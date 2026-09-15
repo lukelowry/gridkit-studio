@@ -15,6 +15,7 @@ export async function until<T>(
 }
 
 export async function focus(target: Locator): Promise<void> {
+  await target.page().bringToFront()
   await target.focus()
   await until(() => target.evaluate((element) => element.ownerDocument.hasFocus()), Boolean)
 }

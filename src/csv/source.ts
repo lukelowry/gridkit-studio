@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import {
+  type ClassData,
   createEmitter,
   fieldKey,
   type FieldRef,
@@ -12,6 +13,8 @@ import {
 } from '@latkit/model'
 import { connect } from '@latkit/port'
 
+import { SharedCache } from '../cache.js'
+import { tableOpener } from '../table/session.js'
 import type { CsvColumn } from './columns.js'
 import { workerPort } from './port.js'
 import { type CsvInfo, csvProtocol, type Samples } from './protocol.js'
@@ -22,12 +25,17 @@ const CACHE_BYTES = 16 * 1024 * 1024
 export class CsvSource implements Results {
   readonly id = randomUUID()
   private readonly worker: Worker
+  private readonly tables
   private readonly connection
+  private tableOpened = false
   private bindings: readonly CsvColumn[] = []
   private readonly fieldRefs = new Map<string, FieldRef>()
   private readonly byField = new Map<string, Map<number, number>>()
-  private readonly cache = new Map<string, Samples>()
-  private cacheBytes = 0
+  private readonly cache = new SharedCache<Samples>(
+    CACHE_BYTES,
+    (result) => result.time.byteLength + result.values.byteLength,
+    256,
+  )
   private position?: { time: number; rows: number; frame: number }
   private readonly histories = new Map<string, { series: Series; publish(): void; clear(): void }>()
   info?: CsvInfo
@@ -37,6 +45,23 @@ export class CsvSource implements Results {
   ) {
     this.worker = new Worker(workerPath, { workerData: { path } })
     this.connection = connect(workerPort(this.worker), csvProtocol)
+    this.tables = tableOpener(workerPort(this.worker))
+  }
+  openTable(data: ClassData, fields: readonly FieldRef[], signal?: AbortSignal) {
+    this.tableOpened = true
+    return this.tables.open(
+      data,
+      fields.map((field) => {
+        const columns = this.byField.get(fieldKey(field))
+        if (!columns) throw new Error('The table field was not recorded.')
+        return {
+          id: '@signal:' + field.id,
+          elements: Uint32Array.from(columns.keys()),
+          columns: Uint32Array.from(columns.values()),
+        }
+      }),
+      signal,
+    )
   }
   get fields(): readonly FieldRef[] {
     return [...this.fieldRefs.values()]
@@ -45,8 +70,8 @@ export class CsvSource implements Results {
     return this.bindings
   }
   set columns(columns: readonly CsvColumn[]) {
-    if (this.histories.size)
-      throw new Error('Recorded columns cannot change after a series is opened.')
+    if (this.histories.size || this.tableOpened)
+      throw new Error('Recorded columns cannot change after a series or table is opened.')
     this.bindings = columns
     this.byField.clear()
     this.fieldRefs.clear()
@@ -101,27 +126,15 @@ export class CsvSource implements Results {
   ): Promise<Samples> {
     signal?.throwIfAborted()
     const key = `${frameOffset}:${frameCount}:${columns.join(',')}`
-    const cached = this.cache.get(key)
-    if (cached) {
-      this.cache.delete(key)
-      this.cache.set(key, cached)
-      return cached
-    }
-    const result = (await this.connection.call(
-      { type: 'read', frameOffset, frameCount, columns },
-      { signal },
-    )) as Samples
-    const bytes = result.time.byteLength + result.values.byteLength
-    if (bytes <= CACHE_BYTES && !this.cache.has(key)) {
-      while (this.cacheBytes + bytes > CACHE_BYTES && this.cache.size) {
-        const [old, value] = this.cache.entries().next().value!
-        this.cache.delete(old)
-        this.cacheBytes -= value.time.byteLength + value.values.byteLength
-      }
-      this.cache.set(key, result)
-      this.cacheBytes += bytes
-    }
-    return result
+    return this.cache.get(
+      key,
+      async (abort) =>
+        (await this.connection.call(
+          { type: 'read', frameOffset, frameCount, columns },
+          { signal: abort },
+        )) as Samples,
+      signal,
+    )
   }
   async cellsAt(
     frame: number,
@@ -277,9 +290,9 @@ export class CsvSource implements Results {
   async dispose(): Promise<void> {
     for (const history of this.histories.values()) history.clear()
     this.histories.clear()
+    this.tables.close()
     this.connection.close()
     this.cache.clear()
-    this.cacheBytes = 0
     await this.worker.terminate()
   }
 }

@@ -79,6 +79,7 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
   const ready = (frame: Frame) =>
     frame.locator('body[data-state="ready"]').waitFor({ timeout: 30000 })
   await ready(network)
+  await workbench.bringToFront()
   await vscode.commands.executeCommand('gridkitStudio.openTable', uri)
   let table = (
     await until(
@@ -87,6 +88,13 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
     )
   )[0]
   await table.locator('[role="grid"][aria-busy="false"]').waitFor()
+  await workbench.bringToFront()
+  await until(() => table.locator('body').getAttribute('data-focus'), Boolean)
+  assert.ok(
+    await table
+      .getByRole('grid')
+      .evaluate((el) => el === el.ownerDocument.activeElement && el.ownerDocument.hasFocus()),
+  )
   await focus(table.getByRole('grid'))
   assert.equal(
     await table.locator('[role="grid"]').getAttribute('aria-rowcount'),
@@ -203,6 +211,8 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
   assert.equal(await network.locator('main').innerText(), '')
   await vscode.commands.executeCommand('notifications.clearAll')
   const previousGrid = await table.locator('body').getAttribute('data-grid')
+  const viewportNode = await table.getByRole('grid').elementHandle()
+  const previousFocus = await table.locator('body').getAttribute('data-focus')
   await focus(network.locator('#network'))
   await network.locator('#network').press('Shift+F10')
   assert.equal(await workbench.getByRole('menuitem', { name: 'Network', exact: true }).count(), 0)
@@ -212,8 +222,8 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
   await workbench.getByRole('menuitem', { name: 'Case', exact: true }).hover()
   await workbench.keyboard.press('Enter')
   await until(
-    () => table.locator('body').getAttribute('data-grid'),
-    (value) => !!value && value !== previousGrid,
+    () => table.locator('body').getAttribute('data-focus'),
+    (value) => !!value && value !== previousFocus,
   )
   await table.locator('[role="grid"][aria-busy="false"]').waitFor()
   await until(
@@ -227,8 +237,12 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
       ),
     Boolean,
   )
+  assert.equal(await table.locator('body').getAttribute('data-grid'), previousGrid)
+  assert.ok(
+    await viewportNode!.evaluate((el) => el.isConnected && el === el.ownerDocument.activeElement),
+  )
   console.log(
-    'PASS native field binding, keyboard network context menu, and shared split-view selection/bindings',
+    'PASS persistent table viewport and native field binding, keyboard network context menu, and shared split-view selection/bindings',
   )
 
   const change = async (next: string) => {
@@ -359,6 +373,9 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
     .click()
   await workbench.keyboard.press('Enter')
   await columns
+  await table.getByRole('grid').evaluate((el) => {
+    el.scrollLeft = 0
+  })
   await table.getByRole('button', { name: 'class', exact: true }).waitFor()
   const branchContext = JSON.parse(
     (await table.locator('.data-row[data-index="1998"]').getAttribute('data-vscode-context'))!,
@@ -490,4 +507,62 @@ export async function runSlice(browser: Browser, workbench: Page, output: string
     'PASS document edits reconcile removed fields and bindings; dark/light/high-contrast captures',
   )
   await doc.save()
+  const stableViewport = await table.getByRole('grid').elementHandle()
+  const wide = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0].uri, 'wide.case.json')
+  await vscode.workspace.fs.writeFile(
+    wide,
+    new TextEncoder().encode(
+      caseText({
+        buses: Array.from({ length: 10000 }, (_, i) => ({
+          number: i,
+          params: Object.fromEntries(
+            Array.from({ length: 64 }, (_, j) => ['metric_' + j, i + j / 100]),
+          ),
+        })),
+      }),
+    ),
+  )
+  await vscode.commands.executeCommand('gridkitStudio.openTable', wide)
+  await until(
+    () => table.locator('body').getAttribute('data-case'),
+    (value) => value === wide.toString(),
+  )
+  await table.locator('[role="grid"][aria-busy="false"]').waitFor()
+  assert.ok(await stableViewport!.evaluate((el) => el.isConnected))
+  assert.equal(await table.getByRole('grid').getAttribute('aria-rowcount'), '10001')
+  assert.ok(Number(await table.getByRole('grid').getAttribute('aria-colcount')) >= 65)
+  assert.ok((await table.getByRole('columnheader').count()) < 20)
+  assert.ok((await table.getByRole('gridcell').count()) < 2000)
+  await table.getByRole('grid').evaluate((el) => {
+    el.scrollLeft = el.scrollWidth
+  })
+  await table.getByRole('button', { name: 'metric_63', exact: true }).waitFor()
+  await focus(table.getByRole('grid'))
+  await table.getByRole('grid').press('End')
+  await table.locator('[role="grid"][aria-busy="false"]').waitFor()
+  await until(
+    () => table.locator('.data-row[data-index="9999"]').innerText(),
+    (value) => value.includes('9999.63'),
+  )
+  assert.ok((await table.getByRole('columnheader').count()) < 20)
+  await table.locator('.data-row[data-index="9999"] [role="gridcell"]').last().click()
+  await table.locator('.data-row[data-index="9999"][aria-selected="true"]').waitFor()
+  await table.locator('#table').screenshot({ path: join(output, 'case-table-wide.png') })
+  await vscode.commands.executeCommand('gridkitStudio.openTable', other)
+  await until(
+    () => table.locator('body').getAttribute('data-case'),
+    (value) => value === other.toString(),
+  )
+  await table.locator('[role="grid"][aria-busy="false"]').waitFor()
+  await vscode.commands.executeCommand('gridkitStudio.openTable', wide)
+  await until(
+    () => table.locator('body').getAttribute('data-case'),
+    (value) => value === wide.toString(),
+  )
+  await table.locator('[role="grid"][aria-busy="false"]').waitFor()
+  assert.ok(await table.getByRole('grid').evaluate((el) => el.scrollTop > 250000))
+  await table.getByRole('button', { name: 'metric_63', exact: true }).waitFor()
+  console.log(
+    'PASS restored per-case scroll and bounded row and column rendering on a 10,000-row, 64-value-column case and persistent viewport rebinding',
+  )
 }

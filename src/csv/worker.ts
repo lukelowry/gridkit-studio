@@ -4,6 +4,8 @@ import { parentPort, workerData } from 'node:worker_threads'
 
 import { serve, transferred } from '@latkit/port'
 
+import { SharedCache } from '../cache.js'
+import { serveTableWorker } from '../table/worker-service.js'
 import { decoder, header, lines } from './decode.js'
 import { workerPort } from './port.js'
 import { type CsvInfo, csvProtocol, type Query, type Samples } from './protocol.js'
@@ -16,7 +18,37 @@ export class CsvFile {
   private index: { offset: number; time: number; frame: number }[] = []
   private stride = 256
   private readonly extents = new Map<string, { frame: number; min: number; max: number }>()
-  constructor(private readonly path: string) {}
+  private readonly frames: SharedCache<Samples>
+  constructor(
+    private readonly path: string,
+    private readonly frameBudget = 32 * 1024 * 1024,
+  ) {
+    this.frames = new SharedCache(
+      frameBudget,
+      (sample) => sample.values.byteLength + sample.time.byteLength,
+    )
+  }
+  /** Cache decoded committed frames below all consumers; returned projections are owned copies. */
+  private async frame(index: number, signal?: AbortSignal): Promise<Samples> {
+    return this.frames.get(
+      String(index),
+      async (abort) => {
+        const start = this.start(index, 'frame')
+        if (!this.file || !start) throw new Error('No CSV samples are available yet.')
+        let frame = start.frame
+        const end = this.offset
+        for await (const row of lines(this.file, start.offset, end, true, abort)) {
+          if (!row.text) continue
+          if (frame++ === index) {
+            const sample = decoder(this.info.headers.length, null)(row.text)
+            return { time: Float64Array.of(sample.time), values: sample.values }
+          }
+        }
+        throw new Error('CSV changed during the read.')
+      },
+      signal,
+    )
+  }
   async scan(final: boolean, signal?: AbortSignal): Promise<CsvInfo> {
     signal?.throwIfAborted()
     this.file ??= await open(this.path, 'r')
@@ -177,6 +209,16 @@ export class CsvFile {
       )
     )
       throw new Error('Invalid CSV block.')
+    if (frameCount === 1 && this.info.headers.length * 8 <= this.frameBudget) {
+      const sample = await this.frame(frameOffset, signal)
+      signal?.throwIfAborted()
+      return {
+        time: sample.time.slice(),
+        values: Float64Array.from(columns, (column) =>
+          column < 0 ? NaN : sample.values[column - 1],
+        ),
+      }
+    }
     const time = new Float64Array(frameCount)
     const values = new Float64Array(frameCount * columns.length).fill(NaN)
     const start = this.start(frameOffset, 'frame')
@@ -202,6 +244,7 @@ export class CsvFile {
     return { time, values }
   }
   async dispose() {
+    this.frames.clear()
     await this.file?.close()
     this.file = undefined
     this.index = []
@@ -209,6 +252,7 @@ export class CsvFile {
 }
 if (parentPort) {
   const file = new CsvFile(workerData.path)
+  serveTableWorker(workerPort(parentPort), file)
   let pending: Promise<unknown> = Promise.resolve()
   serve(
     workerPort(parentPort),

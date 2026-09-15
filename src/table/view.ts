@@ -1,6 +1,4 @@
-import type { Grid } from '@latkit/model'
-import type { Port } from '@latkit/port'
-import { type GridServer, serveGrid } from '@latkit/remote'
+import type { Port, Service } from '@latkit/port'
 import * as vscode from 'vscode'
 
 import { Latest } from '../async.js'
@@ -10,8 +8,10 @@ import { describe } from '../errors.js'
 import { bound, classCapabilities, NO_CAPABILITIES } from '../menus.js'
 import { html, webviewPort } from '../webview/host.js'
 import { tableColumns, tableFieldId } from './columns.js'
-import { caseGrid, recordedGrid } from './grid.js'
 import { defaults, isRequest, isSettings, type TableSettings, type TableState } from './messages.js'
+import type { Table } from './query.js'
+import { TableWorker } from './session.js'
+import { serveTable } from './transport.js'
 
 export const TABLE = 'gridkitStudio.table'
 export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -23,8 +23,13 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
   private readonly activated: vscode.Disposable
   private readonly settings = new Map<string, TableSettings>()
   private saveTimer?: ReturnType<typeof setTimeout>
-  private server?: GridServer
-  private grid?: Grid
+  private server?: Service<never>
+  private grid?: Table
+  private readonly worker = new TableWorker()
+  private binding = ''
+  private recordingId?: string
+  private refreshing?: Promise<void>
+  private focusRequest = 0
   private readonly read = new Latest()
   private readonly following = new Latest()
   private serial = 0
@@ -73,6 +78,22 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
       }
       const state = this.cases.resolve(message.target)
       if (!state || state !== this.state) return
+      if (message.type === 'focusReady') {
+        if (message.grid === this.message?.grid && message.request === this.focusRequest) {
+          this.view?.show(false)
+          void vscode.commands
+            .executeCommand(TABLE + '.focus', { preserveFocus: false })
+            .then(() => {
+              if (message.grid === this.message?.grid && message.request === this.focusRequest)
+                this.port?.post({
+                  type: 'focus-table',
+                  grid: message.grid,
+                  request: message.request,
+                })
+            })
+        }
+        return
+      }
       if (message.type === 'filter') {
         void this.filter()
         return
@@ -98,7 +119,9 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
         this.following.abort()
         this.server?.close()
         this.server = undefined
+        this.grid?.close()
         this.grid = undefined
+        this.binding = ''
         this.view = undefined
         this.port = undefined
         void vscode.commands.executeCommand('setContext', 'gridkitStudio.tableReady', false)
@@ -132,7 +155,7 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
       .filter((column) => column.field?.source === 'signal')
       .map((column) => column.field!.id)
     const recorded = state.fields?.recorded(this.classId).map((field) => field.id)
-    return shown?.join('\0') === recorded?.join('\0')
+    return this.recordingId === state.source?.id && shown?.join('\0') === recorded?.join('\0')
   }
   private updateContext(): void {
     void vscode.commands.executeCommand(
@@ -150,6 +173,7 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
     if (!this.port || !this.message) return
     this.message = {
       ...this.message,
+      focusRequest: this.focusRequest,
       settings: { ...this.preferences },
       settingsVersion: this.settingsVersion,
     }
@@ -189,15 +213,50 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
     this.message = {
       ...this.message,
       time: this.state.timeline.time,
+      frame: this.state.timeline.frame,
+      frameCount: this.state.source.info?.rows,
       tick: (this.message.tick ?? 0) + 1,
     }
-    this.post()
+    this.port?.post({
+      type: 'time',
+      grid: this.message.grid,
+      time: this.message.time,
+      frame: this.message.frame,
+      frameCount: this.message.frameCount,
+      tick: this.message.tick,
+    })
   }
-  private async refresh(): Promise<void> {
+  private refresh(): Promise<void> {
+    if (!this.view || !this.port) return Promise.resolve()
+    const state = this.state
+    const model = state?.fields?.model
+    const spec = model?.classes.find((cls) => cls.id === this.classId) ?? model?.classes[0]
+    const key = JSON.stringify([
+      state?.target,
+      spec?.id,
+      state?.source?.id,
+      spec ? state?.fields?.recorded(spec.id).map((field) => field.id) : [],
+    ])
+    if (this.binding === key && (this.grid || this.refreshing)) {
+      if (this.refreshing) return this.refreshing
+      this.post()
+      this.updateTime()
+      return Promise.resolve()
+    }
+    this.binding = key
+    const pending = this.rebuild()
+    this.refreshing = pending
+    void pending.finally(() => {
+      if (this.refreshing === pending) this.refreshing = undefined
+    })
+    return pending
+  }
+  private async rebuild(): Promise<void> {
     const signal = this.read.next()
     this.following.abort()
     this.server?.close()
     this.server = undefined
+    this.grid?.close()
     this.grid = undefined
     const view = this.view
     const state = this.state
@@ -236,7 +295,16 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
       if (signal.aborted || !state.current(target) || this.view !== view) return
       const name = `${target.revision}:${++this.serial}:${spec.id}`
       const recorded = fields.recorded(spec.id)
-      this.grid = recorded.length ? recordedGrid(data, fields, spec.id) : caseGrid(data)
+      this.recordingId = state.source?.id
+      const grid =
+        recorded.length && fields.source
+          ? await fields.source.openTable(data, recorded, signal)
+          : await this.worker.open(data, signal)
+      if (signal.aborted || !state.current(target) || this.view !== view) {
+        grid.close()
+        return
+      }
+      this.grid = grid
       const columns = [
         ...tableColumns(data, spec.id),
         ...recorded.map((field, i) => ({
@@ -252,18 +320,15 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
           index: data.columns.length + i,
         })),
       ]
-      this.server = serveGrid(this.port, name)
-      this.server.set(this.grid, {
-        rowCount: spec.count,
-        columns: columns
-          .filter((column) => column.id !== null)
-          .sort((a, b) => a.index - b.index)
-          .map(({ id, label }) => ({ id: id!, label })),
-      })
+      this.server = serveTable(this.port, name, this.grid)
       this.message = {
         ...this.message!,
         status: '',
         grid: name,
+        rowCount: spec.count,
+        time: recorded.length ? state.timeline.time : undefined,
+        frame: state.timeline.frame,
+        frameCount: state.source?.info?.rows,
         selection: state.selection,
         columns: columns.map((column) => ({ ...column, bindable: false, bound: false })),
       }
@@ -292,12 +357,22 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
     if (selection) {
       const settings = this.preferences
       try {
-        const position = await grid.locate(
-          selection.element.index,
-          settings.query,
-          settings.sort,
+        const view = await grid.query(
+          {
+            filter: settings.query,
+            sort: settings.sort,
+            time: state.timeline.time,
+            frame: state.timeline.frame,
+            frameCount: state.source?.info?.rows,
+          },
           signal,
         )
+        let position: number | null
+        try {
+          position = await view.locate(selection.element.index, signal)
+        } finally {
+          view.close()
+        }
         if (
           signal.aborted ||
           !state.current(target) ||
@@ -335,6 +410,8 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
     if (state.selection?.element.classId === this.classId) await this.followSelection()
     else this.post()
     this.view?.show(false)
+    this.focusRequest++
+    this.post()
   }
   async selectClass(): Promise<void> {
     const state = this.state
@@ -450,6 +527,8 @@ export class CaseTable implements vscode.WebviewViewProvider, vscode.Disposable 
     this.read.abort()
     this.following.abort()
     this.server?.close()
+    this.grid?.close()
+    this.worker.close()
     for (const subscription of this.viewSubscriptions.splice(0)) subscription.dispose()
     this.view = undefined
     this.port = undefined

@@ -84,11 +84,11 @@ function numeric(text: string): number {
   return value
 }
 /** Parse only requested columns; the time and record width are always checked. */
-export function decoder(width: number, columns: readonly number[]) {
+export function decoder(width: number, columns: readonly number[] | null) {
   const wanted = new Map<number, number[]>()
-  columns.forEach((column, i) => wanted.set(column, [...(wanted.get(column) ?? []), i]))
+  columns?.forEach((column, i) => wanted.set(column, [...(wanted.get(column) ?? []), i]))
   return (text: string): { time: number; values: Float64Array } => {
-    const values = new Float64Array(columns.length).fill(NaN)
+    const values = new Float64Array(columns?.length ?? width - 1).fill(NaN)
     let start = 0
     let count = 0
     let time = NaN
@@ -96,6 +96,7 @@ export function decoder(width: number, columns: readonly number[]) {
       if (end === text.length || text.charCodeAt(end) === 44) {
         const at = wanted.get(count)
         if (count === 0) time = numeric(text.slice(start, end))
+        if (columns === null && count > 0) values[count - 1] = numeric(text.slice(start, end))
         if (at) {
           const value = numeric(text.slice(start, end))
           for (const index of at) values[index] = value

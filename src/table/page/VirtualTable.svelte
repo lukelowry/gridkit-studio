@@ -1,6 +1,5 @@
 <script lang="ts">
-  import type { Grid, GridSort, GridWindow } from '@latkit/model'
-  import type { GridHeader } from '@latkit/remote'
+  import type { GridSort, GridWindow } from '@latkit/model'
   import { onDestroy, untrack } from 'svelte'
 
   import { describe } from '../../errors.js'
@@ -8,9 +7,17 @@
   import type { CaseTarget, Selection } from '../../targets.js'
   import { tableFieldId } from '../columns.js'
   import type { TableState } from '../messages.js'
+  import { FrameQueue } from '../playback.js'
+  import type { QuerySpec, Table } from '../query.js'
+  import { WindowCache } from './window.js'
   let {
     source,
     tick = 0,
+    time,
+    frame,
+    frameCount,
+    focusRequest = 0,
+    focusReady = 0,
     query,
     sort = $bindable(null),
     scrollTop = $bindable(0),
@@ -22,20 +29,27 @@
     selection,
     onselect,
     onstats,
+    onfocusready,
   }: {
     tick?: number
-    source: Grid & GridHeader
+    time?: number
+    frame?: number
+    frameCount?: number
+    focusRequest?: number
+    focusReady?: number
+    source: Table | null
     query: string
     sort: GridSort | null
     scrollTop: number
-    target: CaseTarget
+    target?: CaseTarget
     classId: string
     columns: TableState['columns']
     widths: Record<string, number>
     capabilities: Capabilities
     selection: Selection | null
+    onfocusready: (request: number) => void
     onselect: (selection: Selection) => void
-    onstats: (total: number) => void
+    onstats: (total: number, time?: number) => void
   } = $props()
   const ROW = 28
   const HEADER = 32
@@ -43,7 +57,12 @@
   let viewport = $state<HTMLDivElement>()
   let menuElement = $state<HTMLDivElement>()
   let height = $state(300)
-  let windowData = $state.raw<GridWindow>({ rows: [], total: untrack(() => source.rowCount) })
+  let viewportWidth = $state(800)
+  let scrollLeft = $state(0)
+  let cache = $state.raw<WindowCache | null>(null)
+  let queue = $state.raw<FrameQueue<QuerySpec> | null>(null)
+  let projection = $state.raw<readonly number[]>([])
+  let windowData = $state.raw<GridWindow>({ rows: [], total: untrack(() => source?.rowCount ?? 0) })
   let loading = $state(true)
   let error = $state('')
   let active = $state(0)
@@ -54,6 +73,29 @@
   const columnWidth = (column: TableState['columns'][number]) =>
     widths[column.id ?? '@identity'] ?? column.width
   const width = $derived(columns.reduce((total, column) => total + columnWidth(column), 0))
+  const layout = $derived.by(() => {
+    let left = 0
+    return columns.map((column, position) => {
+      const width = columnWidth(column)
+      const item = { column, position, left, width }
+      left += width
+      return item
+    })
+  })
+  const painted = $derived(
+    layout.filter(
+      (item) =>
+        item.column.identity ||
+        (item.left + item.width >= scrollLeft - 200 &&
+          item.left <= scrollLeft + viewportWidth + 200),
+    ),
+  )
+  // Capping physical height avoids browser layout limits for multi-million-row cases.
+  const surfaceHeight = $derived(Math.min(8_000_000, HEADER + windowData.total * ROW))
+  const scale = $derived(
+    Math.max(1, (HEADER + windowData.total * ROW - height) / Math.max(1, surfaceHeight - height)),
+  )
+  const shift = $derived(scrollTop - scrollTop / scale)
   const activeId = $derived(
     windowData.rows.some((_, i) => renderedFirst + i === active) ? `row-${active}` : undefined,
   )
@@ -63,24 +105,101 @@
     if (!el) return
     const observer = new ResizeObserver(() => {
       height = el.clientHeight
+      viewportWidth = el.clientWidth
     })
     observer.observe(el)
-    el.scrollTop = untrack(() => scrollTop)
-    return () => observer.disconnect()
+    el.scrollTop = untrack(() => scrollTop / scale)
+    const wheel = (event: WheelEvent) => {
+      if (scale === 1 || !event.deltaY || event.ctrlKey) return
+      event.preventDefault()
+      const unit = event.deltaMode === 1 ? ROW : event.deltaMode === 2 ? height - HEADER : 1
+      scrollTop = Math.max(
+        0,
+        Math.min(HEADER + windowData.total * ROW - height, scrollTop + event.deltaY * unit),
+      )
+      el.scrollTop = scrollTop / scale
+      el.scrollLeft += event.deltaX * unit
+    }
+    el.addEventListener('wheel', wheel, { passive: false })
+    return () => {
+      observer.disconnect()
+      el.removeEventListener('wheel', wheel)
+    }
   })
   $effect(() => {
-    const controller = new AbortController()
-    void tick
-    const offset = first
-    loading = true
+    const table = source
+    void query
+    void sort
+    const previous = untrack(() => cache)
+    previous?.close()
+    cache = null
+    windowData = { rows: [], total: table?.rowCount ?? 0 }
+    loading = !!table
     error = ''
-    source.window(query, sort, offset, count, controller.signal).then(
+    keyboardRead?.abort()
+    if (!table) {
+      queue = null
+      return
+    }
+    const frames = new FrameQueue<QuerySpec>(
+      async (spec, signal) => {
+        const view = await table.query(spec, signal)
+        if (cache?.view.frame === view.frame) {
+          view.close()
+          return
+        }
+        const next = new WindowCache(view)
+        try {
+          const offset = first
+          const picked = painted.map((item) => item.column.index)
+          const value = await next.read(offset, count, picked, signal)
+          signal.throwIfAborted()
+          const previous = cache
+          cache = next
+          windowData = value
+          projection = picked
+          renderedFirst = offset
+          loading = false
+          error = ''
+          onstats(value.total, view.time)
+          previous?.close()
+        } catch (error) {
+          next.close()
+          throw error
+        }
+      },
+      (reason) => {
+        error = describe(reason)
+        loading = false
+      },
+    )
+    queue = frames
+    return () => {
+      frames.close()
+      untrack(() => cache)?.close()
+    }
+  })
+  $effect(() => {
+    void tick
+    const frames = queue
+    if (frames) frames.request({ filter: query, sort, time, frame, frameCount })
+  })
+  $effect(() => {
+    const pages = cache
+    const offset = first
+    const length = count
+    const picked = painted.map((item) => item.column.index)
+    if (!pages) return
+    const controller = new AbortController()
+    loading = true
+    pages.read(offset, length, picked, controller.signal).then(
       (value) => {
         if (controller.signal.aborted) return
         windowData = value
+        projection = picked
         renderedFirst = offset
         loading = false
-        onstats(value.total)
+        error = ''
       },
       (reason) => {
         if (!controller.signal.aborted) {
@@ -91,8 +210,62 @@
     )
     return () => controller.abort()
   })
+  // VS Code first loads this document in a hidden pending iframe. Request native
+  // focus after its load handlers and the next layout frame have completed.
+  let presented = $state(false)
   $effect(() => {
-    if (viewport && Math.abs(viewport.scrollTop - scrollTop) > 1) viewport.scrollTop = scrollTop
+    let frame = 0
+    const loaded = () => {
+      frame = requestAnimationFrame(() => {
+        presented = true
+      })
+    }
+    if (document.readyState === 'complete') loaded()
+    else window.addEventListener('load', loaded, { once: true })
+    return () => {
+      window.removeEventListener('load', loaded)
+      cancelAnimationFrame(frame)
+    }
+  })
+  let announced = 0
+  $effect(() => {
+    if (presented && focusRequest > announced && viewport && cache && !loading) {
+      announced = focusRequest
+      onfocusready(focusRequest)
+    }
+  })
+  let focused = 0
+  let windowFocused = $state(false)
+  $effect(() => {
+    const changed = () => {
+      windowFocused = document.hasFocus()
+    }
+    window.addEventListener('focus', changed)
+    window.addEventListener('blur', changed)
+    changed()
+    return () => {
+      window.removeEventListener('focus', changed)
+      window.removeEventListener('blur', changed)
+    }
+  })
+  $effect(() => {
+    void windowFocused
+    if (presented && focusReady > focused && viewport && cache && !loading) {
+      const element = viewport
+      const request = focusReady
+      const frame = requestAnimationFrame(() => {
+        element.focus({ preventScroll: true })
+        if (document.hasFocus()) {
+          focused = request
+          document.body.dataset.focus = String(focused)
+        }
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+  })
+  $effect(() => {
+    if (cache && viewport && Math.abs(viewport.scrollTop - scrollTop / scale) > 1)
+      viewport.scrollTop = scrollTop / scale
   })
   $effect(() => {
     const id = selection?.field ? tableFieldId(selection.field) : undefined
@@ -109,29 +282,37 @@
   let keyboardRead: AbortController | undefined
   onDestroy(() => keyboardRead?.abort())
   let previousFilter: string | undefined
+  let previousBinding: string | undefined
   $effect(() => {
+    const binding = JSON.stringify([target, classId])
     const key = JSON.stringify([query, sort])
-    if (previousFilter !== undefined && key !== previousFilter) {
+    if (binding !== previousBinding) {
+      keyboardRead?.abort()
+      active = Math.floor(untrack(() => scrollTop) / ROW)
+    } else if (previousFilter !== undefined && key !== previousFilter) {
       keyboardRead?.abort()
       active = 0
       scrollTop = 0
       if (viewport) viewport.scrollTop = 0
     }
+    previousBinding = binding
     previousFilter = key
   })
   function move(position: number) {
     active = Math.max(0, Math.min(position, windowData.total - 1))
     const el = viewport
     if (!el) return
-    if (active * ROW < el.scrollTop) el.scrollTop = active * ROW
-    else if ((active + 1) * ROW > el.scrollTop + el.clientHeight - HEADER)
-      el.scrollTop = (active + 1) * ROW - el.clientHeight + HEADER
-    scrollTop = el.scrollTop
+    keyboardRead?.abort()
+    if (active * ROW < scrollTop) scrollTop = active * ROW
+    else if ((active + 1) * ROW > scrollTop + el.clientHeight - HEADER)
+      scrollTop = (active + 1) * ROW - el.clientHeight + HEADER
+    el.scrollTop = scrollTop / scale
   }
   $effect(() => {
     const controller = new AbortController()
-    if (selected !== null) {
-      source.locate(selected, query, sort, controller.signal).then(
+    const view = cache?.view
+    if (selected !== null && view) {
+      view.locate(selected, controller.signal).then(
         (position) => {
           if (!controller.signal.aborted && position !== null) move(position)
         },
@@ -141,22 +322,24 @@
     return () => controller.abort()
   })
   const context = (index?: number, column?: TableState['columns'][number]) =>
-    JSON.stringify(
-      menuContext(
-        {
-          ...target,
-          ...(index !== undefined && { element: { classId, index } }),
-          ...(column?.id && { field: column.field }),
-        },
-        {
-          ...capabilities,
-          bind: column ? column.bindable : index !== undefined && capabilities.bind,
-          unbind: column ? column.bound : index !== undefined && capabilities.unbind,
-          plot: column ? column.field?.source === 'signal' : capabilities.plot,
-        },
-        'table',
-      ),
-    )
+    !target || !source
+      ? '{}'
+      : JSON.stringify(
+          menuContext(
+            {
+              ...target,
+              ...(index !== undefined && { element: { classId, index } }),
+              ...(column?.id && { field: column.field }),
+            },
+            {
+              ...capabilities,
+              bind: column ? column.bindable : index !== undefined && capabilities.bind,
+              unbind: column ? column.bound : index !== undefined && capabilities.unbind,
+              plot: column ? column.field?.source === 'signal' : capabilities.plot,
+            },
+            'table',
+          ),
+        )
   function resize(column: TableState['columns'][number], value: number) {
     widths = { ...widths, [column.id ?? '@identity']: Math.max(70, Math.min(800, value)) }
   }
@@ -184,12 +367,13 @@
         : { column, dir: 'asc' }
   }
   function select(index: number, position: number, column?: TableState['columns'][number]) {
+    if (!cache || !target) return
     active = position
     viewport?.focus()
     onselect({ element: { classId, index }, ...(column?.id && { field: column.field }) })
   }
   async function keyboard(event: KeyboardEvent) {
-    if (event.target !== viewport) return
+    if (event.target !== viewport || !cache || !target) return
     const positions: Record<string, number> = {
       ArrowDown: active + 1,
       ArrowUp: active - 1,
@@ -209,21 +393,21 @@
     keyboardRead?.abort()
     keyboardRead = new AbortController()
     const signal = keyboardRead.signal
-    const asked = source
+    const asked = cache
     const filter = query
     const order = sort
     const position = active
     try {
-      const result = await asked.window(filter, order, position, 1, signal)
+      const visible = windowData.rows[position - renderedFirst]
+      const row = visible ?? (await asked.read(position, 1, [], signal)).rows[0]
       if (
         signal.aborted ||
-        asked !== source ||
+        asked !== cache ||
         filter !== query ||
         order !== sort ||
         position !== active
       )
         return
-      const row = result.rows[0]
       if (!row) return
       if (!menu) {
         onselect({ element: { classId, index: row.index } })
@@ -243,7 +427,7 @@
         }),
       )
     } catch (reason) {
-      if (!signal.aborted && asked === source) error = describe(reason)
+      if (!signal.aborted && asked === cache) error = describe(reason)
     }
   }
 </script>
@@ -259,23 +443,26 @@
   aria-colcount={columns.length}
   aria-activedescendant={activeId}
   aria-busy={loading}
+  aria-disabled={!source}
+  class:unavailable={!source}
   onkeydown={keyboard}
   onscroll={() => {
-    if (viewport) scrollTop = viewport.scrollTop
+    if (viewport) {
+      scrollLeft = viewport.scrollLeft
+      if (source && cache) scrollTop = viewport.scrollTop * scale
+    }
   }}
   data-vscode-context={context()}
 >
-  <div
-    class="surface"
-    style:width="{width}px"
-    style:height="{HEADER + windowData.total * ROW}px"
-    role="rowgroup"
-  >
+  <div class="surface" style:width="{width}px" style:height="{surfaceHeight}px" role="rowgroup">
     <div class="heading row" role="row" aria-rowindex="1">
-      {#each columns as column, i (column.id)}
+      {#each painted as item (item.column.id)}
+        {@const { column, position: i, left } = item}
         <div
           class="cell"
           class:identity={column.identity}
+          style:position={column.identity ? 'sticky' : 'absolute'}
+          style:left="{column.identity ? 0 : left}px"
           role="columnheader"
           aria-colindex={i + 1}
           style:width="{columnWidth(column)}px"
@@ -339,16 +526,19 @@
         }}
         aria-rowindex={renderedFirst + i + 2}
         aria-selected={selected === row.index}
-        style:top="{HEADER + (renderedFirst + i) * ROW}px"
+        style:top="{HEADER + (renderedFirst + i) * ROW - shift}px"
         data-index={row.index}
         data-vscode-context={context(row.index)}
         onclick={() => select(row.index, renderedFirst + i)}
       >
-        {#each columns as column, col (column.id)}
-          {@const cell = column.index < 0 ? row.label : row.cells[column.index]}
+        {#each painted as item (item.column.id)}
+          {@const { column, position: col, left } = item}
+          {@const cell = row.cells[projection.indexOf(column.index)]}
           <div
             class="cell"
             class:identity={column.identity}
+            style:position={column.identity ? 'sticky' : 'absolute'}
+            style:left="{column.identity ? 0 : left}px"
             class:numeric={column.numeric}
             role="gridcell"
             tabindex="-1"
@@ -376,7 +566,7 @@
   </div>
 </div>
 {#if error}<p class="notice" role="alert">{error}</p>
-{:else if !loading && !windowData.total}<p class="notice" role="status">
+{:else if source && !loading && !windowData.total}<p class="notice" role="status">
     No rows match. Change or clear the filter.
   </p>{/if}
 <div bind:this={menuElement} hidden aria-hidden="true"></div>

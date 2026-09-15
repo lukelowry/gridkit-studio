@@ -21,6 +21,7 @@ const builds = [
     ...node,
     external: ['vscode'],
   },
+  { entryPoints: ['src/table/worker.ts'], outfile: 'dist/table/worker.cjs', ...node },
   { entryPoints: ['src/csv/worker.ts'], outfile: 'dist/csv/worker.cjs', ...node },
   { entryPoints: ['src/network/page/main.ts'], outfile: browserRoot + '/main.js', ...browser },
   { entryPoints: ['src/monitor/page/main.ts'], outfile: 'dist/monitor/main.js', ...browser },

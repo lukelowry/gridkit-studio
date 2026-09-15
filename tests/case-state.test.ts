@@ -6,7 +6,7 @@ import { channelsFor, DISPLAY_CHANNELS, renderValues } from '../src/bindings.js'
 import { type Cases, CaseState, type DocumentEdits } from '../src/case.js'
 import { CaseFields, signalStatus } from '../src/fields.js'
 import { parse } from '../src/gridkit/parse.js'
-import { caseGrid } from '../src/table/grid.js'
+import { TableEngine } from '../src/table/engine.js'
 import { targetOf } from '../src/targets.js'
 import { caseBytes } from './support/case.js'
 
@@ -77,19 +77,24 @@ it('defines missing, constant, extreme, and raw dash behavior centrally', () => 
 it('retains source indexes and precision through sorting, filtering and windows', async () => {
   const { model, state } = fixture()
   const data = await model.load('bus')
-  const grid = caseGrid(data)
+  const grid = new TableEngine(data)
+  const columns = data.columns.map((_, i) => i)
   const sort = { column: 'params.x', dir: 'desc' } as const
-  const window = await grid.window('', sort, 0, 1)
+  const view = await grid.query({ filter: '', sort })
+  const window = await view.read(0, 1, columns)
   expect(window.rows[0].index).toBe(1)
   expect(window.rows[0].cells.at(-1)).toBe('1.000000000000002')
-  expect(await grid.locate(0, '', sort)).toBe(1)
-  expect((await grid.window('10', sort, 0, 2)).rows.map((r) => r.index)).toEqual([1])
+  expect(await view.locate(0)).toBe(1)
+  const filtered = await grid.query({ filter: '10', sort })
+  expect((await filtered.read(0, 2, columns)).rows.map((r) => r.index)).toEqual([1])
   const abort = new AbortController()
   abort.abort()
-  await expect(grid.window('', null, 0, 2, abort.signal)).rejects.toMatchObject({
+  await expect(grid.query({ filter: '', sort: null }, abort.signal)).rejects.toMatchObject({
     name: 'AbortError',
   })
-  grid.dispose()
+  view.close()
+  filtered.close()
+  grid.close()
   state.dispose()
 })
 it('shares selection and binding events, validates ranges and unbinds', async () => {

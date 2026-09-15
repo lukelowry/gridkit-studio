@@ -16,6 +16,10 @@ export interface TableState {
   type: 'table'
   time?: number
   tick?: number
+  frame?: number
+  frameCount?: number
+  rowCount?: number
+  focusRequest?: number
   target?: CaseTarget
   name: string
   status: string
@@ -28,9 +32,23 @@ export interface TableState {
   settings: TableSettings
   settingsVersion: number
 }
+export interface TableFocus {
+  type: 'focus-table'
+  grid: string
+  request: number
+}
+export interface TableTime {
+  type: 'time'
+  grid: string
+  time?: number
+  frame?: number
+  frameCount?: number
+  tick?: number
+}
 export type Request =
   | { type: 'ready' }
   | { type: 'focus' }
+  | { type: 'focusReady'; target: CaseTarget; grid: string; request: number }
   | { type: 'filter'; target: CaseTarget }
   | { type: 'select'; target: CaseTarget; selection: Selection | null }
   | {
@@ -64,6 +82,13 @@ export function isRequest(value: unknown): value is Request {
   if (!record(value)) return false
   if (value.type === 'ready' || value.type === 'focus') return true
   if (!isCaseTarget(value.target)) return false
+  if (value.type === 'focusReady')
+    return (
+      typeof value.grid === 'string' &&
+      typeof value.request === 'number' &&
+      Number.isSafeInteger(value.request) &&
+      value.request > 0
+    )
   if (value.type === 'filter') return true
   if (value.type === 'select') return value.selection === null || isSelection(value.selection)
   if (typeof value.grid !== 'string' || !Number.isSafeInteger(value.settingsVersion)) return false

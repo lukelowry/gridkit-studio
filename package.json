@@ -2,7 +2,7 @@
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
   "description": "Power system visualization and simulation tools.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
   "license": "MIT",

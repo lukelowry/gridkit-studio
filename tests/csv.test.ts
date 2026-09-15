@@ -295,3 +295,118 @@ it('streams CSV results through the released remote protocol without losing spar
   expect(local.state.frameCount).toBe(4)
   await expect(series.read(1, window)).rejects.toThrow()
 })
+
+it('shares decoded committed frames across projections without transferring cached buffers', async () => {
+  const { csv } = await fixture('t,a,b,c\n0,1.000000000000002,2,nan\n1,3,4,5\n')
+  await csv.scan(true)
+  const [a, b] = await Promise.all([csv.read(0, 1, [1, -1]), csv.read(0, 1, [2, 1, 2])])
+  expect([...a.values]).toEqual([1.000000000000002, NaN])
+  expect([...b.values]).toEqual([2, 1.000000000000002, 2])
+  structuredClone(a, { transfer: [a.values.buffer as ArrayBuffer, a.time.buffer as ArrayBuffer] })
+  expect([...(await csv.read(0, 1, [1, 3])).values]).toEqual([1.000000000000002, NaN])
+})
+it('keeps an oversized frame on the bounded projection path', async () => {
+  const { path } = await fixture('t,a,b,c\n0,1,2,3\n')
+  const csv = new CsvFile(path, 8)
+  cleanup.push(() => csv.dispose())
+  await csv.scan(true)
+  expect([...(await csv.read(0, 1, [3, 1])).values]).toEqual([3, 1])
+})
+it('serves table queries beside Results in the CSV worker with sparse identities and committed heads', async () => {
+  const { path } = await fixture(
+    't,a,b\n0,1000000000000.125,7\n1,1000000000000.25,8\n1,1000000000000.5,9\n',
+  )
+  const worker = join(dirname(path), 'worker.cjs')
+  await build({
+    entryPoints: [resolve('src/csv/worker.ts')],
+    outfile: worker,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    logLevel: 'silent',
+  })
+  const csv = new CsvSource(path, worker)
+  cleanup.push(() => csv.dispose())
+  csv.columns = [
+    { column: 1, field: { classId: 'bus', source: 'signal', id: 'Vm' }, element: 3 },
+    { column: 2, field: { classId: 'bus', source: 'signal', id: 'Vm' }, element: 0 },
+  ]
+  await csv.scan(true)
+  const table = await csv.openTable(
+    { labels: ['A', 'B', 'C', 'D'], columns: [] },
+    csv.signals('bus'),
+  )
+  const series = await csv.series('bus')
+  const earlier = await table.query({
+    filter: '',
+    sort: { column: '@signal:Vm', dir: 'asc' },
+    time: 1,
+    frameCount: 2,
+  })
+  expect(earlier.frame).toBe(1)
+  const block = await earlier.read(0, 4, [0])
+  expect(block.rows.map((row) => [row.index, row.cells[0]])).toEqual([
+    [0, '8'],
+    [3, '1000000000000.25'],
+    [1, ''],
+    [2, ''],
+  ])
+  const latest = await table.query({
+    filter: '1000000000000.5',
+    sort: null,
+    time: 1,
+    frameCount: 3,
+  })
+  expect(await latest.locate(3)).toBe(0)
+  expect((await earlier.read(0, 1, [0])).rows[0].cells).toEqual(['8'])
+  const values = await series.read(0, {
+    frameOffset: 1,
+    frameCount: 1,
+    elementOffset: 0,
+    elementCount: 2,
+  })
+  expect([...values.values]).toEqual([8, 1000000000000.25])
+  earlier.close()
+  latest.close()
+  table.close()
+  expect([
+    ...(await series.read(0, { frameOffset: 2, frameCount: 1, elementOffset: 0, elementCount: 2 }))
+      .values,
+  ]).toEqual([9, 1000000000000.5])
+  const reopened = await csv.openTable(
+    { labels: ['A', 'B', 'C', 'D'], columns: [] },
+    csv.signals('bus'),
+  )
+  const view = await reopened.query({ filter: '', sort: null, frame: 0, frameCount: 3 })
+  expect((await view.read(3, 1, [0])).rows[0].cells).toEqual(['1000000000000.125'])
+  reopened.close()
+})
+
+it('keeps the table field order independent of CSV and Results signal order', async () => {
+  const { path } = await fixture('t,b,a\n0,22,11\n')
+  const worker = join(dirname(path), 'worker.cjs')
+  await build({
+    entryPoints: [resolve('src/csv/worker.ts')],
+    outfile: worker,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    logLevel: 'silent',
+  })
+  const csv = new CsvSource(path, worker)
+  cleanup.push(() => csv.dispose())
+  const a = { classId: 'bus', source: 'signal' as const, id: 'a' }
+  const b = { classId: 'bus', source: 'signal' as const, id: 'b' }
+  csv.columns = [
+    { column: 1, field: b, element: 0 },
+    { column: 2, field: a, element: 0 },
+  ]
+  await csv.scan(true)
+  const table = await csv.openTable({ labels: ['bus'], columns: [] }, [a, b])
+  const view = await table.query({ filter: '', sort: null, frame: 0 })
+  expect((await view.read(0, 1, [0, 1])).rows[0].cells).toEqual(['11', '22'])
+  expect(() => {
+    csv.columns = []
+  }).toThrow('cannot change')
+  table.close()
+})

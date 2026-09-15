@@ -89,6 +89,8 @@ button {
   background: var(--row-background, var(--vscode-editor-background));
 }
 .heading .cell {
+  height: 100%;
+  top: 0;
   padding: 0;
   position: relative;
 }
@@ -180,4 +182,8 @@ button {
 }
 ::selection {
   background: var(--vscode-editor-selectionBackground);
+}
+
+.viewport.unavailable {
+  display: none;
 }

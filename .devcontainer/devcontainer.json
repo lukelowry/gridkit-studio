@@ -1,0 +1,26 @@
+{
+  "name": "GridKit Studio",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "options": [
+      "--pull"
+    ]
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "24"
+    },
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "username": "vscode"
+    }
+  },
+  "remoteUser": "vscode",
+  "postCreateCommand": "npm install --global pnpm@10.30.0 && pnpm install --frozen-lockfile",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "svelte.svelte-vscode"
+      ]
+    }
+  }
+}

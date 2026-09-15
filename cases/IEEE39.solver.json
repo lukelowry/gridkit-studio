@@ -1,0 +1,7 @@
+{
+  "system_model_file": "IEEE39.case.json",
+  "output_file": "IEEE39.mon.csv",
+  "tmax": 10,
+  "dt_monitor": 0.004166666666666667,
+  "events": []
+}

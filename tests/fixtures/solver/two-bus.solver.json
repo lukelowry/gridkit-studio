@@ -1,0 +1,17 @@
+{
+  "system_model_file": "two-bus.case.json",
+  "dt_monitor": 0.004166666666666667,
+  "tmax": 2,
+  "events": [
+    {
+      "time": 1,
+      "type": "fault_on",
+      "element_id": 0
+    },
+    {
+      "time": 1.1,
+      "type": "fault_off",
+      "element_id": 0
+    }
+  ]
+}

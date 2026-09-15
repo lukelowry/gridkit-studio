@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.vscode-test/
+*.vsix
+*.tsbuildinfo
+output/
+cases/**/*.mon.csv
+
+.gridkit-*.solver.json
+
+.impeccable/

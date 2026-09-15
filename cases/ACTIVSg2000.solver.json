@@ -1,0 +1,7 @@
+{
+  "system_model_file": "ACTIVSg2000.case.json",
+  "output_file": "ACTIVSg2000.mon.csv",
+  "tmax": 10,
+  "dt_monitor": 0.004166666666666667,
+  "events": []
+}

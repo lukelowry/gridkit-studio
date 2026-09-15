@@ -1,0 +1,36 @@
+name: GridKit latest
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+  workflow_call:
+concurrency:
+  group: gridkit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+permissions:
+  contents: read
+jobs:
+  solver:
+    runs-on: ubuntu-latest
+    env:
+      GRIDKIT_TEST_SOLVER: '1'
+      GRIDKIT_TEST_SOFTWARE_GPU: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:solver
+      - name: Test Simulation with GridKit
+        run: dbus-run-session -- xvfb-run -a node tests/host/run.mjs
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: solver-host
+          path: output/playwright

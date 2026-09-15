@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <mask id="wrench-behind-bolt" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect width="24" height="24" fill="#fff"/>
+      <g transform="translate(1.4 1.4)">
+        <path
+          d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66l.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21Z"
+          fill="#000"
+          stroke="#000"
+          stroke-width="1.1"
+          stroke-linejoin="round"
+          transform="rotate(45 12 12)"
+        />
+      </g>
+    </mask>
+  </defs>
+
+  <g
+    transform="translate(1 1) scale(.91)"
+    mask="url(#wrench-behind-bolt)"
+    stroke="currentColor"
+    stroke-width=".9"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M22.7 19 13.6 9.9c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4Z"/>
+  </g>
+  <g transform="translate(1.4 1.4)" stroke="currentColor" stroke-width=".9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66l.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21Z" transform="rotate(45 12 12)"/>
+  </g>
+</svg>

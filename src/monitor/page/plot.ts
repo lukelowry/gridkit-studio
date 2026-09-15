@@ -1,10 +1,10 @@
 import { colormap } from '@latkit/colormaps'
-import { type Domain, fieldKey } from '@latkit/model'
-import { createMonitor, type MonitorSource, type Reading } from '@latkit/monitor'
+import { type Domain, fieldKey, position, type Results } from '@latkit/model'
+import { createMonitor, type Reading } from '@latkit/monitor'
 
 import { describe } from '../../errors.js'
 import { menuContext } from '../../menus.js'
-import { createAxis, position } from '../axes.js'
+import { createAxis } from '../axes.js'
 import type { LaneState, MonitorState, Request } from '../messages.js'
 import { paintAxis } from './axis-view.js'
 
@@ -35,7 +35,8 @@ export class Plot {
   private readonly monitor = createMonitor()
   private readonly resize: ResizeObserver
   private hovered: Reading | null = null
-  private source: MonitorSource
+  private readonly read = new AbortController()
+  private loading = false
   private loaded = false
   private shown = false
   private attaching = false
@@ -47,7 +48,7 @@ export class Plot {
 
   constructor(
     public data: LaneState,
-    source: MonitorSource,
+    private readonly results: Results | null,
     private readonly host: PlotHost,
   ) {
     this.root.dataset.key = fieldKey(data.field)
@@ -75,12 +76,7 @@ export class Plot {
     )
     this.chart.append(this.canvas, this.cursor, this.error)
     this.root.append(header, this.axis, this.chart)
-    this.source = source
-    if (data.frameCount) {
-      this.monitor.loadSource(source)
-      this.loaded = true
-    }
-    this.monitor.on('sourceError', (error) => this.fail(error.message))
+    this.monitor.on('error', (error) => this.fail(error.message))
     this.monitor.on('deviceLost', (event) => {
       if (!event.recovering) this.fail(event.message)
     })
@@ -115,6 +111,22 @@ export class Plot {
     this.resize = new ResizeObserver(() => this.drawAxis())
     this.resize.observe(this.chart)
     this.update(data)
+  }
+
+  private async load() {
+    if (!this.results || this.data.signalIndex === null || this.loaded || this.loading) return
+    this.loading = true
+    try {
+      const series = await this.results.series(this.data.field.classId, this.read.signal)
+      if (this.disposed) return
+      this.monitor.load(series, this.data.signalIndex)
+      this.loaded = true
+      if (this.shown) await this.visible(true)
+    } catch (error) {
+      if (!this.read.signal.aborted && !this.disposed) this.fail(describe(error))
+    } finally {
+      this.loading = false
+    }
   }
 
   private get timeRange(): Domain {
@@ -201,10 +213,6 @@ export class Plot {
   }
 
   update(data: LaneState) {
-    if (data.frameCount && !this.loaded) {
-      this.monitor.loadSource(this.source)
-      this.loaded = true
-    }
     this.action.textContent = data.action?.label ?? ''
     this.action.hidden = !data.action
     this.status.title = data.status
@@ -212,8 +220,8 @@ export class Plot {
     this.status.hidden = !data.status
     this.axis.hidden = !data.frameCount
     this.canvas.hidden = !data.frameCount
-    const appended = data.frameCount !== this.data.frameCount
     this.data = data
+    void this.load()
     this.title.textContent = `${data.label}${data.unit ? ` · ${data.unit}` : ''}`
     this.title.title = `${data.label}: ${data.recordedCount.toLocaleString()} of ${data.elementCount.toLocaleString()} elements have samples`
     this.root.dataset.vscodeContext = JSON.stringify(this.context())
@@ -228,7 +236,6 @@ export class Plot {
       this.styleKey = key
       const palette = colormap((data.colormap ?? 'viridis') as Parameters<typeof colormap>[0])
       const domain = data.valueRange
-      const colors = data.colorRange ?? domain
       this.monitor.setOptions({
         lineWidthPx: 1.25,
         focusColor: null,
@@ -236,13 +243,9 @@ export class Plot {
         ...data.appearance,
         timeRange: this.timeRange,
         valueRange: domain,
-        colormap: (t) => {
-          const value = domain[0] * (1 - t) + domain[1] * t
-          return palette(Math.max(0, Math.min(1, position(value, colors))))
-        },
+        colorRange: data.colorRange ?? null,
+        colormap: palette,
       })
-    } else if (appended) {
-      this.monitor.refreshSource()
     }
     this.drawAxis()
     this.updateCursor()
@@ -324,6 +327,7 @@ export class Plot {
 
   dispose() {
     this.disposed = true
+    this.read.abort()
     this.resize.disconnect()
     this.monitor.destroy()
     this.root.remove()

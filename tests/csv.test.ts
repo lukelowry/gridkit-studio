@@ -1,10 +1,15 @@
 import { appendFile, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
+import { collect, sample, validateSeries } from '@latkit/model'
+import { loopback, settle } from '@latkit/port/testing'
+import { connectResults, serveResults } from '@latkit/remote'
+import { build } from 'esbuild'
 import { afterEach, expect, it } from 'vitest'
 
 import { CHUNK_BYTES, decoder, header } from '../src/csv/decode.js'
+import { CsvSource } from '../src/csv/source.js'
 import { CsvFile } from '../src/csv/worker.js'
 const numbers = (text: string, width: number, columns: number[]) => decoder(width, columns)(text)
 import { bindColumns } from '../src/csv/columns.js'
@@ -141,4 +146,152 @@ it("maps infinite bus samples using GridKit's common Bus header prefix", () => {
   expect(bindColumns(raw, model, ['t', 'Bus_infinite_Va'])).toEqual([
     { column: 1, field: { classId: 'bus', source: 'signal', id: 'Va' }, element: 0 },
   ])
+})
+
+it('locates every duplicate across sparse index entries within the captured head', async () => {
+  const { csv, path } = await fixture(
+    't,a\n' +
+      Array.from({ length: 900 }, (_, i) => (i < 200 ? 0 : i < 800 ? 1 : 2) + ',' + i + '\n').join(
+        '',
+      ),
+  )
+  await csv.scan(false)
+  expect(await csv.bounds([1, 1], 900)).toEqual([200, 800])
+  expect(await csv.bounds([1, 1], 500)).toEqual([200, 500])
+  expect(await csv.bounds([-1, -1], 900)).toEqual([0, 0])
+  expect(await csv.bounds([3, 3], 900)).toEqual([900, 900])
+  await appendFile(path, '2,900\n3,901\n')
+  await csv.scan(true)
+  expect(await csv.bounds([2, 3], 900)).toEqual([800, 900])
+  expect(await csv.bounds([2, 3], 902)).toEqual([800, 902])
+  await expect(csv.bounds([0, 3], 902, AbortSignal.abort())).rejects.toMatchObject({
+    name: 'AbortError',
+  })
+})
+
+it('serves sparse f64 series from the real worker and publishes committed appends', async () => {
+  const { path } = await fixture('t,a,b\n0,1000000000000.125,8\n1,1000000000000.25,9\n')
+  const worker = join(dirname(path), 'worker.cjs')
+  await build({
+    entryPoints: [resolve('src/csv/worker.ts')],
+    outfile: worker,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    logLevel: 'silent',
+  })
+  const csv = new CsvSource(path, worker)
+  cleanup.push(() => csv.dispose())
+  await csv.scan(false)
+  csv.columns = [
+    { column: 1, field: { classId: 'bus', source: 'signal', id: 'Vm' }, element: 3 },
+    { column: 2, field: { classId: 'bus', source: 'signal', id: 'Va' }, element: 90000 },
+  ]
+  const series = await csv.series('bus')
+  expect(await csv.series('bus')).toBe(series)
+  expect(series.elements).toEqual(Uint32Array.of(3, 90000))
+  const before = series.state
+  const window = { frameOffset: 0, frameCount: 2, elementOffset: 0, elementCount: 2 }
+  const block = await series.read(0, window)
+  expect(block.values).toEqual(Float64Array.of(1e12 + 0.125, NaN, 1e12 + 0.25, NaN))
+  expect((await series.read(1, window)).values).toEqual(Float64Array.of(NaN, 8, NaN, 9))
+  expect((await series.read(0, { ...window, elementCount: 0 })).time).toEqual(Float64Array.of(0, 1))
+  let appends = 0
+  const off = series.on('append', () => appends++)
+  await appendFile(path, '1,1000000000000.5,10\n')
+  await csv.scan(false)
+  await csv.scan(false)
+  expect(appends).toBe(1)
+  expect(before.frameCount).toBe(2)
+  expect(series.state.frameCount).toBe(3)
+  expect(await series.locate([1, 1], 2)).toEqual([1, 2])
+  expect(await series.locate([1, 1], 3)).toEqual([1, 3])
+  const batches = []
+  for await (const batch of csv.read('bus', [1, 0])) batches.push(batch)
+  expect(batches[0]).toMatchObject({
+    resultId: csv.id,
+    elements: Uint32Array.of(3, 90000),
+    signalCount: 2,
+  })
+  expect([...batches[0].values].slice(0, 4)).toEqual([NaN, 8, 1e12 + 0.125, NaN])
+  await expect(series.read(0, window, AbortSignal.abort())).rejects.toMatchObject({
+    name: 'AbortError',
+  })
+  expect(() => {
+    csv.columns = []
+  }).toThrow(/cannot change/)
+  off()
+})
+
+it('streams CSV results through the released remote protocol without losing sparse indices or f64 samples', async () => {
+  const { path } = await fixture('t,a,b\n')
+  const worker = join(dirname(path), 'worker.cjs')
+  await build({
+    entryPoints: [resolve('src/csv/worker.ts')],
+    outfile: worker,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    logLevel: 'silent',
+  })
+  const csv = new CsvSource(path, worker)
+  cleanup.push(() => csv.dispose())
+  await csv.scan(false)
+  csv.columns = [
+    { column: 1, field: { classId: 'bus', source: 'signal', id: 'Va' }, element: 90000 },
+    { column: 2, field: { classId: 'bus', source: 'signal', id: 'Vm' }, element: 3 },
+  ]
+  const [host, page] = loopback()
+  const stop = serveResults(host, csv, { maxBytes: 1024 })
+  const results = connectResults(page, csv.id)
+  cleanup.push(async () => {
+    results.close()
+    stop()
+  })
+  const series = await results.series('bus')
+  validateSeries(series)
+  expect(await results.series('bus')).toBe(series)
+  expect(series.state).toEqual({ frameCount: 0, timeRange: null, ranges: null })
+  expect(series.elements).toEqual(Uint32Array.of(3, 90000))
+  const before = series.state
+  let appends = 0
+  series.on('append', () => appends++)
+  await appendFile(path, '0,8,1000000000000.125\n1,9,1000000000000.25\n1,10,1000000000000.5\n')
+  await csv.scan(false)
+  await settle()
+  validateSeries(series)
+  expect(appends).toBe(1)
+  expect(before.frameCount).toBe(0)
+  expect(series.state.frameCount).toBe(3)
+  expect(await series.locate([1, 1], 2)).toEqual([1, 2])
+  expect(await series.locate([1, 1], 3)).toEqual([1, 3])
+  const window = { frameOffset: 0, frameCount: 3, elementOffset: 0, elementCount: 2 }
+  const local = await csv.series('bus')
+  const borrowed = await local.read(1, window)
+  expect(await series.read(1, window)).toEqual(borrowed)
+  expect(await sample(series, 1, 1)).toEqual(Float64Array.of(1e12 + 0.25, NaN))
+  const collected = await collect(results.read('bus', [1, 0]))
+  expect(await sample(collected, 0, 0)).toEqual(Float64Array.of(1e12 + 0.125, NaN))
+  expect(await sample(collected, 1, 2)).toEqual(Float64Array.of(NaN, 10))
+  expect(collected.elements).toEqual(series.elements)
+  const all = await collect(results.read('bus', null))
+  expect(await sample(all, 0, 0)).toEqual(Float64Array.of(NaN, 8))
+  expect(await sample(all, 1, 0)).toEqual(Float64Array.of(1e12 + 0.125, NaN))
+  // Remote transfers must leave the worker's cached samples usable.
+  expect((await local.read(1, window)).values).toBe(borrowed.values)
+  expect(borrowed.values.byteLength).toBe(48)
+  expect(borrowed.values[0]).toBe(1e12 + 0.125)
+  await expect(series.read(1, window, AbortSignal.abort())).rejects.toMatchObject({
+    name: 'AbortError',
+  })
+  await expect(series.read(2, window)).rejects.toThrow()
+  await expect(series.read(1, { ...window, frameCount: 4 })).rejects.toThrow()
+  await expect(results.series('missing')).rejects.toThrow(/not recorded/)
+  results.close()
+  await appendFile(path, '2,11,1000000000000.75\n')
+  await csv.scan(false)
+  await settle()
+  expect(appends).toBe(1)
+  expect(local.state.frameCount).toBe(4)
+  await expect(series.read(1, window)).rejects.toThrow()
 })

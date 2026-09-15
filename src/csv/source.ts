@@ -2,8 +2,14 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import { fieldKey, type FieldRef } from '@latkit/model'
-import type { MonitorSource, SourceWindow } from '@latkit/monitor'
+import {
+  createEmitter,
+  fieldKey,
+  type FieldRef,
+  type Results,
+  type RunFrames,
+  type Series,
+} from '@latkit/model'
 import { connect } from '@latkit/port'
 
 import type { CsvColumn } from './columns.js'
@@ -13,7 +19,7 @@ export type { CsvInfo, Samples } from './protocol.js'
 const BLOCK_BYTES = 1024 * 1024
 const CACHE_BYTES = 16 * 1024 * 1024
 
-export class CsvSource {
+export class CsvSource implements Results {
   readonly id = randomUUID()
   private readonly worker: Worker
   private readonly connection
@@ -23,6 +29,7 @@ export class CsvSource {
   private readonly cache = new Map<string, Samples>()
   private cacheBytes = 0
   private position?: { time: number; rows: number; frame: number }
+  private readonly histories = new Map<string, { series: Series; publish(): void; clear(): void }>()
   info?: CsvInfo
   constructor(
     readonly path: string,
@@ -38,6 +45,8 @@ export class CsvSource {
     return this.bindings
   }
   set columns(columns: readonly CsvColumn[]) {
+    if (this.histories.size)
+      throw new Error('Recorded columns cannot change after a series is opened.')
     this.bindings = columns
     this.byField.clear()
     this.fieldRefs.clear()
@@ -50,10 +59,11 @@ export class CsvSource {
     }
   }
   async scan(final = false, signal?: AbortSignal): Promise<CsvInfo> {
-    return (this.info = (await this.connection.call(
-      { type: 'scan', final },
-      { signal },
-    )) as CsvInfo)
+    const info = (await this.connection.call({ type: 'scan', final }, { signal })) as CsvInfo
+    signal?.throwIfAborted()
+    this.info = info
+    for (const history of this.histories.values()) history.publish()
+    return info
   }
   has(field: FieldRef, element?: number): boolean {
     const map = this.byField.get(fieldKey(field))
@@ -81,9 +91,9 @@ export class CsvSource {
     ]
   }
   async timeAt(frame: number, signal?: AbortSignal): Promise<number> {
-    return (await this.read(frame, 1, [], signal)).time[0]
+    return (await this.samples(frame, 1, [], signal)).time[0]
   }
-  private async read(
+  private async samples(
     frameOffset: number,
     frameCount: number,
     columns: readonly number[],
@@ -129,60 +139,144 @@ export class CsvSource {
         const at = offset + i
         return maps[at % fields.length]?.get(elements[Math.floor(at / fields.length)]) ?? -1
       })
-      const result = await this.read(frame, 1, columns, signal)
+      const result = await this.samples(frame, 1, columns, signal)
       values.set(result.values, offset)
     }
     return values
   }
-  source(field: FieldRef, elementCount: number): MonitorSource {
+  /** Recorded signals in their stable column order. */
+  signals(classId: string): readonly FieldRef[] {
+    return this.fields.filter((field) => field.classId === classId)
+  }
+  async series(classId: string, signal?: AbortSignal): Promise<Series> {
+    signal?.throwIfAborted()
+    const existing = this.histories.get(classId)
+    if (existing) return existing.series
+    const fields = this.signals(classId)
+    if (!fields.length) throw new Error('The class was not recorded.')
+    const maps = fields.map((field) => this.byField.get(fieldKey(field))!)
+    const elements = Uint32Array.from(
+      [...new Set(maps.flatMap((map) => [...map.keys()]))].sort((a, b) => a - b),
+    )
     const csv = this
-    const columns = this.byField.get(fieldKey(field))
-    if (!columns) throw new Error('The field was not recorded.')
-    return {
-      elementCount,
-      get frameCount() {
-        return csv.info?.rows ?? 0
+    const events = createEmitter<{ append: undefined }>()
+    let state = this.seriesState()
+    const series: Series = {
+      elementCount: elements.length,
+      signalCount: fields.length,
+      elements,
+      get state() {
+        return state
       },
-      get timeRange() {
-        return csv.info?.range ?? [0, 1]
-      },
-      valueRange: null,
-      locate: (time, signal) => csv.locate(time, signal),
-      async read(window: SourceWindow, signal?: AbortSignal) {
-        const { frameOffset, frameCount, elementOffset, elementCount: count } = window
+      on: (event, listener) => events.on(event, listener),
+      locate: async (range, frameCount, abort) =>
+        (await csv.connection.call(
+          { type: 'bounds', range, frameCount },
+          { signal: abort },
+        )) as readonly [number, number],
+      async read(signalIndex, window, abort) {
+        const { frameOffset, frameCount, elementOffset, elementCount } = window
         if (
-          ![frameOffset, frameCount, elementOffset, count].every(
+          ![signalIndex, frameOffset, frameCount, elementOffset, elementCount].every(
             (n) => Number.isSafeInteger(n) && n >= 0,
           ) ||
-          elementOffset + count > elementCount
+          signalIndex >= maps.length ||
+          elementOffset + elementCount > elements.length ||
+          frameOffset + frameCount > state.frameCount
         )
-          throw new Error('Invalid sample window.')
+          throw new RangeError('Invalid sample window.')
+        const columns = Array.from(
+          elements.subarray(elementOffset, elementOffset + elementCount),
+          (element) => maps[signalIndex].get(element) ?? -1,
+        )
+        if (frameCount * (elementCount + 1) * 8 <= BLOCK_BYTES)
+          return {
+            ...(await csv.samples(frameOffset, frameCount, columns, abort)),
+            stride: elementCount,
+          }
         const time = new Float64Array(frameCount)
-        const values = new Float64Array(frameCount * count)
-        const columnsPerBlock = Math.max(1, Math.min(count, Math.floor(BLOCK_BYTES / 16)))
-        for (let e = 0; e < count; e += columnsPerBlock) {
-          const width = Math.min(columnsPerBlock, count - e)
-          const framesPerBlock = Math.max(1, Math.floor(BLOCK_BYTES / (8 * (width + 1))))
-          const requested = Array.from(
-            { length: width },
-            (_, i) => columns.get(elementOffset + e + i) ?? -1,
-          )
-          for (let f = 0; f < frameCount; f += framesPerBlock) {
-            const size = Math.min(framesPerBlock, frameCount - f)
-            const block = await csv.read(frameOffset + f, size, requested, signal)
+        const values = new Float64Array(frameCount * elementCount)
+        const width = Math.max(1, Math.min(elementCount, Math.floor(BLOCK_BYTES / 16)))
+        for (let e = 0; e < Math.max(1, elementCount); e += width) {
+          const selected = columns.slice(e, e + width)
+          const frames = Math.max(1, Math.floor(BLOCK_BYTES / (8 * (selected.length + 1))))
+          for (let f = 0; f < frameCount; f += frames) {
+            const count = Math.min(frames, frameCount - f)
+            const block = await csv.samples(frameOffset + f, count, selected, abort)
             time.set(block.time, f)
-            for (let row = 0; row < size; row++)
+            for (let row = 0; row < count; row++)
               values.set(
-                block.values.subarray(row * width, (row + 1) * width),
-                (f + row) * count + e,
+                block.values.subarray(row * selected.length, (row + 1) * selected.length),
+                (f + row) * elementCount + e,
               )
           }
         }
-        return { time, values }
+        return { time, values, stride: elementCount }
       },
+    }
+    this.histories.set(classId, {
+      series,
+      publish: () => {
+        const next = csv.seriesState()
+        if (next.frameCount <= state.frameCount) return
+        state = next
+        events.emit('append', undefined)
+      },
+      clear: () => events.clear(),
+    })
+    return series
+  }
+  private seriesState(): Series['state'] {
+    return Object.freeze({
+      frameCount: this.info?.rows ?? 0,
+      timeRange: this.info?.range ? ([...this.info.range] as const) : null,
+      ranges: null,
+    })
+  }
+  async *read(
+    classId: string,
+    signals: readonly number[] | null,
+    signal?: AbortSignal,
+  ): AsyncIterable<RunFrames> {
+    const series = await this.series(classId, signal)
+    const picked = signals ?? Array.from({ length: series.signalCount }, (_, i) => i)
+    if (picked.some((s) => !Number.isSafeInteger(s) || s < 0 || s >= series.signalCount))
+      throw new RangeError('Signal out of range.')
+    const { elementCount, elements } = series
+    const head = series.state.frameCount
+    const frames = Math.max(1, Math.floor(BLOCK_BYTES / (8 * (elementCount * picked.length + 1))))
+    for (let f = 0; f < head; f += frames) {
+      const count = Math.min(frames, head - f)
+      let time: Float64Array | undefined
+      const values = new Float64Array(count * elementCount * picked.length)
+      for (let s = 0; s < picked.length; s++) {
+        const block = await series.read(
+          picked[s],
+          { frameOffset: f, frameCount: count, elementOffset: 0, elementCount },
+          signal,
+        )
+        time = block.time
+        for (let row = 0; row < count; row++)
+          values.set(
+            block.values.subarray(row * block.stride, row * block.stride + elementCount),
+            (row * picked.length + s) * elementCount,
+          )
+      }
+      time ??= (await this.samples(f, count, [], signal)).time
+      yield {
+        resultId: this.id,
+        classId,
+        elementCount,
+        elements,
+        signalCount: picked.length,
+        time,
+        values,
+      }
     }
   }
   async dispose(): Promise<void> {
+    for (const history of this.histories.values()) history.clear()
+    this.histories.clear()
     this.connection.close()
     this.cache.clear()
     this.cacheBytes = 0

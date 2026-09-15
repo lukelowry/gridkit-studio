@@ -29,13 +29,16 @@ try {
   const elements = csv.columns
     .filter((column) => column.field.classId === field.classId && column.field.id === field.id)
     .map((column) => column.element)
-  const source = csv.source(field, Math.max(...elements) + 1)
-  const series = await source.read({
-    frameOffset: 0,
-    frameCount: info.rows,
-    elementOffset: 0,
-    elementCount: source.elementCount,
-  })
+  const source = await csv.series(field.classId)
+  const series = await source.read(
+    csv.signals(field.classId).findIndex((s) => s.id === field.id),
+    {
+      frameOffset: 0,
+      frameCount: info.rows,
+      elementOffset: 0,
+      elementCount: source.elementCount,
+    },
+  )
   assert.equal(series.time.length, info.rows)
   const frame = await csv.cellsAt(await csv.locate(1), [field], [elements[0]])
   assert.ok(Number.isFinite(frame[0]))
@@ -94,15 +97,18 @@ try {
   let peakMemory = initialMemory
   let samples = 0
   for (const field of fields) {
-    const source = csv.source(field, elementCount)
+    const source = await csv.series(field.classId)
     for (let offset = 0; offset < frameCount; offset += 32) {
       const count = Math.min(32, frameCount - offset)
-      const block = await source.read({
-        frameOffset: offset,
-        frameCount: count,
-        elementOffset: 0,
-        elementCount,
-      })
+      const block = await source.read(
+        csv.signals(field.classId).findIndex((s) => s.id === field.id),
+        {
+          frameOffset: offset,
+          frameCount: count,
+          elementOffset: 0,
+          elementCount,
+        },
+      )
       samples += block.values.length
       peakMemory = Math.max(peakMemory, process.memoryUsage().rss)
       assert.equal(block.time[0], Math.floor(offset / 2) / 10)
@@ -121,9 +127,11 @@ try {
   const abort = new AbortController()
   abort.abort()
   await assert.rejects(
-    csv
-      .source(fields[0], elementCount)
-      .read({ frameOffset: 0, frameCount: 32, elementOffset: 0, elementCount }, abort.signal),
+    (await csv.series(fields[0].classId)).read(
+      0,
+      { frameOffset: 0, frameCount: 32, elementOffset: 0, elementCount },
+      abort.signal,
+    ),
     { name: 'AbortError' },
   )
   console.log(

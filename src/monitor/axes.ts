@@ -11,15 +11,6 @@ export interface Axis {
   annotation: string
 }
 
-/** Normalize in f64, including domains whose subtraction overflows. */
-export function position(value: number, [min, max]: Domain): number {
-  const span = max - min
-  if (!span) return 0.5
-  if (Number.isFinite(span)) return (value - min) / span
-  const scale = Math.max(Math.abs(min), Math.abs(max))
-  return (value / scale - min / scale) / (max / scale - min / scale)
-}
-
 /** Display padding never changes samples or the independent color domain. */
 export function paddedDomain([min, max]: Domain): Domain {
   const span = max - min

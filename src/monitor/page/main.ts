@@ -1,13 +1,11 @@
 import './style.css'
 
-import { type Domain, fieldKey } from '@latkit/model'
-import type { MonitorSource, SourceBlock } from '@latkit/monitor'
-import { connect } from '@latkit/port'
+import { type Domain, fieldKey, position, type Results } from '@latkit/model'
+import { connectResults, type Remote } from '@latkit/remote'
 
 import { port, vscode } from '../../webview/client.js'
-import { createAxis, position } from '../axes.js'
+import { createAxis } from '../axes.js'
 import type { LaneState, MonitorState, Request, ToMonitor } from '../messages.js'
-import { sourceProtocol } from '../source.js'
 import { paintAxis } from './axis-view.js'
 import { Plot } from './plot.js'
 
@@ -18,7 +16,7 @@ const timeAxis = document.querySelector<HTMLElement>('#time-axis')!
 const ticks = document.querySelector<HTMLElement>('#time-ticks')!
 const caption = document.querySelector<HTMLElement>('#time-caption')!
 const cursor = document.querySelector<HTMLElement>('.time-cursor')!
-const connection = connect(port, sourceProtocol)
+let results: Remote<Results> | null = null
 const plots = new Map<string, Plot>()
 let state: MonitorState
 let receivedAt = 0
@@ -71,29 +69,7 @@ function updateAxes() {
 }
 
 function addPlot(data: LaneState) {
-  const sourceId = state.sourceId
-  let plot: Plot
-  const source: MonitorSource = {
-    elementCount: data.elementCount,
-    get frameCount() {
-      return plot?.data.frameCount ?? data.frameCount
-    },
-    get timeRange() {
-      return plot?.data.range ?? data.range
-    },
-    valueRange: null,
-    locate: async (time, signal) =>
-      (await connection.call(
-        { sourceId: sourceId!, field: data.field, type: 'locate', time },
-        { signal },
-      )) as number,
-    read: async (window, signal) =>
-      (await connection.call(
-        { sourceId: sourceId!, field: data.field, type: 'read', window },
-        { signal },
-      )) as SourceBlock,
-  }
-  plot = new Plot(data, source, { state: () => state, send, axisChanged: updateAxes })
+  const plot = new Plot(data, results, { state: () => state, send, axisChanged: updateAxes })
   plots.set(fieldKey(data.field), plot)
   container.append(plot.root)
   visibility.observe(plot.root)
@@ -144,6 +120,8 @@ port.subscribe((value) => {
   const message = value as ToMonitor
   if (message.type === 'monitor') {
     if (state?.target?.uri !== message.target?.uri || state?.sourceId !== message.sourceId) {
+      results?.close()
+      results = message.sourceId ? connectResults(port, message.sourceId) : null
       cancelScrub()
       for (const key of plots.keys()) removePlot(key)
     }
@@ -285,6 +263,6 @@ window.addEventListener('pagehide', () => {
   resize.disconnect()
   visibility.disconnect()
   for (const plot of plots.values()) plot.dispose()
-  connection.close()
+  results?.close()
 })
 send({ type: 'ready' })

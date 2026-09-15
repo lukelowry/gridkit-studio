@@ -1,12 +1,14 @@
 import { COLORMAPS } from '@latkit/colormaps'
 import { fieldKey, type FieldRef } from '@latkit/model'
 import { OPTIONS, validateOptions } from '@latkit/monitor'
-import { type Port, serve, transferred } from '@latkit/port'
+import type { Port } from '@latkit/port'
+import { serveResults } from '@latkit/remote'
 import * as vscode from 'vscode'
 
 import { coalesce, Latest } from '../async.js'
 import type { Cases, CaseState } from '../case.js'
 import { caseCommand, command } from '../commands.js'
+import type { CsvSource } from '../csv/source.js'
 import { describe } from '../errors.js'
 import { signalStatus } from '../fields.js'
 import { bound, classCapabilities } from '../menus.js'
@@ -15,12 +17,12 @@ import type { Target } from '../targets.js'
 import { html, webviewPort } from '../webview/host.js'
 import { paddedDomain } from './axes.js'
 import { isRequest, type LaneState, type PlotPreferences, type ToMonitor } from './messages.js'
-import { sourceProtocol } from './source.js'
 
 export const MONITOR = 'gridkitStudio.monitor'
 export class MonitorView implements vscode.WebviewViewProvider, vscode.Disposable {
   private view?: vscode.WebviewView
   private port?: Port
+  private served?: { id: string; close(): void }
   private state?: CaseState
   private subscription?: vscode.Disposable
   private readonly activated: vscode.Disposable
@@ -99,30 +101,13 @@ export class MonitorView implements vscode.WebviewViewProvider, vscode.Disposabl
     this.view = view
     const port = webviewPort(view.webview)
     this.port = port
-    const service = serve(port, sourceProtocol, async (request, signal) => {
-      const state = this.state
-      const csv = state?.source
-      if (
-        !state ||
-        !csv ||
-        csv.id !== request.sourceId ||
-        !state.plots.has(fieldKey(request.field))
-      )
-        throw new Error('These signals are no longer open.')
-      const count = state.fields?.model.classes.find(
-        (cls) => cls.id === request.field.classId,
-      )?.count
-      if (!count) throw new Error('The element class no longer exists.')
-      const source = csv.source(request.field, count)
-      if (request.type === 'locate') return source.locate(request.time, signal)
-      const block = await source.read(request.window, signal)
-      return transferred(block, [
-        block.time.buffer as ArrayBuffer,
-        block.values.buffer as ArrayBuffer,
-      ])
-    })
     this.subscriptions.push(
-      { dispose: () => service.close() },
+      {
+        dispose: () => {
+          this.served?.close()
+          this.served = undefined
+        },
+      },
       view.webview.onDidReceiveMessage((message: unknown) => {
         if (!isRequest(message)) return
         if (message.type === 'ready') {
@@ -283,6 +268,9 @@ export class MonitorView implements vscode.WebviewViewProvider, vscode.Disposabl
         const available = status.available > 0
         return {
           field,
+          signalIndex: csv?.has(field)
+            ? csv.signals(field.classId).findIndex((signal) => fieldKey(signal) === fieldKey(field))
+            : null,
           label: `${cls.label} / ${info.label}`,
           unit: info.unit,
           recordedCount: status.available,
@@ -324,11 +312,17 @@ export class MonitorView implements vscode.WebviewViewProvider, vscode.Disposabl
     }
     return 'Add a plot to inspect signals.'
   }
+  private serve(csv?: CsvSource): void {
+    if (this.served?.id === csv?.id) return
+    this.served?.close()
+    this.served = csv && this.port ? { id: csv.id, close: serveResults(this.port, csv) } : undefined
+  }
   private async refresh(): Promise<void> {
     const signal = this.refreshRead.next()
     const state = this.state
     const csv = state?.source
     if (!this.view?.visible) return
+    this.serve(csv)
     try {
       const fields = await this.lanes(state, signal)
       if (signal.aborted || state !== this.state) return
@@ -534,6 +528,7 @@ export class MonitorView implements vscode.WebviewViewProvider, vscode.Disposabl
     if (choice && !state.disposed) state.setDisplay({ colormap: choice.value })
   }
   dispose(): void {
+    this.served?.close()
     this.cursorRead.abort()
     this.refreshRead.abort()
     this.subscription?.dispose()

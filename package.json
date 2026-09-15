@@ -2,7 +2,7 @@
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
   "description": "Power system visualization and simulation tools.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
   "license": "MIT",
@@ -66,11 +66,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ],
-    "patchedDependencies": {
-      "@latkit/monitor@0.3.0": "patches/@latkit__monitor@0.3.0.patch",
-      "@latkit/colormaps@0.2.0": "patches/@latkit__colormaps@0.2.0.patch"
-    }
+    ]
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -1203,12 +1199,12 @@
     ]
   },
   "dependencies": {
-    "@latkit/colormaps": "^0.2.0",
-    "@latkit/model": "0.4.0",
-    "@latkit/monitor": "0.3.0",
-    "@latkit/network": "0.10.1",
-    "@latkit/port": "0.2.0",
-    "@latkit/remote": "0.3.1",
+    "@latkit/colormaps": "0.2.1",
+    "@latkit/model": "0.5.0",
+    "@latkit/monitor": "0.4.0",
+    "@latkit/network": "0.10.2",
+    "@latkit/port": "0.2.1",
+    "@latkit/remote": "0.4.0",
     "jsonc-parser": "3.3.1"
   },
   "repository": {

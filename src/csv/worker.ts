@@ -79,6 +79,52 @@ export class CsvFile {
     }
     return found
   }
+  /** Bounds include every repeated timestamp and honor the caller's committed head. */
+  async bounds(
+    range: readonly [number, number],
+    frameCount: number,
+    signal?: AbortSignal,
+  ): Promise<readonly [number, number]> {
+    signal?.throwIfAborted()
+    if (
+      !range.every(Number.isFinite) ||
+      range[0] > range[1] ||
+      !Number.isSafeInteger(frameCount) ||
+      frameCount < 0 ||
+      frameCount > this.info.rows
+    )
+      throw new RangeError('Invalid time bounds.')
+    if (!frameCount || !this.file) return [0, 0]
+    const bound = async (time: number, upper: boolean): Promise<number> => {
+      let low = 0
+      let high = this.index.length
+      while (low < high) {
+        const mid = low + Math.floor((high - low) / 2)
+        if (
+          this.index[mid].frame < frameCount &&
+          (this.index[mid].time < time || (upper && this.index[mid].time === time))
+        )
+          low = mid + 1
+        else high = mid
+      }
+      const start = this.index[Math.max(0, low - 1)]
+      const decode = decoder(this.info.headers.length, [])
+      let frame = start.frame
+      for await (const row of lines(this.file!, start.offset, this.offset, true, signal)) {
+        if (!row.text) continue
+        if (frame >= frameCount) break
+        const value = decode(row.text).time
+        if (value > time || (!upper && value === time)) return frame
+        frame++
+        if (frame % 1024 === 0) {
+          await setImmediate()
+          signal?.throwIfAborted()
+        }
+      }
+      return frameCount
+    }
+    return [await bound(range[0], false), await bound(range[1], true)]
+  }
   async extent(
     columns: readonly number[],
     signal?: AbortSignal,
@@ -172,6 +218,7 @@ if (parentPort) {
         signal.throwIfAborted()
         if (query.type === 'extent') return file.extent(query.columns, signal)
         if (query.type === 'scan') return file.scan(query.final, signal)
+        if (query.type === 'bounds') return file.bounds(query.range, query.frameCount, signal)
         if (query.type === 'locate') return file.locate(query.time, signal)
         const value = await file.read(query.frameOffset, query.frameCount, query.columns, signal)
         return transferred(value, [

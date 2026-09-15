@@ -4,36 +4,28 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  '@latkit/colormaps@0.2.0':
-    hash: 080f160fba6112899fe3d1de3ffa9933e39f79bc385af6f314cc5c739c98171d
-    path: patches/@latkit__colormaps@0.2.0.patch
-  '@latkit/monitor@0.3.0':
-    hash: 4b055652fefa9229c805bf00a020fd567de1201616666140a0ca759136a4fe34
-    path: patches/@latkit__monitor@0.3.0.patch
-
 importers:
 
   .:
     dependencies:
       '@latkit/colormaps':
-        specifier: ^0.2.0
-        version: 0.2.0(patch_hash=080f160fba6112899fe3d1de3ffa9933e39f79bc385af6f314cc5c739c98171d)
+        specifier: 0.2.1
+        version: 0.2.1
       '@latkit/model':
+        specifier: 0.5.0
+        version: 0.5.0
+      '@latkit/monitor':
         specifier: 0.4.0
         version: 0.4.0
-      '@latkit/monitor':
-        specifier: 0.3.0
-        version: 0.3.0(patch_hash=4b055652fefa9229c805bf00a020fd567de1201616666140a0ca759136a4fe34)
       '@latkit/network':
-        specifier: 0.10.1
-        version: 0.10.1
+        specifier: 0.10.2
+        version: 0.10.2
       '@latkit/port':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.2.1
+        version: 0.2.1
       '@latkit/remote':
-        specifier: 0.3.1
-        version: 0.3.1
+        specifier: 0.4.0
+        version: 0.4.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -547,26 +539,26 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@latkit/colormaps@0.2.0':
-    resolution: {integrity: sha512-OgFcB53k1+1foSxxglHMYWedB8PelATghML8AVx0EggCGipsn6vxI4NEE/17yRYFy5zCRljvstHWqFxSGIr6sQ==}
+  '@latkit/colormaps@0.2.1':
+    resolution: {integrity: sha512-RC1kmFvoSQLOv8jzKVhDkP6Y2hjeAEzArxaTVf/48bJtIEb0pdAJI35LDjF6YHKCnamdv8tGp4N5rT8Acf7IdQ==}
 
-  '@latkit/gpu@0.3.0':
-    resolution: {integrity: sha512-h+1mguWEG2VejOoFejg8jv1awKhI8DjP447uepOsNnQuJj7oXgcwjo72B9cwv8aGDPMv+xSN4P1/7V2YCYO1iw==}
+  '@latkit/gpu@0.3.1':
+    resolution: {integrity: sha512-MJZ0gmvZshzonURFz7hRGIMAKKWXMctYzNt5odyMsn+yNn7Vs3cV1+tmM0W8CCPsIVdOV9z6/PtBuiKv4rvrTA==}
 
-  '@latkit/model@0.4.0':
-    resolution: {integrity: sha512-y3PESshJ12u3ZL6zL+OlLc+a7a3YgHlljMTffJdszyRDqLaJM2uAxEHGhfew0VCw9Bz4J5Pk91gEZHNYqqAERw==}
+  '@latkit/model@0.5.0':
+    resolution: {integrity: sha512-eptFpnB3o0/M80GKy3l5k/WQ6tDmKxfRDRDtZ0Er0Q4LkF6NQsS5MLHh4X8gvk5ph7xNpJVFZ2Sjpy9lZNE/pw==}
 
-  '@latkit/monitor@0.3.0':
-    resolution: {integrity: sha512-wteyJlnP4ZZX4YPjzGNIAMmR4V1poC72do+WLv6KxUk2iYyEPLS9+WMe5B1VDOAVU47cztdc5kQOpA3O5AMnSQ==}
+  '@latkit/monitor@0.4.0':
+    resolution: {integrity: sha512-CnKf1Gc3m/2FLpVByx/wLLicv0dz9rCYG3ijjVhkLMbf00FNgWGVZI7OVjVQieTBTq3xCbLA4KxtkXj4ZX6KRg==}
 
-  '@latkit/network@0.10.1':
-    resolution: {integrity: sha512-NgH0sQPn8XnUOPxUrOnBvf9jUJ5r+V/f3Rom1yPmEZAyCfysCyGLeBW+shCloXyd3wROSLQx9wQTovAEYs8FDg==}
+  '@latkit/network@0.10.2':
+    resolution: {integrity: sha512-fjgYphrpJTrWSd2ermb1I9/V1UCeHnAtp+3bekmkwuiyX9Z3HswAZe7QyriBpuvZ+paQTiezPxSHXvjljcFAJA==}
 
-  '@latkit/port@0.2.0':
-    resolution: {integrity: sha512-jdUoXUGxlDstW0yod2vCJEAb6LBNUEUgi6YhplLvFWASC0M110Cj7KRQOaXm8GVRqmkjr7rLVbczneLdTglE2w==}
+  '@latkit/port@0.2.1':
+    resolution: {integrity: sha512-5O4ALr890RYpyuLTEsVC6yF3IiENEBk6Vh5R0MVI4NjjKpBe4DPOi1QOhW9REg1Xl7oxbtTrcSP41bQvd6eyAA==}
 
-  '@latkit/remote@0.3.1':
-    resolution: {integrity: sha512-qg/z+/Epakh8bbsn4GEZjqnP4vweRYK8FM8/3nv8C+bJIQ9as1eXV8/E027J+WXqmraOjqsS4LqyEBkwVlOclA==}
+  '@latkit/remote@0.4.0':
+    resolution: {integrity: sha512-qDZqoDFD0dTDvQoIpd3UQ+MPfPDq6yvRhzuTo+Of8AJDRSWPsnKWY+sCCjbeUbny9ezi5JMwf1Dcw+DOVmSRWw==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -2779,34 +2771,34 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@latkit/colormaps@0.2.0(patch_hash=080f160fba6112899fe3d1de3ffa9933e39f79bc385af6f314cc5c739c98171d)':
+  '@latkit/colormaps@0.2.1':
     dependencies:
-      '@latkit/model': 0.4.0
+      '@latkit/model': 0.5.0
 
-  '@latkit/gpu@0.3.0':
+  '@latkit/gpu@0.3.1':
     dependencies:
       '@webgpu/types': 0.1.72
 
-  '@latkit/model@0.4.0': {}
+  '@latkit/model@0.5.0': {}
 
-  '@latkit/monitor@0.3.0(patch_hash=4b055652fefa9229c805bf00a020fd567de1201616666140a0ca759136a4fe34)':
+  '@latkit/monitor@0.4.0':
     dependencies:
-      '@latkit/gpu': 0.3.0
-      '@latkit/model': 0.4.0
+      '@latkit/gpu': 0.3.1
+      '@latkit/model': 0.5.0
       '@webgpu/types': 0.1.72
 
-  '@latkit/network@0.10.1':
+  '@latkit/network@0.10.2':
     dependencies:
-      '@latkit/gpu': 0.3.0
-      '@latkit/model': 0.4.0
+      '@latkit/gpu': 0.3.1
+      '@latkit/model': 0.5.0
       '@webgpu/types': 0.1.72
 
-  '@latkit/port@0.2.0': {}
+  '@latkit/port@0.2.1': {}
 
-  '@latkit/remote@0.3.1':
+  '@latkit/remote@0.4.0':
     dependencies:
-      '@latkit/model': 0.4.0
-      '@latkit/port': 0.2.0
+      '@latkit/model': 0.5.0
+      '@latkit/port': 0.2.1
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true

@@ -1,6 +1,7 @@
+import { position } from '@latkit/model'
 import { expect, it } from 'vitest'
 
-import { createAxis, paddedDomain, position } from '../src/monitor/axes.js'
+import { createAxis, paddedDomain } from '../src/monitor/axes.js'
 
 it('labels tiny differences explicitly without rounding distinct ticks to the same value', () => {
   const axis = createAxis([1, 1 + 1e-8], 180, true)

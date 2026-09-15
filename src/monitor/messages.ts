@@ -13,6 +13,7 @@ export interface PlotPreferences {
 }
 export type SignalAction = 'signalElements' | 'runSolver' | 'showSolverOutput'
 export interface LaneState {
+  signalIndex: number | null
   field: FieldRef
   label: string
   unit?: string

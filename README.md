@@ -14,7 +14,7 @@ In a devcontainer or SSH session, these tools must be available there. Set **Dyn
 
 ## Develop
 
-Use Node.js 24 and pnpm 10.30.0.
+Use Node.js 24 and pnpm 10.30.0. Latkit dependencies are installed from npm.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -29,4 +29,3 @@ F5 opens the development host with `cases`. Packaging writes `dist/gridkit-studi
 ## Author
 
 GridKit Studio is developed by [Luke Lowery](https://lukelowry.github.io/) and began during his PhD studies at Texas A&M University. See his [Google Scholar profile](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) for publications and [GridKit](https://github.com/ORNL/GridKit) for more information about this work.
-

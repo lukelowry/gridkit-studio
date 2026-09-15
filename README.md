@@ -28,4 +28,4 @@ F5 opens the development host with `cases`. Packaging writes `dist/gridkit-studi
 
 ## Release
 
-Set the version in `package.json`, commit, and push a matching `v<version>` tag. CI tests the tagged commit and publishes a GitHub Release with the verified VSIX. No Marketplace credentials are needed.
+Set the version in `package.json` and push the commit to `main`. In **Actions > CI > Run workflow**, select **Publish release**. CI tests that commit and publishes its VSIX. Pushing a matching `v<version>` tag also publishes. Published versions are never replaced.

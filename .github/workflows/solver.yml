@@ -5,8 +5,8 @@ on:
   workflow_dispatch:
   workflow_call:
 concurrency:
-  group: gridkit-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: gridkit-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
 permissions:
   contents: read
 jobs:

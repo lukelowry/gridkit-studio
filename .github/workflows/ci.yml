@@ -4,11 +4,17 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish release
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
 jobs:
   build:
     strategy:
@@ -81,26 +87,42 @@ jobs:
   solver:
     uses: ./.github/workflows/solver.yml
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish)
     needs: [build, host, solver]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: publish-release
+      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: gridkit-studio
           path: dist
       - name: Publish GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          asset="dist/gridkit-studio-${RELEASE_TAG#v}.vsix"
+          tag="v$(unzip -p dist/gridkit-studio.vsix extension/package.json | jq -er .version)"
+          asset="dist/gridkit-studio-${tag#v}.vsix"
           mv dist/gridkit-studio.vsix "$asset"
-          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --draft --verify-tag --title "GridKit Studio $RELEASE_TAG" --generate-notes
+          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
+            echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
-          gh release upload "$RELEASE_TAG" "$asset" --clobber
-          gh release edit "$RELEASE_TAG" --draft=false
+          if commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha 2>/dev/null)"; then
+            if [[ "$commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::$tag points to another commit. Use a new version."
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
+          fi
+          if ! gh release view "$tag" > /dev/null 2>&1; then
+            gh release create "$tag" --draft --verify-tag --title "GridKit Studio $tag" --generate-notes
+          fi
+          gh release upload "$tag" "$asset" --clobber
+          gh release edit "$tag" --draft=false

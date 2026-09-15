@@ -1,6 +1,6 @@
 # Third-party notices
 
-These components are included in the packaged extension.
+Notices for the packaged extension and bundled development cases.
 
 ## @latkit/colormaps, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network, @latkit/port, @latkit/remote
 
@@ -289,3 +289,82 @@ Apache License
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+## GridKit case data and test fixtures
+
+The files in `cases/` and `tests/fixtures/solver/` include data adapted from
+[GridKit](https://github.com/ORNL/GridKit). Case sources and adaptations are described
+in [cases/README.md](https://github.com/lukelowry/gridkit-studio/blob/main/cases/README.md).
+
+This product includes software produced by UT-Battelle, LLC under Contract
+No. DE-AC05-00OR22725 with the Department of Energy.
+
+Copyright (c) 2025, UT-Battelle.
+All rights reserved.
+
+GridKit™ version 0.1
+
+
+Open Source License:
+
+Subject to the conditions of this License, UT-Battelle, LLC, hereby grants
+free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable copyright license to use, copy, modify,
+merge, publish, distribute, and/or sublicense copies of the Software.
+
+1. Redistributions of Software must retain the above open source license grant,
+copyright and license notices, this list of conditions, and the disclaimer
+listed below.  Changes or modifications to, or derivative works of the
+Software must be noted with comments and the contributor and organization's
+name.  If the Software is protected by a proprietary trademark owned by
+UT-Battelle, LLC or the Department of Energy, then derivative works of the
+Software may not be distributed using the trademark without the prior written
+approval of the trademark owner.
+
+2. Neither the names of Licensor nor the Department of Energy may be used to
+endorse or promote products derived from this Software without their specific
+prior written permission.
+
+3. The Software, with or without modification, must include the following
+acknowledgment: "This product includes software produced by UT-Battelle, LLC
+under Contract No. DE-AC05-00OR22725 with the Department of Energy.”
+
+
+
+-------------------------------------------------------------------------------
+
+DISCLAIMER:
+
+UT-BATTELLE, LLC, AND THE GOVERNMENT MAKE NO REPRESENTATIONS AND DISCLAIM ALL
+WARRANTIES, BOTH EXPRESSED AND IMPLIED. THERE ARE NO EXPRESS OR IMPLIED
+WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, OR THAT THE
+USE OF THE SOFTWARE WILL NOT INFRINGE ANY PATENT, COPYRIGHT, TRADEMARK, OR
+OTHER PROPRIETARY RIGHTS, OR THAT THE SOFTWARE WILL ACCOMPLISH THE INTENDED
+RESULTS OR THAT THE SOFTWARE OR ITS USE WILL NOT RESULT IN INJURY OR DAMAGE.
+THE USER ASSUMES RESPONSIBILITY FOR ALL LIABILITIES, PENALTIES, FINES, CLAIMS,
+CAUSES OF ACTION, AND COSTS AND EXPENSES, CAUSED BY, RESULTING FROM OR ARISING
+OUT OF, IN WHOLE OR IN PART THE USE, STORAGE OR DISPOSAL OF THE SOFTWARE.
+
+Disclaimer:
+
+This material was prepared as an account of work sponsored by an agency of the
+United States Government.  Neither the United States Government nor the United
+States Department of Energy, nor UT-Battelle, nor any of their employees, nor
+any jurisdiction or organization that has cooperated in the development of
+these materials, makes any warranty, express or implied, or assumes any legal
+liability or responsibility for the accuracy, completeness, or usefulness or
+any information, apparatus, product, software, or process disclosed, or
+represents that its use would not infringe privately owned rights.
+
+Reference herein to any specific commercial product, process, or service by
+trade name, trademark, manufacturer, or otherwise does not necessarily
+constitute or imply its endorsement, recommendation, or favoring by the United
+States Government or any agency thereof, or UT Batelle. The views and opinions
+of authors expressed herein do not necessarily state or reflect those of the
+United States Government or any agency thereof.
+
+OAK RIDGE NATIONAL LABORATORY
+operated by UT-BATTELLE for the
+UNITED STATES DEPARTMENT OF ENERGY
+under Contract DE-AC05-00OR22725

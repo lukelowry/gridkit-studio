@@ -26,6 +26,7 @@ pnpm package
 
 F5 opens the development host with `cases`. Packaging writes `dist/gridkit-studio.vsix`.
 
-## Release
+## Author
 
-Set the version in `package.json` and push the commit to `main`. In **Actions > CI > Run workflow**, select **Publish release**. CI tests that commit and publishes its VSIX. Pushing a matching `v<version>` tag also publishes. Published versions are never replaced.
+GridKit Studio is developed by [Luke Lowery](https://lukelowry.github.io/) and began during his PhD studies at Texas A&M University. See his [Google Scholar profile](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) for publications and [GridKit](https://github.com/ORNL/GridKit) for more information about this work.
+

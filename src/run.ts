@@ -33,11 +33,14 @@ export class Run {
   private disposed = false
   private reading: Promise<void> = Promise.resolve()
   private before?: string
+  private source?: CsvSource
+  private disposal?: Promise<void>
   constructor(
     readonly state: CaseState,
     readonly launch: SolverLaunch,
     private readonly diagnostics: vscode.DiagnosticCollection,
     private readonly command: SimulationCommand,
+    readonly provenance?: Readonly<Record<string, unknown>>,
   ) {
     this.target = state.target
     this.monitoring = indexMonitoring(launch.raw)
@@ -71,7 +74,8 @@ export class Run {
             if (final && monitored) throw new Error('GridKit did not produce new CSV output.')
             return
           }
-          await this.state.attachSource(new CsvSource(this.launch.output))
+          this.source = new CsvSource(this.launch.output)
+          await this.state.attachSource(this.source)
         }
         const source = this.state.source!
         const previous = source.info?.rows
@@ -172,6 +176,7 @@ export class Run {
         )
       if (this.dataError)
         throw new Error(`Simulation output could not be loaded: ${this.dataError}`)
+      await this.launch.publish?.()
       this.status = 'completed'
       return 0
     } catch (error) {
@@ -206,10 +211,21 @@ export class Run {
       await this.finish(() => {})
     } else await this.execution?.cancel()
   }
-  async dispose(): Promise<void> {
-    if (this.disposed) return
-    this.disposed = true
-    await this.cancel()
-    this.diagnostics.delete(this.state.document.uri)
+  dispose(): Promise<void> {
+    return (this.disposal ??= (async () => {
+      this.disposed = true
+      await this.cancel()
+      if (this.started) await this.done
+      await this.reading.catch(() => {})
+      try {
+        await this.source?.dispose()
+      } finally {
+        try {
+          await this.launch.dispose?.()
+        } finally {
+          this.diagnostics.delete(this.state.document.uri)
+        }
+      }
+    })())
   }
 }

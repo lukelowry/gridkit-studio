@@ -16,7 +16,7 @@ export async function showSource(cases: Cases, target: Target): Promise<void> {
   const state = cases.resolve(target)
   if (!state) return
   const document = state.document
-  let span = target.element ? cases.documents.source(document, target.element) : undefined
+  let span = target.element ? await cases.documents.source(document, target.element) : undefined
   if (
     span &&
     target.field?.source === 'column' &&

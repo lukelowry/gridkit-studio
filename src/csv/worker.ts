@@ -4,14 +4,17 @@ import { parentPort, workerData } from 'node:worker_threads'
 
 import { serve, transferred } from '@latkit/port'
 
+import { ByteBudget } from '../budget.js'
 import { SharedCache } from '../cache.js'
 import { serveTableWorker } from '../table/worker-service.js'
 import { decoder, header, lines } from './decode.js'
+import { MAX_COLUMNS, sampleBytes } from './limits.js'
 import { workerPort } from './port.js'
 import { type CsvInfo, csvProtocol, type Query, type Samples } from './protocol.js'
 export type { CsvInfo, Samples } from './protocol.js'
 
 export class CsvFile {
+  private readonly reads = new ByteBudget(64 * 1024 * 1024, 64)
   private file?: FileHandle
   private offset = 0
   private info: CsvInfo = { headers: [], rows: 0, range: null, bytes: 0, indexEntries: 0 }
@@ -73,6 +76,7 @@ export class CsvFile {
           }
         }
         this.info.rows++
+        this.offset = row.end
         if (this.info.rows % 1024 === 0) {
           await setImmediate()
           signal?.throwIfAborted()
@@ -169,9 +173,9 @@ export class CsvFile {
       )
     )
       throw new Error('Invalid signal columns.')
+    if (columns.length > MAX_COLUMNS) throw new RangeError('Too many CSV columns.')
     const key = columns.join(',')
-    const extent = this.extents.get(key) ?? { frame: 0, min: Infinity, max: -Infinity }
-    this.extents.set(key, extent)
+    const extent = { ...(this.extents.get(key) ?? { frame: 0, min: Infinity, max: -Infinity }) }
     const start = this.start(extent.frame, 'frame')
     if (this.file && start && extent.frame < this.info.rows) {
       const decode = decoder(this.info.headers.length, columns)
@@ -192,9 +196,23 @@ export class CsvFile {
         }
       }
     }
+    if (extent.frame >= (this.extents.get(key)?.frame ?? 0)) this.extents.set(key, extent)
     return extent.min === Infinity ? [0, 1] : [extent.min, extent.max]
   }
   async read(
+    frameOffset: number,
+    frameCount: number,
+    columns: readonly number[],
+    signal?: AbortSignal,
+  ): Promise<Samples> {
+    const release = await this.reads.acquire(sampleBytes(frameCount, columns.length), signal)
+    try {
+      return await this.readSamples(frameOffset, frameCount, columns, signal)
+    } finally {
+      release()
+    }
+  }
+  private async readSamples(
     frameOffset: number,
     frameCount: number,
     columns: readonly number[],
@@ -209,6 +227,8 @@ export class CsvFile {
       )
     )
       throw new Error('Invalid CSV block.')
+    sampleBytes(frameCount, columns.length)
+    if (columns.length > MAX_COLUMNS) throw new RangeError('Too many CSV columns.')
     if (frameCount === 1 && this.info.headers.length * 8 <= this.frameBudget) {
       const sample = await this.frame(frameOffset, signal)
       signal?.throwIfAborted()
@@ -253,12 +273,15 @@ export class CsvFile {
 if (parentPort) {
   const file = new CsvFile(workerData.path)
   serveTableWorker(workerPort(parentPort), file)
-  let pending: Promise<unknown> = Promise.resolve()
+  let scanning: Promise<unknown> = Promise.resolve()
+  const reads = new ByteBudget(4, 64)
+  const background = new ByteBudget(1, 16)
+  const active = new Set<Promise<unknown>>()
   serve(
     workerPort(parentPort),
     csvProtocol,
     (query: Query, signal) => {
-      const next = pending.then(async () => {
+      const execute = async () => {
         signal.throwIfAborted()
         if (query.type === 'extent') return file.extent(query.columns, signal)
         if (query.type === 'scan') return file.scan(query.final, signal)
@@ -269,13 +292,29 @@ if (parentPort) {
           value.time.buffer as ArrayBuffer,
           value.values.buffer as ArrayBuffer,
         ])
-      })
-      pending = next.catch(() => {})
+      }
+      const next =
+        query.type === 'scan'
+          ? scanning.then(execute)
+          : (async () => {
+              const release = await (query.type === 'extent' ? background : reads).acquire(
+                1,
+                signal,
+              )
+              try {
+                return await execute()
+              } finally {
+                release()
+              }
+            })()
+      if (query.type === 'scan') scanning = next.catch(() => {})
+      active.add(next)
+      void next.finally(() => active.delete(next)).catch(() => {})
       return next
     },
     {
       onClose: () => {
-        void pending.finally(() => file.dispose())
+        void Promise.allSettled([...active]).then(() => file.dispose())
       },
     },
   )

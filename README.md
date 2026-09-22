@@ -8,7 +8,7 @@ Download the `.vsix` from [Releases](https://github.com/lukelowry/gridkit-studio
 
 Open a `*.case.json`, configure **Simulation**, choose **Signals**, and run. A `*.solver.json` is optional. Existing monitor and reference CSVs open through **Open Monitor CSV...**. Errors appear in the task terminal and Simulation.
 
-Requires VS Code 1.96+ and WebGPU for visualization. Simulation requires either DynamicSimulation or Docker/Podman. Container execution uses `ghcr.io/lukelowry/gridkit:latest`.
+Requires VS Code 1.96+ and WebGPU for visualization. Simulation requires either DynamicSimulation or Docker/Podman. Container execution pulls `ghcr.io/lukelowry/gridkit:latest` on each run. Auto remembers the selected runtime for each case until runtime settings change. Runs capture their inputs and runtime identity in a temporary `.gridkit-run-*` directory and publish complete CSV files after successful completion; clearing the run removes its temporary files.
 
 In a devcontainer or SSH session, these tools must be available there. Set **DynamicSimulation Path** to use your own build, or **Simulation Method** to select Docker or Podman. Auto prefers installed DynamicSimulation.
 

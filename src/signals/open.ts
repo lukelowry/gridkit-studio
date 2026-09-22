@@ -38,6 +38,7 @@ export function registerCsv(context: vscode.ExtensionContext, cases: Cases): voi
       )
       if (!choice) return
       const document = await vscode.workspace.openTextDocument(choice.uri)
+      await cases.documents.ensureParsed(document)
       const state = cases.resolve(cases.get(document).target)
       if (!state) throw new Error('Fix the case errors before opening signals.')
       if (state.run?.status === 'running')

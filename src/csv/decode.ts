@@ -1,5 +1,7 @@
 import type { FileHandle } from 'node:fs/promises'
 
+import { MAX_COLUMNS, MAX_RECORD_BYTES } from './limits.js'
+
 export const CHUNK_BYTES = 256 * 1024
 /** Byte offsets refer to the original file, including CRLF. Incomplete live rows stay unread. */
 export async function* lines(
@@ -27,6 +29,8 @@ export async function* lines(
     for (let i = 0; i < bytesRead; i++) {
       if (chunk[i] !== 10) continue
       const tail = chunk.subarray(from, i)
+      if (length + tail.length > MAX_RECORD_BYTES)
+        throw new RangeError('CSV record exceeds 16 MiB.')
       const row = parts.length ? Buffer.concat([...parts, tail], length + tail.length) : tail
       yield {
         text: row.toString('utf8').replace(/\r$/, ''),
@@ -39,6 +43,8 @@ export async function* lines(
       rowStart = position + from
     }
     if (from < bytesRead) {
+      if (length + bytesRead - from > MAX_RECORD_BYTES)
+        throw new RangeError('CSV record exceeds 16 MiB.')
       const part = Buffer.from(chunk.subarray(from, bytesRead))
       parts.push(part)
       length += part.length
@@ -65,11 +71,13 @@ export function header(text: string): string[] {
         i++
       } else quoted = !quoted
     } else if (c === ',' && !quoted) {
+      if (values.length >= MAX_COLUMNS) throw new RangeError('Too many CSV columns.')
       values.push(value)
       value = ''
     } else value += c
   }
   if (quoted) throw new Error('Incomplete CSV header.')
+  if (values.length >= MAX_COLUMNS) throw new RangeError('Too many CSV columns.')
   values.push(value)
   if (values[0] !== 't' || values.length < 2)
     throw new Error('Expected a GridKit CSV header beginning with t.')
@@ -86,7 +94,11 @@ function numeric(text: string): number {
 /** Parse only requested columns; the time and record width are always checked. */
 export function decoder(width: number, columns: readonly number[] | null) {
   const wanted = new Map<number, number[]>()
-  columns?.forEach((column, i) => wanted.set(column, [...(wanted.get(column) ?? []), i]))
+  columns?.forEach((column, i) => {
+    const indices = wanted.get(column)
+    if (indices) indices.push(i)
+    else wanted.set(column, [i])
+  })
   return (text: string): { time: number; values: Float64Array } => {
     const values = new Float64Array(columns?.length ?? width - 1).fill(NaN)
     let start = 0

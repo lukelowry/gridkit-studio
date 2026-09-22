@@ -288,7 +288,7 @@ function inputIdentity(raw: Case): string {
     .digest('hex')
 }
 
-export function parse(bytes: Uint8Array): ParsedCase {
+export function prepareCase(bytes: Uint8Array) {
   const text = new TextDecoder().decode(bytes)
   const raw = validate(JSON.parse(text))
   const rows = new Map(raw.buses.map((bus, row) => [bus.number, row]))
@@ -296,34 +296,38 @@ export function parse(bytes: Uint8Array): ParsedCase {
   const byId = new Map(groups.map((group) => [classId(group.className), group]))
   const name = raw.header.case_name
   const hasBranches = raw.devices.some((device) => device.class === 'Branch')
-  const model = createModel(
-    {
-      vendor: 'gridkit',
-      id: caseId(name, bytes),
-      name,
-      meta: readMeta(raw),
-      topology: readTopology(raw, rows),
-      owners: {
-        ...(raw.buses.length > 0 && { vertex: 'bus' }),
-        ...(hasBranches && { edge: 'branch' }),
-      },
-      classes: groups.map((group) => makeClass(group, rows)),
+  const data: Parameters<typeof createModel>[0] = {
+    vendor: 'gridkit',
+    id: caseId(name, bytes),
+    name,
+    meta: readMeta(raw),
+    topology: readTopology(raw, rows),
+    owners: {
+      ...(raw.buses.length > 0 && { vertex: 'bus' }),
+      ...(hasBranches && { edge: 'branch' }),
     },
-    {
-      load: async (id) => {
-        const group = byId.get(id)
-        if (!group) throw new Error(`GridKit: unknown class '${id}'`)
-        return classData(group)
-      },
-      bytes: async () => bytes,
+    classes: groups.map((group) => makeClass(group, rows)),
+  }
+  const loader: Parameters<typeof createModel>[1] = {
+    load: async (id) => {
+      const group = byId.get(id)
+      if (!group) throw new Error(`GridKit: unknown class '${id}'`)
+      return classData(group)
     },
-  )
+    bytes: async () => bytes,
+  }
   return {
     raw,
-    model,
+    data,
+    loader,
     inputIdentity: inputIdentity(raw),
     monitoring: indexMonitoring(raw),
   }
+}
+
+export function parse(bytes: Uint8Array): ParsedCase {
+  const { data, loader, ...snapshot } = prepareCase(bytes)
+  return { ...snapshot, model: createModel(data, loader) }
 }
 
 function elementLabel(group: ClassRecords, index: number): string {

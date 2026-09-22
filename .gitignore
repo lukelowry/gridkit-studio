@@ -10,3 +10,6 @@ cases/**/*.mon.csv
 .gridkit-*.solver.json
 
 .impeccable/
+
+.gridkit-run-*/
+.gridkit-export-*

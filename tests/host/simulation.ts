@@ -146,7 +146,7 @@ export async function runSimulationWorkflow(browser: Browser, workbench: Page, o
     )
     assert.equal(
       (await vscode.workspace.fs.readDirectory(folder)).some(([name]) =>
-        name.startsWith('.gridkit-'),
+        /^\.gridkit-.*\.solver\.json$/.test(name),
       ),
       false,
       'Temporary solver input must be removed',
@@ -225,7 +225,18 @@ export async function runSimulationWorkflow(browser: Browser, workbench: Page, o
     () => monitor.locator('#time-axis').getAttribute('aria-valuenow'),
     (text) => !!text?.includes('0.004166'),
   )
+  const stagedDirectories = (await vscode.workspace.fs.readDirectory(folder)).filter(([name]) =>
+    name.startsWith('.gridkit-run-'),
+  )
+  assert.equal(stagedDirectories.length, 1, 'Replacing a run releases its previous staged files')
   await vscode.commands.executeCommand('gridkitStudio.clearRun')
+  assert.equal(
+    (await vscode.workspace.fs.readDirectory(folder)).some(([name]) =>
+      name.startsWith('.gridkit-run-'),
+    ),
+    false,
+    'Clearing the run releases staged inputs and result readers',
+  )
   const csv = vscode.Uri.joinPath(folder, 'mon.csv')
   const before = await vscode.workspace.fs.readFile(csv)
   const opening = vscode.commands.executeCommand('gridkitStudio.openCsv', csv)

@@ -9,6 +9,7 @@ import { describe } from './errors.js'
 import { parseSolver } from './gridkit/solver.js'
 import { Run } from './run.js'
 import {
+  type RuntimeSelection,
   simulationCommand,
   SimulationConfigurationError,
   type SimulationOptions,
@@ -19,6 +20,7 @@ import {
   SOLVER_FILES,
   useConfiguration,
 } from './simulation/setup.js'
+import { recordRuntime, stageLaunch } from './staging.js'
 
 export interface GridKitTaskDefinition extends vscode.TaskDefinition {
   type: 'gridkit'
@@ -32,12 +34,13 @@ class SolverTerminal implements vscode.Pseudoterminal {
   readonly onDidClose = this.closed.event
   private run?: Run
   private cancelled = false
-  constructor(private readonly prepare: () => Promise<Run>) {}
+  private readonly preparation = new AbortController()
+  constructor(private readonly prepare: (signal: AbortSignal) => Promise<Run>) {}
   open(): void {
     void (async () => {
       try {
         this.written.fire('Preparing DynamicSimulation...\r\n')
-        this.run = await this.prepare()
+        this.run = await this.prepare(this.preparation.signal)
         const matches = vscode.window.terminals.filter(
           (terminal) =>
             terminal.name === this.run!.taskName || terminal.name.endsWith(this.run!.taskName!),
@@ -80,6 +83,7 @@ class SolverTerminal implements vscode.Pseudoterminal {
   }
   close(): void {
     this.cancelled = true
+    this.preparation.abort()
     void this.run?.cancel()
   }
 }
@@ -91,7 +95,11 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
   const preparing = new Set<string>()
   const diagnostics = vscode.languages.createDiagnosticCollection('gridkit-run')
   context.subscriptions.push(diagnostics)
-  const prepare = async (definition: GridKitTaskDefinition, folder: vscode.WorkspaceFolder) => {
+  const prepare = async (
+    definition: GridKitTaskDefinition,
+    folder: vscode.WorkspaceFolder,
+    signal: AbortSignal,
+  ) => {
     if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before running GridKit.')
     if (folder.uri.scheme !== 'file')
       throw new Error('Run GridKit in a local, WSL, SSH, or Dev Container workspace.')
@@ -104,6 +112,7 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
       caseUri = vscode.Uri.file(resolve(dirname(uri.fsPath), input.system_model_file))
     }
     const document = await vscode.workspace.openTextDocument(caseUri)
+    await cases.documents.ensureParsed(document, document.version, signal)
     const state = cases.resolve(cases.get(document).target)
     if (!state) throw new Error('Fix the case errors before running the simulation.')
     const key = await realpath(document.uri.fsPath)
@@ -121,10 +130,23 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
         method: settings.get('simulationMethod', 'auto'),
         executable: settings.get('dynamicSimulationPath', ''),
       }
-      const launch = await prepareSimulation(cases, state, folder.uri.fsPath)
+      let launch = await prepareSimulation(cases, state, folder.uri.fsPath)
       let run: Run | undefined
       try {
-        const command = await simulationCommand(launch, options)
+        signal.throwIfAborted()
+        launch = await stageLaunch(launch, signal)
+        const runtimeKey = 'runtime:' + key
+        const signature = JSON.stringify(options)
+        const saved = context.workspaceState.get<{ signature: string; selected: RuntimeSelection }>(
+          runtimeKey,
+        )
+        const command = await simulationCommand(
+          launch,
+          options,
+          saved?.signature === signature ? saved.selected : undefined,
+        )
+        if (command.runtime)
+          await context.workspaceState.update(runtimeKey, { signature, selected: command.runtime })
         const outputPaths = new Set(launch.outputs)
         for (const open of vscode.workspace.textDocuments)
           if (open.isDirty && open.uri.scheme === 'file') {
@@ -134,13 +156,16 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
                 'A monitor output has unsaved edits. Close or save it before running the solver.',
               )
           }
+        launch.assertCurrent?.()
+        const provenance = await recordRuntime(launch, command, signal)
+        signal.throwIfAborted()
+        launch.assertCurrent?.()
         for (const output of launch.outputs)
           if (running.get(output)?.status === 'running')
             throw new Error(
               'Another solver is writing this monitor output. Stop it before running this solver.',
             )
-        launch.assertCurrent?.()
-        run = new Run(state, launch, diagnostics, command)
+        run = new Run(state, launch, diagnostics, command, provenance)
         run.taskName = `Run ${definition.solver ?? definition.case}`
         for (const output of launch.outputs) running.set(output, run)
         void run.done.then(() => {
@@ -148,13 +173,20 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
             if (running.get(output) === run) running.delete(output)
         })
         await state.attachRun(run)
+        signal.throwIfAborted()
         cases.activate(state)
         return run
       } catch (error) {
         if (run) {
           await run.dispose()
           if (state.run === run) await state.attachRun(undefined)
-        } else await launch.cleanup?.()
+        } else {
+          try {
+            await launch.cleanup?.()
+          } finally {
+            await launch.dispose?.()
+          }
+        }
         throw error
       }
     } finally {
@@ -167,7 +199,9 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
       folder,
       `Run ${definition.solver ?? definition.case}`,
       'GridKit',
-      new vscode.CustomExecution(async () => new SolverTerminal(() => prepare(definition, folder))),
+      new vscode.CustomExecution(
+        async () => new SolverTerminal((signal) => prepare(definition, folder, signal)),
+      ),
     )
     value.group = vscode.TaskGroup.Build
     value.presentationOptions = {

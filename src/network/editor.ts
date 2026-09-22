@@ -76,7 +76,7 @@ export class NetworkEditor implements vscode.CustomTextEditorProvider, vscode.Di
         try {
           if (message.type === 'ready') {
             view.ready = true
-            this.cases.documents.read(document)
+            await this.cases.documents.ensureParsed(document)
             this.settings(view)
             this.update(panel, view)
           } else if (message.type === 'focus') {

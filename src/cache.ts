@@ -82,6 +82,13 @@ export class SharedCache<T> {
       bytes -= entry.bytes
     }
   }
+  deleteWhere(matches: (key: string) => boolean) {
+    for (const [key, entry] of this.entries)
+      if (matches(key)) {
+        entry.controller.abort()
+        this.entries.delete(key)
+      }
+  }
   clear() {
     for (const entry of this.entries.values()) entry.controller.abort()
     this.entries.clear()

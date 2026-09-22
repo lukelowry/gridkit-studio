@@ -23,7 +23,7 @@ export interface SimulationDraft {
 }
 export const SOLVER_FILES = '**/*.solver.json'
 /** Temporary inputs in the setup working directory are never offered as saved configurations. */
-export const SOLVER_EXCLUDES = '{**/node_modules/**,**/.git/**,**/.gridkit-*}'
+export const SOLVER_EXCLUDES = '{**/node_modules/**,**/.git/**,**/.gridkit-*,**/.gridkit-run-*/**}'
 export const portable = (path: string) => path.split('\\').join('/')
 
 export function setupDirectory(state: CaseState): string {
@@ -143,11 +143,16 @@ export async function prepareSimulation(
   assertCurrent()
   const verify = (launch: SolverLaunch): SolverLaunch => {
     assertCurrent()
+    if (
+      launch.sourceText?.case !== state.document.getText() ||
+      (configuration && launch.sourceText?.solver !== configuration.getText())
+    )
+      throw new Error('Saved inputs changed while preparing the simulation. Run again.')
     if (relative(launch.case, casePath) !== '')
       throw new Error('This configuration belongs to a different case. Open that case first.')
     return { ...launch, assertCurrent }
   }
-  if (configuration) return verify(await resolveSolver(configuration.uri.fsPath, root))
+  if (configuration) return verify(await resolveSolver(configuration.uri.fsPath, root, 'staged'))
   const input = await setupInput(state)
   if (!state.raw.monitors?.at(-1)?.file_name)
     input.output_file ??= basename(state.document.uri.fsPath).replace(/\.case\.json$/i, '.mon.csv')
@@ -159,7 +164,7 @@ export async function prepareSimulation(
   }
   await writeFile(path, JSON.stringify(input), { flag: 'wx' })
   try {
-    return { ...verify(await resolveSolver(path, root)), cleanup }
+    return { ...verify(await resolveSolver(path, root, 'staged')), cleanup }
   } catch (error) {
     await cleanup()
     throw error

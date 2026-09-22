@@ -15,9 +15,15 @@ import { ElementStatus } from './status.js'
 import { CaseTable, TABLE } from './table/view.js'
 import { registerTasks } from './tasks.js'
 
+let activeCases: Cases | undefined
+export async function deactivate(): Promise<void> {
+  await activeCases?.dispose()
+  activeCases = undefined
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const documents = new Documents()
-  const cases = new Cases(documents)
+  const cases = (activeCases = new Cases(documents))
   const network = new NetworkEditor(context.extensionUri, cases)
   const table = new CaseTable(context.extensionUri, cases, context.workspaceState)
   const signals = new SignalsTree(cases, context)
@@ -72,8 +78,8 @@ export function activate(context: vscode.ExtensionContext): void {
       preview: false,
     })
   }
-  const check = (document: vscode.TextDocument) => {
-    const snapshot = documents.read(document)
+  const check = async (document: vscode.TextDocument) => {
+    const snapshot = await documents.ensureParsed(document)
     if (snapshot.state === 'invalid') {
       void vscode.window.showErrorMessage(snapshot.issues[0].message)
       return

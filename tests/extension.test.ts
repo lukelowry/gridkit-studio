@@ -3,6 +3,7 @@ import type * as vscode from 'vscode'
 
 import { activate } from '../src/extension.js'
 import { caseText } from './support/case.js'
+import { inlineParser } from './support/parser.js'
 import { commands, window, workspace } from './support/vscode.js'
 
 const uri = (path: string) => ({ path }) as vscode.Uri
@@ -40,6 +41,13 @@ beforeEach(() => {
   subscriptions = []
   activate({ subscriptions } as unknown as vscode.ExtensionContext)
 })
+
+vi.mock('../src/parser/client.js', () => ({
+  Parser: class {
+    parse = inlineParser.parse
+    dispose = inlineParser.dispose
+  },
+}))
 
 describe('case commands', () => {
   it('finishes validation without waiting for notification dismissal', async () => {

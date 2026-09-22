@@ -5,7 +5,7 @@ export function workerPort(worker: Worker | MessagePort): Port {
   return {
     post: (message, transfer) => worker.postMessage(message, transfer ? [...transfer] : []),
     subscribe(receive, close) {
-      const ended = () => close?.('CsvSource worker closed.')
+      const ended = () => close?.('Worker connection closed.')
       worker.on('message', receive)
       worker.on('error', ended)
       worker.on('exit', ended)

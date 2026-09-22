@@ -8,10 +8,11 @@ import { classCapabilities, menuContext } from '../src/menus.js'
 import { ElementStatus } from '../src/status.js'
 import { tableColumns } from '../src/table/columns.js'
 import { caseText } from './support/case.js'
+import { inlineParser } from './support/parser.js'
 import { activeEditorChanged, statusItems } from './support/vscode.js'
 
-function setup() {
-  const documents = new Documents()
+async function setup() {
+  const documents = new Documents(inlineParser)
   const cases = new Cases(documents)
   const make = (path: string) =>
     cases.get({
@@ -28,6 +29,7 @@ function setup() {
     } as unknown as vscode.TextDocument)
   const a = make('/a.case.json')
   const b = make('/b.case.json')
+  await Promise.all([documents.ensureParsed(a.document), documents.ensureParsed(b.document)])
   return {
     cases,
     a,
@@ -39,7 +41,7 @@ function setup() {
   }
 }
 it('uses the same element and field selection for all observers and preserves anchored device identity', async () => {
-  const t = setup()
+  const t = await setup()
   const first = vi.fn()
   const second = vi.fn()
   t.a.onDidChange(first)
@@ -67,7 +69,7 @@ it('uses the same element and field selection for all observers and preserves an
   t.dispose()
 })
 it('rejects superseded field selection reads and missing fields', async () => {
-  const t = setup()
+  const t = await setup()
   const data = await t.a.fields!.model.load('bus')
   let finish!: (column: (typeof data.columns)[number]) => void
   vi.spyOn(t.a.fields!, 'field').mockImplementationOnce(
@@ -92,7 +94,7 @@ it('rejects superseded field selection reads and missing fields', async () => {
   t.dispose()
 })
 it('keeps element capabilities equal across views while adding cell context', async () => {
-  const t = setup()
+  const t = await setup()
   const target = { ...t.a.target, element: { classId: 'bus', index: 0 } }
   const caps = classCapabilities(t.a.fields!.model, 'bus', true, t.a.bindings)
   const { gridkitOrigin: _a, ...network } = menuContext(target, caps, 'network')
@@ -120,7 +122,7 @@ it('keeps element capabilities equal across views while adding cell context', as
   t.dispose()
 })
 it('presents one real identifier and qualifies only colliding labels without losing column indexes', async () => {
-  const t = setup()
+  const t = await setup()
   const data = await t.a.fields!.model.load('bus')
   const columns = tableColumns(data, 'bus')
   expect(columns[0]).toMatchObject({ id: 'top.number', label: 'number', identity: true })
@@ -136,7 +138,7 @@ it('presents one real identifier and qualifies only colliding labels without los
   t.dispose()
 })
 it('shows contextual selection status with a frozen source target and hides for unrelated editors', async () => {
-  const t = setup()
+  const t = await setup()
   const status = new ElementStatus(t.cases)
   const item = statusItems.filter((item) => item.name === 'Focused Case Element').at(-1)!
   t.cases.focus(t.a)
@@ -162,7 +164,7 @@ it('shows contextual selection status with a frozen source target and hides for 
 })
 
 it('selection never moves case focus, even when its field read settles late', async () => {
-  const t = setup()
+  const t = await setup()
   const data = await t.a.fields!.model.load('bus')
   let finish!: (column: (typeof data.columns)[number]) => void
   vi.spyOn(t.a.fields!, 'field').mockImplementationOnce(

@@ -410,3 +410,33 @@ it('keeps the table field order independent of CSV and Results signal order', as
   }).toThrow('cannot change')
   table.close()
 })
+
+it('rejects oversized CSV records and impossible read allocations', async () => {
+  const { csv } = await fixture('t,v\n0,' + '1'.repeat(16 * 1024 * 1024))
+  await expect(csv.scan(false)).rejects.toThrow('record exceeds')
+  await expect(csv.read(0, Number.MAX_SAFE_INTEGER, [1])).rejects.toThrow('budget')
+})
+it('serves committed interactive reads while a long scan is still running', async () => {
+  const { path } = await fixture('t,v\n0,1\n1,2\n')
+  const worker = join(dirname(path), 'responsive-worker.cjs')
+  await build({
+    entryPoints: [resolve('src/csv/worker.ts')],
+    outfile: worker,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    logLevel: 'silent',
+  })
+  const csv = new CsvSource(path, worker)
+  cleanup.push(() => csv.dispose())
+  await csv.scan(false)
+  await appendFile(path, Array.from({ length: 100000 }, (_, i) => i + 2 + ',3\n').join(''))
+  let finished = false
+  const scanning = csv.scan(true).then((info) => {
+    finished = true
+    return info
+  })
+  expect(await csv.timeAt(1)).toBe(1)
+  expect(finished).toBe(false)
+  expect((await scanning).rows).toBe(100002)
+})

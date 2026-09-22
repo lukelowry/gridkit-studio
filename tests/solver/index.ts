@@ -9,21 +9,28 @@ import { bindColumns } from '../../src/csv/columns.js'
 import { CsvSource } from '../../src/csv/source.js'
 import { nativeCaseEdits } from '../../src/gridkit/edit.js'
 import { parse } from '../../src/gridkit/parse.js'
+import type { SolverLaunch } from '../../src/launch.js'
 import { resolveSolver } from '../../src/launch.js'
 import { executeSolver, simulationCommand } from '../../src/runtime.js'
 import { appendFault } from '../../src/simulation/faults.js'
+import { recordRuntime, stageLaunch } from '../../src/staging.js'
 const options = { method: 'auto', executable: '' } as const
 const root = await mkdtemp(join(tmpdir(), 'gridkit solver test '))
 let csv: CsvSource | undefined
+let staged: SolverLaunch | undefined
 try {
   for (const file of ['two-bus.case.json', 'two-bus.solver.json'])
     await copyFile(resolve('tests/fixtures/solver', file), join(root, file))
   const before = await readFile(join(root, 'two-bus.case.json'))
   const launch = await resolveSolver(join(root, 'two-bus.solver.json'), root)
-  const execution = executeSolver(await simulationCommand(launch, options), (_stream, text) =>
-    process.stdout.write(text),
-  )
+  staged = await stageLaunch(launch)
+  const command = await simulationCommand(staged, options)
+  await recordRuntime(staged, command)
+  const execution = executeSolver(command, (_stream, text) => process.stdout.write(text))
   assert.equal(await execution.done, 0)
+  await staged.publish!()
+  await staged.dispose!()
+  staged = undefined
   csv = new CsvSource(launch.output, resolve('dist/csv/worker.cjs'))
   const info = await csv.scan(true)
   assert.ok(info.rows > 400)
@@ -168,9 +175,10 @@ try {
     `PASS exact CSV samples: ${samples.toLocaleString()} samples, ${elementCount} traces per field, ${(performance.now() - started).toFixed(0)} ms, ${((peakMemory - initialMemory) / 1048576).toFixed(1)} MiB peak RSS increase`,
   )
   console.log(
-    `PASS DynamicSimulation, CSV (${info.rows} rows), worker reads, paths with spaces, and no copied run artifacts`,
+    `PASS DynamicSimulation, CSV (${info.rows} rows), worker reads, paths with spaces, and staged run cleanup`,
   )
 } finally {
   await csv?.dispose()
+  await staged?.dispose?.()
   await rm(root, { recursive: true, force: true })
 }

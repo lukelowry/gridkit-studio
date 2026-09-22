@@ -9,19 +9,23 @@ export interface SolverLaunch {
   solver: string
   case: string
   output: string
-  outputs: string[]
+  outputs: readonly string[]
   cwd: string
   root: string
   input: SolverInput
   raw: Case
   assertCurrent?: () => void
   cleanup?: () => Promise<void>
+  dispose?: () => Promise<void>
+  publish?: () => Promise<void>
+  sourceText?: Readonly<{ solver: string; case: string }>
+  provenance?: Readonly<Record<string, unknown>>
 }
 export const within = (root: string, path: string) => {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('..\\') && !rel.startsWith('../') && !isAbsolute(rel)
 }
-async function canonical(path: string): Promise<string> {
+export async function canonical(path: string): Promise<string> {
   try {
     return await realpath(path)
   } catch (error) {
@@ -29,12 +33,17 @@ async function canonical(path: string): Promise<string> {
     return resolve(await realpath(dirname(path)), path.split(/[\\/]/).at(-1)!)
   }
 }
-export async function resolveSolver(path: string, root: string): Promise<SolverLaunch> {
+export async function resolveSolver(
+  path: string,
+  root: string,
+  outputMode: 'direct' | 'staged' = 'direct',
+): Promise<SolverLaunch> {
   if (!/\.solver\.json$/i.test(path)) throw new Error('Choose a .solver.json file.')
   const solver = await realpath(path)
   const cwd = dirname(solver)
   const mount = await realpath(root)
-  const input = parseSolver(JSON.parse(await readFile(solver, 'utf8')))
+  const solverText = await readFile(solver, 'utf8')
+  const input = parseSolver(JSON.parse(solverText))
   const casePath = await realpath(resolve(cwd, input.system_model_file))
   const caseText = await readFile(casePath, 'utf8')
   const raw = validate(JSON.parse(caseText))
@@ -69,7 +78,7 @@ export async function resolveSolver(path: string, root: string): Promise<SolverL
   const monitor = modelOutput || input.output_file
   if (!monitor)
     throw new Error('Set output_file in the solver or a CSV file_name in the case monitors.')
-  if (modelOutput && input.output_file) {
+  if (outputMode === 'direct' && modelOutput && input.output_file) {
     const alias = resolve(cwd, input.output_file)
     const target = resolve(cwd, modelOutput)
     if (relative(alias, target) === '')
@@ -116,5 +125,15 @@ export async function resolveSolver(path: string, root: string): Promise<SolverL
     })
     if (info && !info.isFile()) throw new Error('Monitor output must be a regular file.')
   }
-  return { solver, case: casePath, output, outputs, cwd, root: mount, input, raw }
+  return {
+    solver,
+    case: casePath,
+    output,
+    outputs,
+    cwd,
+    root: mount,
+    input,
+    raw,
+    sourceText: Object.freeze({ solver: solverText, case: caseText }),
+  }
 }

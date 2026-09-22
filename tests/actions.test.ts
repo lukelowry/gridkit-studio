@@ -7,10 +7,11 @@ import { Documents } from '../src/documents.js'
 import type { NetworkEditor } from '../src/network/editor.js'
 import type { CaseTable } from '../src/table/view.js'
 import { caseText } from './support/case.js'
+import { inlineParser } from './support/parser.js'
 import { commands, window } from './support/vscode.js'
 
-function setup() {
-  const documents = new Documents()
+async function setup() {
+  const documents = new Documents(inlineParser)
   const cases = new Cases(documents)
   const make = (path: string) =>
     cases.get({
@@ -23,6 +24,7 @@ function setup() {
     } as unknown as vscode.TextDocument)
   const a = make('/a.case.json')
   const b = make('/b.case.json')
+  await Promise.all([documents.ensureParsed(a.document), documents.ensureParsed(b.document)])
   commands.registerCommand.mockClear()
   const subscriptions: vscode.Disposable[] = []
   registerActions(
@@ -49,7 +51,7 @@ function setup() {
   }
 }
 it('an awaited native binding picker stays with its captured case after focus changes', async () => {
-  const test = setup()
+  const test = await setup()
   let choose!: (value: unknown) => void
   window.showQuickPick.mockImplementationOnce(
     () =>
@@ -66,7 +68,7 @@ it('an awaited native binding picker stays with its captured case after focus ch
   test.dispose()
 })
 it('an edit while a native picker is open rejects its eventual choice', async () => {
-  const test = setup()
+  const test = await setup()
   let choose!: (value: unknown) => void
   window.showQuickPick.mockImplementationOnce(
     () =>

@@ -12,6 +12,7 @@ import {
   extent,
   validateBinding,
 } from './bindings.js'
+import { report } from './commands.js'
 import type { CsvSource } from './csv/source.js'
 import { Documents, isCase, type Snapshot } from './documents.js'
 import { CaseFields, type SignalState } from './fields.js'
@@ -193,7 +194,7 @@ export class CaseState implements vscode.Disposable {
     this.fields = parsed && new CaseFields(parsed.model, () => this.source)
     if (!compatible) this.selection = null
     if (parsed) {
-      if (!compatible) void this.attachRun(undefined)
+      if (!compatible) void this.attachRun(undefined).catch(report)
       else if (this.run) this.run.target = this.target
       this.inputIdentity = parsed.inputIdentity
       this.fields!.setTime(this.timeline.time, this.timeline.frame)
@@ -315,14 +316,21 @@ export class CaseState implements vscode.Disposable {
     this.changed.fire('results')
   }
 
-  dispose(): void {
+  private disposal?: Promise<void>
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal
     this.disposed = true
     this.selectionRead.abort()
     this.reads.abort()
     this.timeline.dispose()
-    void this.run?.dispose()
-    void this.source?.dispose()
     this.changed.dispose()
+    return (this.disposal = (async () => {
+      try {
+        await this.run?.dispose()
+      } finally {
+        await this.source?.dispose()
+      }
+    })())
   }
 }
 
@@ -346,13 +354,14 @@ export class Cases implements vscode.Disposable {
 
   constructor(readonly documents: Documents) {
     this.subscriptions = [
-      documents.onDidChange(({ document, snapshot }) =>
-        this.states.get(document.uri.toString())?.update(snapshot),
-      ),
+      documents.onDidChange(({ document, snapshot }) => {
+        const state = this.states.get(document.uri.toString())
+        if (state?.document === document) state.update(snapshot)
+      }),
       vscode.workspace.onDidCloseTextDocument((document) => {
         const state = this.states.get(document.uri.toString())
         if (!state || state.document !== document) return
-        state.dispose()
+        void state.dispose().catch(report)
         this.states.delete(document.uri.toString())
         if (this.active === state) {
           this.active = undefined
@@ -379,7 +388,7 @@ export class Cases implements vscode.Disposable {
     const key = document.uri.toString()
     let state = this.states.get(key)
     if (!state) {
-      state = new CaseState(document, this.documents.read(document))
+      state = new CaseState(document, this.documents.current(document))
       this.states.set(key, state)
     }
     return state
@@ -426,13 +435,17 @@ export class Cases implements vscode.Disposable {
     if (!count) return
     if (!(await vscode.workspace.applyEdit(edit))) throw new Error('The edit could not be applied.')
     for (const { document, edits } of changes)
-      if (edits.length && isCase(document.uri) && !document.isClosed) this.documents.read(document)
+      if (edits.length && isCase(document.uri) && !document.isClosed)
+        await this.documents.ensureParsed(document)
   }
-  dispose(): void {
-    for (const state of this.states.values()) state.dispose()
+  private disposal?: Promise<void>
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal
+    const pending = [...this.states.values()].map((state) => state.dispose())
     this.states.clear()
     this.activated.dispose()
     this.focusChanged.dispose()
     for (const subscription of this.subscriptions) subscription.dispose()
+    return (this.disposal = Promise.all(pending).then(() => {}))
   }
 }

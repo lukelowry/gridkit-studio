@@ -7,6 +7,10 @@ import { delimiter, extname, isAbsolute, relative, resolve, win32 } from 'node:p
 import type { SolverLaunch } from './launch.js'
 
 export const GRIDKIT_IMAGE = 'ghcr.io/lukelowry/gridkit:latest'
+export interface RuntimeSelection {
+  method: 'installed' | 'docker' | 'podman'
+  path: string
+}
 export type SolverStream = 'stdout' | 'stderr'
 export interface SimulationOptions {
   method: 'auto' | 'installed' | 'docker' | 'podman'
@@ -17,6 +21,7 @@ export interface SimulationCommand {
   args: string[]
   cwd: string
   stopArgs?: string[]
+  runtime?: RuntimeSelection & { image?: string }
 }
 export interface Execution {
   done: Promise<number>
@@ -129,14 +134,20 @@ function containerArgs(launch: SolverLaunch, engine: 'docker' | 'podman', name: 
 export async function simulationCommand(
   launch: SolverLaunch,
   options: SimulationOptions,
+  previous?: RuntimeSelection,
 ): Promise<SimulationCommand> {
-  const selected = await resolveExecutable(options, launch.root)
+  const selected = previous ?? (await resolveExecutable(options, launch.root))
+  if (previous && !(await findExecutable(previous.path)))
+    throw new SimulationConfigurationError(
+      'The runtime selected for this case is no longer available. Select a Simulation Method in Settings to change runtimes.',
+    )
   if (selected.method === 'installed')
-    return { executable: selected.path, args: [launch.solver], cwd: launch.cwd }
+    return { executable: selected.path, args: [launch.solver], cwd: launch.cwd, runtime: selected }
   const name = `gridkit-studio-${randomUUID()}`
   return {
     executable: selected.path,
     args: containerArgs(launch, selected.method, name),
+    runtime: { ...selected, image: GRIDKIT_IMAGE },
     cwd: launch.cwd,
     stopArgs: ['rm', '-f', name],
   }
@@ -148,7 +159,7 @@ export function executeSolver(
 ): Execution {
   write(
     'stdout',
-    `${command.executable}\r\n${command.stopArgs ? GRIDKIT_IMAGE + '\r\n' : ''}${command.args.at(-1)}\r\n`,
+    `${command.executable}\r\n${command.runtime?.image ? command.runtime.image + '\r\n' : ''}${command.args.at(-1)}\r\n`,
   )
   const child = spawn(command.executable, command.args, {
     cwd: command.cwd,

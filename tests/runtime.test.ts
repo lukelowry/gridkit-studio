@@ -54,6 +54,7 @@ it('prefers installed DynamicSimulation over container engines', async () => {
     executable: installed,
     args: [launch().solver],
     cwd: root,
+    runtime: { method: 'installed', path: installed },
   })
 })
 it('uses Docker before Podman and honors explicit Podman selection', async () => {
@@ -318,4 +319,22 @@ it('preserves Podman error messages for Simulation and the task terminal', () =>
   output.write('stderr', 'Error: cannot connect to Podman socket\n')
   output.finish()
   expect(output.failure).toBe('Error: cannot connect to Podman socket')
+})
+
+it('pulls the latest GHCR image while retaining the selected engine for a case', async () => {
+  await executable('docker')
+  vi.stubEnv('PATH', root)
+  const command = await simulationCommand(launch(), auto)
+  expect(command.args).toContain('ghcr.io/lukelowry/gridkit:latest')
+  expect(command.args).toContain('--pull=always')
+  expect(command.args.some((arg) => arg.startsWith('--platform'))).toBe(false)
+  const installed = await executable('DynamicSimulation')
+  expect((await simulationCommand(launch(), auto, command.runtime)).executable).toBe(
+    command.executable,
+  )
+  await fs.unlink(command.executable)
+  await expect(simulationCommand(launch(), auto, command.runtime)).rejects.toThrow(
+    'no longer available',
+  )
+  expect((await simulationCommand(launch(), auto)).executable).toBe(installed)
 })

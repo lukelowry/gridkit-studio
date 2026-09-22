@@ -13,14 +13,22 @@ import {
 } from '@latkit/model'
 import { connect } from '@latkit/port'
 
+import { sampleBudget } from '../budget.js'
 import { SharedCache } from '../cache.js'
 import { tableOpener } from '../table/session.js'
 import type { CsvColumn } from './columns.js'
 import { workerPort } from './port.js'
 import { type CsvInfo, csvProtocol, type Samples } from './protocol.js'
 export type { CsvInfo, Samples } from './protocol.js'
-const BLOCK_BYTES = 1024 * 1024
+import { BLOCK_BYTES, sampleBytes } from './limits.js'
+export { leasedSampleTiles, sampleTiles } from './tiles.js'
 const CACHE_BYTES = 16 * 1024 * 1024
+
+const sampleCache = new SharedCache<Samples>(
+  CACHE_BYTES,
+  (result) => result.time.byteLength + result.values.byteLength,
+  256,
+)
 
 export class CsvSource implements Results {
   readonly id = randomUUID()
@@ -31,14 +39,10 @@ export class CsvSource implements Results {
   private bindings: readonly CsvColumn[] = []
   private readonly fieldRefs = new Map<string, FieldRef>()
   private readonly byField = new Map<string, Map<number, number>>()
-  private readonly cache = new SharedCache<Samples>(
-    CACHE_BYTES,
-    (result) => result.time.byteLength + result.values.byteLength,
-    256,
-  )
   private position?: { time: number; rows: number; frame: number }
   private readonly histories = new Map<string, { series: Series; publish(): void; clear(): void }>()
   info?: CsvInfo
+  private disposal?: Promise<void>
   constructor(
     readonly path: string,
     workerPath = join(__dirname, 'csv/worker.cjs'),
@@ -125,14 +129,24 @@ export class CsvSource implements Results {
     signal?: AbortSignal,
   ): Promise<Samples> {
     signal?.throwIfAborted()
-    const key = `${frameOffset}:${frameCount}:${columns.join(',')}`
-    return this.cache.get(
+    sampleBytes(frameCount, columns.length)
+    const key = `${this.id}:${frameOffset}:${frameCount}:${columns.join(',')}`
+    return sampleCache.get(
       key,
-      async (abort) =>
-        (await this.connection.call(
-          { type: 'read', frameOffset, frameCount, columns },
-          { signal: abort },
-        )) as Samples,
+      async (abort) => {
+        const release = await sampleBudget.acquire(
+          sampleBytes(frameCount, columns.length) * 2,
+          abort,
+        )
+        try {
+          return (await this.connection.call(
+            { type: 'read', frameOffset, frameCount, columns },
+            { signal: abort },
+          )) as Samples
+        } finally {
+          release()
+        }
+      },
       signal,
     )
   }
@@ -142,10 +156,12 @@ export class CsvSource implements Results {
     elements: readonly number[],
     signal?: AbortSignal,
   ): Promise<Float64Array> {
+    signal?.throwIfAborted()
+    sampleBytes(1, fields.length * elements.length)
     const values = new Float64Array(fields.length * elements.length).fill(NaN)
     if (frame < 0) return values
     const maps = fields.map((field) => this.byField.get(fieldKey(field)))
-    const chunk = Math.max(1, Math.floor(BLOCK_BYTES / 8))
+    const chunk = Math.max(1, Math.floor(BLOCK_BYTES / 8) - 1)
     for (let offset = 0; offset < values.length; offset += chunk) {
       const count = Math.min(chunk, values.length - offset)
       const columns = Array.from({ length: count }, (_, i) => {
@@ -198,6 +214,8 @@ export class CsvSource implements Results {
           frameOffset + frameCount > state.frameCount
         )
           throw new RangeError('Invalid sample window.')
+        abort?.throwIfAborted()
+        sampleBytes(frameCount, elementCount)
         const columns = Array.from(
           elements.subarray(elementOffset, elementOffset + elementCount),
           (element) => maps[signalIndex].get(element) ?? -1,
@@ -257,6 +275,7 @@ export class CsvSource implements Results {
       throw new RangeError('Signal out of range.')
     const { elementCount, elements } = series
     const head = series.state.frameCount
+    sampleBytes(1, elementCount * picked.length)
     const frames = Math.max(1, Math.floor(BLOCK_BYTES / (8 * (elementCount * picked.length + 1))))
     for (let f = 0; f < head; f += frames) {
       const count = Math.min(frames, head - f)
@@ -287,12 +306,15 @@ export class CsvSource implements Results {
       }
     }
   }
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    return (this.disposal ??= this.close())
+  }
+  private async close(): Promise<void> {
     for (const history of this.histories.values()) history.clear()
     this.histories.clear()
     this.tables.close()
     this.connection.close()
-    this.cache.clear()
+    sampleCache.deleteWhere((key) => key.startsWith(this.id + ':'))
     await this.worker.terminate()
   }
 }

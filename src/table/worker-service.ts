@@ -1,5 +1,6 @@
 import { type Port, serve } from '@latkit/port'
 
+import { sampleBytes } from '../csv/limits.js'
 import type { CsvFile } from '../csv/worker.js'
 import { type Recording, TableEngine } from './engine.js'
 import { openTableProtocol } from './protocol.js'
@@ -25,6 +26,7 @@ export function serveTableWorker(port: Port, file?: CsvFile) {
               }
             },
             async read(frame, fields, elements, signal) {
+              sampleBytes(1, fields.length * elements.length)
               if (frame < 0) return new Float64Array(fields.length * elements.length).fill(NaN)
               const columns = elements.flatMap((element) =>
                 fields.map((field) => maps[field].get(element) ?? -1),

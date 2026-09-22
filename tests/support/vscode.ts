@@ -107,6 +107,7 @@ export const window = {
   }),
   showQuickPick: vi.fn(),
   showInputBox: vi.fn(),
+  showSaveDialog: vi.fn(),
   visibleTextEditors: [] as vscode.TextEditor[],
   registerCustomEditorProvider: vi.fn(),
   activeTextEditor: undefined as vscode.TextEditor | undefined,
@@ -131,3 +132,7 @@ export class TabInputCustom {
 }
 
 export const tasks = { registerTaskProvider: vi.fn(), executeTask: vi.fn() }
+
+export const Uri = {
+  file: (fsPath: string) => ({ fsPath, scheme: 'file', toString: () => fsPath }),
+}

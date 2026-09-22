@@ -3,8 +3,11 @@ import { copyFile, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
+import { applyEdits } from 'jsonc-parser'
+
 import { bindColumns } from '../../src/csv/columns.js'
 import { CsvSource } from '../../src/csv/source.js'
+import { nativeCaseEdits } from '../../src/gridkit/edit.js'
 import { parse } from '../../src/gridkit/parse.js'
 import { resolveSolver } from '../../src/launch.js'
 import { executeSolver, simulationCommand } from '../../src/runtime.js'
@@ -70,6 +73,33 @@ try {
     0,
   )
   console.log('PASS authored named fault with declaration index and real-valued impedance')
+  const integral = JSON.stringify(launch.raw).replace('"speed"', '"SPEED"')
+  const repaired = applyEdits(integral, nativeCaseEdits(integral, JSON.parse(integral)))
+  assert.match(repaired, /"H":3\.0/)
+  await writeFile(join(root, 'normalized.case.json'), repaired)
+  await writeFile(
+    join(root, 'normalized.solver.json'),
+    JSON.stringify({
+      system_model_file: 'normalized.case.json',
+      tmax: 0.1,
+      dt_monitor: 0.01,
+      max_order: 2,
+      max_steps: -1,
+      rel_tol: 0,
+      abs_tol: 1e-8,
+      events: [],
+    }),
+  )
+  const normalized = await resolveSolver(join(root, 'normalized.solver.json'), root)
+  assert.equal(
+    await executeSolver(await simulationCommand(normalized, options), (_stream, text) =>
+      process.stdout.write(text),
+    ).done,
+    0,
+  )
+  console.log(
+    'PASS normalized GENROU real tokens and monitor spelling, max_order, unlimited steps, and absolute-only tolerance',
+  )
   const widePath = join(root, 'wide.csv')
   const file = await open(widePath, 'w')
   const elementCount = 4096

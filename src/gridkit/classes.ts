@@ -1,51 +1,29 @@
-// Monitor names follow GridKit PhasorDynamics MonitorableVariables enums.
-interface ClassInfo {
-  readonly label?: string
-  readonly monitors: readonly string[]
-}
+import { CONTRACT } from './contract.js'
 
-export const CLASSES: Readonly<Record<string, ClassInfo>> = {
-  Branch: { monitors: ['ir1', 'ii1', 'im1', 'p1', 'q1', 'ir2', 'ii2', 'im2', 'p2', 'q2'] },
-  Bus: { monitors: ['Vr', 'Vi', 'Vm', 'Va'] },
-  BusFault: { monitors: ['state', 'ir', 'ii'] },
-  BusToSignalAdapter: { monitors: [] },
-  ConstantSignalSource: { monitors: [] },
-  Esdc1a: { label: 'ESDC1A', monitors: ['efd', 'vc', 'vr', 'vf', 'se', 'vfe'] },
-  GastPti: { label: 'GAST-PTI', monitors: ['pmech', 'xvalve', 'xflow', 'xtemp', 'vload', 'vtemp'] },
-  GenClassical: { monitors: ['ir', 'ii', 'p', 'q', 'delta', 'omega', 'speed'] },
-  Genrou: { label: 'GENROU', monitors: ['ir', 'ii', 'p', 'q', 'delta', 'omega', 'speed'] },
-  Gensal: {
-    label: 'GENSAL',
-    monitors: [
-      'ir',
-      'ii',
-      'p',
-      'q',
-      'delta',
-      'omega',
-      'speed',
-      'Eqp',
-      'psidp',
-      'psiqpp',
-      'psidpp',
-      'vd',
-      'vq',
-      'te',
-      'id',
-      'iq',
-    ],
-  },
-  Hygov: { label: 'HYGOV', monitors: ['pmech', 'filter', 'desiredgate', 'gate', 'flow', 'head'] },
-  Ieeest: { label: 'IEEEST', monitors: ['vss'] },
-  Ieeet1: { label: 'IEEET1', monitors: ['efd', 'ksat'] },
-  LoadZ: { monitors: ['p', 'q'] },
-  LoadZIP: { monitors: ['ir', 'ii', 'im', 'p', 'q'] },
-  Reecb: { label: 'REECB', monitors: ['iqcmd', 'ipcmd', 'vmeas', 'pmeas'] },
-  Regca: { label: 'REGCA', monitors: ['ir', 'ii', 'p', 'q'] },
-  Repca: { label: 'REPCA', monitors: ['qext', 'pext', 'vmeas', 'qmeas', 'pmeas'] },
-  SexsPti: { label: 'SEXS-PTI', monitors: ['efd'] },
+const LABELS: Readonly<Record<string, string>> = {
+  Esdc1a: 'ESDC1A',
+  GastPti: 'GAST-PTI',
+  Genrou: 'GENROU',
+  Gensal: 'GENSAL',
+  Hygov: 'HYGOV',
+  Ieeest: 'IEEEST',
+  Ieeet1: 'IEEET1',
+  Reecb: 'REECB',
+  Regca: 'REGCA',
+  Repca: 'REPCA',
+  SexsPti: 'SEXS-PTI',
+  Tgov1: 'TGOV1',
+}
+export const CLASSES: Readonly<
+  Record<string, { readonly label?: string; readonly monitors: readonly string[] }>
+> = {
+  ...Object.fromEntries(
+    Object.entries(CONTRACT).map(([name, model]) => [
+      name,
+      { label: LABELS[name], monitors: model.monitors },
+    ]),
+  ),
   Signal: { monitors: [] },
-  Tgov1: { label: 'TGOV1', monitors: [] },
 }
 
 export function identityColumn(classId: string): string {

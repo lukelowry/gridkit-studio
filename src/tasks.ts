@@ -88,6 +88,7 @@ const workspacePath = (folder: vscode.WorkspaceFolder, uri: vscode.Uri) =>
 
 export function registerTasks(context: vscode.ExtensionContext, cases: Cases): void {
   const running = new Map<string, Run>()
+  const preparing = new Set<string>()
   const diagnostics = vscode.languages.createDiagnosticCollection('gridkit-run')
   context.subscriptions.push(diagnostics)
   const prepare = async (definition: GridKitTaskDefinition, folder: vscode.WorkspaceFolder) => {
@@ -105,46 +106,59 @@ export function registerTasks(context: vscode.ExtensionContext, cases: Cases): v
     const document = await vscode.workspace.openTextDocument(caseUri)
     const state = cases.resolve(cases.get(document).target)
     if (!state) throw new Error('Fix the case errors before running the simulation.')
-    if (state.run?.status === 'running')
-      throw new Error(
-        'This case already has a running simulation. Stop it before starting another.',
-      )
-    state.assertCommitted()
-    if (definition.solver) await useConfiguration(state, uri)
-    const settings = vscode.workspace.getConfiguration('gridkitStudio', document.uri)
-    const options: SimulationOptions = {
-      method: settings.get('simulationMethod', 'auto'),
-      executable: settings.get('dynamicSimulationPath', ''),
-    }
-    const launch = await prepareSimulation(cases, state, folder.uri.fsPath)
+    const key = await realpath(document.uri.fsPath)
+    if (preparing.has(key)) throw new Error('This case is already preparing a simulation.')
+    preparing.add(key)
     try {
-      const command = await simulationCommand(launch, options)
-      const outputPaths = new Set(launch.outputs)
-      for (const open of vscode.workspace.textDocuments)
-        if (open.isDirty && open.uri.scheme === 'file') {
-          const path = await realpath(open.uri.fsPath).catch(() => open.uri.fsPath)
-          if (outputPaths.has(path))
+      if (state.run?.status === 'running')
+        throw new Error(
+          'This case already has a running simulation. Stop it before starting another.',
+        )
+      state.assertCommitted()
+      if (definition.solver) await useConfiguration(state, uri)
+      const settings = vscode.workspace.getConfiguration('gridkitStudio', document.uri)
+      const options: SimulationOptions = {
+        method: settings.get('simulationMethod', 'auto'),
+        executable: settings.get('dynamicSimulationPath', ''),
+      }
+      const launch = await prepareSimulation(cases, state, folder.uri.fsPath)
+      let run: Run | undefined
+      try {
+        const command = await simulationCommand(launch, options)
+        const outputPaths = new Set(launch.outputs)
+        for (const open of vscode.workspace.textDocuments)
+          if (open.isDirty && open.uri.scheme === 'file') {
+            const path = await realpath(open.uri.fsPath).catch(() => open.uri.fsPath)
+            if (outputPaths.has(path))
+              throw new Error(
+                'A monitor output has unsaved edits. Close or save it before running the solver.',
+              )
+          }
+        for (const output of launch.outputs)
+          if (running.get(output)?.status === 'running')
             throw new Error(
-              'A monitor output has unsaved edits. Close or save it before running the solver.',
+              'Another solver is writing this monitor output. Stop it before running this solver.',
             )
-        }
-      for (const output of launch.outputs)
-        if (running.get(output)?.status === 'running')
-          throw new Error(
-            'Another solver is writing this monitor output. Stop it before running this solver.',
-          )
-      const run = new Run(state, launch, diagnostics, command)
-      run.taskName = `Run ${definition.solver ?? definition.case}`
-      for (const output of launch.outputs) running.set(output, run)
-      void run.done.then(() => {
-        for (const output of launch.outputs) if (running.get(output) === run) running.delete(output)
-      })
-      await state.attachRun(run)
-      cases.activate(state)
-      return run
-    } catch (error) {
-      await launch.cleanup?.()
-      throw error
+        launch.assertCurrent?.()
+        run = new Run(state, launch, diagnostics, command)
+        run.taskName = `Run ${definition.solver ?? definition.case}`
+        for (const output of launch.outputs) running.set(output, run)
+        void run.done.then(() => {
+          for (const output of launch.outputs)
+            if (running.get(output) === run) running.delete(output)
+        })
+        await state.attachRun(run)
+        cases.activate(state)
+        return run
+      } catch (error) {
+        if (run) {
+          await run.dispose()
+          if (state.run === run) await state.attachRun(undefined)
+        } else await launch.cleanup?.()
+        throw error
+      }
+    } finally {
+      preparing.delete(key)
     }
   }
   const task = (definition: GridKitTaskDefinition, folder: vscode.WorkspaceFolder) => {

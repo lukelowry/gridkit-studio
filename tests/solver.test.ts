@@ -40,3 +40,29 @@ it('does not confuse a neighboring workspace prefix with containment', () => {
   expect(within('/work/case', '/work/case/solver.json')).toBe(true)
   expect(within('/work/case', '/work/case-other/solver.json')).toBe(false)
 })
+
+it('accepts native tolerance, order, and unlimited step modes', () => {
+  for (const patch of [
+    { rel_tol: 0, abs_tol: 1e-8 },
+    { abs_tol: 0 },
+    { max_steps: -1 },
+    { max_steps: 0 },
+    { max_order: 1 },
+    { max_order: 5 },
+  ])
+    expect(() => parseSolver({ ...valid, ...patch })).not.toThrow()
+})
+it('rejects invalid orders, coerced enums, zero comparison tolerances, and unsafe step limits', () => {
+  for (const patch of [
+    { max_order: 0 },
+    { max_order: 6 },
+    { max_order: 1.5 },
+    { max_order: '2' },
+    { max_steps: Number.MAX_SAFE_INTEGER + 1 },
+    { rel_tol: 0, abs_tol: 0 },
+    { error_tolerance: [1e-4, 0] },
+    { consistent_ic_type: ['y'] },
+    { error_type: ['absolute'] },
+  ])
+    expect(() => parseSolver({ ...valid, ...patch })).toThrow()
+})

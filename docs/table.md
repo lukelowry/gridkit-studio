@@ -9,8 +9,6 @@ The table prepares a query once, then reads projected cells from that immutable 
 - Class columns are copied once per binding. Model-owned buffers are never transferred. Newly allocated sparse recording axes are transferred to the worker in the requested display order.
 - The webview owns one persistent viewport, keyboard focus, scroll position, and a small cache of aligned pages. It renders only visible rows and columns, with the identity column pinned.
 
-The application protocol uses the published Latkit port API. Results and Series retain the released Latkit API and borrowed f64 buffer semantics. The table view contract is application-local; it does not assume an unpublished Latkit API or require a dependency override.
-
 ## Query lifetime
 
 A query returns a lease with a row count, committed frame identity, and time. Its read and locate methods always use that snapshot. The caller closes the lease when replacing it. Client-assigned lease IDs allow cleanup even when cancellation races the reply.
@@ -56,6 +54,4 @@ pnpm test:host
 
 The benchmark writes results to output/table-benchmark/results.json. It measures the actual query engine without worker transport or DOM cost: 40-row reads, 8 projected columns, and 15 warm samples reported by median. Browser tests separately cover native focus, keyboard navigation, revision changes, a 10,000-row case with 64 value columns, themes, and recorded data beside the monitor.
 
-On the development machine, the original million-row, 8-column filtered/sorted warm read took about 40 ms. The new path measured about 0.05 ms. The 200,000-column CSV fixture decoded once in about 45 ms and then served all 98 projected batches in about 13 ms. These are local measurements, not latency guarantees.
-
-A cold full-table search or dynamic sort still costs work proportional to the data. The design bounds retained caches and keeps that work off the UI and extension host; it does not promise a full million-row dynamic sort at every display frame.
+Cold full-table searches and dynamic sorts require work proportional to the data size.

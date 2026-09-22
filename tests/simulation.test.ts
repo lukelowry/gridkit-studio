@@ -6,7 +6,7 @@ import { applyEdits } from 'jsonc-parser'
 import { expect, it, vi } from 'vitest'
 
 import type { Cases, ReadyCase } from '../src/case.js'
-import { faultRealEdits } from '../src/gridkit/edit.js'
+import { nativeCaseEdits } from '../src/gridkit/edit.js'
 import { validate } from '../src/gridkit/validate.js'
 import { prepareSimulation } from '../src/simulation/setup.js'
 import { caseText } from './support/case.js'
@@ -22,6 +22,7 @@ it('runs a bare case through native solver input and cleans up only its temporar
     await writeFile(path, text)
     const state = {
       document: { uri: { fsPath: path }, isDirty: false, getText: () => text },
+      current: () => true,
       raw: validate(JSON.parse(text)),
       setup: { kind: 'memory', options: { tmax: 1, events: [] } },
     } as unknown as ReadyCase
@@ -44,6 +45,7 @@ it('cleans temporary input after preparation fails and rejects cases outside the
     await writeFile(path, text)
     const state = {
       document: { uri: { fsPath: path }, isDirty: false, getText: () => text },
+      current: () => true,
       raw: validate(JSON.parse(text)),
       setup: { kind: 'memory', options: { tmax: 1, events: [], reference_file: 'missing.csv' } },
     } as unknown as ReadyCase
@@ -91,7 +93,12 @@ it.each(['memory', 'document'] as const)(
         }),
       }
       const setup = { kind: 'memory', options: { tmax: 1, events: [] } }
-      const state = { document, raw: validate(JSON.parse(text)), setup } as unknown as ReadyCase
+      const state = {
+        current: () => true,
+        document,
+        raw: validate(JSON.parse(text)),
+        setup,
+      } as unknown as ReadyCase
       const cases = {
         edit: vi.fn<Cases['edit']>(async (changes) => {
           expect(changes[0].version).toBe(document.version)
@@ -110,13 +117,24 @@ it.each(['memory', 'document'] as const)(
           }),
         )
         state.setup = { kind, uri } as ReadyCase['setup']
-        workspace.openTextDocument.mockResolvedValueOnce({ uri, isDirty: false } as never)
+        workspace.openTextDocument.mockResolvedValueOnce({
+          uri,
+          isDirty: false,
+          version: 1,
+          getText: () =>
+            JSON.stringify({
+              system_model_file: 'fault.case.json',
+              output_file: 'fault.mon.csv',
+              tmax: 1,
+              events: [],
+            }),
+        } as never)
       }
       const launch = await prepareSimulation(cases, state, root)
       const saved = await readFile(path, 'utf8')
       expect(saved).not.toBe(before)
       expect(JSON.parse(saved)).toEqual(JSON.parse(before))
-      expect(faultRealEdits(saved, launch.raw)).toEqual([])
+      expect(nativeCaseEdits(saved, launch.raw)).toEqual([])
       expect(launch.raw.devices[0].params.R).toBe(2)
       expect(document.save).toHaveBeenCalledOnce()
       await launch.cleanup?.()

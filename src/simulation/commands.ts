@@ -7,6 +7,7 @@ import { caseCommand, command } from '../commands.js'
 import {
   commitSetup,
   saveConfiguration,
+  setupDirectory,
   setupInput,
   SOLVER_EXCLUDES,
   SOLVER_FILES,
@@ -70,8 +71,11 @@ export async function chooseConfiguration(state: CaseState): Promise<void> {
   if (!choice || state.disposed) return
   if (choice.uri) await useConfiguration(state, choice.uri)
   else {
+    const setup = state.setup
+    const baseDirectory = setupDirectory(state)
     const { system_model_file: _, ...options } = await setupInput(state)
-    state.setSetup({ kind: 'memory', options })
+    if (state.setup !== setup) throw new Error('The configuration changed. Choose it again.')
+    state.setSetup({ kind: 'memory', options, baseDirectory })
   }
 }
 

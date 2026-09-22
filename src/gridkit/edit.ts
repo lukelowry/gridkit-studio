@@ -1,5 +1,7 @@
 import { applyEdits, type Edit, modify, visit } from 'jsonc-parser'
 
+import { canonicalMonitor, classMonitors } from './classes.js'
+import { modelContract } from './contract.js'
 import { locate } from './source.js'
 import type { Case } from './validate.js'
 
@@ -41,21 +43,28 @@ export function textEdits(before: string, after: string): Edit[] {
   return [{ offset: start, length: end - start, content: after.slice(start, nextEnd) }]
 }
 
-/** GridKit reads these parameters as real variants, including integral values. */
-export function faultRealEdits(text: string, raw: Case): Edit[] {
+/** Preserve JSON token precision while preparing known native parameter and monitor spellings. */
+export function nativeCaseEdits(text: string, raw: Case): Edit[] {
   const edits: Edit[] = []
   visit(text, {
     onLiteralValue(value, offset, length, _line, _column, path) {
       const location = path()
       if (location.length !== 4) return
-      const [list, index, params, key] = location
+      const [list, index, block, key] = location
+      if ((list !== 'devices' && list !== 'buses') || typeof index !== 'number') return
+      const element = raw[list][index]
+      if (!element) return
+      if (block === 'mon' && typeof value === 'string') {
+        const name = canonicalMonitor(element.class, value)
+        if (name !== value && classMonitors(element.class).includes(name))
+          edits.push({ offset, length, content: JSON.stringify(name) })
+        return
+      }
       if (
-        list !== 'devices' ||
-        typeof index !== 'number' ||
-        params !== 'params' ||
-        (key !== 'R' && key !== 'X') ||
-        raw.devices[index]?.class !== 'BusFault' ||
-        typeof value !== 'number'
+        block !== 'params' ||
+        typeof key !== 'string' ||
+        typeof value !== 'number' ||
+        !modelContract(element.class)?.realParameters.includes(key)
       )
         return
       const literal = text.slice(offset, offset + length)

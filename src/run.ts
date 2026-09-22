@@ -28,6 +28,7 @@ export class Run {
   private finished!: (status: RunStatus) => void
   private execution?: Execution
   private timer?: ReturnType<typeof setTimeout>
+  private started = false
   private cancelled = false
   private disposed = false
   private reading: Promise<void> = Promise.resolve()
@@ -82,11 +83,22 @@ export class Run {
           this.state.timeline.update(info.range)
           this.state.resultsChanged()
         }
-        if (final && !info.rows) throw new Error('GridKit produced no monitor samples.')
+        if (final) {
+          if (!info.rows) throw new Error('GridKit produced no monitor samples.')
+          const expected = [...this.monitoring.values()].reduce(
+            (count, elements) => count + elements.size,
+            0,
+          )
+          if (source.columns.length !== expected)
+            throw new Error('GridKit output is missing declared monitor columns.')
+        }
         this.dataError = undefined
       }))
   }
   async start(write: (text: string) => void): Promise<number> {
+    if (this.status === 'cancelled') return 130
+    if (this.started) throw new Error('This simulation has already been started.')
+    this.started = true
     const diagnostics: vscode.Diagnostic[] = []
     const output = new SolverOutput((issue) => {
       if (!this.state.current(this.target)) return
@@ -105,26 +117,42 @@ export class Run {
         this.status = 'cancelled'
         return 130
       }
+      this.launch.assertCurrent?.()
       this.execution = executeSolver(this.command, (stream, text) => {
         write(text)
         output.write(stream, text)
       })
+      let polling = true
+      let readFailures = 0
       const poll = () => {
-        this.timer = setTimeout(() => {
-          void this.refresh(false).then(
-            () => {
-              if (this.status === 'running' && !this.disposed) poll()
-            },
-            (error) => {
-              this.dataError = describe(error)
-              this.state.resultsChanged()
-            },
-          )
-        }, 300)
+        this.timer = setTimeout(
+          () => {
+            void this.refresh(false)
+              .then(
+                () => {
+                  readFailures = 0
+                },
+                (error) => {
+                  readFailures++
+                  this.dataError = describe(error)
+                  this.state.resultsChanged()
+                },
+              )
+              .then(() => {
+                if (polling && !this.cancelled && !this.disposed && readFailures < 3) poll()
+              })
+          },
+          Math.min(300 * 2 ** readFailures, 3000),
+        )
       }
       poll()
-      const code = await this.execution.done
-      clearTimeout(this.timer)
+      let code: number
+      try {
+        code = await this.execution.done
+      } finally {
+        polling = false
+        clearTimeout(this.timer)
+      }
       output.finish()
       try {
         await this.refresh(code === 0 && !this.cancelled)
@@ -142,6 +170,8 @@ export class Run {
               ? 'Simulation completed; reference comparison failed. See the task terminal.'
               : `DynamicSimulation exited with code ${code}. See the task terminal.`),
         )
+      if (this.dataError)
+        throw new Error(`Simulation output could not be loaded: ${this.dataError}`)
       this.status = 'completed'
       return 0
     } catch (error) {
@@ -151,23 +181,30 @@ export class Run {
       return this.cancelled ? 130 : 1
     } finally {
       output.finish()
-      clearTimeout(this.timer)
-      if (this.dataError) write(`\r\nMonitor: ${this.dataError}\r\n`)
-      if (this.state.current(this.target) && !this.disposed) this.state.resultsChanged()
-      try {
-        await this.launch.cleanup?.()
-      } catch (error) {
-        write(`\r\nCleanup: Cannot remove temporary simulation input: ${describe(error)}\r\n`)
-      }
-      this.finished(this.status)
+      await this.finish(write)
     }
   }
+  private async finish(write: (text: string) => void): Promise<void> {
+    clearTimeout(this.timer)
+    if (this.dataError) write(`\r\nMonitor: ${this.dataError}\r\n`)
+    if (this.state.current(this.target) && !this.disposed) this.state.resultsChanged()
+    try {
+      await this.launch.cleanup?.()
+    } catch (error) {
+      write(`\r\nCleanup: Cannot remove temporary simulation input: ${describe(error)}\r\n`)
+    }
+    this.finished(this.status)
+  }
+
   async cancel(): Promise<void> {
     if (this.status !== 'running') return
     this.cancelled = true
     this.state.resultsChanged()
     clearTimeout(this.timer)
-    await this.execution?.cancel()
+    if (!this.started) {
+      this.status = 'cancelled'
+      await this.finish(() => {})
+    } else await this.execution?.cancel()
   }
   async dispose(): Promise<void> {
     if (this.disposed) return

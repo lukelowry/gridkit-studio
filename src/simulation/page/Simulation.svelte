@@ -10,7 +10,7 @@
     { title: '', keys: ['tmax', 'dt_monitor'] },
     {
       title: 'Solver options',
-      keys: ['dt_fixed', 'rel_tol', 'abs_tol', 'max_steps', 'consistent_ic_type'],
+      keys: ['dt_fixed', 'rel_tol', 'abs_tol', 'max_steps', 'max_order', 'consistent_ic_type'],
     },
     {
       title: 'Output and comparison',
@@ -20,6 +20,7 @@
   const keys = groups.flatMap((group) => [...group.keys])
   type Setting = (typeof keys)[number]
   const choices: Partial<Record<Setting, readonly { value: string; label: string }[]>> = {
+    max_order: [1, 2, 3, 4, 5].map((order) => ({ value: String(order), label: String(order) })),
     consistent_ic_type: [
       { value: 'y', label: 'y' },
       { value: 'ya_ydp', label: 'ya_ydp' },
@@ -194,17 +195,18 @@
       >
         <fieldset disabled={!!fault || busy || model.running || stale}>
           {#snippet fields(groupKeys: readonly Setting[])}
-            {#each groupKeys as key}
+            {#each groupKeys as key (key)}
               <label class="setting">
                 <span>{labels[key]}</span>
                 {#if choices[key]}
                   <select
                     name={key}
+                    aria-describedby={key === 'max_order' ? 'max-order-hint' : undefined}
                     bind:value={values[key]}
                     onchange={(event) => changed(key, event.currentTarget.value)}
                   >
                     <option value="">GridKit default</option>
-                    {#each choices[key] ?? [] as choice}
+                    {#each choices[key] ?? [] as choice (choice.value)}
                       <option value={choice.value}>{choice.label}</option>
                     {/each}
                   </select>
@@ -218,9 +220,16 @@
                   />
                 {/if}
               </label>
+              {#if key === 'max_order'}
+                <p id="max-order-hint" class="clear-time">
+                  {Number(values.dt_fixed) > 0
+                    ? 'Fixed stepping uses an order of at most 2.'
+                    : 'Adaptive stepping uses an order of at most 5 by default.'}
+                </p>
+              {/if}
             {/each}
           {/snippet}
-          {#each groups as group}
+          {#each groups as group (group.title)}
             {#if group.title}
               <details>
                 <summary>{group.title}</summary>
@@ -290,7 +299,7 @@
               <summary>
                 Impedance <span>R {fault.values.resistance}, X {fault.values.reactance} p.u.</span>
               </summary>
-              {#each faultFields.slice(2) as field}<label class="setting">
+              {#each faultFields.slice(2) as field (field.key)}<label class="setting">
                   <span>{field.label}</span>
                   <input
                     name={'fault-' + field.key}
@@ -355,7 +364,7 @@
             Other events <span>{model.events.length}</span>
           </summary>
           <p class="empty">These transitions are preserved individually.</p>
-          {#each model.events as event}<div class="fault-row">
+          {#each model.events as event (event.index)}<div class="fault-row">
               <span>{event.label}</span>
               <div class="row-actions">
                 <button

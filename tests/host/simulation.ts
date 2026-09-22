@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { Browser, Frame, Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { changeJson, faultRealEdits } from '../../src/gridkit/edit.js'
+import { changeJson, nativeCaseEdits } from '../../src/gridkit/edit.js'
 import { until } from './wait.js'
 
 export async function runSimulationWorkflow(browser: Browser, workbench: Page, output: string) {
@@ -43,11 +43,14 @@ export async function runSimulationWorkflow(browser: Browser, workbench: Page, o
   await simulation.getByText('Unsaved configuration', { exact: true }).waitFor()
   await simulation.locator('input[name="tmax"]').click()
   await simulation.locator('input[name="tmax"]').fill('0.1')
+  await simulation.getByText('Solver options', { exact: true }).click()
+  await simulation.locator('select[name="max_order"]').selectOption('2')
   await simulation.getByRole('button', { name: 'Apply', exact: true }).click()
   await until(
     () => simulation.getByRole('button', { name: 'Apply', exact: true }).count(),
     (count) => count === 0,
   )
+  assert.equal(await simulation.locator('select[name="max_order"]').inputValue(), '2')
   const addFault = vscode.commands.executeCommand('gridkitStudio.addFault')
   await workbench
     .locator('.quick-input-list .monaco-list-row')
@@ -291,7 +294,7 @@ async function runLargeCases(browser: Browser, workbench: Page): Promise<void> {
       (device: { class: string }) => device.class === 'BusFault',
     )
     const text = changeJson(source, ['devices', index, 'params', 'R'], 0)
-    assert.ok(faultRealEdits(text, JSON.parse(text)).length > 0)
+    assert.ok(nativeCaseEdits(text, JSON.parse(text)).length > 0)
     await vscode.workspace.fs.writeFile(uri, Buffer.from(text))
     const solverUri = vscode.Uri.joinPath(folder, name + '.solver.json')
     await vscode.workspace.fs.writeFile(
@@ -337,7 +340,7 @@ async function runLargeCases(browser: Browser, workbench: Page): Promise<void> {
     assert.equal(code, 0, name + ' fault simulation must complete')
     const saved = await readFile(uri.fsPath, 'utf8')
     assert.deepEqual(JSON.parse(saved), JSON.parse(text))
-    assert.deepEqual(faultRealEdits(saved, JSON.parse(saved)), [])
+    assert.deepEqual(nativeCaseEdits(saved, JSON.parse(saved)), [])
     console.log(
       'PASS ' +
         name +
@@ -369,6 +372,38 @@ async function runFailure(browser: Browser, workbench: Page, output: string): Pr
   })
   await vscode.commands.executeCommand('gridkitStudio.runSolver', uri)
   assert.equal(await ended, 1)
+  await workbench
+    .getByText('GridKit: $.devices[1].params.H must be a number', { exact: true })
+    .first()
+    .waitFor()
+  console.log('PASS invalid native parameter rejected before execution with its source path')
+  await vscode.commands.executeCommand('notifications.clearAll')
+
+  const runtimeCase = vscode.Uri.joinPath(folder, 'solver-failure.case.json')
+  const runtimeSolver = vscode.Uri.joinPath(folder, 'solver-failure.solver.json')
+  await vscode.workspace.fs.writeFile(runtimeCase, Buffer.from(text.replace('"H":true', '"H":3.0')))
+  await vscode.workspace.fs.writeFile(
+    runtimeSolver,
+    Buffer.from(
+      JSON.stringify({
+        system_model_file: 'solver-failure.case.json',
+        tmax: 1,
+        dt_monitor: 0.01,
+        max_steps: 1,
+        events: [],
+      }),
+    ),
+  )
+  await vscode.commands.executeCommand('gridkitStudio.preview', runtimeCase)
+  const failed = new Promise<number | undefined>((resolve) => {
+    const subscription = vscode.tasks.onDidEndTaskProcess((event) => {
+      if (event.execution.task.definition.solver !== 'solver-failure.solver.json') return
+      subscription.dispose()
+      resolve(event.exitCode)
+    })
+  })
+  await vscode.commands.executeCommand('gridkitStudio.runSolver', runtimeSolver)
+  assert.equal(await failed, 1)
   await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
   const simulation = (await until(async () => {
     for (const page of browser.contexts().flatMap((context) => context.pages()))
@@ -379,13 +414,13 @@ async function runFailure(browser: Browser, workbench: Page, output: string): Pr
   }, Boolean))!
   await until(
     () => simulation.locator('.notice').first().textContent(),
-    (value) => !!value && /variant|parameter/i.test(value),
+    (value) => !!value && /IDA|mxstep|steps/i.test(value),
   )
   await vscode.commands.executeCommand('gridkitStudio.showSolverOutput')
   assert.ok(
-    vscode.window.activeTerminal?.name.endsWith('invalid-parameter.case.json'),
+    vscode.window.activeTerminal?.name.endsWith('solver-failure.solver.json'),
     'Show Terminal must reveal this run, not another task',
   )
   await workbench.screenshot({ path: join(output, 'simulation-error.png') })
-  console.log('PASS actual GridKit exception in Simulation and originating task terminal')
+  console.log('PASS actual GridKit integration failure in Simulation and originating task terminal')
 }

@@ -6,6 +6,7 @@ export const labels: Record<keyof SolverOptions, string> = {
   rel_tol: 'Relative tolerance',
   abs_tol: 'Absolute tolerance',
   max_steps: 'Maximum steps',
+  max_order: 'Maximum integration order',
   consistent_ic_type: 'Initial conditions',
   events: 'Events',
   output_file: 'Output CSV',

@@ -2,12 +2,16 @@ import type {
   DataBatch,
   Domain,
   FieldSelection,
+  FieldValues,
   Parameters,
   Query,
   QueryBlock,
   Schema,
   Value,
 } from '@latkit/model'
+
+import type { Bindings } from './bindings.js'
+import type { SettingsValues } from './preferences.js'
 export interface SourceRange {
   offset: number
   length: number
@@ -68,7 +72,6 @@ export interface RunRequest extends Revision {
   values: Record<string, unknown>
   outputs: readonly FieldSelection[]
   runtime: RuntimeOptions
-  configuration?: { text: string; directory: string }
   cacheBytes: number
 }
 export interface SourceContext {
@@ -78,12 +81,25 @@ export interface SourceContext {
   completions: { name: string; detail: string; description?: string }[]
   reference?: string
 }
+export type Mutation =
+  | { kind: 'remove'; ids: readonly string[] }
+  | { kind: 'set'; id: string; field: string; value: Value }
+  | { kind: 'move'; id: string; position: readonly [number, number] | null }
+  | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
 export interface Requests {
+  transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
+  placement: { input: Revision; output: Record<string, FieldValues> }
+  presentation: { input: Revision; output: Record<string, FieldValues> }
+
   complete: { input: { text: string; offset: number }; output: SourceContext['completions'] }
   context: { input: Revision & { offset: number }; output: SourceContext }
   symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
-  parse: { input: Revision & { text: string }; output: Summary }
+  parse: {
+    input: Revision &
+      ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
+    output: Summary
+  }
   query: { input: Revision & { query: Query; run?: string }; output: QueryBlock[] }
   batches: {
     input: Revision & {
@@ -132,11 +148,20 @@ export interface Plot {
   id?: string
 }
 export interface ViewState {
+  uri?: string
+  version?: number
+  writable?: boolean
+  settings?: SettingsValues
+  loop?: 'none' | 'wrap' | 'pingpong'
+  speed?: number
+  values?: Record<string, unknown>
+  table?: { type?: string; fields?: string[]; filter?: string }
+
+  diagramEditing?: boolean
   playing?: boolean
   navigate?: boolean
-  branchColors?: boolean
   follow?: boolean
-  bindings?: Record<string, string>
+  bindings?: Bindings
   summary?: Summary
   stale?: boolean
   selection?: Element
@@ -153,18 +178,21 @@ export type ToView =
       revision: Revision
       base: boolean
       window?: Domain
+      positions?: Record<string, FieldValues>
     }
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
   | { kind: 'end'; stream: number }
   | { kind: 'reply'; id: number; value?: unknown; error?: string }
   | { kind: 'action'; command: string; value?: unknown }
 export type FromView =
+  | { kind: 'cancel'; id: number }
   | { kind: 'overlap'; elements: Element[] }
   | { kind: 'window'; bounds: Domain }
-  | { kind: 'values'; values: Record<string, unknown> }
+  | { kind: 'values'; uri: string; values: Record<string, unknown> }
+  | { kind: 'tableState'; table: { type?: string; fields?: string[]; filter?: string } }
   | { kind: 'ready' }
   | { kind: 'ack'; stream: number; sequence: number }
   | { kind: 'select'; element: Element }
-  | { kind: 'request'; id: number; method: 'query' | 'edit'; input: unknown }
+  | { kind: 'request'; id: number; method: 'query' | 'edit' | 'transact'; input: unknown }
   | { kind: 'command'; command: string; value?: unknown }
   | { kind: 'error'; message: string }

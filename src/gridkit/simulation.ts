@@ -1,5 +1,5 @@
-import { copyFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import {
   type Arguments,
@@ -8,12 +8,10 @@ import {
   failure,
   type Parameters,
 } from '@latkit/model'
-import { modify } from 'jsonc-parser'
 
 import type { RunInfo, RunRequest, RuntimeProcess } from '../messages.js'
 import { type ResultCache, Results } from '../results/results.js'
 import type { Case } from './case.js'
-import { parseSolver } from './configuration.js'
 import { diagnose } from './edits.js'
 import { commandOf, parametersOf, selections } from './parameters.js'
 import { launch } from './runtime.js'
@@ -59,9 +57,6 @@ export class Simulation implements Command {
       if (!valid) throw failure('invalid-input', `Invalid value for ${name}.`)
       values[name] = value
     }
-    const configuration = this.request.configuration
-    const legacy = configuration ? parseSolver(JSON.parse(configuration.text)) : undefined
-    // Advanced local settings have their own compatibility rules (for example negative max_steps).
     const command = commandOf(this.kase, values as Arguments<Parameters>)
     const outputs = selections(this.kase, context.outputs)
     if (!outputs.length) throw failure('invalid-input', 'Select at least one output in Signals.')
@@ -81,7 +76,7 @@ export class Simulation implements Command {
     } finally {
       await handle.close()
     }
-    let text = inputOf(
+    const text = inputOf(
       command,
       'case.json',
       {
@@ -91,32 +86,6 @@ export class Simulation implements Command {
       faultOrdinal(this.kase),
     )
 
-    if (legacy && configuration) {
-      if (command.fault)
-        throw failure(
-          'invalid-input',
-          'Use configuration events or the simple fault controls, not both.',
-        )
-      const monitor = JSON.parse(text).monitors
-      // Preserve advanced options, unknown members and original real-number tokens.
-      text = configuration.text
-      const replace = (key: string, value: unknown) => {
-        for (const edit of modify(text, [key], value, {}).reverse())
-          text = text.slice(0, edit.offset) + edit.content + text.slice(edit.offset + edit.length)
-      }
-      replace('system_model_file', 'case.json')
-      if (legacy.reference_file && command.format === 'arrow')
-        monitor.push({ file_name: 'comparison.csv', format: 'csv' })
-      replace('monitors', monitor)
-      replace('output_file', undefined)
-      if (legacy.reference_file) {
-        await copyFile(
-          resolve(configuration.directory, legacy.reference_file),
-          join(this.directory, 'reference.csv'),
-        )
-        replace('reference_file', 'reference.csv')
-      }
-    }
     await writeFile(join(this.directory, 'input.json'), text)
     const process = await launch(
       this.request.runtime,
@@ -130,17 +99,11 @@ export class Simulation implements Command {
         await context.publish(batches)
         context.progress({
           completed: this.info.domain[1],
-          total: legacy?.tmax ?? command.domain[1],
+          total: command.domain[1],
           domain: this.info.domain,
         })
       })
       await process.done
-      if (legacy?.output_file && configuration) {
-        const destination = resolve(configuration.directory, legacy.output_file)
-        if (destination === resolve(configuration.directory, legacy.system_model_file))
-          throw failure('invalid-input', 'Output file must not overwrite the case.')
-        await this.results.exportCsv(destination, context.signal)
-      }
     } finally {
       await process.stop()
       await process.done.catch(() => {})

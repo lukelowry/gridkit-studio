@@ -123,7 +123,7 @@ describe('single catalog and source ownership', () => {
     expect(text).toContain('"kv":230.000')
     expect(text).toContain('"keep":1.000')
   })
-  it('handles legacy infinite buses and reports invalid known values from the catalog', async () => {
+  it('handles native infinite buses and reports invalid known values from the catalog', async () => {
     const kase = await Case.parse(
       await readFile('tests/fixtures/solver/two-bus.case.json', 'utf8'),
       catalog,

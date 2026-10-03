@@ -2,9 +2,11 @@ import type { RowsBlock } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { display, referenceNames, rowsOf } from './cells.js'
+import { menuContext, type Target } from './contexts.js'
 import type { Element } from './messages.js'
 import type { Sessions } from './sessions.js'
 export class Node extends vscode.TreeItem {
+  target?: Target
   constructor(
     label: string,
     readonly data: {
@@ -25,9 +27,13 @@ export function registerTrees(studio: Sessions) {
   let revision = ''
   const refresh = studio.changed.event(() => {
     const state = studio.active ? studio.state(studio.active) : undefined
-    const next = [studio.active, state?.summary?.version, state?.stale, state?.selection?.id].join(
-      ':',
-    )
+    const next = [
+      studio.active,
+      state?.summary?.version,
+      state?.stale,
+      state?.selection?.id,
+      JSON.stringify(state?.bindings),
+    ].join(':')
     if (next !== revision) {
       revision = next
       changed.fire(undefined)
@@ -68,6 +74,37 @@ export function registerTrees(studio: Sessions) {
       const state = studio.state(studio.active)
       const summary = state.summary
       if (!summary) return []
+      const prepare = (item: Node) => {
+        item.target = {
+          uri: summary.uri,
+          version: summary.version,
+          origin: signals ? 'signals' : 'inspector',
+          type: item.data.type,
+          field: item.data.field,
+          ...(item.data.id
+            ? {
+                element: {
+                  id: item.data.id,
+                  ...(item.data.field ? { field: item.data.field } : {}),
+                },
+              }
+            : {}),
+        }
+        const context = menuContext(summary, item.target, state.bindings)
+        item.contextValue = Object.entries(context)
+          .filter(([key, value]) => key.startsWith('gridkit') && value === true)
+          .map(([key]) => key)
+          .join(' ')
+        item.id = [
+          summary.uri,
+          item.data.kind,
+          item.data.type,
+          item.data.field,
+          item.data.id,
+          item.data.offset,
+        ].join(':')
+        return item
+      }
       if (!signals && !node) {
         const selected = state.selection
         if (!selected)
@@ -96,7 +133,7 @@ export function registerTrees(studio: Sessions) {
             title: 'Inspect field',
             arguments: [item],
           }
-          return item
+          return prepare(item)
         })
       }
       if (!node)
@@ -113,7 +150,7 @@ export function registerTrees(studio: Sessions) {
               vscode.TreeItemCollapsibleState.Collapsed,
             )
             item.description = String(count)
-            return item
+            return prepare(item)
           })
       const type = node.data.type!
       if (node.data.kind === 'type')
@@ -127,7 +164,7 @@ export function registerTrees(studio: Sessions) {
             )
             item.description = definition.unit
             item.contextValue = 'signal'
-            return item
+            return prepare(item)
           })
       if (node.data.kind === 'field' || node.data.kind === 'more') {
         const name = summary.schema.types[type]!.fields.name
@@ -147,7 +184,7 @@ export function registerTrees(studio: Sessions) {
           item.description = row.id ?? ''
           item.contextValue = 'signal'
           item.command = { command: 'gridkitStudio.plot', title: 'Plot signal', arguments: [item] }
-          return item
+          return prepare(item)
         })
         if (offset + rows.length < summary.counts[type]!)
           nodes.push(

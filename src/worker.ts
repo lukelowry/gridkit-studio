@@ -1,11 +1,11 @@
 import { mkdir, mkdtemp } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 
 import {
   type Arguments,
-  blockByteLength,
   blockBuffers,
+  blockByteLength,
   type DataBatch,
   type Parameters,
   type QueryBlock,
@@ -20,7 +20,9 @@ import { catalogOf } from './gridkit/definition.js'
 import { diagnose, editable, editField, sourceRange } from './gridkit/edits.js'
 import { completionsAt, sourceContext } from './gridkit/navigation.js'
 import { parametersOf, selections } from './gridkit/parameters.js'
+import { placement } from './gridkit/placement.js'
 import { Simulation } from './gridkit/simulation.js'
+import { applyChanges, presentation, transaction } from './gridkit/transactions.js'
 import type {
   FromWorker,
   Request,
@@ -37,6 +39,7 @@ const port = parentPort!
 const catalog = catalogOf(JSON.stringify(catalogJson))
 const cases = new Map<string, { kase: Case; summary: Summary }>()
 const parses = new Map<string, number>()
+const mirrors = new Map<string, { version: number; text: string }>()
 const operations = new Map<number, AbortController>()
 const acknowledgements = new Map<number, () => void>()
 const running = new Map<string, { controller: AbortController; done: Promise<unknown> }>()
@@ -48,7 +51,11 @@ const cacheLimit = (value: number) => {
     throw new Error('Result cache must be between 16 and 2048 MiB.')
   return value
 }
-const send = (message: FromWorker, buffers: readonly ArrayBufferLike[] = []) => port.postMessage(message, buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))
+const send = (message: FromWorker, buffers: readonly ArrayBufferLike[] = []) =>
+  port.postMessage(
+    message,
+    buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer),
+  )
 const get = (revision: Revision) => {
   const entry = cases.get(revision.uri)
   if (
@@ -181,8 +188,18 @@ function runCase(input: RunRequest) {
 
 async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
   switch (request.method) {
+    case 'placement':
+      return placement(get(request.input).kase, signal)
     case 'parse': {
-      const { uri, version, text } = request.input
+      const { uri, version } = request.input
+      const previous = mirrors.get(uri)
+      if (!('text' in request.input) && previous?.version !== request.input.baseVersion)
+        throw new Error('Source mirror is stale.')
+      const text =
+        'text' in request.input
+          ? request.input.text
+          : applyChanges(previous!.text, request.input.changes)
+      mirrors.set(uri, { version, text })
       parses.set(uri, version)
       const started = performance.now()
       const kase = await Case.parse(text, catalog, uri.split('/').at(-1), signal)
@@ -321,6 +338,10 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       }
       return direction > 0 ? run.info.domain[1] : run.info.domain[0]
     }
+    case 'transact':
+      return transaction(get(request.input).kase, request.input.mutations)
+    case 'presentation':
+      return presentation(get(request.input).kase)
     case 'locate':
       return sourceRange(get(request.input).kase, request.input.id, request.input.field)
     case 'edit':
@@ -351,6 +372,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       if (request.method === 'release') {
         cases.delete(uri)
         parses.delete(uri)
+        mirrors.delete(uri)
       }
       return null
     }
@@ -367,7 +389,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
         id: crypto.randomUUID(),
         revision: request.input,
         fingerprint: kase.version,
-        name: kase.name,
+        name: basename(request.input.path),
         state: 'running',
         path: request.input.path,
         format: request.input.path.endsWith('.csv') ? 'csv' : 'arrow',
@@ -415,7 +437,11 @@ port.on('message', (message: ToWorker) => {
   operations.set(message.id, controller)
   void handle(message, controller.signal)
     .then(
-      (value) => send({ kind: 'result', id: message.id, value }, message.method === 'query' ? blockBuffers(value) : []),
+      (value) =>
+        send(
+          { kind: 'result', id: message.id, value },
+          message.method === 'query' ? blockBuffers(value) : [],
+        ),
       (error) =>
         send({
           kind: 'error',

@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises'
+import { copyFile, mkdir, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -47,3 +47,5 @@ for (const options of builds) {
   if (process.argv.includes('--watch')) await (await context(config)).watch()
   else await build(config)
 }
+
+await copyFile('assets/borders.bin', 'dist/webview/borders.bin')

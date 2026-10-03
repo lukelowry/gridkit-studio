@@ -75,8 +75,22 @@ describe('real worker protocol', () => {
           }).done
         ).length,
       ).toBeGreaterThan(0)
+      const edits = await call('transact', {
+        ...revision,
+        mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'Delta Ω' }],
+      }).done
+      const delta = await call('parse', {
+        ...revision,
+        version: 2,
+        baseVersion: 1,
+        changes: [edits],
+      }).done
+      expect(delta.version).toBe(2)
+      await expect(
+        call('parse', { ...revision, version: 3, baseVersion: 1, changes: [edits] }).done,
+      ).rejects.toThrow(/mirror is stale/)
       // A malformed newer revision keeps the old projection unavailable to stale edits.
-      await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()
+      await expect(call('parse', { ...revision, version: 4, text: '{' }).done).rejects.toThrow()
       await expect(
         call('edit', { ...revision, id: 'Bus/1', field: 'name', value: 'stale' }).done,
       ).rejects.toThrow(/changed/)

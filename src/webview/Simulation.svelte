@@ -5,22 +5,20 @@
   import { bridge } from './bridge.js'
   let view = $state<ViewState>({})
   let values = $state<Record<string, unknown>>({})
-  let configuration = $state<string | undefined>()
   const parameters = $derived(Object.entries(view.summary?.parameters ?? {}))
   function update(name: string, value: unknown) {
     values = { ...values, [name]: value }
-    bridge.send({ kind: 'values', values: $state.snapshot(values) })
+    bridge.send({ kind: 'values', uri: view.uri!, values: $state.snapshot(values) })
   }
   onMount(() => {
     const stop = bridge.on((message) => {
       if (message.kind === 'state') {
-        const extended = message as typeof message & {
-          values?: Record<string, unknown>
-          configuration?: string
-        }
+        if (
+          view.uri !== message.state.uri ||
+          JSON.stringify(values) !== JSON.stringify(message.state.values ?? {})
+        )
+          values = message.state.values ?? {}
         view = message.state
-        values = extended.values ?? values
-        configuration = extended.configuration
       }
     })
     bridge.send({ kind: 'ready' })
@@ -32,36 +30,15 @@
   {#if !view.summary}
     <p class="muted">Open a case to configure and run a local simulation.</p>
   {:else}
-    <div class="actions">
-      <button
-        class="primary"
-        disabled={view.stale || view.run?.state === 'running'}
-        onclick={() => bridge.command('runSolver')}
-      >
-        Run simulation
-      </button>
-      <button disabled={view.run?.state !== 'running'} onclick={() => bridge.command('stopSolver')}>
-        Stop
-      </button>
-    </div>
-    <button
-      class="configuration"
-      aria-label="Choose simulation configuration"
-      onclick={() => bridge.command('chooseConfiguration')}
-    >
-      {configuration ?? 'Simulation form'}
-    </button>
-    {#if configuration}<p class="muted">Using captured configuration values and events.</p>
-      <button onclick={() => bridge.command('openConfiguration')}>Edit configuration</button>{/if}
     {#if view.stale}<p class="warning" role="status">Resolve case errors before running.</p>{/if}
     <form
       onsubmit={(event) => {
         event.preventDefault()
-        bridge.command('runSolver')
+        // Run is the native view-title action.
       }}
     >
       {#each parameters as [name, spec] (name)}
-        {#if (!configuration || name === 'output_format') && (!name.startsWith('fault_') || (values.fault ?? false))}
+        {#if !name.startsWith('fault_') || (values.fault ?? false)}
           <label for={name} title={spec.description ?? ''}>
             {spec.label ?? name}{spec.unit ? ' [' + spec.unit + ']' : ''}
           </label>
@@ -107,9 +84,6 @@
         {/if}
       {/each}
     </form>
-    <button class="configuration" onclick={() => bridge.command('monitorSignals')}>
-      Choose recorded signals…
-    </button>
     {#if view.run}<p class="status" aria-live="polite">
         {view.run.state} · {view.run.frames.toLocaleString()} frames · {view.run.domain[1].toPrecision(
           5,
@@ -124,16 +98,6 @@
     padding: 12px;
     height: 100vh;
     overflow: auto;
-  }
-  .actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-  .configuration {
-    width: 100%;
-    text-align: left;
-    margin-bottom: 8px;
   }
   form {
     display: grid;

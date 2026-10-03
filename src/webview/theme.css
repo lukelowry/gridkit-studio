@@ -1,4 +1,13 @@
+/* Lattice spacing and density, using native workbench semantic colors and type. */
 :root {
+  --spacing-2xs: 2px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --text-sm: 12px;
+  --row-height: 28px;
+  --header-height: 32px;
   color-scheme: light dark;
   font: var(--vscode-font-size, 13px) var(--vscode-font-family, system-ui);
   color: var(--vscode-foreground);
@@ -49,7 +58,7 @@ select {
   border-radius: 2px;
 }
 :focus-visible {
-  outline: 1px solid var(--vscode-focusBorder);
+  outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 1px;
 }
 .toolbar {
@@ -68,7 +77,7 @@ select {
   color: var(--vscode-descriptionForeground);
 }
 .status {
-  padding: 6px 12px;
+  padding: 3px 12px;
   font-size: 12px;
   background: var(--vscode-editor-background);
   border-top: 1px solid var(--vscode-panel-border);
@@ -142,4 +151,23 @@ button[aria-pressed='true'] {
   border-color: var(--vscode-focusBorder);
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
+}
+
+::selection {
+  background: var(--vscode-editor-selectionBackground);
+}
+input {
+  caret-color: var(--vscode-input-foreground);
+}
+* {
+  scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+  scrollbar-width: thin;
+}
+body[data-contrast='high'] {
+  --vscode-descriptionForeground: var(--vscode-foreground);
+  --vscode-panel-border: var(--vscode-foreground);
+}
+body[data-motion='reduce'] * {
+  animation: none !important;
+  transition: none !important;
 }

@@ -65,12 +65,28 @@ async function main() {
         })
         latencies.push(performance.now() - start)
       }
+      const edits = await call('transact', {
+        uri,
+        version: 1,
+        mutations: [
+          {
+            kind: 'set',
+            id: 'Bus/' + JSON.parse(text).buses[0].number,
+            field: 'name',
+            value: 'Performance Δ',
+          },
+        ],
+      })
+      const deltaStart = performance.now()
+      await call('parse', { uri, version: 2, baseVersion: 1, changes: [edits] })
+      const deltaRoundtripMs = performance.now() - deltaStart
+      const deltaBytes = JSON.stringify(edits).length
       clearInterval(timer)
       const size = text.length
       const queryP95Ms = latencies.sort((a, b) => a - b)[18]!
       assert.equal(summary.counts.Bus, name === 'ACTIVSg2000' ? 2000 : 10000)
       const before = process.memoryUsage().rss
-      for (let i = 2; i < 5; i++) await call('parse', { uri, version: i, text })
+      for (let i = 3; i < 6; i++) await call('parse', { uri, version: i, text })
       await call('release', { uri })
       global.gc?.()
       report.push({
@@ -79,6 +95,8 @@ async function main() {
         parseMs: summary.parseMs,
         roundtripMs,
         queryP95Ms,
+        deltaRoundtripMs,
+        deltaBytes,
         maxHostTimerDriftMs: delay,
         rssBefore: before,
         rssAfter: process.memoryUsage().rss,

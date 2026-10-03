@@ -1,58 +1,46 @@
 import { type Gpu } from '@latkit/gpu'
-import { bitAt, type Data, type FieldValues, itemId, selectRows } from '@latkit/model'
+import { type Data, type FieldValues, itemId, selectRows } from '@latkit/model'
 import { createNetwork, type Network, type NetworkItem, type VertexOptions } from '@latkit/network'
 
-import type { Element } from '../messages.js'
+import type { Element, ViewState } from '../messages.js'
 import { bridge } from './bridge.js'
+import { nativeMenu } from './context.js'
 import { nameFieldOf, networkOf } from './topology.js'
-export function networkTopology(source: Data) {
+export function networkTopology(source: Data, positions: Record<string, FieldValues> = {}) {
   const drawn = networkOf(source.schema)
   const vertices: Record<string, VertexOptions> = {}
   for (const type of drawn.vertices) {
-    const table = source.tables[type]
-    const spatial = source.schema.types[type]!.spatial!.field
-    let positioned = false
-    for (const page of table?.fields[spatial] ?? []) {
-      for (let row = 0; row < page.column.length; row++)
-        if (!page.column.validity || bitAt(page.column.validity, page.column.offset + row)) {
-          positioned = true
-          break
-        }
-      if (positioned) break
-    }
-    let position: FieldValues | undefined
-    if (table && !positioned) {
-      const rows = table.rows
-      const count = rows.kind === 'range' ? rows.count : rows.values.length
-      const values = new Float64Array(count * 2)
-      for (let row = 0; row < count; row++) {
-        const angle = (row * 2 * Math.PI) / Math.max(1, count)
-        values[row * 2] = 20 * Math.cos(angle)
-        values[row * 2 + 1] = 20 * Math.sin(angle)
-      }
-      position = {
-        index: table.index,
-        rows,
-        values: {
-          kind: 'vector',
-          size: 2,
-          offset: 0,
-          length: count,
-          values: { kind: 'numeric', values, offset: 0, length: values.length },
-        },
-      }
-    }
+    const position = positions[type]
     vertices[type] = { labels: nameFieldOf(source.schema, type), ...(position ? { position } : {}) }
   }
   return {
     vertices,
     edges: Object.fromEntries(
-      drawn.edges.map(({ type, ends, bends }) => [type, { ends, ...(bends ? { bends } : {}) }]),
+      drawn.edges.map(({ type, ends, bends }) => [
+        type,
+        { ends, ...(bends && !Object.keys(positions).length ? { bends } : {}) },
+      ]),
     ),
   }
 }
-export function mountNetwork(gpu: Gpu, canvas: HTMLCanvasElement, source: Data, style: object) {
-  const network = createNetwork(gpu, { canvas, source, ...networkTopology(source), ...style })
+export function mountNetwork(
+  gpu: Gpu,
+  canvas: HTMLCanvasElement,
+  source: Data,
+  style: object,
+  state: () => ViewState,
+  positions: Record<string, FieldValues> = {},
+) {
+  const topology = networkTopology(source, positions)
+  const network = createNetwork(gpu, {
+    canvas,
+    source,
+    ...topology,
+    ...(Object.values(topology.vertices).some((vertex) => vertex.position)
+      ? { camera: { projection: 'flat' as const, fit: true } }
+      : {}),
+    ...style,
+  })
   network.on('select', (items) => {
     const item = items[0]
     if (item) {
@@ -60,11 +48,15 @@ export function mountNetwork(gpu: Gpu, canvas: HTMLCanvasElement, source: Data, 
       if (id) bridge.send({ kind: 'select', element: { id } })
     }
   })
-  network.on('contextmenu', (event) => {
-    const item = event.items[0]
-    if (item) bridge.send({ kind: 'select', element: { id: itemId(item) } })
-    bridge.send({ kind: 'overlap', elements: event.items.map((item) => ({ id: itemId(item) })) })
-  })
+  network.on('contextmenu', (event) =>
+    nativeMenu(
+      canvas,
+      event.point,
+      event.items.map((item) => ({ id: itemId(item) })),
+      state(),
+      'network',
+    ),
+  )
   network.on('open', (item) => {
     bridge.send({ kind: 'select', element: { id: itemId(item) } })
     bridge.command('elementSource')

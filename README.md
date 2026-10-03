@@ -1,32 +1,39 @@
 # GridKit Studio
 
-Explore, edit, and simulate GridKit cases inside VS Code. Network, Diagram, Table, and JSON share the same document, including native saving, dirty state, and undo/redo.
+Explore, edit, and simulate GridKit cases inside VS Code with current Latkit renderers.
 
-## Use
+## Workbench
 
-Requires **VS Code 1.140 or later**. Install the prerelease VSIX using **Extensions: Install from VSIX…**, then open a `*.case.json`.
+Requires **VS Code 1.135 or later**. Install the prerelease VSIX with **Extensions: Install from VSIX…**, then open a `*.case.json`.
 
-- **Network** is the default case editor. Use **Reopen Editor With…** for Diagram, Table, or JSON.
-- Select an element to inspect its fields in the native **Inspector**. Edit with the field context menu or F2 in Table. Reference values use stable IDs such as `Bus/42`.
-- **Diagram** shows directed signal ports and nets. Fit a selected element's neighborhood to inspect its connections. Cases without signal topology show an explanatory empty state.
-- Choose recorded outputs in **Signals**, configure **Simulation**, and run. Execution appears in a native task terminal; stopping the task cancels and cleans up the solver.
-- **Monitor** plots recorded signals, supports a shared playhead, stepping, looping, and following live results. Its initial window is at most ten seconds; pan or choose a time window to read other portions of the raw result file.
-- Import existing Arrow or CSV results with **Open Monitor CSV…**; export recorded results to CSV.
+- **Network** is the default editor. **Reopen Editor With…** opens Diagram or JSON on the same document.
+- **Case** is a native bottom panel. Its title actions choose the element type, filter, and columns. Click headers to sort; use F2 or double-click to edit.
+- **Diagram** supports directed ports and fan-out nets. Toggle editing in the native editor title, drag blocks to place them, and drag ports to wire them. Native context menus disconnect ports and delete unreferenced elements. **Arrange Diagram** saves the selected automatic layout to the case.
+- **Inspector**, **Simulation**, and **Signals** use the GridKit sidebar. Native menus, Quick Picks, editor/view title actions, and task terminals handle workbench actions.
+- **Monitor** lives in the bottom panel. Plot fields from Signals, then use its native play, pause, step, loop, follow, window, and plot actions. The timeline supports continuous scrubbing.
+- **Review Case Changes** opens the native Git diff against HEAD, including unsaved changes. Source Control owns staging, commits, and conflict resolution.
 
-A matching `*.solver.json` is detected automatically. Choose **Simulation form** to use simple catalog-derived options, or select a solver configuration for advanced settings and events. Unsaved case and configuration content is captured for each run. Legacy reference comparisons run through a CSV monitor alongside Arrow capture.
+Network, Diagram, Case, and JSON share native saving, dirty state, undo/redo, and linked selection. Structured edits preserve untouched text, unknown properties, and numeric spelling. Diagram positions are stored in the component's `extension.diagram.position`. Wiring two disconnected ports creates a Signal record; an arbitrary component-creation palette is not included.
 
-Simulation requires a trusted workspace and either an installed **DynamicSimulation**, **Docker**, or **Podman**. Auto searches in that order. Set **Dynamic Simulation Path** for your own build. The default container image is `ghcr.io/lukelowry/gridkit:arrow`, which supports Arrow streams; a runtime without that support can use CSV output instead. In SSH, WSL, or a devcontainer, execution and files live on the workspace extension host.
+## Settings and simulation
 
-Each run retains its original case revision. Source edits never silently attach incompatible results. Invalid intermediate JSON leaves the last valid view visibly stale. Failed and cancelled runs retain available partial results. The current and previous run remain until cleared or the case closes; exported files are yours. Raw run files live in extension storage, with a shared 256 MiB sample cache by default. WebGPU is required for canvas views; source, Table, Inspector, and execution remain available without it.
+The native Settings UI exposes **139 Lattice settings** for Network, Diagram, Monitor, and accessibility. Search `gridkitStudio.network`, `gridkitStudio.diagram`, or `gridkitStudio.monitor`; canvas context menus open the relevant settings. This includes geometry, labels, ports, routing/layout, colors, colormaps, lighting, camera, picking, input, antialiasing, trace/axis styling, and motion. VS Code supplies the theme and font. Five field-mapping channels control vertex color/size/height and edge color/dashes.
 
-Four read-only VS Code language-model tools expose case inspection, bounded row queries, diagnostics, and run summaries. They use open sessions and require no Studio model provider, credentials, or chat UI.
+Simulation uses current catalog-derived command parameters. Configure the sidebar form and recorded outputs, then run through a native task terminal. Stopping the task cancels and cleans up the process. Unsaved case content is captured at run start. There is no legacy solver-configuration or reference-comparison adapter.
+
+Execution requires a trusted workspace and **DynamicSimulation**, **Docker**, or **Podman**. Auto searches in that order. Configure the executable path or container image in Settings. The default container is `ghcr.io/lukelowry/gridkit:arrow`. Arrow is the default output format; CSV remains a current supported format. **Import Results…** accepts Arrow/CSV; **Export CSV…** exports a run. In SSH, WSL, or a devcontainer, execution and files belong to the workspace extension host.
+
+Each run retains its input revision. Incompatible results never silently overlay an edited case. Failed/cancelled runs keep available partial samples visibly incomplete. Current and previous runs remain until cleared or closed; exported files remain user-owned. Raw files back windowed reads, with a shared 256 MiB sample cache by default.
+
+WebGPU is required only for canvas views. Source, Case, Inspector, and execution remain available without it. Four read-only VS Code language-model tools inspect open cases, bounded rows, diagnostics, and runs without a separate chat UI, provider, or credentials.
 
 ## Develop
 
-Use Node.js 24 and pnpm 10.30.0. All Latkit dependencies are exact published npm versions; there are no sibling-repository runtime imports.
+Use Node.js 24 and pnpm 10.30.0. Published Latkit dependencies are pinned exactly: model 3.0.0, GPU 0.14.0, Network 0.18.0, Diagram 0.8.0, and Monitor 0.13.0. There are no sibling-repository runtime imports.
 
 ```sh
 pnpm install --frozen-lockfile
+pnpm settings:check
 pnpm lint
 pnpm format:check
 pnpm test
@@ -34,12 +41,13 @@ pnpm test:host
 pnpm test:solver
 pnpm test:performance
 pnpm package
+pnpm test:package
 ```
 
-F5 opens a development host with the bundled `cases` directory. Packaging writes `dist/gridkit-studio-0.3.0.vsix`. The host suite runs real VS Code 1.140 and webviews; rendering tests require a working WebGPU adapter. The solver suite defaults to Docker; set `GRIDKIT_TEST_SOLVER` to an installed executable path or `GRIDKIT_TEST_IMAGE` to another compatible image. Large CSV benchmarks run when the ignored local `cases/*.mon.csv` files are present.
+F5 opens a development host. Packaging writes `dist/gridkit-studio-0.3.1.vsix`. The host suite uses actual VS Code and webviews and requires WebGPU. The solver suite defaults to Docker; `GRIDKIT_TEST_SOLVER` selects an installed executable and `GRIDKIT_TEST_IMAGE` selects another compatible image. Large CSV benchmarks run when the ignored local result fixtures are available.
 
-See [REWRITE.md](REWRITE.md) for architecture, imported-code provenance, and verification evidence.
+See [REWRITE.md](REWRITE.md) for architecture, provenance, and verification, and [document editing](docs/table.md) for the transaction boundary.
 
 ## Author
 
-GridKit Studio is developed by [Luke Lowery](https://lukelowry.github.io/) and began during his PhD studies at Texas A&M University. See his [Google Scholar profile](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) for publications and [GridKit](https://github.com/ORNL/GridKit) for more information about this work.
+GridKit Studio is developed by [Luke Lowery](https://lukelowry.github.io/) and began during his PhD studies at Texas A&M University. See his [Google Scholar profile](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) and [GridKit](https://github.com/ORNL/GridKit).

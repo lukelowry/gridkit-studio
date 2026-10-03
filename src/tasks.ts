@@ -1,19 +1,15 @@
-import { dirname, normalize, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
 import type { RunRequest, RuntimeOptions } from './messages.js'
 import type { Sessions } from './sessions.js'
-const samePath = (a: string, b: string) =>
-  process.platform === 'win32'
-    ? normalize(a).toLowerCase() === normalize(b).toLowerCase()
-    : normalize(a) === normalize(b)
 export function registerTasks(studio: Sessions) {
-  const make = (uri: vscode.Uri, configuration?: vscode.Uri) => {
+  const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
     const definition = {
       type: 'gridkit',
       case: uri.toString(),
-      ...(configuration ? { configuration: configuration.toString() } : {}),
+      ...(values ? { values } : {}),
     }
     const task = new vscode.Task(
       definition,
@@ -47,35 +43,13 @@ export function registerTasks(studio: Sessions) {
                   : '',
                 image: settings.get('containerImage', 'ghcr.io/lukelowry/gridkit:arrow'),
               }
-              const configurationUri = configuration ?? session.configuration
-              const config = configurationUri
-                ? await vscode.workspace.openTextDocument(configurationUri)
-                : undefined
-              if (config) {
-                const model = JSON.parse(config.getText()).system_model_file
-                if (
-                  typeof model !== 'string' ||
-                  samePath(resolve(dirname(config.uri.fsPath), model), uri.fsPath) === false
-                )
-                  throw new Error(
-                    'This configuration targets a different case. Open its system_model_file first.',
-                  )
-              }
               const request: RunRequest = {
                 uri: uri.toString(),
                 version: summary.version,
-                values: session.values,
+                values: structuredClone(values ?? session.values),
                 outputs: session.outputs,
                 runtime,
                 cacheBytes: settings.get<number>('resultCacheMiB', 256) * (1 << 20),
-                ...(config
-                  ? {
-                      configuration: {
-                        text: config.getText(),
-                        directory: vscode.Uri.joinPath(config.uri, '..').fsPath,
-                      },
-                    }
-                  : {}),
               }
               write.fire(
                 `Captured ${document.isDirty ? 'unsaved ' : ''}case revision ${summary.version}.\r\n`,
@@ -126,10 +100,8 @@ export function registerTasks(studio: Sessions) {
         path.includes('://')
           ? vscode.Uri.parse(path)
           : vscode.Uri.file(resolve(folder?.uri.fsPath ?? '.', path)),
-        typeof task.definition.configuration === 'string'
-          ? task.definition.configuration.includes('://')
-            ? vscode.Uri.parse(task.definition.configuration)
-            : vscode.Uri.file(resolve(folder?.uri.fsPath ?? '.', task.definition.configuration))
+        task.definition.values && typeof task.definition.values === 'object'
+          ? task.definition.values
           : undefined,
       )
     },

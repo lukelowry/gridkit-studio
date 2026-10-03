@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -25,12 +25,7 @@ async function main() {
     executable: process.env.GRIDKIT_TEST_SOLVER ?? '',
     image: process.env.GRIDKIT_TEST_IMAGE ?? 'ghcr.io/lukelowry/gridkit:arrow',
   }
-  async function execute(
-    name: string,
-    format: 'arrow' | 'csv',
-    configuration?: string,
-    cancel = false,
-  ) {
+  async function execute(name: string, format: 'arrow' | 'csv', cancel = false) {
     const directory = join(root, name)
     await mkdir(directory)
     const input: RunRequest = {
@@ -44,7 +39,6 @@ async function main() {
       outputs: [{ from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } }],
       runtime,
       cacheBytes: 1 << 20,
-      ...(configuration ? { configuration: { text: configuration, directory: root } } : {}),
     }
     const info: RunInfo = {
       id: name,
@@ -125,7 +119,7 @@ async function main() {
       values.push(...block.columns.Vm!.values)
     assert.ok(values.every(Number.isFinite))
     const record = { format, frames: info.frames, values, durationMs: performance.now() - started }
-    if (!configuration) records.push(record)
+    records.push(record)
     return record
   }
   try {
@@ -135,38 +129,11 @@ async function main() {
     records[0]!.values.forEach((value, i) =>
       assert.ok(Math.abs(value - records[1]!.values[i]!) < 1e-5),
     )
-    await copyFile(join(root, 'csv/results.csv'), join(root, 'reference.csv'))
-    const configuration =
-      '{"system_model_file":"original.case.json","tmax":0.1000,"dt_monitor":0.0100,"dt_fixed":0.0,"max_steps":-1,"events":[],"reference_file":"reference.csv","output_file":"export.csv","error_tolerance":0.00001,"extension":{"preserve":1.000}}'
-    const legacy = await execute('legacy', 'arrow', configuration)
-    const staged = await readFile(join(root, 'legacy/input.json'), 'utf8')
-    assert.ok(staged.includes('0.1000'))
-    assert.ok(staged.includes('1.000'))
-    assert.match(await readFile(join(root, 'export.csv'), 'utf8'), /time/)
-    // A failed reference comparison must fail the run, never silently skip comparison.
-    const reference = await readFile(join(root, 'reference.csv'), 'utf8')
-    await writeFile(
-      join(root, 'reference.csv'),
-      reference
-        .split('\n')
-        .map((line, i) =>
-          i && line
-            ? line
-                .split(',')
-                .map((cell, j) => (j ? String(Number(cell) + 1) : cell))
-                .join(',')
-            : line,
-        )
-        .join('\n'),
-    )
-    await assert.rejects(execute('mismatch', 'arrow', configuration), /exited with code/)
-    const cancellation = await execute('cancel', 'arrow', undefined, true)
+    const cancellation = await execute('cancel', 'arrow', true)
     await mkdir('output/tests', { recursive: true })
     const report = {
       formats: records.map(({ values, ...record }) => ({ ...record, samples: values.length })),
-      legacy,
       cancellation,
-      referenceMismatchRejected: true,
     }
     await writeFile('output/tests/solver-report.json', JSON.stringify(report, null, 2))
     console.log(report)

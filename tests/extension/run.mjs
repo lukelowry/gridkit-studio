@@ -1,4 +1,4 @@
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -6,6 +6,7 @@ import { runTests } from '@vscode/test-electron'
 import { build } from 'esbuild'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
+const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const testRoot = path.join(root, '.vscode-test')
 await mkdir(testRoot, { recursive: true })
 const run = await mkdtemp(path.join(testRoot, 'run-'))
@@ -53,7 +54,7 @@ await runTests({
     GRIDKIT_TEST_PACKAGED: process.env.GRIDKIT_TEST_EXTENSION_PATH ? '1' : undefined,
     GRIDKIT_TEST_SOLVER: process.env.GRIDKIT_TEST_SOLVER,
   },
-  version: process.env.VSCODE_VERSION ?? '1.140.0',
+  version: process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
   ...(process.env.VSCODE_EXECUTABLE_PATH && {
     vscodeExecutablePath: process.env.VSCODE_EXECUTABLE_PATH,
   }),

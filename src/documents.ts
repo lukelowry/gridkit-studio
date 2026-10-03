@@ -2,13 +2,16 @@ import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import type { Client } from './client.js'
-import type { Element, Summary } from './messages.js'
+import type { Element, Mutation, SourceEdit, Summary } from './messages.js'
 interface Entry {
   document: vscode.TextDocument
   summary?: Summary
   pending?: Promise<Summary>
   controller?: AbortController
   timer?: ReturnType<typeof setTimeout>
+  workerVersion?: number
+  changes: SourceEdit[][]
+  editing?: Promise<void>
   stale: boolean
   error?: string
 }
@@ -22,6 +25,13 @@ export class Documents {
       vscode.workspace.onDidChangeTextDocument((event) => {
         const entry = this.entries.get(event.document.uri.toString())
         if (!entry || !event.contentChanges.length) return
+        entry.changes.push(
+          event.contentChanges.map((change) => ({
+            offset: change.rangeOffset,
+            length: change.rangeLength,
+            text: change.text,
+          })),
+        )
         entry.stale = true
         entry.controller?.abort()
         entry.pending = undefined
@@ -46,6 +56,8 @@ export class Documents {
         for (const [uri, entry] of this.entries) {
           entry.stale = true
           entry.error = error.message
+          entry.workerVersion = undefined
+          entry.changes = []
           entry.pending = undefined
           this.changed.fire(uri)
         }
@@ -61,7 +73,7 @@ export class Documents {
     const uri = document.uri.toString()
     let entry = this.entries.get(uri)
     if (!entry) {
-      entry = { document, stale: true }
+      entry = { document, stale: true, changes: [] }
       this.entries.set(uri, entry)
     }
     entry.controller?.abort()
@@ -69,8 +81,27 @@ export class Documents {
     const controller = (entry.controller = new AbortController())
     const version = document.version
     const current = entry
+    const input =
+      entry.workerVersion !== undefined && entry.changes.length
+        ? { uri, version, baseVersion: entry.workerVersion, changes: entry.changes }
+        : { uri, version, text: document.getText() }
+    entry.changes = []
+    entry.workerVersion = version
     const pending = this.client
-      .call('parse', { uri, version, text: document.getText() }, controller.signal)
+      .call('parse', input, controller.signal)
+      .catch((error) => {
+        if (
+          error.message === 'Source mirror is stale.' &&
+          !controller.signal.aborted &&
+          document.version === version
+        )
+          return this.client.call(
+            'parse',
+            { uri, version, text: document.getText() },
+            controller.signal,
+          )
+        throw error
+      })
       .then(
         (summary) => {
           if (document.version !== version || controller.signal.aborted)
@@ -122,36 +153,71 @@ export class Documents {
     entry.pending = pending
     return pending
   }
-  async edit(uri: string, expected: number, element: Element & { field: string }, value: Value) {
-    const entry = this.entries.get(uri)
-    if (!entry || entry.document.version !== expected || entry.stale)
-      throw new Error('The document changed. Refresh before editing.')
-    const edits = await this.client.call('edit', { uri, version: expected, ...element, value })
-    if (entry.document.version !== expected || entry.stale)
-      throw new Error('The document changed before this edit could be applied.')
-    const edit = new vscode.WorkspaceEdit()
-    edit.set(
-      entry.document.uri,
-      edits.map((change) =>
-        vscode.TextEdit.replace(
-          new vscode.Range(
-            entry.document.positionAt(change.offset),
-            entry.document.positionAt(change.offset + change.length),
-          ),
-          change.text,
-        ),
-      ),
+  /** Every surface commits through this serialized, revision-checked native text boundary. */
+  edit(uri: string, expected: number, element: Element & { field: string }, value: Value) {
+    return this.transact(
+      uri,
+      expected,
+      [{ kind: 'set', id: element.id, field: element.field, value }],
+      'Edit ' + element.field,
     )
-    if (!(await vscode.workspace.applyEdit(edit)))
-      throw new Error('VS Code could not apply the edit.')
+  }
+  transact(
+    uri: string,
+    expected: number,
+    mutations: readonly Mutation[],
+    label = 'Edit GridKit case',
+  ): Promise<void> {
+    const entry = this.entries.get(uri)
+    if (!entry) return Promise.reject(new Error('The case document is closed.'))
+    const check = () => {
+      if (entry.document.isClosed || this.entries.get(uri) !== entry)
+        throw new Error('The case document is closed.')
+      if (entry.document.version !== expected || entry.stale)
+        throw new Error('The document changed. Refresh before editing.')
+      if (vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) === false)
+        throw new Error('This document is read-only.')
+    }
+    const pending = (entry.editing ?? Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        check()
+        const edits = await this.client.call('transact', { uri, version: expected, mutations })
+        check()
+        if (!edits.length) return
+        const workspaceEdit = new vscode.WorkspaceEdit()
+        workspaceEdit.set(
+          entry.document.uri,
+          edits.map((change): [vscode.TextEdit, vscode.WorkspaceEditEntryMetadata] => [
+            vscode.TextEdit.replace(
+              new vscode.Range(
+                entry.document.positionAt(change.offset),
+                entry.document.positionAt(change.offset + change.length),
+              ),
+              change.text,
+            ),
+            { label, needsConfirmation: false },
+          ]),
+        )
+        if (!(await vscode.workspace.applyEdit(workspaceEdit)))
+          throw new Error('VS Code could not apply the document transaction.')
+      })
+      .finally(() => {
+        if (entry.editing === pending) entry.editing = undefined
+      })
+    entry.editing = pending
+    return pending
   }
   async reveal(uri: string, element?: Element) {
     const document =
       this.entries.get(uri)?.document ??
       (await vscode.workspace.openTextDocument(vscode.Uri.parse(uri)))
-    const summary = await this.ensure(document)
     const source = element
-      ? await this.client.call('locate', { uri, version: summary.version, ...element })
+      ? await this.client.call('locate', {
+          uri,
+          version: (await this.ensure(document)).version,
+          ...element,
+        })
       : { offset: 0, length: 0 }
     const editor = await vscode.window.showTextDocument(document, {
       viewColumn: vscode.ViewColumn.Beside,

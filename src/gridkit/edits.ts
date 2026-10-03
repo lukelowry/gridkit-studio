@@ -96,8 +96,15 @@ export function sourceRange(kase: Case, id: string, field?: string): SourceRange
 export function editable(plan: FieldPlan): boolean {
   return !['identity', 'output'].includes(plan.source.kind)
 }
-export function editField(kase: Case, id: string, field: string, input: Value): SourceEdit[] {
-  const record = recordOf(kase, id)
+export function editField(
+  kase: Case,
+  id: string,
+  field: string,
+  input: Value,
+  recordText?: string,
+): SourceEdit[] {
+  const original = recordOf(kase, id)
+  const record = recordText === undefined ? original : { ...original, text: recordText, offset: 0 }
   const plan = record.table.shape.plan.get(field)
   if (!plan || !editable(plan))
     throw failure('invalid-input', 'Edit identities and structural changes in JSON.')
@@ -143,11 +150,6 @@ export function editField(kase: Case, id: string, field: string, input: Value): 
     }
   } else if (!definition.nullable || plan.required)
     throw failure('invalid-input', 'This field cannot be null.')
-  const formattingOptions = {
-    insertSpaces: !/\n\t/.test(record.text),
-    tabSize: /\n( +)"/.exec(record.text)?.[1]?.length ?? 2,
-    eol: record.text.includes('\r\n') ? '\r\n' : '\n',
-  }
   const paths =
     plan.source.kind === 'position'
       ? [
@@ -156,7 +158,7 @@ export function editField(kase: Case, id: string, field: string, input: Value): 
         ]
       : [{ path: nativePath(record.table.shape, plan), value }]
   // Existing scalar values get exact token replacements, retaining every untouched byte.
-  // Insertions use jsonc-parser's formatter; two position insertions are composed against one record.
+  // Insertions use jsonc-parser without reformatting; position insertions compose against one record.
   if (paths.length === 1) {
     const node = findNodeAtLocation(parseTree(record.text)!, paths[0]!.path)
     if (node) {
@@ -167,7 +169,7 @@ export function editField(kase: Case, id: string, field: string, input: Value): 
   }
   let next = record.text
   for (const item of paths) {
-    for (const edit of modify(next, item.path, item.value, { formattingOptions }).reverse())
+    for (const edit of modify(next, item.path, item.value, {}).reverse())
       next = next.slice(0, edit.offset) + edit.content + next.slice(edit.offset + edit.length)
     if (typeof item.value === 'number' && (type === 'float64' || plan.source.kind === 'position')) {
       const node = findNodeAtLocation(parseTree(next)!, item.path)!

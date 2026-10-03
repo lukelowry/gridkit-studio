@@ -5,6 +5,7 @@ import * as vscode from 'vscode'
 
 import type { EditorKind, FromView, Summary, ToView } from './messages.js'
 import type { Sessions } from './sessions.js'
+import { nameFieldOf } from './webview/topology.js'
 
 export function html(
   webview: vscode.Webview,
@@ -21,7 +22,10 @@ export function html(
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
 export class View {
+  #requests = new Map<number, AbortController>()
+  #tableState = ''
   #summary?: Summary
+  #settings?: import('./preferences.js').SettingsValues
   #ready = false
   #stream = 0
   #controller?: AbortController
@@ -36,7 +40,7 @@ export class View {
   readonly disposables: vscode.Disposable[] = []
   constructor(
     readonly studio: Sessions,
-    readonly panel: vscode.WebviewPanel,
+    readonly panel: vscode.WebviewPanel | vscode.WebviewView,
     readonly uri: string,
     readonly kind: EditorKind | 'monitor',
   ) {
@@ -58,11 +62,12 @@ export class View {
         if (changed === uri) void this.update().catch((error) => studio.output.error(String(error)))
       }),
       studio.action.event((action) => {
-        if (action.uri === uri) {
+        if (action.uri === uri && (!action.view || action.view === kind)) {
           if (action.command === 'monitorWindow' && typeof action.value === 'string') {
             const range = action.value.split(/[, ]+/).map(Number)
             if (range.length === 2 && range.every(Number.isFinite) && range[0]! < range[1]!) {
               this.#window = [range[0]!, range[1]!]
+              this.studio.all.get(this.uri)!.window = this.#window
               this.#signature = ''
               void this.update()
             }
@@ -70,32 +75,49 @@ export class View {
           void this.send({ kind: 'action', command: action.command, value: action.value })
         }
       }),
-      panel.onDidChangeViewState(() => {
-        if (!panel.visible) this.cancel()
-        else {
-          if (panel.active) studio.activate(uri)
-          this.#signature = ''
-          void this.update().catch((error) => studio.output.error(String(error)))
-        }
-      }),
+      ('onDidChangeViewState' in panel ? panel.onDidChangeViewState : panel.onDidChangeVisibility)(
+        () => {
+          if (!panel.visible) {
+            this.#ready = false
+            this.cancel(true)
+            this.#baseFingerprint = undefined
+          } else {
+            if ('active' in panel && panel.active) studio.activate(uri)
+            this.#signature = ''
+            void this.update().catch((error) => studio.output.error(String(error)))
+          }
+        },
+      ),
       panel.onDidDispose(() => this.dispose()),
     )
   }
   send(message: ToView) {
     return this.panel.webview.postMessage(message)
   }
-  cancel() {
+  cancel(requests = false) {
+    if (requests) {
+      for (const controller of this.#requests.values()) controller.abort()
+      this.#requests.clear()
+    }
     this.#controller?.abort()
     this.#ack?.reject(new Error('View hidden or replaced'))
     this.#ack = undefined
   }
   async receive(message: FromView) {
     if (!message || typeof message !== 'object') return
+    if (this.#disposed) return
+    if (message.kind === 'cancel') {
+      this.#requests.get(message.id)?.abort()
+      return
+    }
     if (message.kind === 'ready') {
+      this.cancel()
+      this.#tableState = ''
       this.#ready = true
       this.#signature = ''
       this.#baseFingerprint = undefined
       this.#summary = undefined
+      this.#settings = undefined
       await this.update()
       return
     }
@@ -121,6 +143,7 @@ export class View {
         JSON.stringify(bounds) !== JSON.stringify(this.#window)
       ) {
         this.#window = bounds
+        this.studio.all.get(this.uri)!.window = bounds
         await this.update()
       }
       return
@@ -138,7 +161,8 @@ export class View {
         'openTable',
         'openDiagram',
         'openMonitor',
-        'chooseConfiguration',
+        'plot',
+        'showSource',
         'previousSample',
         'nextSample',
         'seekTime',
@@ -155,11 +179,32 @@ export class View {
       ]
       if (allowed.includes(message.command)) {
         this.studio.activate(this.uri)
-        await vscode.commands.executeCommand('gridkitStudio.' + message.command, message.value)
+        await vscode.commands.executeCommand('gridkitStudio.' + message.command, message.value, {
+          uri: this.uri,
+          view: this.kind,
+        })
+      }
+      return
+    }
+    if (message.kind === 'tableState') {
+      const session = this.studio.all.get(this.uri)
+      if (session) {
+        session.table = message.table
+        this.studio.persist(session)
+        this.studio.updateContexts()
+        if ('description' in this.panel)
+          this.panel.description =
+            (this.studio.state(this.uri).summary?.name ?? '') + ' · ' + (message.table.type ?? '')
       }
       return
     }
     if (message.kind === 'request') {
+      if (this.#requests.size >= 16) {
+        await this.send({ kind: 'reply', id: message.id, error: 'Too many pending requests.' })
+        return
+      }
+      const request = new AbortController()
+      this.#requests.set(message.id, request)
       try {
         const entry = this.studio.documents.entries.get(this.uri)
         const summary = entry?.summary
@@ -168,29 +213,67 @@ export class View {
         let value: unknown
         if (message.method === 'query') {
           const query = message.input as RowsQuery
-          if (query?.kind !== 'rows' || !Number.isSafeInteger(query.limit) || query.limit! > 100)
+          if (
+            query?.kind !== 'rows' ||
+            !Number.isSafeInteger(query.limit) ||
+            query.limit! < 0 ||
+            query.limit! > 100
+          )
             throw new Error('Invalid row query')
-          value = await this.studio.client.call('query', {
-            uri: this.uri,
-            version: summary.version,
-            query,
-          })
+          value = await this.studio.client.call(
+            'query',
+            {
+              uri: this.uri,
+              version: summary.version,
+              query,
+            },
+            request.signal,
+          )
+        } else if (message.method === 'transact') {
+          const edit = message.input as {
+            version: number
+            mutations: import('./messages.js').Mutation[]
+            label?: string
+          }
+          await this.studio.documents.transact(this.uri, edit.version, edit.mutations, edit.label)
         } else {
           const edit = message.input as { id: string; field: string; value: Value; version: number }
           await this.studio.documents.edit(this.uri, edit.version, edit, edit.value)
         }
-        await this.send({ kind: 'reply', id: message.id, value })
+        if (!request.signal.aborted) await this.send({ kind: 'reply', id: message.id, value })
       } catch (error) {
-        await this.send({ kind: 'reply', id: message.id, error: String(error) })
+        if (!request.signal.aborted)
+          await this.send({ kind: 'reply', id: message.id, error: String(error) })
+      } finally {
+        this.#requests.delete(message.id)
       }
     }
   }
   async update() {
     if (this.#disposed || !this.#ready || !this.panel.visible) return
     const state = this.studio.state(this.uri)
+    if (this.kind === 'table') {
+      const signature = JSON.stringify([
+        state.version,
+        state.stale,
+        state.writable,
+        state.selection,
+        state.bindings,
+        state.table,
+      ])
+      if (
+        signature === this.#tableState &&
+        state.settings === this.#settings &&
+        state.summary === this.#summary
+      )
+        return
+      this.#tableState = signature
+    }
     const sent = { ...state }
     if (state.summary === this.#summary) delete sent.summary
     else this.#summary = state.summary
+    if (state.settings === this.#settings) delete sent.settings
+    else this.#settings = state.settings
     await this.send({ kind: 'state', state: sent })
     if (!state.summary || (state.stale && this.kind !== 'monitor') || this.kind === 'table') return
     if (this.#busy) {
@@ -199,18 +282,24 @@ export class View {
     }
     const summary = state.summary
     const session = this.studio.all.get(this.uri)!
+    this.#window = session.window
     const run =
       this.kind === 'monitor' || state.run?.fingerprint === summary.fingerprint
         ? state.run
         : undefined
-    const baseFingerprint = this.kind === 'monitor' && run ? run.fingerprint : summary.fingerprint
+    const baseFingerprint =
+      (this.kind === 'monitor' && run ? run.fingerprint : summary.fingerprint) +
+      ':' +
+      JSON.stringify(session.bindings)
     const at = state.at ?? run?.domain[1] ?? 0
     if (
       this.kind !== 'monitor' &&
       (!this.#sampleWindow || at < this.#sampleWindow[0] || at > this.#sampleWindow[1])
     )
       this.#sampleWindow = [at - 0.5, at + 0.5]
-    const hasBindings = Object.keys(session.bindings).length > 0
+    const hasBindings = Object.values(session.bindings).some(
+      (binding) => summary.schema.types[binding.type]?.fields[binding.field]?.sampled,
+    )
     const sampledRun = this.kind === 'monitor' || hasBindings ? run : undefined
     const signature = [
       baseFingerprint,
@@ -245,6 +334,15 @@ export class View {
         revision: summary,
         base,
         window: this.#window,
+        ...(base && (this.kind === 'diagram' || this.kind === 'network')
+          ? {
+              positions: await this.studio.client.call(
+                this.kind === 'diagram' ? 'presentation' : 'placement',
+                { uri: this.uri, version: summary.version },
+                controller.signal,
+              ),
+            }
+          : {}),
       })
       let sequence = 0
       const consume = async (batches: readonly DataBatch[]) => {
@@ -279,7 +377,10 @@ export class View {
           select: f.select.filter((name) => {
             const def = summary.schema.types[f.from]!.fields[name]!
             return (
-              name === 'name' ||
+              Object.values(session.bindings).some(
+                (binding) => binding.type === f.from && binding.field === name,
+              ) ||
+              name === nameFieldOf(summary.schema, f.from) ||
               name === summary.schema.types[f.from]!.spatial?.field ||
               (typeof def.type === 'object' && def.type.kind === 'reference')
             )
@@ -309,7 +410,9 @@ export class View {
       }
       if (this.kind !== 'monitor' && sampledRun)
         fields.push(
-          ...Object.entries(session.bindings).map(([from, field]) => ({ from, select: [field] })),
+          ...Object.values(session.bindings)
+            .filter((binding) => summary.schema.types[binding.type]?.fields[binding.field]?.sampled)
+            .map(({ type, field }) => ({ from: type, select: [field] })),
         )
       await this.studio.client.call(
         'batches',
@@ -328,7 +431,9 @@ export class View {
         controller.signal,
         consume,
       )
+      controller.signal.throwIfAborted()
       await this.send({ kind: 'end', stream })
+      controller.signal.throwIfAborted()
       this.#baseFingerprint = baseFingerprint
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -348,16 +453,16 @@ export class View {
   }
   dispose() {
     this.#disposed = true
-    this.cancel()
+    this.cancel(true)
     for (const disposable of this.disposables) disposable.dispose()
   }
 }
 export function registerEditors(studio: Sessions) {
   const subscriptions: vscode.Disposable[] = []
-  for (const kind of ['network', 'diagram', 'table'] as const)
+  for (const kind of ['network', 'diagram'] as const)
     subscriptions.push(
       vscode.window.registerCustomEditorProvider(
-        kind === 'table' ? 'gridkitStudio.tableEditor' : 'gridkitStudio.' + kind,
+        'gridkitStudio.' + kind,
         {
           async resolveCustomTextEditor(document, panel) {
             new View(studio, panel, document.uri.toString(), kind)
@@ -374,5 +479,86 @@ export function registerEditors(studio: Sessions) {
         },
       ),
     )
+
+  for (const kind of ['table', 'monitor'] as const)
+    subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        'gridkitStudio.' + kind,
+        {
+          resolveWebviewView(panel) {
+            let content: View | undefined
+            const update = () => {
+              const uri = studio.active
+              if (content && uri === content.uri) {
+                panel.description =
+                  studio.state(uri).summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)
+                return
+              }
+              content?.dispose()
+              content = undefined
+              if (uri && studio.documents.entries.has(uri)) {
+                content = new View(studio, panel, uri, kind)
+                panel.description =
+                  studio.state(uri).summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)
+              } else {
+                panel.webview.html =
+                  '<!doctype html><html lang="en"><body style="font-family:var(--vscode-font-family);color:var(--vscode-foreground);padding:12px">Open a GridKit case to inspect its ' +
+                  (kind === 'monitor' ? 'recorded signals.' : 'fields.') +
+                  '</body></html>'
+                panel.description = undefined
+              }
+            }
+            const changed = studio.changed.event(update)
+            const visibility = panel.onDidChangeVisibility(update)
+            panel.onDidDispose(() => {
+              changed.dispose()
+              visibility.dispose()
+              content?.dispose()
+            })
+            update()
+          },
+        },
+        { webviewOptions: { retainContextWhenHidden: false } },
+      ),
+    )
+  subscriptions.push(
+    vscode.window.registerWebviewViewProvider('gridkitStudio.simulation', {
+      resolveWebviewView(view) {
+        view.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [vscode.Uri.joinPath(studio.context.extensionUri, 'dist', 'webview')],
+        }
+        view.webview.html = html(view.webview, studio.context, 'simulation', 'simulation')
+        const update = () => {
+          if (view.visible)
+            void view.webview.postMessage({
+              kind: 'state',
+              state: studio.active ? studio.state(studio.active) : {},
+            })
+        }
+        const changed = studio.changed.event(update)
+        const visibility = view.onDidChangeVisibility(update)
+        const messages = view.webview.onDidReceiveMessage((message) => {
+          if (message?.kind === 'ready') update()
+          else if (
+            message?.kind === 'values' &&
+            studio.active &&
+            message.uri === studio.active &&
+            message.values &&
+            typeof message.values === 'object'
+          ) {
+            const session = studio.current()
+            session.values = message.values
+            studio.persist(session)
+          }
+        })
+        view.onDidDispose(() => {
+          changed.dispose()
+          visibility.dispose()
+          messages.dispose()
+        })
+      },
+    }),
+  )
   return subscriptions
 }

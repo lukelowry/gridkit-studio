@@ -1,12 +1,12 @@
 import './theme.css'
 
 import type { Diagram } from '@latkit/diagram'
-import type { ColormapName, ColorScale } from '@latkit/gpu'
 import {
   appendData,
   createData,
   type Data,
   type DataBatch,
+  type FieldValues,
   type RowBatch,
   type SampleBatch,
 } from '@latkit/model'
@@ -14,44 +14,107 @@ import type { Network } from '@latkit/network'
 
 import type { ViewState } from '../messages.js'
 import { bridge } from './bridge.js'
-import { CanvasGpu, theme } from './gpu.js'
-import { diagramOf } from './topology.js'
+import { CanvasGpu } from './gpu.js'
+import { accessibility, diagramStyle, networkStyle } from './style.js'
+import { diagramOf, networkOf } from './topology.js'
 
 function boot() {
   const kind = document.body.dataset.kind
   if (kind !== 'network' && kind !== 'diagram') return
   document.getElementById('app')!.innerHTML =
-    `<main class="shell"><div class="toolbar"><span class="grow">${kind === 'network' ? 'Network' : 'Diagram'}</span><button data-command="fit">Fit</button><button data-command="elementSource">Source</button><button data-command="openTable">Table</button></div><div class="warning" hidden role="status"></div><div class="surface"><canvas tabindex="0" aria-label="${kind} view. Use arrow keys to navigate, plus or minus to zoom. Inspect elements in the native Inspector." data-vscode-context='{"webviewSection":"element","preventDefaultContextMenuItems":true}'></canvas><div class="empty" role="status">Loading case…</div></div><div class="status" aria-live="polite"></div></main>`
+    '<main class="shell"><div class="warning" hidden role="status"></div><div class="surface"><canvas tabindex="0" aria-label="' +
+    kind +
+    ' view. Right-click an element for actions; press F2 to edit the selected field."></canvas><div class="empty" role="status">Loading case…</div></div><div class="status" role="status"></div></main>'
   const canvas = document.querySelector('canvas')!
-  const empty = document.querySelector<HTMLDivElement>('.empty')!
-  const warning = document.querySelector<HTMLDivElement>('.warning')!
-  const status = document.querySelector<HTMLDivElement>('.status')!
-  for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-command]'))
-    button.onclick = () => bridge.command(button.dataset.command!)
-  const style = () => theme(kind)
+  const empty = document.querySelector<HTMLElement>('.empty')!
+  const warning = document.querySelector<HTMLElement>('.warning')!
+  const status = document.querySelector<HTMLElement>('.status')!
+  canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const owner = new CanvasGpu()
   let networkModule: typeof import('./network.js') | undefined
   let diagramModule: typeof import('./diagram.js') | undefined
   let base: Data | undefined
-  let replaceBase = true
-  let view: Network | Diagram | undefined
   let data: Data | undefined
+  let view: Network | Diagram | undefined
   let state: ViewState = {}
   let stream = 0
-  let batches: DataBatch[] = []
+  let revision = 0
+  let replaceBase = true
   let schema: Data['schema'] | undefined
+  let batches: DataBatch[] = []
+  let positions: Record<string, FieldValues> = {}
   let closed = false
+  let rendering = false
+  let queued = false
+  let styleTurn = 0
+  let geographic = false
+  let selectionKey = ''
+  let preferredProjection: string | undefined
   const error = (reason: unknown) => {
     empty.hidden = false
-    empty.textContent = `Canvas unavailable: ${String(reason)}. Table, Inspector, JSON, and simulations remain available.`
+    empty.textContent =
+      'Canvas unavailable: ' +
+      String(reason) +
+      '. Use the native Reload action, or inspect this case in Case, Inspector, or JSON.'
     bridge.send({ kind: 'error', message: String(reason) })
+  }
+  async function paint() {
+    if (!view || !data) return
+    const turn = ++styleTurn
+    const current = view
+    accessibility(state)
+    const patch =
+      kind === 'diagram'
+        ? diagramStyle(data, state, positions)
+        : await networkStyle(data, state, geographic)
+    if (turn === styleTurn && !closed && view === current) {
+      current.set(patch as never)
+      if (kind === 'network') {
+        const preference = state.settings?.['network.camera.projection'] ?? 'globe'
+        const projection = preference === 'globe' && !geographic ? 'flat' : preference
+        if (preferredProjection !== projection) {
+          preferredProjection = projection
+          ;(current as Network).set({ camera: { projection, orbit: false, fit: true } })
+        }
+      }
+    }
+  }
+  function selection(force = false) {
+    if (!view) return
+    const key = (state.selection?.id ?? '') + ':' + (state.selection?.field ?? '')
+    if (!force && key === selectionKey) return
+    selectionKey = key
+    try {
+      if (kind === 'diagram') {
+        const diagram = view as Diagram
+        const item = state.selection
+          ? diagramModule!.diagramItem(diagram, state.selection)
+          : undefined
+        diagram.select(item ? [item] : [])
+        if (item && state.navigate) diagram.reveal(item)
+      } else {
+        const network = view as Network
+        const item = state.selection
+          ? networkModule!.networkItem(network, state.selection)
+          : undefined
+        network.select(item ? [item] : [])
+        if (item && state.navigate) network.reveal(item)
+      }
+    } catch {
+      /* A newer document projection can supersede the selection. */
+    }
   }
   async function render() {
     if (!data || closed) return
-    if (kind === 'diagram') {
-      const vertices = diagramOf(data.schema).vertices
+    if (rendering) {
+      queued = true
+      return
+    }
+    rendering = true
+    try {
       if (
-        !vertices.some((type) => {
+        kind === 'diagram' &&
+        !diagramOf(data.schema).vertices.some((type) => {
           const rows = data!.tables[type]?.rows
           return rows && (rows.kind === 'range' ? rows.count : rows.values.length) > 0
         })
@@ -60,85 +123,94 @@ function boot() {
         view = undefined
         empty.hidden = false
         empty.textContent =
-          'This case has no directed signal connections. Open Network to inspect its electrical topology.'
+          'This case has no directed signal components. Use Network to inspect its electrical topology.'
         return
       }
-    }
-    const gpu = await owner.get(() => {
-      view?.destroy()
-      view = undefined
-      error('WebGPU device was lost. Reopen this view to retry.')
-    })
-    if (closed || !data) return
-    if (!view) {
-      if (kind === 'diagram') {
-        diagramModule ??= await import('./diagram.js')
-        if (closed) return
-        view = diagramModule.mountDiagram(gpu, canvas, data, style())
-      } else {
+      const gpu = await owner.get(() => {
+        view?.destroy()
+        view = undefined
+        delete canvas.dataset.connected
+        error('WebGPU device lost')
+      })
+      if (closed) return
+      if (kind === 'network') {
         networkModule ??= await import('./network.js')
         if (closed) return
-        view = networkModule.mountNetwork(gpu, canvas, data, style())
-      }
-      const events = view as Network
-      events.on('error', error)
-      events.on('frame', () => {
-        canvas.dataset.rendered = 'true'
-        canvas.dataset.stats = JSON.stringify(view?.stats())
-        if (view)
-          status.textContent = `${state.selection?.id ?? 'Select an element to inspect'}${state.run ? ' · ' + state.run.state : ''}`
-      })
-      events.on('camera', (camera) => bridge.save({ camera }))
-      const saved = bridge.state<{ camera?: never }>({})
-      if (saved.camera) view.set({ camera: saved.camera })
-    } else view.set({ source: data, at: state.at })
-    empty.hidden = true
-    if (kind === 'network')
-      (view as Network).set({ edgeBaseColor: state.branchColors ? null : theme().textColor })
-    selection()
-    bindings()
-  }
-  let range: ColorScale['domain']
-  let colormap: ColormapName = 'viridis'
-  function bindings() {
-    if (!view) return
-    for (const [type, field] of Object.entries(state.bindings ?? {})) {
-      if (view.config.vertices[type])
-        view.set({ vertices: { [type]: { color: { field, domain: range, colormap } } } })
-      else if (view.config.edges?.[type]) view.set({ edges: { [type]: { color: field } } })
-    }
-  }
-  function selection() {
-    if (!view || !state.selection) return
-    try {
-      if (kind === 'diagram') {
-        const diagram = view as Diagram
-        const item = diagramModule!.diagramItem(diagram, state.selection)
-        diagram.select(item ? [item] : [])
-        if (item && state.navigate) diagram.reveal(item)
+        const topology = networkModule.networkTopology(data, positions)
+        geographic =
+          networkOf(data.schema).geographic &&
+          !Object.values(topology.vertices).some((vertex) => vertex.position)
+        if (!view) view = networkModule.mountNetwork(gpu, canvas, data, {}, () => state, positions)
+        else view.set({ source: data, ...topology } as never)
       } else {
-        const network = view as Network
-        const item = networkModule!.networkItem(network, state.selection)
-        network.select(item ? [item] : [])
-        if (item && state.navigate) network.reveal(item)
+        diagramModule ??= await import('./diagram.js')
+        if (closed) return
+        if (!view) view = diagramModule.mountDiagram(gpu, canvas, data, {}, () => state)
+        else view.set({ source: data })
       }
-    } catch {
-      /* Selection may refer to a newer revision still in transit. */
+      if (!canvas.dataset.connected) {
+        canvas.dataset.connected = 'true'
+        const events = view as Network
+        events.on('error', error)
+        events.on('frame', () => {
+          canvas.dataset.rendered = 'true'
+          canvas.dataset.stats = JSON.stringify(view?.stats())
+        })
+        events.on('camera', (camera) => bridge.save({ uri: state.uri, camera }))
+        const saved = bridge.state<{ uri?: string; camera?: never }>({})
+        if (saved.uri === state.uri && saved.camera) view.set({ camera: saved.camera })
+        else {
+          const initial = view
+          const off = events.on('frame', () => {
+            off()
+            if (view === initial) initial.fit(undefined, { animate: false })
+          })
+        }
+      }
+      view.set({ at: state.at })
+      await paint()
+      empty.hidden = true
+      selection(true)
+    } finally {
+      rendering = false
+      if (queued && !closed) {
+        queued = false
+        void render().catch(error)
+      }
     }
   }
   bridge.on((message) => {
     if (message.kind === 'state') {
+      const beforeSettings = state.settings
+      const beforeBindings = JSON.stringify(state.bindings)
+      const beforeRun = state.run?.id
+      const beforeEditing = state.diagramEditing
+      const beforeStale = state.stale
       state = { ...state, ...message.state }
       warning.hidden = !state.stale
-      warning.textContent = 'Source has errors or is updating. Showing the last valid revision.'
+      warning.textContent =
+        'Source is updating or contains errors. Showing the last valid revision; editing is paused.'
+      status.textContent =
+        (state.selection?.id ?? 'Select an element to inspect') +
+        (state.run ? ' · ' + state.run.state : '') +
+        (state.diagramEditing ? ' · Editing: drag ports to wire, drag blocks to place' : '')
       view?.set({ at: state.at })
       selection()
-      bindings()
+      if (
+        beforeSettings !== state.settings ||
+        beforeBindings !== JSON.stringify(state.bindings) ||
+        beforeRun !== state.run?.id ||
+        beforeEditing !== state.diagramEditing ||
+        beforeStale !== state.stale
+      )
+        void paint().catch(error)
     } else if (message.kind === 'begin') {
       stream = message.stream
+      revision = message.revision.version
       batches = []
       schema = message.schema
       replaceBase = message.base
+      if (message.positions) positions = message.positions
     } else if (message.kind === 'batch') {
       if (message.stream === stream) batches.push(...message.batches)
       bridge.send({ kind: 'ack', stream: message.stream, sequence: message.sequence })
@@ -154,61 +226,49 @@ function boot() {
           batches.filter((batch): batch is SampleBatch => batch.kind === 'samples'),
         )
         batches = []
-        void render().catch(error)
+        if (revision === state.summary?.version) void render().catch(error)
       } catch (reason) {
         error(reason)
       }
-    } else if (message.kind === 'action' && view) {
-      if (message.command === 'bindingRange' && typeof message.value === 'string') {
-        const bounds = message.value.split(/[, ]+/).map(Number)
-        if (bounds.length === 2 && bounds.every(Number.isFinite) && bounds[0]! < bounds[1]!) {
-          range = [bounds[0]!, bounds[1]!]
-          bindings()
-        }
-      } else if (message.command === 'signalColormap') {
-        colormap = message.value as ColormapName
-        bindings()
-      } else if (message.command === 'fit') view.fit()
-      else if (message.command === 'error') error(message.value)
+    } else if (message.kind === 'action') {
+      if (message.command === 'error') {
+        error(message.value)
+        return
+      }
+      if (message.command === 'reloadView') {
+        view?.destroy()
+        view = undefined
+        delete canvas.dataset.connected
+        void render().catch(error)
+        return
+      }
+      if (!view) return
+      if (message.command === 'fit') view.fit()
       else if (message.command === 'projection' && kind === 'network')
-        (view as Network).set({ camera: { projection: message.value as 'flat' } })
+        (view as Network).set({
+          camera: { orbit: false, projection: message.value as 'flat', fit: true },
+        })
       else if (message.command === 'orbit' && kind === 'network') {
         const network = view as Network
-        network.set({ camera: { orbit: !network.camera.orbit } })
+        if (state.settings?.['accessibility.motion'] !== 'reduce')
+          network.set({ camera: { orbit: !network.camera.orbit } })
       } else if (message.command === 'neighborhood') {
         if (kind === 'diagram') {
           const diagram = view as Diagram
-          const item = diagram.selection[0]
-          if (item) diagram.fit(diagram.neighborhood(item))
+          if (diagram.selection[0]) diagram.fit(diagram.neighborhood(diagram.selection[0]))
         } else {
           const network = view as Network
-          const item = network.selection[0]
-          if (item) network.fit(network.neighborhood(item))
+          if (network.selection[0]) network.fit(network.neighborhood(network.selection[0]))
         }
-      } else if (message.command === 'bind') {
-        const value = message.value as { type: string; field: string }
-        if (view.config.vertices[value.type])
-          view.set({ vertices: { [value.type]: { color: value.field } } })
-        else view.set({ edges: { [value.type]: { color: value.field } } })
-      } else if (message.command === 'unbind') {
-        view.set({
-          vertices: Object.fromEntries(
-            Object.keys(view.config.vertices).map((type) => [type, { color: null }]),
-          ),
-          edges: Object.fromEntries(
-            Object.keys(view.config.edges ?? {}).map((type) => [type, { color: null }]),
-          ),
-        })
       }
     }
   })
-  const observer = new MutationObserver(() => view?.set(style()))
+  const observer = new MutationObserver(() => void paint().catch(error))
   observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] })
-  document.addEventListener('visibilitychange', () => {
-    if (!closed) view?.set({ paused: document.hidden })
-  })
+  document.addEventListener('visibilitychange', () => view?.set({ paused: document.hidden }))
   window.addEventListener('pagehide', () => {
     closed = true
+    styleTurn++
     observer.disconnect()
     view?.destroy()
     view = undefined

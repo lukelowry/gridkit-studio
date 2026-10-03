@@ -14,13 +14,34 @@ const scratch = await mkdtemp(join(root, 'output', 'packaged-'))
 const extensions = join(scratch, 'extensions')
 const profile = join(scratch, 'profile')
 await mkdir(extensions)
-const executable = await downloadAndUnzipVSCode(process.env.VSCODE_VERSION ?? '1.140.0')
+const executable =
+  process.env.VSCODE_EXECUTABLE_PATH ??
+  (await downloadAndUnzipVSCode(
+    process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
+  ))
 let cli =
   process.platform === 'darwin'
     ? join(dirname(executable), '..', 'Resources', 'app', 'out', 'cli.js')
     : join(dirname(executable), 'resources', 'app', 'out', 'cli.js')
-if (!await access(cli).then(()=>true,()=>false)) {
-  for (const directory of await readdir(dirname(executable),{withFileTypes:true})) { if (!directory.isDirectory()) continue; const candidate=join(dirname(executable),directory.name,'resources','app','out','cli.js'); if(await access(candidate).then(()=>true,()=>false)){cli=candidate;break} }
+if (
+  !(await access(cli).then(
+    () => true,
+    () => false,
+  ))
+) {
+  for (const directory of await readdir(dirname(executable), { withFileTypes: true })) {
+    if (!directory.isDirectory()) continue
+    const candidate = join(dirname(executable), directory.name, 'resources', 'app', 'out', 'cli.js')
+    if (
+      await access(candidate).then(
+        () => true,
+        () => false,
+      )
+    ) {
+      cli = candidate
+      break
+    }
+  }
 }
 const run = (executable, args, env) =>
   new Promise((resolve, reject) => {
@@ -56,6 +77,8 @@ assert.ok(installed, 'VSIX was not installed')
 const target = resolve(extensions, installed)
 const packaged = JSON.parse(await readFile(join(target, 'package.json'), 'utf8'))
 assert.deepEqual(packaged.dependencies, manifest.dependencies)
+assert.equal(packaged.version, manifest.version)
+assert.equal(packaged.engines.vscode, manifest.engines.vscode)
 async function verify(directory) {
   for (const item of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, item.name)

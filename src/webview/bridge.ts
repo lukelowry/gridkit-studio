@@ -12,6 +12,7 @@ const pending = new Map<
     resolve(value: unknown): void
     reject(error: Error): void
     timer: ReturnType<typeof setTimeout>
+    dispose(): void
   }
 >()
 let next = 0
@@ -32,14 +33,33 @@ export const bridge = {
   save(value: unknown) {
     api.setState(value)
   },
-  request<T>(method: 'query' | 'edit', input: unknown): Promise<T> {
+  request<T>(
+    method: 'query' | 'edit' | 'transact',
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    if (signal?.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'))
+    if (pending.size >= 16) return Promise.reject(new Error('Too many pending view requests.'))
     const id = ++next
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const cancel = () => {
+        const entry = pending.get(id)
+        if (!entry) return
+        entry.dispose()
+        clearTimeout(entry.timer)
         pending.delete(id)
+        api.postMessage({ kind: 'cancel', id })
+        reject(new DOMException('Cancelled', 'AbortError'))
+      }
+      const dispose = () => signal?.removeEventListener('abort', cancel)
+      const timer = setTimeout(() => {
+        dispose()
+        pending.delete(id)
+        api.postMessage({ kind: 'cancel', id })
         reject(new Error('The extension did not respond.'))
       }, 15000)
-      pending.set(id, { resolve: (value) => resolve(value as T), reject, timer })
+      pending.set(id, { resolve: (value) => resolve(value as T), reject, timer, dispose })
+      signal?.addEventListener('abort', cancel, { once: true })
       api.postMessage({ kind: 'request', id, method, input })
     })
   },
@@ -51,6 +71,7 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
     const entry = pending.get(message.id)
     if (entry) {
       clearTimeout(entry.timer)
+      entry.dispose()
       pending.delete(message.id)
       if (message.error) entry.reject(new Error(message.error))
       else entry.resolve(message.value)

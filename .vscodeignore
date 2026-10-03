@@ -24,3 +24,6 @@ tests/**
 tsconfig.json
 tsconfig.webview.json
 vitest.config.ts
+scripts/**
+assets/borders.bin
+.gridkit-run-*/**

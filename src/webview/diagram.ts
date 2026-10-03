@@ -1,9 +1,11 @@
 import { createDiagram, type Diagram, type DiagramItem } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
-import { type Data, itemId, rowAt, type Schema, selectRows } from '@latkit/model'
+import { type Data, itemId, rowAt, rowCount, type Schema, selectRows } from '@latkit/model'
 
-import type { Element } from '../messages.js'
+import type { Element, ViewState } from '../messages.js'
 import { bridge } from './bridge.js'
+import { nativeMenu } from './context.js'
+import { editing } from './diagram-edit.js'
 import { diagramOf, nameFieldOf, placementOf } from './topology.js'
 export function diagramTopology(schema: Schema) {
   const drawn = diagramOf(schema)
@@ -16,7 +18,13 @@ export function diagramTopology(schema: Schema) {
     ),
   }
 }
-export function mountDiagram(gpu: Gpu, canvas: HTMLCanvasElement, source: Data, style: object) {
+export function mountDiagram(
+  gpu: Gpu,
+  canvas: HTMLCanvasElement,
+  source: Data,
+  style: object,
+  state: () => ViewState,
+) {
   const diagram = createDiagram(gpu, {
     canvas,
     source,
@@ -37,18 +45,58 @@ export function mountDiagram(gpu: Gpu, canvas: HTMLCanvasElement, source: Data, 
     select(item)
     bridge.command('elementSource')
   })
-  diagram.on('contextmenu', (event) => {
-    select(event.items[0])
-    bridge.send({
-      kind: 'overlap',
-      elements: event.items
+  diagram.on('contextmenu', (event) =>
+    nativeMenu(
+      canvas,
+      event.point,
+      event.items
         .filter((item) => item.kind !== 'group')
         .map((item) => ({
           id: itemId(item),
           ...(item.kind === 'port' ? { field: item.port } : {}),
         })),
-    })
+      state(),
+      'diagram',
+    ),
+  )
+  const arrange = editing(diagram, gpu, state)
+  const stop = bridge.on((message) => {
+    if (
+      message.kind === 'action' &&
+      message.command === 'diagramEditing' &&
+      message.value === true
+    ) {
+      let item = state().selection ? diagramItem(diagram, state().selection!) : undefined
+      if (!item) {
+        for (const type of diagramOf(diagram.config.source.schema).vertices) {
+          const table = diagram.config.source.tables[type]
+          if (!table || !rowCount(table.rows)) continue
+          const candidate: DiagramItem = {
+            kind: 'vertex',
+            source: diagram.config.source,
+            index: table.index,
+            row: rowAt(table.rows, 0),
+          }
+          item ??= candidate
+          if (diagram.neighborhood(candidate).length > 1) {
+            item = candidate
+            break
+          }
+        }
+      }
+      if (item) {
+        select(item)
+        diagram.fit(diagram.neighborhood(item), { animate: false })
+      }
+    }
+    if (message.kind === 'action' && message.command === 'arrangeDiagram')
+      void arrange().catch((error) => bridge.send({ kind: 'error', message: String(error) }))
   })
+  const destroy = diagram.destroy.bind(diagram)
+  diagram.destroy = () => {
+    stop()
+    destroy()
+  }
   return diagram
 }
 export function diagramItem(diagram: Diagram, element: Element): DiagramItem | undefined {

@@ -1,13 +1,31 @@
-# Table and document editing
+# Documents, Case, and diagram editing
 
-Table is an optional custom text editor for the same VS Code TextDocument used by Network, Diagram, and JSON. The data worker parses a document revision once into Latkit Data. Table issues bounded Latkit row queries, requesting at most 100 rows and 256 KiB per block with owned buffers. It virtualizes rows with fixed 30-pixel spacing.
+Case is a native bottom-panel view of the same TextDocument used by Network, Diagram, and JSON. Its title actions select a type, filter names, and choose columns. Column headers sort. Native context menus carry the exact case, revision, element, and field; they do not silently change selection.
 
-Column selection, name filtering, and sorting are local view preferences expressed as ordinary Latkit query fields. Responses have a generation check so an older query cannot replace newer rows. Linked selection resolves a stable domain ID to its physical row; when necessary it switches type and clears filtering/sorting to reveal that row.
+Rows are virtualized at 28 pixels. Each Latkit query asks for at most 100 rows and owned 256 KiB blocks. Superseded queries are aborted through the webview, extension host, and worker. A webview has at most 16 pending requests. Playback-only changes do not restart Case queries.
 
-F2 or double-click edits a known field. The catalog compiler determines editability: parameters, initial values, ordinary names, positions, and references are editable; identities and sampled outputs are not. Reference edits use stable IDs such as Bus/42. Minimal source replacements are applied only against the captured document version through WorkspaceEdit. JSON remains available for structural changes.
+F2 and double-click edit a cell. Arrow keys move between cells. Inspector uses native Quick Picks and input boxes; reference selection is searchable and bounded. The compiled catalog determines editability. Stable domain IDs identify records, while Latkit indexes resolve physical rows.
 
-Untouched properties and numeric text are preserved. Native real-valued parameters retain fractional or exponent tokens when edited. Worker source locations translate UTF-8 offsets to VS Code's UTF-16 positions. Invalid intermediate JSON retains the last valid projection with a stale banner and disables edits until parsing succeeds.
+## Transaction boundary
 
-Table does not require WebGPU. Controls use VS Code theme tokens, native HTML semantics, visible focus, and high-contrast colors. Undo and redo belong to VS Code, shared by every editor on the document.
+Every structured edit calls Documents.transact with an expected document revision and typed mutations. The worker plans minimal text replacements; the host checks the revision again and commits one WorkspaceEdit. Each document serializes transactions. Stale and read-only documents reject edits.
 
-Run `pnpm test` for source/ownership contracts and `pnpm test:host` for actual VS Code integration. `pnpm test:performance` measures 100-row queries on the bundled 2,000- and 10,000-bus cases.
+Only touched records are materialized for editing. Multiple field changes in a record compose before a minimal replacement is produced. Untouched numeric spelling, whitespace, Unicode, line endings, and unknown properties survive. Insertions deliberately avoid a whole-record formatting pass. Worker UTF-8 source locations are converted to VS Code UTF-16 positions.
+
+Document-change events send revisioned UTF-16 deltas to a worker source mirror. Parsing is debounced and cancelled when superseded. A missing mirror resynchronizes from the full document. The parser currently rebuilds the immutable column projection after a delta; incremental column reparsing is a future optimization, not an existing claim.
+
+## Diagram
+
+Toggle editing with the native editor-title action. Drag blocks to place them, drag compatible ports to wire them, and use native context actions to disconnect or delete. Required connections and remaining references guard deletion. A net has at most one output driver through the wiring operation; input fan-out is allowed. Two disconnected ports allocate one new stable Signal ID.
+
+Positions live in each record's extension.diagram.position as [x, y]. The first move captures the automatic arrangement before changing the dragged blocks, preserving the rest of the layout. Arrange Diagram applies the selected Lattice layout settings and writes one undoable transaction. Stored positions select manual placement until arranged again.
+
+Transactions are bounded to 10,000 changes and 4 MiB inserted text. New diagram gestures should produce these domain mutations rather than serializing the document or editing column arrays.
+
+## Git and lifecycle
+
+Review Case Changes lazily uses the built-in Git extension's versioned API and opens HEAD against the existing TextDocument. Unsaved edits are visible on the right side. Native Source Control owns staging, committing, history, and conflict resolution; Studio creates no competing SCM provider.
+
+Invalid intermediate JSON leaves the last valid view visibly stale and disables structured editing. Runs retain their captured input revision. Unrelated results never overlay a changed case. Recreated webviews receive a complete base projection before sample updates; hide/dispose cancels their reads.
+
+See REWRITE.md for commands and measured verification.

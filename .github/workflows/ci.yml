@@ -43,6 +43,7 @@ jobs:
           const { version } = JSON.parse(readFileSync('package.json', 'utf8'))
           assert.equal(process.env.RELEASE_TAG, `v${version}`, 'Tag must match package.json version')
           JS
+      - run: pnpm settings:check
       - run: pnpm lint
         if: runner.os == 'Linux'
       - run: pnpm format:check
@@ -57,13 +58,13 @@ jobs:
         if: runner.os == 'Linux'
         with:
           name: gridkit-studio
-          path: dist/gridkit-studio-0.3.0.vsix
+          path: dist/gridkit-studio-0.3.1.vsix
           if-no-files-found: error
   host:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        vscode: ['1.140.0', stable]
+        vscode: ['1.135.0', stable]
       fail-fast: false
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}
@@ -78,12 +79,15 @@ jobs:
           package-manager-cache: false
       - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
-      - run: dbus-run-session -- xvfb-run -a pnpm test:host
+      - run: pnpm package
+      - run: dbus-run-session -- xvfb-run -a pnpm test:package
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: host-${{ matrix.vscode }}
-          path: output/playwright
+          path: |
+            output/packaged-*/playwright
+            output/packaged-*/tests
   solver:
     uses: ./.github/workflows/solver.yml
   release:
@@ -106,9 +110,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag="v$(unzip -p dist/gridkit-studio-0.3.0.vsix extension/package.json | jq -er .version)"
+          tag="v$(unzip -p dist/gridkit-studio-0.3.1.vsix extension/package.json | jq -er .version)"
           asset="dist/gridkit-studio-${tag#v}.vsix"
-          test "dist/gridkit-studio-0.3.0.vsix" = "$asset" || mv dist/gridkit-studio-0.3.0.vsix "$asset"
+          test "dist/gridkit-studio-0.3.1.vsix" = "$asset" || mv dist/gridkit-studio-0.3.1.vsix "$asset"
           if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
             echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
             exit 0

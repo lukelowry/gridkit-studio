@@ -26,6 +26,10 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+## Adapted Lattice and GridKit Server code
+
+Settings, renderer configuration, topology/layout, binding styles, the catalog compiler, parser, staging, and result readers include adaptations from Lattice 8100c24e and GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above. See REWRITE.md for source provenance.
+
 ## jsonc-parser
 
 The MIT License (MIT)
@@ -76,7 +80,7 @@ Original color tables by Nathaniel J. Smith, Stefan van der Walt, and Eric Firin
 CC0 / public domain: https://creativecommons.org/publicdomain/zero/1.0/
 Source: https://github.com/BIDS/colormap/blob/master/colormaps.py
 
-Geographic borders are derived from Natural Earth public-domain map data.
+Geographic borders are the Lattice 8100c24e derivative of Natural Earth 5.1.2 public-domain map data, packaged as dist/webview/borders.bin.
 Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
 
 ## Studio icons

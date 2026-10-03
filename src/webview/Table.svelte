@@ -1,10 +1,12 @@
 <script lang="ts">
   import type { RowsBlock, RowsQuery, Value } from '@latkit/model'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
 
   import { display, referenceNames, rowsOf } from '../cells.js'
+  import { menuContext } from '../contexts.js'
   import type { ViewState } from '../messages.js'
   import { bridge } from './bridge.js'
+  import { accessibility } from './style.js'
   let view = $state<ViewState>({})
   let type = $state(bridge.state({ type: 'Bus' }).type)
   let fields = $state<string[]>([])
@@ -14,11 +16,11 @@
   let total = $state(0)
   let error = $state('')
   let loading = $state(false)
-  let chooser = $state(false)
   let rows = $state<ReturnType<typeof rowsOf>>([])
   let editing = $state<{ id: string; field: string; text: string; version: number } | undefined>()
   let scroll: HTMLDivElement
   let generation = 0
+  let controller: AbortController | undefined
   const allFields = $derived(
     Object.keys(view.summary?.schema.types[type]?.fields ?? {}).filter(
       (field) => !view.summary?.schema.types[type]?.fields[field]?.sampled,
@@ -27,9 +29,61 @@
   const types = $derived(
     Object.entries(view.summary?.counts ?? {}).filter(([, count]) => count > 0),
   )
-  const height = 30
+  const height = 28
+  const context = (id: string | null, field?: string) =>
+    view.summary
+      ? JSON.stringify(
+          menuContext(
+            view.summary,
+            {
+              uri: view.summary.uri,
+              version: view.summary.version,
+              origin: 'table',
+              type,
+              field,
+              ...(id ? { element: { id, ...(field ? { field } : {}) } } : {}),
+            },
+            view.bindings,
+          ),
+        )
+      : '{}'
+  const persist = () =>
+    bridge.send({ kind: 'tableState', table: { type, fields: $state.snapshot(fields), filter } })
+  async function move(event: KeyboardEvent, row: number, column: number) {
+    const key = event.key
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return
+    event.preventDefault()
+    const nextRow = Math.max(
+      0,
+      Math.min(total - 1, row + (key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0)),
+    )
+    const nextColumn = Math.max(
+      0,
+      Math.min(
+        fields.length - 1,
+        key === 'Home'
+          ? 0
+          : key === 'End'
+            ? fields.length - 1
+            : column + (key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0),
+      ),
+    )
+    if (nextRow < offset || nextRow >= offset + rows.length) {
+      offset = Math.max(0, nextRow - 10)
+      scroll.scrollTop = nextRow * height
+      await load()
+    }
+    await tick()
+    scroll
+      .querySelector<HTMLButtonElement>(
+        '[data-row="' + nextRow + '"][data-column="' + nextColumn + '"]',
+      )
+      ?.focus()
+  }
   async function load() {
+    controller?.abort()
     if (!view.summary || view.stale) return
+    const request = (controller = new AbortController())
     const current = ++generation
     loading = true
     error = ''
@@ -55,16 +109,20 @@
             }
           : {}),
       }
-      const blocks = await bridge.request<RowsBlock[]>('query', $state.snapshot(query))
+      const blocks = await bridge.request<RowsBlock[]>(
+        'query',
+        $state.snapshot(query),
+        request.signal,
+      )
       if (generation !== current) return
       const references = await referenceNames(blocks, (query) =>
-        bridge.request<RowsBlock[]>('query', query),
+        bridge.request<RowsBlock[]>('query', query, request.signal),
       )
       if (generation !== current) return
       rows = rowsOf(blocks, references)
       total = blocks[0]?.total ?? rows.length
     } catch (reason) {
-      if (generation === current) error = String(reason)
+      if (generation === current && !request.signal.aborted) error = String(reason)
     } finally {
       if (generation === current) loading = false
     }
@@ -81,7 +139,10 @@
     const timer = setTimeout(() => {
       void load()
     }, 60)
-    return () => clearTimeout(timer)
+    return () => {
+      clearTimeout(timer)
+      controller?.abort()
+    }
   })
   function changeType(next: string) {
     type = next
@@ -91,6 +152,7 @@
     fields = Object.keys(view.summary?.schema.types[type]?.fields ?? {})
       .filter((field) => !view.summary?.schema.types[type]?.fields[field]?.sampled)
       .slice(0, 12)
+    persist()
     bridge.save({ type })
     if (scroll) scroll.scrollTop = 0
   }
@@ -107,7 +169,8 @@
     if (id) bridge.send({ kind: 'select', element: { id, ...(field ? { field } : {}) } })
   }
   function edit(id: string | null, field: string, value: unknown) {
-    if (!id || view.stale || !view.summary?.editable[type]?.includes(field)) return
+    if (!id || view.stale || !view.writable || !view.summary?.editable[type]?.includes(field))
+      return
     const spec = view.summary?.schema.types[type]?.fields[field]
     editing = {
       id,
@@ -175,6 +238,7 @@
         const first = !view.summary
         const before = view.selection?.id
         view = { ...view, ...message.state }
+        accessibility(view)
         if (
           view.selection?.id &&
           view.selection.id !== before &&
@@ -183,62 +247,41 @@
           !rows.some((row) => row.id === view.selection!.id)
         )
           void reveal(view.selection.id)
-        if (first && view.summary)
-          changeType(view.summary.counts[type] ? type : (types[0]?.[0] ?? 'Bus'))
+        if (first && view.summary) {
+          const saved = view.table
+          changeType(
+            saved?.type && view.summary.counts[saved.type]
+              ? saved.type
+              : view.summary.counts[type]
+                ? type
+                : (types[0]?.[0] ?? 'Bus'),
+          )
+          if (saved?.fields) fields = saved.fields.filter((field) => allFields.includes(field))
+          filter = saved?.filter ?? ''
+          persist()
+        }
       } else if (message.kind === 'action') {
-        if (message.command === 'chooseColumns') chooser = !chooser
+        if (message.command === 'columns' && Array.isArray(message.value))
+          fields = message.value.filter(
+            (field): field is string => typeof field === 'string' && allFields.includes(field),
+          )
         if (message.command === 'resetColumns') fields = allFields.slice(0, 12)
         if (message.command === 'clearTableFilter') filter = ''
         if (message.command === 'filterTable') filter = String(message.value ?? '')
         if (message.command === 'selectClass' && view.summary?.schema.types[String(message.value)])
           changeType(String(message.value))
+        persist()
       }
     })
     bridge.send({ kind: 'ready' })
-    return stop
+    return () => {
+      stop()
+      controller?.abort()
+    }
   })
 </script>
 
 <main class="shell">
-  <div class="toolbar">
-    <label>
-      Type <select
-        value={type}
-        onchange={(event) => changeType(event.currentTarget.value)}
-        aria-label="Element type"
-      >
-        {#each types as [name, count] (name)}<option value={name}>{name} ({count})</option>{/each}
-      </select>
-    </label>
-    <input
-      class="grow"
-      aria-label="Filter names"
-      placeholder="Filter names…"
-      bind:value={filter}
-      oninput={() => {
-        offset = 0
-        if (scroll) scroll.scrollTop = 0
-      }}
-    />
-    <button onclick={() => (chooser = !chooser)} aria-expanded={chooser}>Columns</button>
-    <button onclick={() => bridge.command('elementSource')}>Source</button>
-  </div>
-  {#if chooser}
-    <fieldset>
-      <legend>Visible columns</legend>
-      {#each allFields as field (field)}<label>
-          <input
-            type="checkbox"
-            checked={fields.includes(field)}
-            onchange={(event) =>
-              (fields = event.currentTarget.checked
-                ? [...fields, field]
-                : fields.filter((name) => name !== field))}
-          />
-          {field}
-        </label>{/each}
-    </fieldset>
-  {/if}
   {#if view.stale}<div class="warning" role="status">
       Source is updating or invalid. Showing the last valid revision; editing is paused.
     </div>{/if}
@@ -279,16 +322,20 @@
               class="spacer"
             ></td>
           </tr>{/if}
-        {#each rows as row (row.id)}
+        {#each rows as row, rowIndex (row.id)}
           <tr
             class:selected={view.selection?.id === row.id}
-            aria-rowindex={offset + rows.indexOf(row) + 2}
+            aria-rowindex={offset + rowIndex + 2}
+            data-vscode-context={context(row.id)}
           >
             <th scope="row">
               <button onclick={() => select(row.id)} title={row.id ?? ''}>{row.id}</button>
             </th>
-            {#each fields as field (field)}
-              <td>
+            {#each fields as field, columnIndex (field)}
+              <td
+                data-vscode-context={context(row.id, field)}
+                class:numeric={typeof row.values[field] === 'number'}
+              >
                 {#if editing?.id === row.id && editing.field === field}
                   <input
                     use:focus
@@ -307,13 +354,19 @@
                 {:else}
                   <button
                     class="cell"
+                    data-row={offset + rowIndex}
+                    data-column={columnIndex}
+                    tabindex={(view.selection?.id === row.id && view.selection?.field === field) ||
+                    (!view.selection && rowIndex === 0 && columnIndex === 0)
+                      ? 0
+                      : -1}
                     onclick={() => select(row.id, field)}
                     ondblclick={() => edit(row.id, field, row.values[field])}
                     onkeydown={(event) => {
                       if (event.key === 'Enter' || event.key === 'F2') {
                         event.preventDefault()
                         edit(row.id, field, row.values[field])
-                      }
+                      } else void move(event, offset + rowIndex, columnIndex)
                     }}
                     title={'Double-click or press F2 to edit ' + field}
                   >
@@ -367,9 +420,8 @@
   }
   th,
   td {
-    height: 30px;
+    height: 28px;
     padding: 0 6px;
-    border-right: 1px solid var(--vscode-panel-border);
     border-bottom: 1px solid var(--vscode-panel-border);
     text-align: left;
     font-weight: normal;
@@ -402,16 +454,21 @@
     padding: 0;
     border: 0;
   }
-  fieldset {
-    margin: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    border: 1px solid var(--vscode-panel-border);
+  tbody th {
+    position: sticky;
+    left: 0;
+    background: var(--vscode-editor-background);
+    border-right: 1px solid var(--vscode-panel-border);
   }
-  fieldset label {
-    display: flex;
-    gap: 4px;
-    align-items: center;
+  .numeric .cell {
+    text-align: right;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  tr.selected th {
+    background: var(--vscode-list-inactiveSelectionBackground);
+  }
+  .cell:focus-visible {
+    outline-offset: -2px;
+    background: var(--vscode-list-focusBackground);
   }
 </style>

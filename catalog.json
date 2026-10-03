@@ -1,0 +1,2521 @@
+{
+  "bus": {
+    "name": "Bus",
+    "label": "Bus",
+    "family": "Bus",
+    "params": [
+      {
+        "id": "kv",
+        "type": "real",
+        "unit": "kV"
+      }
+    ],
+    "init": [
+      {
+        "id": "Vr",
+        "unit": "p.u."
+      },
+      {
+        "id": "Vi",
+        "unit": "p.u."
+      }
+    ],
+    "ports": [],
+    "outputs": [
+      {
+        "id": "Vr",
+        "unit": "p.u."
+      },
+      {
+        "id": "Vi",
+        "unit": "p.u."
+      },
+      {
+        "id": "Vm",
+        "unit": "p.u."
+      },
+      {
+        "id": "Va",
+        "unit": "rad"
+      }
+    ]
+  },
+  "classes": [
+    {
+      "name": "Branch",
+      "label": "Branch",
+      "family": "Branch",
+      "params": [
+        {
+          "id": "R",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "X",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "G",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "B",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Gmag",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Bmag",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "tap",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "phase",
+          "type": "real",
+          "unit": "rad",
+          "default": 0
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus1",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "bus2",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir1"
+        },
+        {
+          "id": "ii1"
+        },
+        {
+          "id": "im1"
+        },
+        {
+          "id": "p1"
+        },
+        {
+          "id": "q1"
+        },
+        {
+          "id": "ir2"
+        },
+        {
+          "id": "ii2"
+        },
+        {
+          "id": "im2"
+        },
+        {
+          "id": "p2"
+        },
+        {
+          "id": "q2"
+        }
+      ]
+    },
+    {
+      "name": "BusFault",
+      "label": "BusFault",
+      "family": "Fault",
+      "params": [
+        {
+          "id": "state0",
+          "type": "flag"
+        },
+        {
+          "id": "R",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "X",
+          "type": "real",
+          "unit": "p.u."
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "control_signal",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "state"
+        },
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        }
+      ]
+    },
+    {
+      "name": "BusToSignalAdapter",
+      "label": "BusToSignalAdapter",
+      "family": "Adapter",
+      "params": [],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "ir",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "ii",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vr",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "vi",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "name": "ConstantSignalSource",
+      "label": "ConstantSignalSource",
+      "family": "Source",
+      "params": [
+        {
+          "id": "Sr",
+          "type": "real",
+          "default": 0
+        },
+        {
+          "id": "Si",
+          "type": "real",
+          "default": 0
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "sr",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "si",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "name": "Esdc1a",
+      "label": "ESDC1A",
+      "family": "Exciter",
+      "params": [
+        {
+          "id": "Tr",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Ka",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 40
+        },
+        {
+          "id": "Ta",
+          "type": "real",
+          "unit": "s",
+          "default": 0.1
+        },
+        {
+          "id": "Tb",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Tc",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Vrmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Vrmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1
+        },
+        {
+          "id": "Ke",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.1
+        },
+        {
+          "id": "Te",
+          "type": "real",
+          "unit": "s",
+          "default": 0.5
+        },
+        {
+          "id": "Kf",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.05
+        },
+        {
+          "id": "Tf1",
+          "type": "real",
+          "unit": "s",
+          "default": 0.7
+        },
+        {
+          "id": "Spdmlt",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "E1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2.8
+        },
+        {
+          "id": "Se1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.08
+        },
+        {
+          "id": "E2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 3.7
+        },
+        {
+          "id": "Se2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.33
+        },
+        {
+          "id": "UEL",
+          "type": "integer",
+          "default": 0
+        },
+        {
+          "id": "exclim",
+          "type": "flag",
+          "default": true
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "in",
+          "required": true
+        },
+        {
+          "name": "vref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vs",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vuel",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "out",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "efd"
+        },
+        {
+          "id": "vc"
+        },
+        {
+          "id": "vr"
+        },
+        {
+          "id": "vf"
+        },
+        {
+          "id": "se"
+        },
+        {
+          "id": "vfe"
+        }
+      ]
+    },
+    {
+      "name": "GastPti",
+      "label": "GAST-PTI",
+      "family": "Governor",
+      "params": [
+        {
+          "id": "R",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.05
+        },
+        {
+          "id": "T1",
+          "type": "real",
+          "unit": "s",
+          "default": 0.4
+        },
+        {
+          "id": "T2",
+          "type": "real",
+          "unit": "s",
+          "default": 0.1
+        },
+        {
+          "id": "T3",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        },
+        {
+          "id": "At",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Kt",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2
+        },
+        {
+          "id": "Vmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Vmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Dturb",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Trate",
+          "type": "real",
+          "unit": "MW"
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "out",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "pmech"
+        },
+        {
+          "id": "xvalve"
+        },
+        {
+          "id": "xflow"
+        },
+        {
+          "id": "xtemp"
+        },
+        {
+          "id": "vload"
+        },
+        {
+          "id": "vtemp"
+        }
+      ]
+    },
+    {
+      "name": "GenClassical",
+      "label": "GenClassical",
+      "family": "Machine",
+      "params": [
+        {
+          "id": "p0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "q0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "H",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        },
+        {
+          "id": "D",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Ra",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Xdp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.2
+        },
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        },
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        },
+        {
+          "id": "delta"
+        },
+        {
+          "id": "omega"
+        },
+        {
+          "id": "speed"
+        }
+      ]
+    },
+    {
+      "name": "Genrou",
+      "label": "GENROU",
+      "family": "Machine",
+      "params": [
+        {
+          "id": "p0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "q0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "H",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        },
+        {
+          "id": "D",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Ra",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Tdop",
+          "type": "real",
+          "unit": "s",
+          "default": 7
+        },
+        {
+          "id": "Tdopp",
+          "type": "real",
+          "unit": "s",
+          "default": 0.04
+        },
+        {
+          "id": "Tqop",
+          "type": "real",
+          "unit": "s",
+          "default": 0.75
+        },
+        {
+          "id": "Tqopp",
+          "type": "real",
+          "unit": "s",
+          "default": 0.05
+        },
+        {
+          "id": "Xd",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2.1
+        },
+        {
+          "id": "Xdp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.2
+        },
+        {
+          "id": "Xdpp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.18
+        },
+        {
+          "id": "Xq",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.5
+        },
+        {
+          "id": "Xqp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.5
+        },
+        {
+          "id": "Xqpp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.18
+        },
+        {
+          "id": "Xl",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.15
+        },
+        {
+          "id": "S10",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "S12",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        },
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        },
+        {
+          "id": "delta"
+        },
+        {
+          "id": "omega"
+        },
+        {
+          "id": "speed"
+        }
+      ]
+    },
+    {
+      "name": "Gensal",
+      "label": "GENSAL",
+      "family": "Machine",
+      "params": [
+        {
+          "id": "p0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "q0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "H",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        },
+        {
+          "id": "D",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Ra",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Tdop",
+          "type": "real",
+          "unit": "s",
+          "default": 7
+        },
+        {
+          "id": "Tdopp",
+          "type": "real",
+          "unit": "s",
+          "default": 0.04
+        },
+        {
+          "id": "Tqopp",
+          "type": "real",
+          "unit": "s",
+          "default": 0.05
+        },
+        {
+          "id": "Xd",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2.1
+        },
+        {
+          "id": "Xdp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.2
+        },
+        {
+          "id": "Xdpp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.18
+        },
+        {
+          "id": "Xq",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.5
+        },
+        {
+          "id": "Xl",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.15
+        },
+        {
+          "id": "S10",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "S12",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        },
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        },
+        {
+          "id": "delta"
+        },
+        {
+          "id": "omega"
+        },
+        {
+          "id": "speed"
+        },
+        {
+          "id": "Eqp"
+        },
+        {
+          "id": "psidp"
+        },
+        {
+          "id": "psiqpp"
+        },
+        {
+          "id": "psidpp"
+        },
+        {
+          "id": "vd"
+        },
+        {
+          "id": "vq"
+        },
+        {
+          "id": "te"
+        },
+        {
+          "id": "id"
+        },
+        {
+          "id": "iq"
+        }
+      ]
+    },
+    {
+      "name": "Hygov",
+      "label": "HYGOV",
+      "family": "Governor",
+      "params": [
+        {
+          "id": "Trate",
+          "type": "real",
+          "unit": "MW",
+          "default": 100
+        },
+        {
+          "id": "Rperm",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.04
+        },
+        {
+          "id": "Rtemp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.3
+        },
+        {
+          "id": "Tr",
+          "type": "real",
+          "unit": "s",
+          "default": 5
+        },
+        {
+          "id": "Tf",
+          "type": "real",
+          "unit": "s",
+          "default": 0.05
+        },
+        {
+          "id": "Tg",
+          "type": "real",
+          "unit": "s",
+          "default": 0.5
+        },
+        {
+          "id": "Velm",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 0.2
+        },
+        {
+          "id": "Gmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Gmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Tw",
+          "type": "real",
+          "unit": "s",
+          "default": 1
+        },
+        {
+          "id": "At",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.2
+        },
+        {
+          "id": "Dturb",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.5
+        },
+        {
+          "id": "Qnl",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.05
+        },
+        {
+          "id": "Tn",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Tnp",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "db1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "db2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Hdam",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Gv0",
+          "type": "real"
+        },
+        {
+          "id": "Gv1",
+          "type": "real"
+        },
+        {
+          "id": "Gv2",
+          "type": "real"
+        },
+        {
+          "id": "Gv3",
+          "type": "real"
+        },
+        {
+          "id": "Gv4",
+          "type": "real"
+        },
+        {
+          "id": "Gv5",
+          "type": "real"
+        },
+        {
+          "id": "Pgv0",
+          "type": "real"
+        },
+        {
+          "id": "Pgv1",
+          "type": "real"
+        },
+        {
+          "id": "Pgv2",
+          "type": "real"
+        },
+        {
+          "id": "Pgv3",
+          "type": "real"
+        },
+        {
+          "id": "Pgv4",
+          "type": "real"
+        },
+        {
+          "id": "Pgv5",
+          "type": "real"
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "paux",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "out",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "pmech"
+        },
+        {
+          "id": "filter"
+        },
+        {
+          "id": "desiredgate"
+        },
+        {
+          "id": "gate"
+        },
+        {
+          "id": "flow"
+        },
+        {
+          "id": "head"
+        }
+      ]
+    },
+    {
+      "name": "Ieeest",
+      "label": "IEEEST",
+      "family": "Stabilizer",
+      "params": [
+        {
+          "id": "A1",
+          "type": "real",
+          "unit": "s",
+          "default": 1.013
+        },
+        {
+          "id": "A2",
+          "type": "real",
+          "unit": "s²",
+          "default": 0.013
+        },
+        {
+          "id": "A3",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "A4",
+          "type": "real",
+          "unit": "s²",
+          "default": 0
+        },
+        {
+          "id": "A5",
+          "type": "real",
+          "unit": "s",
+          "default": 1.013
+        },
+        {
+          "id": "A6",
+          "type": "real",
+          "unit": "s²",
+          "default": 0.113
+        },
+        {
+          "id": "T1",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "T2",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "T3",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "T4",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "T5",
+          "type": "real",
+          "unit": "s",
+          "default": 1.65
+        },
+        {
+          "id": "T6",
+          "type": "real",
+          "unit": "s",
+          "default": 1.65
+        },
+        {
+          "id": "Ks",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 3
+        },
+        {
+          "id": "Lsmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -0.1
+        },
+        {
+          "id": "Lsmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.1
+        },
+        {
+          "id": "Vcl",
+          "type": "real"
+        },
+        {
+          "id": "Vcu",
+          "type": "real"
+        },
+        {
+          "id": "Tdelay",
+          "type": "real"
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "input",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "output",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "vss"
+        }
+      ]
+    },
+    {
+      "name": "Ieeet1",
+      "label": "IEEET1",
+      "family": "Exciter",
+      "params": [
+        {
+          "id": "Tr",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Ka",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 50
+        },
+        {
+          "id": "Ta",
+          "type": "real",
+          "unit": "s",
+          "default": 0.04
+        },
+        {
+          "id": "Ke",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -0.06
+        },
+        {
+          "id": "Te",
+          "type": "real",
+          "unit": "s",
+          "default": 0.6
+        },
+        {
+          "id": "Kf",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.09
+        },
+        {
+          "id": "Tf",
+          "type": "real",
+          "unit": "s",
+          "default": 1.46
+        },
+        {
+          "id": "Vrmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1
+        },
+        {
+          "id": "Vrmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "E1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2.8
+        },
+        {
+          "id": "E2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 3.73
+        },
+        {
+          "id": "Se1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.04
+        },
+        {
+          "id": "Se2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.33
+        },
+        {
+          "id": "Ispdlim",
+          "type": "flag",
+          "default": false
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vs",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vuel",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "voel",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "efd"
+        },
+        {
+          "id": "ksat"
+        }
+      ]
+    },
+    {
+      "name": "LoadZ",
+      "label": "LoadZ",
+      "family": "Load",
+      "params": [
+        {
+          "id": "R",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "X",
+          "type": "real",
+          "unit": "p.u."
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        }
+      ]
+    },
+    {
+      "name": "LoadZIP",
+      "label": "LoadZIP",
+      "family": "Load",
+      "params": [
+        {
+          "id": "Pnom",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Qnom",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "alphaI",
+          "type": "real",
+          "default": 0
+        },
+        {
+          "id": "alphaP",
+          "type": "real",
+          "default": 0
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        },
+        {
+          "id": "im"
+        },
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        }
+      ]
+    },
+    {
+      "name": "Reecb",
+      "label": "REECB",
+      "family": "Controller",
+      "params": [
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA"
+        },
+        {
+          "id": "PfFlag",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "VFlag",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "QFlag",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "Pqflag",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "Trv",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "Tp",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Vref0",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "Vdip",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.85
+        },
+        {
+          "id": "Vup",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.15
+        },
+        {
+          "id": "dbd1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "dbd2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "kqv",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 5
+        },
+        {
+          "id": "Iql1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1.1
+        },
+        {
+          "id": "Iqh1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.1
+        },
+        {
+          "id": "Qmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.436
+        },
+        {
+          "id": "Qmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -0.436
+        },
+        {
+          "id": "Kqp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Kqi",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 0.1
+        },
+        {
+          "id": "Vmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.1
+        },
+        {
+          "id": "Vmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.9
+        },
+        {
+          "id": "Kvp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 18
+        },
+        {
+          "id": "Kvi",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 5
+        },
+        {
+          "id": "Tiq",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "Tpord",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "dPmax",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 99
+        },
+        {
+          "id": "dPmin",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": -99
+        },
+        {
+          "id": "Pmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Pmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Imax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.3
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "pe",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "qgen",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "qext",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pfaref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "iqcmd",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "ipcmd",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "iqcmd"
+        },
+        {
+          "id": "ipcmd"
+        },
+        {
+          "id": "vmeas"
+        },
+        {
+          "id": "pmeas"
+        }
+      ]
+    },
+    {
+      "name": "Regca",
+      "label": "REGCA",
+      "family": "Converter",
+      "params": [
+        {
+          "id": "p0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "q0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        },
+        {
+          "id": "Tg",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "TM",
+          "type": "real",
+          "unit": "s",
+          "default": 0.02
+        },
+        {
+          "id": "Rqmax",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 999
+        },
+        {
+          "id": "Rqmin",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": -999
+        },
+        {
+          "id": "Rpmax",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 999
+        },
+        {
+          "id": "sL",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "IL1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.1
+        },
+        {
+          "id": "VL0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.4
+        },
+        {
+          "id": "VL1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.9
+        },
+        {
+          "id": "VA0",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.4
+        },
+        {
+          "id": "VA1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.9
+        },
+        {
+          "id": "Vhvmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1.2
+        },
+        {
+          "id": "Qmin",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "Khv",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.7
+        },
+        {
+          "id": "Xe",
+          "type": "real",
+          "unit": "p.u."
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "ipcmd",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "iqcmd",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "ibranchr",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "ibranchi",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "pbranch",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "qbranch",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "ir"
+        },
+        {
+          "id": "ii"
+        },
+        {
+          "id": "p"
+        },
+        {
+          "id": "q"
+        }
+      ]
+    },
+    {
+      "name": "Repca",
+      "label": "REPCA",
+      "family": "Controller",
+      "params": [
+        {
+          "id": "mva",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        },
+        {
+          "id": "VcompFlag",
+          "type": "flag",
+          "default": true
+        },
+        {
+          "id": "RefFlag",
+          "type": "flag",
+          "default": true
+        },
+        {
+          "id": "Freqflag",
+          "type": "flag",
+          "default": false
+        },
+        {
+          "id": "Tfltr",
+          "type": "real",
+          "unit": "s",
+          "default": 0.05
+        },
+        {
+          "id": "Vfrz",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.7
+        },
+        {
+          "id": "Rc",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Xc",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Kc",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "dbdlow",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "dbdupper",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "emax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "emin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1
+        },
+        {
+          "id": "Kp",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 10
+        },
+        {
+          "id": "Ki",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 10
+        },
+        {
+          "id": "Qmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Qmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1
+        },
+        {
+          "id": "Tft",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "Tfv",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        },
+        {
+          "id": "Tp",
+          "type": "real",
+          "unit": "s",
+          "default": 0
+        },
+        {
+          "id": "fdbd1",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "fdbd2",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Ddn",
+          "type": "real",
+          "unit": "p.u./p.u.",
+          "default": 20
+        },
+        {
+          "id": "Dup",
+          "type": "real",
+          "unit": "p.u./p.u.",
+          "default": 0
+        },
+        {
+          "id": "femax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "femin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": -1
+        },
+        {
+          "id": "Kpg",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 10
+        },
+        {
+          "id": "Kig",
+          "type": "real",
+          "unit": "p.u./s",
+          "default": 10
+        },
+        {
+          "id": "Pmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 2
+        },
+        {
+          "id": "Pmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Tlag",
+          "type": "real",
+          "unit": "s",
+          "default": 3
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "ir",
+          "kind": "signal",
+          "direction": "in",
+          "required": true
+        },
+        {
+          "name": "ii",
+          "kind": "signal",
+          "direction": "in",
+          "required": true
+        },
+        {
+          "name": "p",
+          "kind": "signal",
+          "direction": "in",
+          "required": true
+        },
+        {
+          "name": "q",
+          "kind": "signal",
+          "direction": "in",
+          "required": true
+        },
+        {
+          "name": "freq",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "qref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "freqref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "qext",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "pext",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "qext"
+        },
+        {
+          "id": "pext"
+        },
+        {
+          "id": "vmeas"
+        },
+        {
+          "id": "qmeas"
+        },
+        {
+          "id": "pmeas"
+        }
+      ]
+    },
+    {
+      "name": "SexsPti",
+      "label": "SEXS-PTI",
+      "family": "Exciter",
+      "params": [
+        {
+          "id": "Ta",
+          "type": "real",
+          "unit": "s"
+        },
+        {
+          "id": "Tb",
+          "type": "real",
+          "unit": "s"
+        },
+        {
+          "id": "Te",
+          "type": "real",
+          "unit": "s"
+        },
+        {
+          "id": "K",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "Efdmax",
+          "type": "real",
+          "unit": "p.u."
+        },
+        {
+          "id": "Efdmin",
+          "type": "real",
+          "unit": "p.u."
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "bus",
+          "kind": "bus",
+          "direction": "both",
+          "required": true
+        },
+        {
+          "name": "vref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vs",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "vuel",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "voel",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "efd",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "id": "efd"
+        }
+      ]
+    },
+    {
+      "name": "Tgov1",
+      "label": "TGOV1",
+      "family": "Governor",
+      "params": [
+        {
+          "id": "Trate",
+          "type": "real",
+          "unit": "MVA",
+          "default": 100
+        },
+        {
+          "id": "R",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0.05
+        },
+        {
+          "id": "T1",
+          "type": "real",
+          "unit": "s",
+          "default": 0.5
+        },
+        {
+          "id": "T2",
+          "type": "real",
+          "unit": "s",
+          "default": 2.5
+        },
+        {
+          "id": "T3",
+          "type": "real",
+          "unit": "s",
+          "default": 7.5
+        },
+        {
+          "id": "Pvmax",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 1
+        },
+        {
+          "id": "Pvmin",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        },
+        {
+          "id": "Dt",
+          "type": "real",
+          "unit": "p.u.",
+          "default": 0
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "speed",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pref",
+          "kind": "signal",
+          "direction": "in",
+          "required": false
+        },
+        {
+          "name": "pmech",
+          "kind": "signal",
+          "direction": "out",
+          "required": true
+        }
+      ],
+      "outputs": []
+    }
+  ],
+  "options": [
+    {
+      "id": "dt_monitor",
+      "label": "Output interval",
+      "description": "Monitor output interval in seconds. Zero records segment endpoints only.",
+      "type": "real",
+      "unit": "s",
+      "bounds": {
+        "lower": {
+          "value": 0
+        }
+      },
+      "default": 0.01
+    },
+    {
+      "id": "tmax",
+      "label": "End time",
+      "description": "Final simulation time in seconds.",
+      "type": "real",
+      "unit": "s",
+      "bounds": {
+        "lower": {
+          "value": 0,
+          "inclusive": false
+        }
+      },
+      "default": 10
+    },
+    {
+      "id": "dt_fixed",
+      "label": "Fixed step size",
+      "description": "A constant internal solver step in seconds instead of adaptive stepping.",
+      "type": "real",
+      "unit": "s",
+      "bounds": {
+        "lower": {
+          "value": 0,
+          "inclusive": false
+        }
+      },
+      "optional": true
+    },
+    {
+      "id": "rel_tol",
+      "label": "Relative tolerance",
+      "description": "Relative IDA solver tolerance. GridKit's own default is 1e-7.",
+      "type": "real",
+      "bounds": {
+        "lower": {
+          "value": 0,
+          "inclusive": false
+        }
+      },
+      "optional": true,
+      "default": 0.001
+    },
+    {
+      "id": "abs_tol",
+      "label": "Absolute tolerance",
+      "description": "Absolute IDA solver tolerance. GridKit's own default is 1e-9.",
+      "type": "real",
+      "bounds": {
+        "lower": {
+          "value": 0,
+          "inclusive": false
+        }
+      },
+      "optional": true,
+      "default": 1e-5
+    },
+    {
+      "id": "max_steps",
+      "label": "Maximum steps",
+      "description": "Maximum internal solver steps per output interval. GridKit default: 10000; zero uses the IDA default (500).",
+      "type": "integer",
+      "bounds": {
+        "lower": {
+          "value": 0
+        }
+      },
+      "optional": true
+    },
+    {
+      "id": "consistent_ic_type",
+      "label": "Initial conditions",
+      "description": "How IDA computes consistent initial conditions at start and after each event: ya_ydp solves the algebraic variables and differential derivatives; y solves every variable. GridKit default: ya_ydp.",
+      "type": "choice",
+      "choices": [
+        {
+          "id": "ya_ydp",
+          "label": "Algebraic + derivatives (ya_ydp)"
+        },
+        {
+          "id": "y",
+          "label": "All variables (y)"
+        }
+      ],
+      "optional": true
+    }
+  ]
+}

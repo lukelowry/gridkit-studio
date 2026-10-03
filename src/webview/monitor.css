@@ -1,0 +1,30 @@
+.plots {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.plots section {
+  display: flex;
+  flex-direction: column;
+  height: 300px;
+  min-height: 240px;
+  flex: 1;
+  border: 1px solid var(--vscode-panel-border);
+}
+.plots h2 {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 8px 12px;
+  margin: 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.plots canvas {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  outline-offset: -2px;
+}

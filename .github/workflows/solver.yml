@@ -1,20 +1,14 @@
-name: GridKit latest
+name: GridKit runtime
 on:
-  schedule:
-    - cron: '23 7 * * *'
   workflow_dispatch:
   workflow_call:
-concurrency:
-  group: gridkit-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
 permissions:
   contents: read
 jobs:
   solver:
     runs-on: ubuntu-latest
     env:
-      GRIDKIT_TEST_SOLVER: '1'
-      GRIDKIT_TEST_SOFTWARE_GPU: '1'
+      GRIDKIT_TEST_IMAGE: ghcr.io/lukelowry/gridkit:arrow
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,12 +19,9 @@ jobs:
           package-manager-cache: false
       - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - run: pnpm test:solver
-      - name: Test Simulation with GridKit
-        run: dbus-run-session -- xvfb-run -a node tests/host/run.mjs
       - uses: actions/upload-artifact@v7
-        if: failure()
+        if: always()
         with:
-          name: solver-host
-          path: output/playwright
+          name: solver-results
+          path: output/tests/solver-report.json

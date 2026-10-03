@@ -1,270 +1,146 @@
-import { realpath } from 'node:fs/promises'
-import { dirname, relative, resolve } from 'node:path'
+import { dirname, normalize, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import type { Cases } from './case.js'
-import { command, uriOf } from './commands.js'
-import { describe } from './errors.js'
-import { parseSolver } from './gridkit/solver.js'
-import { Run } from './run.js'
-import {
-  type RuntimeSelection,
-  simulationCommand,
-  SimulationConfigurationError,
-  type SimulationOptions,
-} from './runtime.js'
-import {
-  prepareSimulation,
-  SOLVER_EXCLUDES,
-  SOLVER_FILES,
-  useConfiguration,
-} from './simulation/setup.js'
-import { recordRuntime, stageLaunch } from './staging.js'
-
-export interface GridKitTaskDefinition extends vscode.TaskDefinition {
-  type: 'gridkit'
-  solver?: string
-  case?: string
-}
-class SolverTerminal implements vscode.Pseudoterminal {
-  private readonly written = new vscode.EventEmitter<string>()
-  private readonly closed = new vscode.EventEmitter<number>()
-  readonly onDidWrite = this.written.event
-  readonly onDidClose = this.closed.event
-  private run?: Run
-  private cancelled = false
-  private readonly preparation = new AbortController()
-  constructor(private readonly prepare: (signal: AbortSignal) => Promise<Run>) {}
-  open(): void {
-    void (async () => {
-      try {
-        this.written.fire('Preparing DynamicSimulation...\r\n')
-        this.run = await this.prepare(this.preparation.signal)
-        const matches = vscode.window.terminals.filter(
-          (terminal) =>
-            terminal.name === this.run!.taskName || terminal.name.endsWith(this.run!.taskName!),
-        )
-        this.run.terminal =
-          vscode.window.terminals.find(
-            (terminal) =>
-              'pty' in terminal.creationOptions && terminal.creationOptions.pty === this,
-          ) ?? (matches.length === 1 ? matches[0] : undefined)
-        if (this.cancelled) await this.run.cancel()
-        const code = await this.run.start((text) =>
-          this.written.fire(text.replace(/\r?\n/g, '\r\n')),
-        )
-        if (this.run.error && this.run.status === 'failed') {
-          const run = this.run
-          void vscode.window.showErrorMessage(this.run.error, 'Show Terminal').then((choice) => {
-            if (choice === 'Show Terminal')
-              void vscode.commands.executeCommand('gridkitStudio.showSolverOutput', run)
-          })
-        }
-        this.closed.fire(code)
-      } catch (error) {
-        this.written.fire(`${describe(error)}\r\n`)
-        if (!this.cancelled) {
-          const actions = error instanceof SimulationConfigurationError ? ['Open Settings'] : []
-          void vscode.window.showErrorMessage(describe(error), ...actions).then((choice) => {
-            if (choice === 'Open Settings')
-              void vscode.commands.executeCommand(
-                'workbench.action.openSettings',
-                '@ext:lukelowery.gridkit-studio',
-              )
-          })
-        }
-        this.closed.fire(1)
-      } finally {
-        this.written.dispose()
-        this.closed.dispose()
-      }
-    })()
-  }
-  close(): void {
-    this.cancelled = true
-    this.preparation.abort()
-    void this.run?.cancel()
-  }
-}
-const workspacePath = (folder: vscode.WorkspaceFolder, uri: vscode.Uri) =>
-  relative(folder.uri.fsPath, uri.fsPath).split('\\').join('/')
-
-export function registerTasks(context: vscode.ExtensionContext, cases: Cases): void {
-  const running = new Map<string, Run>()
-  const preparing = new Set<string>()
-  const diagnostics = vscode.languages.createDiagnosticCollection('gridkit-run')
-  context.subscriptions.push(diagnostics)
-  const prepare = async (
-    definition: GridKitTaskDefinition,
-    folder: vscode.WorkspaceFolder,
-    signal: AbortSignal,
-  ) => {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before running GridKit.')
-    if (folder.uri.scheme !== 'file')
-      throw new Error('Run GridKit in a local, WSL, SSH, or Dev Container workspace.')
-    const uri = vscode.Uri.joinPath(folder.uri, (definition.solver ?? definition.case)!)
-    let caseUri = uri
-    if (definition.solver) {
-      const input = parseSolver(
-        JSON.parse((await vscode.workspace.openTextDocument(uri)).getText()),
-      )
-      caseUri = vscode.Uri.file(resolve(dirname(uri.fsPath), input.system_model_file))
+import type { RunRequest, RuntimeOptions } from './messages.js'
+import type { Sessions } from './sessions.js'
+const samePath = (a: string, b: string) =>
+  process.platform === 'win32'
+    ? normalize(a).toLowerCase() === normalize(b).toLowerCase()
+    : normalize(a) === normalize(b)
+export function registerTasks(studio: Sessions) {
+  const make = (uri: vscode.Uri, configuration?: vscode.Uri) => {
+    const definition = {
+      type: 'gridkit',
+      case: uri.toString(),
+      ...(configuration ? { configuration: configuration.toString() } : {}),
     }
-    const document = await vscode.workspace.openTextDocument(caseUri)
-    await cases.documents.ensureParsed(document, document.version, signal)
-    const state = cases.resolve(cases.get(document).target)
-    if (!state) throw new Error('Fix the case errors before running the simulation.')
-    const key = await realpath(document.uri.fsPath)
-    if (preparing.has(key)) throw new Error('This case is already preparing a simulation.')
-    preparing.add(key)
-    try {
-      if (state.run?.status === 'running')
-        throw new Error(
-          'This case already has a running simulation. Stop it before starting another.',
-        )
-      state.assertCommitted()
-      if (definition.solver) await useConfiguration(state, uri)
-      const settings = vscode.workspace.getConfiguration('gridkitStudio', document.uri)
-      const options: SimulationOptions = {
-        method: settings.get('simulationMethod', 'auto'),
-        executable: settings.get('dynamicSimulationPath', ''),
-      }
-      let launch = await prepareSimulation(cases, state, folder.uri.fsPath)
-      let run: Run | undefined
-      try {
-        signal.throwIfAborted()
-        launch = await stageLaunch(launch, signal)
-        const runtimeKey = 'runtime:' + key
-        const signature = JSON.stringify(options)
-        const saved = context.workspaceState.get<{ signature: string; selected: RuntimeSelection }>(
-          runtimeKey,
-        )
-        const command = await simulationCommand(
-          launch,
-          options,
-          saved?.signature === signature ? saved.selected : undefined,
-        )
-        if (command.runtime)
-          await context.workspaceState.update(runtimeKey, { signature, selected: command.runtime })
-        const outputPaths = new Set(launch.outputs)
-        for (const open of vscode.workspace.textDocuments)
-          if (open.isDirty && open.uri.scheme === 'file') {
-            const path = await realpath(open.uri.fsPath).catch(() => open.uri.fsPath)
-            if (outputPaths.has(path))
-              throw new Error(
-                'A monitor output has unsaved edits. Close or save it before running the solver.',
-              )
-          }
-        launch.assertCurrent?.()
-        const provenance = await recordRuntime(launch, command, signal)
-        signal.throwIfAborted()
-        launch.assertCurrent?.()
-        for (const output of launch.outputs)
-          if (running.get(output)?.status === 'running')
-            throw new Error(
-              'Another solver is writing this monitor output. Stop it before running this solver.',
-            )
-        run = new Run(state, launch, diagnostics, command, provenance)
-        run.taskName = `Run ${definition.solver ?? definition.case}`
-        for (const output of launch.outputs) running.set(output, run)
-        void run.done.then(() => {
-          for (const output of launch.outputs)
-            if (running.get(output) === run) running.delete(output)
-        })
-        await state.attachRun(run)
-        signal.throwIfAborted()
-        cases.activate(state)
-        return run
-      } catch (error) {
-        if (run) {
-          await run.dispose()
-          if (state.run === run) await state.attachRun(undefined)
-        } else {
-          try {
-            await launch.cleanup?.()
-          } finally {
-            await launch.dispose?.()
-          }
-        }
-        throw error
-      }
-    } finally {
-      preparing.delete(key)
-    }
-  }
-  const task = (definition: GridKitTaskDefinition, folder: vscode.WorkspaceFolder) => {
-    const value = new vscode.Task(
+    const task = new vscode.Task(
       definition,
-      folder,
-      `Run ${definition.solver ?? definition.case}`,
+      vscode.workspace.getWorkspaceFolder(uri) ?? vscode.TaskScope.Workspace,
+      'Simulate ' + uri.path.split('/').at(-1),
       'GridKit',
-      new vscode.CustomExecution(
-        async () => new SolverTerminal((signal) => prepare(definition, folder, signal)),
-      ),
+      new vscode.CustomExecution(async () => {
+        const write = new vscode.EventEmitter<string>()
+        const close = new vscode.EventEmitter<number>()
+        let subscription: vscode.Disposable | undefined
+        let started = false
+        let cancelled = false
+        const terminal: vscode.Pseudoterminal = {
+          onDidWrite: write.event,
+          onDidClose: close.event,
+          open() {
+            void (async () => {
+              if (!vscode.workspace.isTrusted)
+                throw new Error('Trust this workspace to execute GridKit.')
+              const document = await vscode.workspace.openTextDocument(uri)
+              const session = await studio.open(document)
+              const summary = await studio.documents.ensure(document)
+              const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
+              const runtime: RuntimeOptions = {
+                method: settings.get('simulationMethod', 'auto'),
+                executable: settings.get<string>('dynamicSimulationPath', '')
+                  ? resolve(
+                      vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath),
+                      settings.get<string>('dynamicSimulationPath')!,
+                    )
+                  : '',
+                image: settings.get('containerImage', 'ghcr.io/lukelowry/gridkit:arrow'),
+              }
+              const configurationUri = configuration ?? session.configuration
+              const config = configurationUri
+                ? await vscode.workspace.openTextDocument(configurationUri)
+                : undefined
+              if (config) {
+                const model = JSON.parse(config.getText()).system_model_file
+                if (
+                  typeof model !== 'string' ||
+                  samePath(resolve(dirname(config.uri.fsPath), model), uri.fsPath) === false
+                )
+                  throw new Error(
+                    'This configuration targets a different case. Open its system_model_file first.',
+                  )
+              }
+              const request: RunRequest = {
+                uri: uri.toString(),
+                version: summary.version,
+                values: session.values,
+                outputs: session.outputs,
+                runtime,
+                cacheBytes: settings.get<number>('resultCacheMiB', 256) * (1 << 20),
+                ...(config
+                  ? {
+                      configuration: {
+                        text: config.getText(),
+                        directory: vscode.Uri.joinPath(config.uri, '..').fsPath,
+                      },
+                    }
+                  : {}),
+              }
+              write.fire(
+                `Captured ${document.isDirty ? 'unsaved ' : ''}case revision ${summary.version}.\r\n`,
+              )
+              subscription = studio.client.event.event((event) => {
+                if (event.kind === 'log' && event.uri === request.uri)
+                  write.fire(event.message.replace(/\r?\n/g, '\r\n') + '\r\n')
+              })
+              if (cancelled) throw new Error('Task cancelled before launch.')
+              started = true
+              const result = await studio.client.call('run', request)
+              write.fire(
+                `\r\n${result.state}: ${result.frames} frames${result.message ? ' — ' + result.message : ''}\r\n`,
+              )
+              close.fire(result.state === 'complete' ? 0 : 1)
+            })()
+              .catch((error) => {
+                write.fire(String(error) + '\r\n')
+                close.fire(1)
+              })
+              .finally(() => subscription?.dispose())
+          },
+          close() {
+            cancelled = true
+            subscription?.dispose()
+            if (started) void studio.client.call('stop', { uri: uri.toString() }).catch(() => {})
+          },
+        }
+        return terminal
+      }),
+      [],
     )
-    value.group = vscode.TaskGroup.Build
-    value.presentationOptions = {
+    task.presentationOptions = {
       reveal: vscode.TaskRevealKind.Always,
       panel: vscode.TaskPanelKind.Dedicated,
       clear: true,
-      focus: false,
-      showReuseMessage: false,
     }
-    return value
+    return task
   }
-  context.subscriptions.push(
-    vscode.tasks.registerTaskProvider('gridkit', {
-      async provideTasks() {
-        if (!vscode.workspace.isTrusted) return []
-        const files = await vscode.workspace.findFiles(SOLVER_FILES, SOLVER_EXCLUDES)
-        return files.flatMap((uri) => {
-          const folder = vscode.workspace.getWorkspaceFolder(uri)
-          return folder
-            ? [task({ type: 'gridkit', solver: workspacePath(folder, uri) }, folder)]
-            : []
-        })
-      },
-      resolveTask(value) {
-        const definition = value.definition as GridKitTaskDefinition
-        return (typeof definition.solver === 'string' || typeof definition.case === 'string') &&
-          typeof value.scope === 'object'
-          ? task(definition, value.scope)
-          : undefined
-      },
-    }),
-  )
-  command(context, 'runSolver', async (argument) => {
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace before running GridKit.')
-    const editorUri = vscode.window.activeTextEditor?.document.uri
-    let uri =
-      uriOf(argument) ??
-      cases.active?.document.uri ??
-      (editorUri && /\.(solver|case)\.json$/i.test(editorUri.path) ? editorUri : undefined)
-    if (!uri) {
-      const files = await vscode.workspace.findFiles('**/*.{case,solver}.json', SOLVER_EXCLUDES)
-      uri = (
-        await vscode.window.showQuickPick(
-          files.map((uri) => ({ label: vscode.workspace.asRelativePath(uri), uri })),
-          { title: 'Run Simulation' },
-        )
-      )?.uri
-    }
-    if (!uri) return
-    const folder = vscode.workspace.getWorkspaceFolder(uri)
-    if (!folder) throw new Error('Open the case folder as a workspace first.')
-    const path = workspacePath(folder, uri)
-    const definition: GridKitTaskDefinition = /\.solver\.json$/i.test(uri.path)
-      ? { type: 'gridkit', solver: path }
-      : { type: 'gridkit', case: path }
-    return vscode.tasks.executeTask(task(definition, folder))
+  const provider = vscode.tasks.registerTaskProvider('gridkit', {
+    provideTasks: () => [...studio.all.keys()].map((uri) => make(vscode.Uri.parse(uri))),
+    resolveTask: (task) => {
+      const path = task.definition.case
+      if (typeof path !== 'string') return
+      const folder =
+        typeof task.scope === 'object' ? task.scope : vscode.workspace.workspaceFolders?.[0]
+      return make(
+        path.includes('://')
+          ? vscode.Uri.parse(path)
+          : vscode.Uri.file(resolve(folder?.uri.fsPath ?? '.', path)),
+        typeof task.definition.configuration === 'string'
+          ? task.definition.configuration.includes('://')
+            ? vscode.Uri.parse(task.definition.configuration)
+            : vscode.Uri.file(resolve(folder?.uri.fsPath ?? '.', task.definition.configuration))
+          : undefined,
+      )
+    },
   })
-  command(context, 'showSolverOutput', (argument) => {
-    const run = argument instanceof Run ? argument : cases.active?.run
-    if (run?.terminal && vscode.window.terminals.includes(run.terminal)) run.terminal.show(true)
-    else
-      void vscode.window.showInformationMessage('This simulation task terminal is no longer open.')
-  })
-  command(context, 'stopSolver', () => cases.active?.run?.cancel())
-  command(context, 'clearRun', () => cases.active?.attachRun(undefined))
+  return {
+    provider,
+    async run(uri: string) {
+      if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
+      if (studio.all.get(uri)?.run?.state === 'running')
+        throw new Error('A simulation is already active for this case.')
+      return vscode.tasks.executeTask(make(vscode.Uri.parse(uri)))
+    },
+  }
 }

@@ -1,184 +1,180 @@
 import assert from 'node:assert/strict'
-import { copyFile, mkdtemp, open, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 
-import { applyEdits } from 'jsonc-parser'
+import { type Arguments, type Parameters, read } from '@latkit/model'
 
-import { bindColumns } from '../../src/csv/columns.js'
-import { CsvSource } from '../../src/csv/source.js'
-import { nativeCaseEdits } from '../../src/gridkit/edit.js'
-import { parse } from '../../src/gridkit/parse.js'
-import type { SolverLaunch } from '../../src/launch.js'
-import { resolveSolver } from '../../src/launch.js'
-import { executeSolver, simulationCommand } from '../../src/runtime.js'
-import { appendFault } from '../../src/simulation/faults.js'
-import { recordRuntime, stageLaunch } from '../../src/staging.js'
-const options = { method: 'auto', executable: '' } as const
-const root = await mkdtemp(join(tmpdir(), 'gridkit solver test '))
-let csv: CsvSource | undefined
-let staged: SolverLaunch | undefined
-try {
-  for (const file of ['two-bus.case.json', 'two-bus.solver.json'])
-    await copyFile(resolve('tests/fixtures/solver', file), join(root, file))
-  const before = await readFile(join(root, 'two-bus.case.json'))
-  const launch = await resolveSolver(join(root, 'two-bus.solver.json'), root)
-  staged = await stageLaunch(launch)
-  const command = await simulationCommand(staged, options)
-  await recordRuntime(staged, command)
-  const execution = executeSolver(command, (_stream, text) => process.stdout.write(text))
-  assert.equal(await execution.done, 0)
-  await staged.publish!()
-  await staged.dispose!()
-  staged = undefined
-  csv = new CsvSource(launch.output, resolve('dist/csv/worker.cjs'))
-  const info = await csv.scan(true)
-  assert.ok(info.rows > 400)
-  csv.columns = bindColumns(launch.raw, parse(before).model, info.headers)
-  const field = csv.columns[0].field
-  const elements = csv.columns
-    .filter((column) => column.field.classId === field.classId && column.field.id === field.id)
-    .map((column) => column.element)
-  const source = await csv.series(field.classId)
-  const series = await source.read(
-    csv.signals(field.classId).findIndex((s) => s.id === field.id),
-    {
-      frameOffset: 0,
-      frameCount: info.rows,
-      elementOffset: 0,
-      elementCount: source.elementCount,
-    },
+import catalog from '../../catalog.json'
+import { Case } from '../../src/gridkit/case.js'
+import { catalogOf } from '../../src/gridkit/definition.js'
+import { Simulation } from '../../src/gridkit/simulation.js'
+import type { RunInfo, RunRequest, RuntimeProcess } from '../../src/messages.js'
+import { ResultCache } from '../../src/results/results.js'
+async function main() {
+  const root = await mkdtemp(join(tmpdir(), 'gridkit-native-test-'))
+  const kase = await Case.parse(
+    await readFile('tests/fixtures/IEEE39.case.json', 'utf8'),
+    catalogOf(JSON.stringify(catalog)),
   )
-  assert.equal(series.time.length, info.rows)
-  const frame = await csv.cellsAt(await csv.locate(1), [field], [elements[0]])
-  assert.ok(Number.isFinite(frame[0]))
-  assert.deepEqual(await readFile(join(root, 'two-bus.case.json')), before)
-  assert.deepEqual((await readdir(root)).sort(), [
-    'mon.csv',
-    'two-bus.case.json',
-    'two-bus.solver.json',
-  ])
-  const authored = appendFault(before.toString(), launch.raw, launch.raw.buses[0].number, 0, 1)
-  await writeFile(join(root, 'authored.case.json'), authored.text)
-  await writeFile(
-    join(root, 'authored.solver.json'),
-    JSON.stringify({
-      system_model_file: 'authored.case.json',
-      tmax: 0.1,
-      dt_monitor: 0.01,
-      events: [
-        { time: 0.02, type: 'fault_on', element_id: authored.index },
-        { time: 0.03, type: 'fault_off', element_id: authored.index },
-      ],
-    }),
-  )
-  const authoredLaunch = await resolveSolver(join(root, 'authored.solver.json'), root)
-  assert.equal(
-    await executeSolver(await simulationCommand(authoredLaunch, options), (_stream, text) =>
-      process.stdout.write(text),
-    ).done,
-    0,
-  )
-  console.log('PASS authored named fault with declaration index and real-valued impedance')
-  const integral = JSON.stringify(launch.raw).replace('"speed"', '"SPEED"')
-  const repaired = applyEdits(integral, nativeCaseEdits(integral, JSON.parse(integral)))
-  assert.match(repaired, /"H":3\.0/)
-  await writeFile(join(root, 'normalized.case.json'), repaired)
-  await writeFile(
-    join(root, 'normalized.solver.json'),
-    JSON.stringify({
-      system_model_file: 'normalized.case.json',
-      tmax: 0.1,
-      dt_monitor: 0.01,
-      max_order: 2,
-      max_steps: -1,
-      rel_tol: 0,
-      abs_tol: 1e-8,
-      events: [],
-    }),
-  )
-  const normalized = await resolveSolver(join(root, 'normalized.solver.json'), root)
-  assert.equal(
-    await executeSolver(await simulationCommand(normalized, options), (_stream, text) =>
-      process.stdout.write(text),
-    ).done,
-    0,
-  )
-  console.log(
-    'PASS normalized GENROU real tokens and monitor spelling, max_order, unlimited steps, and absolute-only tolerance',
-  )
-  const widePath = join(root, 'wide.csv')
-  const file = await open(widePath, 'w')
-  const elementCount = 4096
-  const frameCount = 513
-  const columns = Array.from({ length: elementCount * 2 }, (_, i) => `v${i}`)
-  await file.write(`t,${columns.join(',')}\n`)
-  for (let frame = 0; frame < frameCount; frame++) {
-    const row = Array.from({ length: elementCount * 2 }, (_, i) =>
-      i === elementCount - 1 && frame === 257 ? 'nan' : String(frame * 10000 + i),
-    )
-    await file.write(`${Math.floor(frame / 2) / 10},${row.join(',')}\n`)
+  const records: { format: string; frames: number; values: number[]; durationMs: number }[] = []
+  const runtime: RunRequest['runtime'] = {
+    method: process.env.GRIDKIT_TEST_SOLVER ? 'installed' : 'docker',
+    executable: process.env.GRIDKIT_TEST_SOLVER ?? '',
+    image: process.env.GRIDKIT_TEST_IMAGE ?? 'ghcr.io/lukelowry/gridkit:arrow',
   }
-  await file.close()
-  await csv.dispose()
-  csv = new CsvSource(widePath, resolve('dist/csv/worker.cjs'))
-  await csv.scan(true)
-  const fields = ['a', 'b'].map((id) => ({ classId: 'bus', source: 'signal' as const, id }))
-  csv.columns = columns.map((_, i) => ({
-    column: i + 1,
-    element: i % elementCount,
-    field: fields[Math.floor(i / elementCount)],
-  }))
-  const started = performance.now()
-  const initialMemory = process.memoryUsage().rss
-  let peakMemory = initialMemory
-  let samples = 0
-  for (const field of fields) {
-    const source = await csv.series(field.classId)
-    for (let offset = 0; offset < frameCount; offset += 32) {
-      const count = Math.min(32, frameCount - offset)
-      const block = await source.read(
-        csv.signals(field.classId).findIndex((s) => s.id === field.id),
-        {
-          frameOffset: offset,
-          frameCount: count,
-          elementOffset: 0,
-          elementCount,
-        },
-      )
-      samples += block.values.length
-      peakMemory = Math.max(peakMemory, process.memoryUsage().rss)
-      assert.equal(block.time[0], Math.floor(offset / 2) / 10)
-      assert.equal(
-        block.values[elementCount - 1],
-        offset * 10000 + elementCount - 1 + (field.id === 'b' ? elementCount : 0),
-      )
+  async function execute(
+    name: string,
+    format: 'arrow' | 'csv',
+    configuration?: string,
+    cancel = false,
+  ) {
+    const directory = join(root, name)
+    await mkdir(directory)
+    const input: RunRequest = {
+      uri: 'file:///test.case.json',
+      version: 1,
+      values: {
+        tmax: cancel ? 1000 : 0.1,
+        dt_monitor: cancel ? 0.001 : 0.01,
+        output_format: format,
+      },
+      outputs: [{ from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } }],
+      runtime,
+      cacheBytes: 1 << 20,
+      ...(configuration ? { configuration: { text: configuration, directory: root } } : {}),
     }
+    const info: RunInfo = {
+      id: name,
+      revision: input,
+      fingerprint: kase.version,
+      name: 'IEEE39',
+      state: 'running',
+      path: join(directory, 'results.' + format),
+      format,
+      frames: 0,
+      domain: [0, 0],
+      started: Date.now(),
+      outputs: input.outputs,
+    }
+    let owned: RuntimeProcess | undefined
+    let cleaned = false
+    const simulation = new Simulation(
+      kase,
+      input,
+      directory,
+      new ResultCache(1 << 20),
+      info,
+      (process) => {
+        if (process) owned = process
+        else cleaned = true
+      },
+    )
+    const started = performance.now()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error('Solver test timed out.')), 90000)
+    let failure: unknown
+    try {
+      await simulation.run(input.values as Arguments<Parameters>, {
+        signal: controller.signal,
+        outputs: input.outputs,
+        maxBlockBytes: 256 << 10,
+        publish: async () => {
+          if (cancel) controller.abort(new Error('Test cancellation'))
+        },
+        progress: () => {},
+        log: (entry) => console.log(entry.message),
+      })
+    } catch (error) {
+      failure = error
+    } finally {
+      clearTimeout(timer)
+    }
+    assert.ok(cleaned, 'Runtime ownership was not released')
+    if (cancel) {
+      assert.match(String(failure), /Test cancellation/)
+      assert.ok(info.frames > 0)
+      assert.ok(info.domain[1] < 1000)
+      if (owned?.container) {
+        const { stdout } = await promisify(execFile)(owned.executable, [
+          'ps',
+          '-aq',
+          '--filter',
+          'name=' + owned.container,
+        ])
+        assert.equal(stdout.trim(), '')
+      }
+      return { cancelledFrames: info.frames, cleanupMs: performance.now() - started }
+    }
+    if (failure) throw failure
+    assert.ok(info.frames >= 10)
+    const data = await simulation.results!.data(undefined, new AbortController().signal)
+    const values: number[] = []
+    for await (const block of read(
+      data,
+      {
+        kind: 'samples',
+        from: 'Bus',
+        select: ['Vm'],
+        window: { kind: 'range', between: [0, 0.1] },
+      },
+      { buffers: 'owned' },
+    ))
+      values.push(...block.columns.Vm!.values)
+    assert.ok(values.every(Number.isFinite))
+    const record = { format, frames: info.frames, values, durationMs: performance.now() - started }
+    if (!configuration) records.push(record)
+    return record
   }
-  assert.equal(samples, elementCount * frameCount * 2)
-  const event = await csv.locate(12.8)
-  assert.equal(event, 257)
-  const values = await csv.cellsAt(event, fields, [elementCount - 1])
-  assert.ok(Number.isNaN(values[0]))
-  assert.equal(values[1], 257 * 10000 + elementCount * 2 - 1)
-  const abort = new AbortController()
-  abort.abort()
-  await assert.rejects(
-    (await csv.series(fields[0].classId)).read(
-      0,
-      { frameOffset: 0, frameCount: 32, elementOffset: 0, elementCount },
-      abort.signal,
-    ),
-    { name: 'AbortError' },
-  )
-  console.log(
-    `PASS exact CSV samples: ${samples.toLocaleString()} samples, ${elementCount} traces per field, ${(performance.now() - started).toFixed(0)} ms, ${((peakMemory - initialMemory) / 1048576).toFixed(1)} MiB peak RSS increase`,
-  )
-  console.log(
-    `PASS DynamicSimulation, CSV (${info.rows} rows), worker reads, paths with spaces, and staged run cleanup`,
-  )
-} finally {
-  await csv?.dispose()
-  await staged?.dispose?.()
-  await rm(root, { recursive: true, force: true })
+  try {
+    for (const format of ['arrow', 'csv'] as const) await execute(format, format)
+    assert.equal(records[0]!.frames, records[1]!.frames)
+    assert.equal(records[0]!.values.length, records[1]!.values.length)
+    records[0]!.values.forEach((value, i) =>
+      assert.ok(Math.abs(value - records[1]!.values[i]!) < 1e-5),
+    )
+    await copyFile(join(root, 'csv/results.csv'), join(root, 'reference.csv'))
+    const configuration =
+      '{"system_model_file":"original.case.json","tmax":0.1000,"dt_monitor":0.0100,"dt_fixed":0.0,"max_steps":-1,"events":[],"reference_file":"reference.csv","output_file":"export.csv","error_tolerance":0.00001,"extension":{"preserve":1.000}}'
+    const legacy = await execute('legacy', 'arrow', configuration)
+    const staged = await readFile(join(root, 'legacy/input.json'), 'utf8')
+    assert.ok(staged.includes('0.1000'))
+    assert.ok(staged.includes('1.000'))
+    assert.match(await readFile(join(root, 'export.csv'), 'utf8'), /time/)
+    // A failed reference comparison must fail the run, never silently skip comparison.
+    const reference = await readFile(join(root, 'reference.csv'), 'utf8')
+    await writeFile(
+      join(root, 'reference.csv'),
+      reference
+        .split('\n')
+        .map((line, i) =>
+          i && line
+            ? line
+                .split(',')
+                .map((cell, j) => (j ? String(Number(cell) + 1) : cell))
+                .join(',')
+            : line,
+        )
+        .join('\n'),
+    )
+    await assert.rejects(execute('mismatch', 'arrow', configuration), /exited with code/)
+    const cancellation = await execute('cancel', 'arrow', undefined, true)
+    await mkdir('output/tests', { recursive: true })
+    const report = {
+      formats: records.map(({ values, ...record }) => ({ ...record, samples: values.length })),
+      legacy,
+      cancellation,
+      referenceMismatchRejected: true,
+    }
+    await writeFile('output/tests/solver-report.json', JSON.stringify(report, null, 2))
+    console.log(report)
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 })
+  }
 }
+void main().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})

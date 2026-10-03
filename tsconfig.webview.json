@@ -1,9 +1,9 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": []
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "ESNext.Disposable"],
+    "types": ["@webgpu/types"]
   },
-  "include": ["src/**/page/**/*.ts", "src/**/page/**/*.svelte", "src/webview/client.ts"],
+  "include": ["src/webview/**/*.ts", "src/webview/**/*.svelte", "src/messages.ts"],
   "exclude": []
 }

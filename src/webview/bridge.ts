@@ -1,0 +1,62 @@
+import type { FromView, ToView } from '../messages.js'
+declare function acquireVsCodeApi(): {
+  postMessage(message: unknown): void
+  getState(): unknown
+  setState(value: unknown): void
+}
+const api = acquireVsCodeApi()
+const listeners = new Set<(message: ToView) => void>()
+const pending = new Map<
+  number,
+  {
+    resolve(value: unknown): void
+    reject(error: Error): void
+    timer: ReturnType<typeof setTimeout>
+  }
+>()
+let next = 0
+export const bridge = {
+  send(message: FromView) {
+    api.postMessage(message)
+  },
+  command(command: string, value?: unknown) {
+    api.postMessage({ kind: 'command', command, value })
+  },
+  on(listener: (message: ToView) => void) {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  },
+  state<T>(fallback: T): T {
+    return (api.getState() as T | undefined) ?? fallback
+  },
+  save(value: unknown) {
+    api.setState(value)
+  },
+  request<T>(method: 'query' | 'edit', input: unknown): Promise<T> {
+    const id = ++next
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id)
+        reject(new Error('The extension did not respond.'))
+      }, 15000)
+      pending.set(id, { resolve: (value) => resolve(value as T), reject, timer })
+      api.postMessage({ kind: 'request', id, method, input })
+    })
+  },
+}
+window.addEventListener('message', (event: MessageEvent<ToView>) => {
+  const message = event.data
+  if (!message || typeof message !== 'object') return
+  if (message.kind === 'reply') {
+    const entry = pending.get(message.id)
+    if (entry) {
+      clearTimeout(entry.timer)
+      pending.delete(message.id)
+      if (message.error) entry.reject(new Error(message.error))
+      else entry.resolve(message.value)
+    }
+  } else for (const listener of listeners) listener(message)
+})
+window.addEventListener('unhandledrejection', (event) =>
+  bridge.send({ kind: 'error', message: String(event.reason) }),
+)

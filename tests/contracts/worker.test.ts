@@ -160,6 +160,12 @@ describe('real worker protocol', () => {
       expect(frames()).toBeGreaterThan(0)
       expect(frames()).toBeLessThan(200)
 
+      // A view that holds a window of the run is sent the pages that overlap it, and no others.
+      batches.length = 0
+      await call('batches', { ...stream, window: [0.1, 0.2] }).done
+      expect(frames()).toBeGreaterThan(0)
+      expect(frames()).toBeLessThan(200)
+
       await expect(call('batches', { ...stream, maxBytes: 64 }).done).rejects.toThrow(
         /Visible data exceeds/,
       )

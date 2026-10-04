@@ -15,7 +15,7 @@ A view is streamed the case's rows once, and the samples of the fields it draws.
 
 Playback is one clock a case, Lattice's Transport, held in the extension. It changes only on play, pause, seek, rate, repeat, and arriving frames; each view integrates it locally on its own animation frames, so playing and scrubbing cross no process boundary per frame. A view's seek paints at once and is confirmed to the others.
 
-Network and Diagram are custom text editors. Case and Monitor are native bottom-panel WebviewViews; Mappings, DynamicSimulation, and Export are sidebar WebviewViews. Inspector/Signals use native trees; workbench actions use native menus, title actions, Quick Picks, Settings, and tasks, while controls coupled to a canvas (projection, rotation, fit, playback, mapping, export) are drawn in the view with Lattice's components. Camera changes survive data updates and a replaced GPU. Incompatible sample overlays are withheld.
+Network and Diagram are custom text editors. Case and Monitor are native bottom-panel WebviewViews; Mappings, DynamicSimulation, and Export are sidebar WebviewViews. Inspector uses a native tree; workbench actions use native menus, title actions, Quick Picks, Settings, and tasks, while controls coupled to a canvas (projection, rotation, fit, playback, mapping, export) are drawn in the view with Lattice's components. Camera changes survive data updates and a replaced GPU. Incompatible sample overlays are withheld.
 
 ## Single definitions
 
@@ -73,4 +73,8 @@ Measured locally on 2026-10-04 with VS Code 1.135, single runs:
 - With `GRIDKIT_TEST_LIVE=1` the host suite also runs IEEE39 in the Docker image with a signal mapped to vertex color and height: 1,001 frames over 10 s arrive appended, the playhead follows the head and rests at the end, the Monitor is shown again when the run completes, and a seek repaints the Network from what it holds.
 - A hidden Network keeps its webview and draws nothing while the clock plays.
 
-Not exercised: the windowed path for runs too large to hold whole, and video export under CI's software GPU.
+- The rule for the window of a run a view holds, and the worker's window filter, have unit and contract tests; no test drives a run large enough to take that path through the views.
+
+The Signals tree is gone: what a run records is chosen under Monitors in the DynamicSimulation panel, which is Lattice's Study panel with its own Run, and a signal is plotted from the list in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
+
+Not exercised: video export under CI's software GPU. Known and open: the Diagram's layout is latkit's and is superlinear; measured here, 1,338 blocks (ACTIVSg2000) take 18 to 30 s to a first frame and ACTIVSg10k exceeds the layout time limit.

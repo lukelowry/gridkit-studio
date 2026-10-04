@@ -4,8 +4,10 @@
 
   import type { ClockState, LoopMode } from '../../transport.js'
   import type { Clock } from '../clock.js'
+  import { formatNumber } from '../format.js'
   import type { IconName } from '../ui/glyphs.js'
   import Icon from '../ui/Icon.svelte'
+  import Select from '../ui/Select.svelte'
   import { axisName } from './plot.js'
 
   let {
@@ -60,7 +62,12 @@
   /** The repeat mode a press moves to. */
   const following = $derived(REPEATS[(repeat + 1) % REPEATS.length]!)
   // A speed set elsewhere is offered after the usual ones, so the control can show it.
-  const speeds = $derived(SPEEDS.includes(tick.rate) ? SPEEDS : [...SPEEDS, tick.rate])
+  const speeds = $derived(
+    (SPEEDS.includes(tick.rate) ? SPEEDS : [...SPEEDS, tick.rate]).map((rate) => ({
+      value: rate,
+      label: `${formatNumber(rate)}×`,
+    })),
+  )
   /** Whether a frame lies behind the playhead, and ahead of it, to step to. */
   const earlier = $derived(frames >= 2 && t > recorded[0])
   const later = $derived(frames >= 2 && t < recorded[1])
@@ -149,17 +156,20 @@
     </span>
   </div>
   <div class="playback__settings" role="group" aria-label="Playback settings">
-    <select
-      class="c-select playback__rate"
-      aria-label="Speed"
-      title="Simulated seconds per second"
+    <Select
+      label="Speed"
+      hideLabel
+      options={speeds}
+      compact
       disabled={!playable}
       data-testid="transport-rate"
-      value={tick.rate}
-      onchange={(event) => clock.act({ action: 'rate', value: Number(event.currentTarget.value) })}
-    >
-      {#each speeds as rate (rate)}<option value={rate}>{rate}×</option>{/each}
-    </select>
+      bind:value={
+        () => tick.rate,
+        (rate) => {
+          if (rate !== null) clock.act({ action: 'rate', value: rate })
+        }
+      }
+    />
     <button
       type="button"
       class="c-icon-btn"
@@ -206,10 +216,10 @@
     flex-wrap: nowrap;
   }
 
-  /* The speed hugs its value. */
-  .playback__rate {
+  /* An unlabeled trigger takes its row's width, but this group takes its content's, so the trigger
+     hugs its value instead of collapsing. */
+  .playback__settings :global(.select__trigger.select__trigger--unlabeled) {
     inline-size: auto;
-    min-block-size: var(--control-h);
   }
 
   /* The time: a caption, then the playhead over the span's end in fixed-width digits. */

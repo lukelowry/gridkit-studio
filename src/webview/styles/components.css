@@ -1,7 +1,7 @@
 /*
   Lattice's global component classes, which screens compose by name: buttons (c-btn and its size
   and primary variants, c-icon-btn), the empty state, the text field, the form field (c-field), the
-  native select, the checkbox (c-check), notes, and the instrument row (c-row) that Switch and Row
+  checkbox (c-check), notes, and the instrument row (c-row) that Switch and Row
   share. Keyboard focus rings come from tokens.css.
 */
 
@@ -120,8 +120,7 @@
 }
 
 /* A search or filter field one row tall: mono type in a recessed well. */
-.c-input,
-.c-select {
+.c-input {
   inline-size: 100%;
   min-block-size: var(--spacing-row-h);
   padding-inline: var(--spacing-sm);
@@ -137,25 +136,8 @@
   color: var(--color-text-2);
 }
 
-.c-input:focus-visible,
-.c-select:focus-visible {
+.c-input:focus-visible {
   outline-offset: -1px;
-}
-
-/* The workbench's own list of options, one row tall: a native select keeps the platform's menu. */
-.c-select {
-  background: var(--vscode-dropdown-background, var(--color-input));
-  color: var(--vscode-dropdown-foreground, var(--color-text-1));
-  border-color: var(--vscode-dropdown-border, var(--color-border));
-  font-family: var(--font-body);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.c-select:disabled,
-.c-input:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 /* A form field: a recessed box one row tall holding an input. The
@@ -232,6 +214,12 @@
 .c-check:has(:disabled) {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/* The asterisk after a required field's label; the markup hides it from assistive technology. */
+.c-required {
+  margin-inline-start: 0.15em;
+  color: var(--color-red);
 }
 
 /* Explanatory copy under a group of rows, indented to the row label; the tones carry errors and

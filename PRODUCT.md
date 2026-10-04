@@ -2,7 +2,7 @@
 
 GridKit Studio is a desktop VS Code extension for inspecting, editing, and simulating GridKit power-system cases.
 
-The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, Signals, and Export fold in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
+The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, and Export fold in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
 
 The user explicitly requires Lattice's useful settings and interaction model, compact styling, and direct published Latkit APIs. Studio exposes all 139 applicable Network, Diagram, Monitor, and accessibility settings using Lattice defaults. VS Code owns theme selection. No browser shell or compatibility subsystem is retained. Controls that belong to a canvas are Lattice's own, in the view: the Network's projection, rotation and fit controls, the Monitor's playback, the Mappings panel, and video export.
 

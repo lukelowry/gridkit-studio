@@ -149,6 +149,24 @@ export function registerCommands(studio: Sessions) {
     )
     return choice ? { type: choice.type, field: choice.field } : undefined
   }
+  /** The id of the row the reference `value` names; `missing` says it names none. */
+  async function referred(context: Context, value: unknown, missing: string) {
+    const reference = value as { index?: { type: string }; row?: number } | null
+    if (!reference?.index || reference.row === undefined) throw new Error(missing)
+    const blocks = (await studio.client.call('query', {
+      uri: context.session.uri,
+      version: context.summary.version,
+      query: {
+        kind: 'rows',
+        from: reference.index.type,
+        select: [],
+        rows: { kind: 'range', offset: reference.row, count: 1 },
+        ids: true,
+        limit: 1,
+      },
+    })) as RowsBlock[]
+    return rowsOf(blocks)[0]?.id
+  }
   async function pickReference(context: Context, type: string): Promise<string | undefined> {
     const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { id: string }>()
     picker.title = 'Choose ' + type
@@ -232,7 +250,7 @@ export function registerCommands(studio: Sessions) {
     if (selected?.[0])
       await vscode.commands.executeCommand('vscode.openWith', selected[0], 'gridkitStudio.network')
   })
-  command('preview', (context) => open(context, 'network'))
+  command('openNetwork', (context) => open(context, 'network'))
   command('reveal', (context) => open(context, 'network'))
   command('openDiagram', (context) => open(context, 'diagram'))
   command('revealDiagram', (context) => open(context, 'diagram'))
@@ -256,25 +274,11 @@ export function registerCommands(studio: Sessions) {
   command('followReference', async (context) => {
     if (!context.element || !context.field || !context.type) return
     const row = (await rows(context, context.type, [context.field], [context.element.id]))[0]
-    const reference = row?.values[context.field] as {
-      index?: { type: string }
-      row?: number
-    } | null
-    if (!reference?.index || reference.row === undefined)
-      throw new Error('This reference is disconnected.')
-    const blocks = (await studio.client.call('query', {
-      uri: context.session.uri,
-      version: context.summary.version,
-      query: {
-        kind: 'rows',
-        from: reference.index.type,
-        select: [],
-        rows: { kind: 'range', offset: reference.row, count: 1 },
-        ids: true,
-        limit: 1,
-      },
-    })) as RowsBlock[]
-    const id = rowsOf(blocks)[0]?.id
+    const id = await referred(
+      context,
+      row?.values[context.field],
+      'This reference is disconnected.',
+    )
     if (id) studio.select(context.session.uri, { id })
   })
   command('editField', async (context) => {
@@ -328,8 +332,8 @@ export function registerCommands(studio: Sessions) {
         ),
       )
   })
-  command('runSolver', (context) => tasks.run(context.session.uri))
-  register('stopSolver', (value, supplied) =>
+  command('run', (context) => tasks.run(context.session.uri))
+  register('stop', (value, supplied) =>
     studio.client.call('stop', { uri: targetOf(value, supplied).uri }),
   )
   command('clearRun', async (context) => {
@@ -341,7 +345,9 @@ export function registerCommands(studio: Sessions) {
   const plot = async (context: Context) => {
     const selected = await chooseSignal(context)
     if (!selected) return
-    const id = context.element?.id.startsWith(selected.type + '/') ? context.element.id : undefined
+    // A view that names the signal plots every element; elsewhere, the element at hand.
+    const element = context.target?.origin === 'monitor' ? undefined : context.element
+    const id = element?.id.startsWith(selected.type + '/') ? element.id : undefined
     const plot: Plot = { from: selected.type, field: selected.field, ...(id ? { id } : {}) }
     if (!context.session.plots.some((item) => JSON.stringify(item) === JSON.stringify(plot)))
       context.session.plots.push(plot)
@@ -349,7 +355,6 @@ export function registerCommands(studio: Sessions) {
     await panel(context, 'monitor')
   }
   command('plot', plot)
-  command('findSignal', plot)
   command('removePlot', async (context) => {
     const session = context.session
     const targeted = context.target?.plot
@@ -384,30 +389,6 @@ export function registerCommands(studio: Sessions) {
       changed(context.session)
     }
   })
-  command('monitorSignals', async (context) => {
-    const { session, summary } = context
-    const choices = Object.entries(summary.schema.types).flatMap(([from, spec]) =>
-      Object.entries(spec.fields)
-        .filter(([, field]) => field.sampled && summary.counts[from])
-        .map(([field, spec]) => ({
-          label: from + '.' + field,
-          description: spec.unit,
-          from,
-          field,
-          picked: session.outputs.some(
-            (output) => output.from === from && output.select.includes(field),
-          ),
-        })),
-    )
-    const selected = await vscode.window.showQuickPick(choices, {
-      title: 'Recorded outputs',
-      canPickMany: true,
-    })
-    if (selected) {
-      session.outputs = selected.map((item) => ({ from: item.from, select: [item.field] }))
-      changed(session)
-    }
-  })
   command('addFault', async (context) => {
     context.session.values.fault = true
     if (context.element && context.type === 'Bus')
@@ -440,7 +421,7 @@ export function registerCommands(studio: Sessions) {
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
     if (path) await studio.client.call('export', { run: context.session.run.id, path: path.fsPath })
   })
-  register('showSolverOutput', () => studio.output.show())
+  register('showOutput', () => studio.output.show())
   command('performance', async (context) => {
     studio.output.appendLine(
       JSON.stringify({
@@ -586,23 +567,8 @@ export function registerCommands(studio: Sessions) {
       )
       const field = edge?.ends?.[side]
       if (!field) return
-      const value = (await rows(context, context.type, [field], [context.element.id]))[0]?.values[
-        field
-      ] as { index?: { type: string }; row?: number } | null
-      if (!value?.index || value.row === undefined) throw new Error('The endpoint is disconnected.')
-      const blocks = (await studio.client.call('query', {
-        uri: context.session.uri,
-        version: context.summary.version,
-        query: {
-          kind: 'rows',
-          from: value.index.type,
-          select: [],
-          rows: { kind: 'range', offset: value.row, count: 1 },
-          ids: true,
-          limit: 1,
-        },
-      })) as RowsBlock[]
-      const target = rowsOf(blocks)[0]?.id
+      const row = (await rows(context, context.type, [field], [context.element.id]))[0]
+      const target = await referred(context, row?.values[field], 'The endpoint is disconnected.')
       if (target) studio.select(context.session.uri, { id: target })
     })
   command('toggleDiagramEditing', (context) => {
@@ -668,7 +634,7 @@ export function registerCommands(studio: Sessions) {
       'monitor',
     )
   })
-  command('signalColormap', async (context) => {
+  command('colormap', async (context) => {
     const setting = definitions.find((setting) => setting.id === 'network.colormap')!
     const name = await vscode.window.showQuickPick(
       'options' in setting
@@ -690,7 +656,7 @@ export function registerCommands(studio: Sessions) {
   for (const [id, category] of [
     ['networkSettings', 'network'],
     ['diagramSettings', 'diagram'],
-    ['monitorOptions', 'monitor'],
+    ['monitorSettings', 'monitor'],
     ['simulationSettings', 'simulationMethod'],
   ] as const)
     command(id, () =>

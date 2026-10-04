@@ -4,13 +4,14 @@
   import { onMount } from 'svelte'
 
   import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../messages.js'
+  import { fieldName, typeName } from '../../schema.js'
   import { type ClockState, IDLE } from '../../transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { receive } from '../stream.js'
   import { appearance, font, palette, watchTheme } from '../theme.js'
-  import Icon from '../ui/Icon.svelte'
+  import Select from '../ui/Select.svelte'
   import { windowOf } from './plot.js'
   import Plot from './Plot.svelte'
   import Transport from './Transport.svelte'
@@ -30,7 +31,10 @@
   /** Grows each time the GPU stops, so every plot draws again on a new one. */
   let epoch = $state(0)
   let fault = $state<string | null>(null)
-  let paused = $state(document.hidden)
+  /** Whether the workbench shows the view; a hidden one keeps its webview and stands still. */
+  let visible = $state(true)
+  let hidden = $state(document.hidden)
+  const paused = $derived(!visible || hidden)
   /** The times the reader turned the plots to, and the ones the extension was last told. */
   let chosen = $state.raw<Domain | undefined>()
   let told: Domain | undefined
@@ -57,7 +61,8 @@
     if (!run || !(run.domain[1] > run.domain[0]))
       return [run?.domain[0] ?? 0, (run?.domain[0] ?? 0) + 1]
     if (held) return [Math.max(run.domain[0], run.domain[1] - TAIL), run.domain[1]]
-    return windowOf(run.domain, running)
+    // A run that says how long it is shows all of that from its first frame.
+    return running && run.span ? run.span : windowOf(run.domain, running)
   })
   /** The run in a line: what it is, how it stands, and how much of it there is. */
   const about = $derived(
@@ -74,6 +79,18 @@
   )
   const same = (a: Domain | undefined, b: Domain | undefined) =>
     a?.[0] === b?.[0] && a?.[1] === b?.[1]
+  /** Every signal the run on show records (or the runs to come, before the first), type by type. */
+  const signals = $derived.by(() => {
+    const schema = view.summary?.schema
+    if (!schema) return []
+    return (run?.outputs ?? view.outputs ?? []).flatMap(({ from, select }) =>
+      select.map((field) => ({
+        value: { type: from, field },
+        label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
+        group: typeName(schema, from),
+      })),
+    )
+  })
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
   /** The reader turned a plot to `bounds`: every plot follows, and the extension hears once they rest. */
@@ -97,7 +114,8 @@
           if (view.run?.id !== before.run?.id) chosen = told = undefined
           else if (!same(view.window, before.window) && !same(view.window, told)) chosen = undefined
         } else if (message.kind === 'action') {
-          if (message.command === 'resetMonitorWindow') chosen = told = undefined
+          if (message.command === 'shown') visible = message.value === true
+          else if (message.command === 'resetMonitorWindow') chosen = told = undefined
           else if (message.command === 'retryMonitor') {
             fault = null
             epoch++
@@ -114,7 +132,7 @@
       ),
       watchTheme(() => (theme = { palette: palette(), font: font() })),
     ]
-    const visibility = () => (paused = document.hidden)
+    const visibility = () => (hidden = document.hidden)
     document.addEventListener('visibilitychange', visibility)
     bridge.send({ kind: 'ready' })
     return () => {
@@ -129,15 +147,30 @@
 
 <div class="monitor">
   <div class="monitor__head">
-    <button
-      type="button"
-      class="c-btn monitor__add"
-      title="Plot a recorded signal"
-      data-testid="monitor-add"
-      onclick={() => bridge.command('plot')}
-    >
-      <Icon name="plus" />Signal
-    </button>
+    <div class="monitor__signal">
+      <Select
+        label="Signal"
+        options={signals}
+        key={({ type, field }) => `${type}/${field}`}
+        placeholder="Add signal"
+        compact
+        hideLabel
+        disabled={signals.length === 0}
+        data-testid="monitor-signal"
+        bind:value={
+          (): { type: string; field: string } | null => null,
+          (signal) => {
+            if (signal !== null && view.summary)
+              bridge.command('plot', {
+                uri: view.summary.uri,
+                version: view.summary.version,
+                origin: 'monitor',
+                ...signal,
+              })
+          }
+        }
+      />
+    </div>
     <p class="monitor__run" title={about}>{about}</p>
     {#if tick.status !== 'idle' && live && !tick.follow}
       <button
@@ -222,12 +255,13 @@
     align-items: center;
     gap: 0 var(--spacing-sm);
     min-block-size: var(--spacing-header-h);
-    padding-inline: var(--spacing-xs) var(--spacing-md);
+    padding-inline: var(--spacing-md);
     border-block-end: 1px solid var(--color-border);
   }
 
-  .monitor__add {
-    flex: 0 0 auto;
+  .monitor__signal {
+    flex: 0 1 12rem;
+    min-inline-size: 5rem;
   }
 
   .monitor__run {

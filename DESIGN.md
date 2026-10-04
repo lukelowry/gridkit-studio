@@ -89,7 +89,7 @@ The visual system is restrained and data dense: flat surfaces, narrow separators
 
 ## Tokens
 
-`src/webview/styles/tokens.css` defines Lattice's token names (`--color-*`, `--text-*`, `--spacing-*`, `--radius-*`, `--motion-*`, `--focus-ring`) from workbench theme variables, so a component ported from Lattice keeps its class names and rules. `components.css` carries Lattice's global classes: `c-btn`, `c-icon-btn`, `c-input`, `c-select`, `c-field`, `c-check`, `c-note`, `c-row`, `c-empty`, `c-sr-only`. Write new view styles against these; do not read `--vscode-*` variables in a component unless no token names the role.
+`src/webview/styles/tokens.css` defines Lattice's token names (`--color-*`, `--text-*`, `--spacing-*`, `--radius-*`, `--motion-*`, `--focus-ring`) from workbench theme variables, so a component ported from Lattice keeps its class names and rules. `components.css` carries Lattice's global classes: `c-btn`, `c-icon-btn`, `c-input`, `c-field`, `c-check`, `c-note`, `c-row`, `c-empty`, `c-sr-only`. `src/webview/ui/` holds Lattice's components as they are there: `Select` (searched and windowed past fifty options), `Switch`, `Section`, `Accordion`, `CanvasHost`, `Icon`. Write new view styles against these; do not read `--vscode-*` variables in a component unless no token names the role.
 
 A view sits on the surface of the part of the workbench that holds it: `--color-bg` is the editor background for Network and Diagram, the panel background for Case and Monitor, and the side bar background for Mappings, DynamicSimulation, and Export. Renderers clear with the same token, so a canvas and the chrome around it are one surface.
 
@@ -121,7 +121,7 @@ Use stable element identifiers when a name is missing. Editing must expose reada
 
 ## Layout
 
-Network and Diagram occupy native editor groups and fill them: zero body padding, no footer. Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, Signals, and Export fold in the GridKit sidebar. Users retain normal workbench docking, splitting, and resizing.
+Network and Diagram occupy native editor groups and fill them: zero body padding, no footer. Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, and Export fold in the GridKit sidebar. Users retain normal workbench docking, splitting, and resizing.
 
 A panel header is 32px: what the panel shows where a title would stand, then its controls at the right. Rows are 28px. Settings rows put the label left and the control right, and stack when the panel is narrow (container queries, not device breakpoints).
 
@@ -143,7 +143,7 @@ Diagram block geometry is renderer-owned and configurable. Rounded blocks defaul
 
 ### What lives where
 
-A control that changes a canvas, or reads it at frame rate, lives in the view and is Lattice's: the Network's projection, Auto-rotate and Fit; the Monitor's playback; the Mappings panel; video export. A workbench action lives in native surfaces: open, run, stop, import, export CSV, settings, source, Git, field editing, and context menus on the clicked element. Each has one home. The palette keeps commands for the in-view controls, for keybindings.
+What Lattice draws in a panel, Studio draws in that panel with Lattice's component: the Network's projection, Auto-rotate and Fit; the Monitor's signal list and playback; the Mappings panel; the DynamicSimulation form with its Run and Stop; video export. A workbench action lives in native surfaces: open, import, export CSV, settings, source, Git, field editing, and context menus on the clicked element. Each has one home. The palette keeps commands for the in-view controls, for keybindings.
 
 ### Network and Diagram canvases
 
@@ -151,7 +151,7 @@ Render directly through Latkit using current settings and theme mappings. The to
 
 ### Monitor
 
-The header holds a button to add a signal, the run in a line (name, state, frames), Go live while a run arrives and the playhead is behind it, and the playback controls: step back, play/pause/replay, step forward, the time over the run's end in fixed-width digits, speed, and repeat. Each lane names its signal and has one control, to remove it. Moving the pointer over a paused plot seeks. Space plays or pauses; Page Up and Page Down read traces at the playhead for a screen reader. Zooming one lane zooms all. Plot context menus stay native.
+The header holds the list a signal is added from, the run in a line (name, state, frames), Go live while a run arrives and the playhead is behind it, and the playback controls: step back, play/pause/replay, step forward, the time over the run's end in fixed-width digits, speed, and repeat. Each lane names its signal and has one control, to remove it. Moving the pointer over a paused plot seeks. Space plays or pauses; Page Up and Page Down read traces at the playhead for a screen reader. Zooming one lane zooms all. Plot context menus stay native.
 
 ### Mappings
 
@@ -163,7 +163,9 @@ A property sheet: Views (switches), Arrangement, Time (start, end, speed), Outpu
 
 ### Case table and DynamicSimulation
 
-A real table with sticky column labels, element identities, catalog units, and linked row selection; F2, Enter, or double-click edits in place. DynamicSimulation is a sheet of label/control rows; Run and Stop are its title actions.
+A real table with sticky column labels, element identities, catalog units, and linked row selection; F2, Enter, or double-click edits in place.
+
+DynamicSimulation is Lattice's Study panel. A bar reads where the newest run stands (frames, a percentage while it runs, Failed, Stopped) beside Run, which becomes Stop; a hairline under it fills as frames arrive. The parameters follow as rows: numbers in a fixed-width mono field at the right, a choice or an element of the case (a fault's bus) in a Select, a flag as a Switch. A value that cannot run says why under its row and disables Run. Monitors, folded by default, lists each type's recordable signals as switches.
 
 ### Status, warnings, and empty states
 

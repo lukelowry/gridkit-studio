@@ -14,6 +14,7 @@ import type {
 
 import type { Bindings, Channel, FieldRef } from './bindings.js'
 import type { SettingsValues } from './preferences.js'
+import type { Held } from './streams.js'
 import type { ClockState, LoopMode } from './transport.js'
 export interface SourceRange {
   offset: number
@@ -36,6 +37,11 @@ export interface Revision {
 export interface Element {
   id: string
   field?: string
+}
+/** An element as a form offers it. */
+export interface ElementChoice {
+  id: string
+  name: string
 }
 export interface Summary extends Revision {
   editable: Record<string, string[]>
@@ -67,6 +73,8 @@ export interface RunInfo {
   format: 'arrow' | 'csv'
   frames: number
   domain: Domain
+  /** The times the run will cover, once its command says. */
+  span?: Domain
   message?: string
   started: number
   outputs: readonly FieldSelection[]
@@ -119,6 +127,8 @@ export interface Requests {
     output: { pages: number }
   }
   locate: { input: Revision & Element; output: SourceRange }
+  /** Every element of a type, by id and name, for a form that picks one. */
+  elements: { input: Revision & { type: string }; output: ElementChoice[] }
   edit: { input: Revision & Element & { field: string; value: Value }; output: SourceEdit[] }
   run: { input: RunRequest; output: RunInfo }
   stop: { input: { uri: string }; output: null }
@@ -182,6 +192,8 @@ export interface ViewState {
   stale?: boolean
   selection?: Element
   run?: RunInfo
+  /** What the runs to come record. */
+  outputs?: readonly FieldSelection[]
   plots?: Plot[]
   /** The times the Monitor's reader chose to show; absent, the plots show the run. */
   window?: Domain
@@ -201,9 +213,8 @@ export interface Begin {
   base: boolean
   /** Whether the samples that follow continue those the view holds, rather than replace them. */
   append: boolean
-  /** The times whose samples the view holds once the stream ends: from `from` on, to `to` when it
-   *  ends; absent, the whole run. */
-  held?: { from: number; to?: number }
+  /** The times whose samples the view holds once the stream ends; absent, the whole run. */
+  held?: Held
   /** Places for a network whose vertices have none of their own. */
   placement?: Record<string, FieldValues>
   /** Where the diagram's blocks were arranged. */
@@ -228,6 +239,8 @@ export type TransportAction =
 export interface ViewRequests {
   /** Rows of the case; read at a time, of the run on show. */
   query: { input: RowsQuery; output: RowsBlock[] }
+  /** Every element of a type, for a parameter that names one. */
+  elements: { input: { type: string }; output: ElementChoice[] }
   edit: { input: Element & { field: string; value: Value; version: number }; output: void }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
@@ -253,6 +266,7 @@ export type FromView =
   | ({ kind: 'transport'; seq: number } & TransportAction)
   | { kind: 'bind'; field: FieldRef; channels: readonly Channel[]; domain?: Domain }
   | { kind: 'editing'; field: FieldRef | null }
+  | { kind: 'record'; type: string; field: string; on: boolean }
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
   | { kind: 'tableState'; table: TableState }
   | { kind: 'busy'; busy: boolean }

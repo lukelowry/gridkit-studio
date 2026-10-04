@@ -58,7 +58,7 @@ jobs:
         if: runner.os == 'Linux'
         with:
           name: gridkit-studio
-          path: dist/gridkit-studio-0.3.2.vsix
+          path: dist/gridkit-studio-*.vsix
           if-no-files-found: error
   host:
     runs-on: ubuntu-latest
@@ -110,9 +110,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag="v$(unzip -p dist/gridkit-studio-0.3.2.vsix extension/package.json | jq -er .version)"
-          asset="dist/gridkit-studio-${tag#v}.vsix"
-          test "dist/gridkit-studio-0.3.2.vsix" = "$asset" || mv dist/gridkit-studio-0.3.2.vsix "$asset"
+          asset="$(ls dist/gridkit-studio-*.vsix)"
+          tag="v$(unzip -p "$asset" extension/package.json | jq -er .version)"
           if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
             echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
             exit 0

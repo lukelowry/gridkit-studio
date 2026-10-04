@@ -9,8 +9,8 @@
   import { CanvasGpu } from '../gpu.js'
   import { receive } from '../stream.js'
   import { appearance } from '../theme.js'
-  import Row from '../ui/Row.svelte'
   import Section from '../ui/Section.svelte'
+  import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
   import {
     blockedReason,
@@ -196,21 +196,20 @@
             : 'Choose a signal in Monitor.'}
         </p>
       {/if}
-      <Row label="Arrangement">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            disabled={settings.views.length < 2}
-            value={settings.layout}
-            onchange={(event) =>
-              change({ layout: event.currentTarget.value === 'row' ? 'row' : 'column' })}
-          >
-            <option value="column">Stacked</option>
-            <option value="row">Side by side</option>
-          </select>
-        {/snippet}
-      </Row>
+      <Select
+        label="Arrangement"
+        disabled={settings.views.length < 2}
+        options={[
+          { value: 'column', label: 'Stacked' },
+          { value: 'row', label: 'Side by side' },
+        ]}
+        bind:value={
+          () => settings.layout,
+          (layout) => {
+            if (layout) change({ layout })
+          }
+        }
+      />
       <p class="c-note">Views appear in selection order, with their current framing.</p>
     </Section>
     <Section label="Time">
@@ -248,18 +247,16 @@
       >
         Use recorded range
       </button>
-      <Row label="Playback speed">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            value={settings.rate}
-            onchange={(event) => change({ rate: Number(event.currentTarget.value) })}
-          >
-            {#each [0.25, 0.5, 1, 2, 4] as rate (rate)}<option value={rate}>{rate}x</option>{/each}
-          </select>
-        {/snippet}
-      </Row>
+      <Select
+        label="Playback speed"
+        options={[0.25, 0.5, 1, 2, 4].map((value) => ({ value, label: value + 'x' }))}
+        bind:value={
+          () => settings.rate,
+          (rate) => {
+            if (rate) change({ rate })
+          }
+        }
+      />
       <p class="c-note">
         Output duration: {Number.isFinite(duration) && duration > 0
           ? duration.toFixed(2) + ' s'
@@ -267,64 +264,59 @@
       </p>
     </Section>
     <Section label="Output">
-      <Row label="Format">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            value={settings.format}
-            onchange={(event) =>
-              change({ format: event.currentTarget.value === 'webm' ? 'webm' : 'mp4' })}
-          >
-            <option value="mp4">MP4</option>
-            <option value="webm">WebM</option>
-          </select>
-        {/snippet}
-      </Row>
-      <Row label="Resolution">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            value={settings.height}
-            onchange={(event) => {
-              const height = Number(event.currentTarget.value)
-              change({ height, width: (height * 16) / 9 })
-            }}
-          >
-            <option value={720}>720p</option>
-            <option value={1080}>1080p</option>
-            <option value={2160}>4K</option>
-          </select>
-        {/snippet}
-      </Row>
-      <Row label="Frame rate">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            value={settings.frameRate}
-            onchange={(event) => change({ frameRate: Number(event.currentTarget.value) })}
-          >
-            {#each [24, 30, 60] as rate (rate)}<option value={rate}>{rate} fps</option>{/each}
-          </select>
-        {/snippet}
-      </Row>
-      <Row label="Quality">
-        {#snippet children(label)}
-          <select
-            class="c-select"
-            aria-labelledby={label}
-            value={settings.quality}
-            onchange={(event) =>
-              change({ quality: event.currentTarget.value as VideoSettings['quality'] })}
-          >
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="very-high">Very high</option>
-          </select>
-        {/snippet}
-      </Row>
+      <Select
+        label="Format"
+        options={[
+          { value: 'mp4', label: 'MP4' },
+          { value: 'webm', label: 'WebM' },
+        ]}
+        data-testid="video-format"
+        bind:value={
+          () => settings.format,
+          (format) => {
+            if (format) change({ format })
+          }
+        }
+      />
+      <Select
+        label="Resolution"
+        options={[
+          { value: 720, label: '720p' },
+          { value: 1080, label: '1080p' },
+          { value: 2160, label: '4K' },
+        ]}
+        data-testid="video-resolution"
+        bind:value={
+          () => settings.height,
+          (height) => {
+            if (height) change({ height, width: (height * 16) / 9 })
+          }
+        }
+      />
+      <Select
+        label="Frame rate"
+        options={[24, 30, 60].map((value) => ({ value, label: value + ' fps' }))}
+        bind:value={
+          () => settings.frameRate,
+          (frameRate) => {
+            if (frameRate) change({ frameRate })
+          }
+        }
+      />
+      <Select
+        label="Quality"
+        options={[
+          { value: 'medium', label: 'Medium' },
+          { value: 'high', label: 'High' },
+          { value: 'very-high', label: 'Very high' },
+        ]}
+        bind:value={
+          () => settings.quality,
+          (quality) => {
+            if (quality) change({ quality })
+          }
+        }
+      />
       <p class="c-note">Writes directly to your file as the video is exported.</p>
     </Section>
   </fieldset>
@@ -386,6 +378,11 @@
 
   .export__fields {
     min-inline-size: 0;
+  }
+
+  .export :global(.c-input) {
+    inline-size: 8rem;
+    max-inline-size: 100%;
   }
 
   .export__fields:disabled {

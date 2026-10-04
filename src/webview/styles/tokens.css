@@ -23,6 +23,7 @@
 
   /* Fixed heights: a panel header and its controls, and a compact row. */
   --spacing-header-h: 32px;
+  --spacing-touch-h: 44px;
   --spacing-row-h: 28px;
   --control-h: 28px;
 
@@ -34,6 +35,7 @@
   --color-bg: var(--vscode-editor-background);
   --color-surface-1: var(--color-bg);
   --color-surface-2: var(--vscode-editorWidget-background);
+  --color-surface-3: var(--vscode-editorWidget-border, var(--vscode-panel-border));
   --color-input: var(--vscode-input-background, var(--color-surface-2));
   --color-border: var(--vscode-panel-border, var(--vscode-widget-border, transparent));
   --color-text-1: var(--vscode-foreground);
@@ -52,14 +54,17 @@
   --color-error-text: var(--vscode-errorForeground);
   --color-warning-text: var(--vscode-editorWarning-foreground);
   --color-scrollbar: var(--vscode-scrollbarSlider-background);
+  /* The shadow every floating surface casts. */
+  --shadow-overlay: 0 4px 12px var(--vscode-widget-shadow, rgb(0 0 0 / 0.36));
 
   /* The one keyboard focus ring. Every ring is drawn from it, so higher contrast thickens them all. */
   --focus-width: 2px;
   --focus-ring: var(--focus-width) solid var(--color-focus-ring);
 
-  /* Motion: one curve and two durations. Every
+  /* Motion: one curve for hover states, one for things that appear, and two durations. Every
      transition reads these, so zeroing the durations stills the whole interface. */
   --motion-hover: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-entrance: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-fast: 80ms;
   --motion-mid: 180ms;
 

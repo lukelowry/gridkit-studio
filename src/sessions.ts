@@ -183,6 +183,7 @@ export class Sessions {
       stale: entry?.stale,
       selection: session?.selection,
       run: session?.run,
+      outputs: session?.outputs,
       plots: session?.plots,
       window: session?.window,
       values: session?.values,
@@ -229,6 +230,22 @@ export class Sessions {
     })
     session.transport.pause()
     session.transport.seek(t)
+  }
+  /** Record `field` of every `type` element in the runs to come, or stop; a signal no longer
+   *  recorded is no longer plotted. */
+  record(uri: string, type: string, field: string, on: boolean) {
+    const session = this.all.get(uri)
+    if (!session) return
+    const others = session.outputs.filter((output) => output.from !== type)
+    const select = (session.outputs.find((output) => output.from === type)?.select ?? []).filter(
+      (name) => name !== field,
+    )
+    if (on) select.push(field)
+    session.outputs = select.length ? [...others, { from: type, select }] : others
+    if (!on)
+      session.plots = session.plots.filter((plot) => plot.from !== type || plot.field !== field)
+    this.persist(session)
+    this.changed.fire(uri)
   }
   /** Make `field` drive exactly `channels`. A mapped signal is recorded by the runs to come. */
   bind(

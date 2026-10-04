@@ -1,11 +1,15 @@
 <!-- @component
-  Bindable switch row with a visible state label. From Lattice.
+  Bindable switch row with a visible state label. Extra attributes target the button.
 -->
 <script lang="ts">
+  import type { HTMLButtonAttributes } from 'svelte/elements'
+
   let {
     label,
     checked = $bindable(false),
-  }: {
+    class: className,
+    ...rest
+  }: Omit<HTMLButtonAttributes, 'children'> & {
     /** The setting's name, on the left and as the accessible name. */
     readonly label: string
     checked?: boolean
@@ -13,9 +17,10 @@
 </script>
 
 <button
+  {...rest}
   type="button"
   role="switch"
-  class="c-row switch"
+  class={['c-row', 'switch', className]}
   aria-checked={checked}
   onclick={() => (checked = !checked)}
 >
@@ -45,17 +50,17 @@
   .switch__track {
     display: inline-flex;
     align-items: center;
-    inline-size: 28px;
-    block-size: 16px;
+    inline-size: 1.75rem;
+    block-size: 1rem;
     padding: 2px;
     border: 1px solid var(--color-text-3);
     border-radius: var(--radius-pill);
-    background: var(--color-input);
+    background: var(--color-surface-2);
   }
 
   .switch__knob {
-    inline-size: 10px;
-    block-size: 10px;
+    inline-size: 0.625rem;
+    block-size: 0.625rem;
     border-radius: 50%;
     background: var(--color-text-2);
   }

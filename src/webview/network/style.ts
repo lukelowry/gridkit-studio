@@ -122,11 +122,15 @@ function sampledFrom(
   whole: boolean,
 ): (field: FieldRef) => Sampled | null | undefined {
   return ({ type, field }) => {
-    if (source.schema.types[type]?.fields[field]?.sampled !== true) return undefined
+    // A binding is told before the stream that carries its field: it draws once that arrives.
+    const held = (data: Data) => (data.tables[type]?.fields[field]?.length ?? 0) > 0
+    if (source.schema.types[type]?.fields[field]?.sampled !== true)
+      return held(source) ? undefined : null
     if (
       !run ||
       run.fingerprint !== summary?.fingerprint ||
-      !recordedWhole(run.outputs, summary.counts[type] ?? 0, { type, field })
+      !recordedWhole(run.outputs, summary.counts[type] ?? 0, { type, field }) ||
+      !held(source)
     )
       return null
     return {

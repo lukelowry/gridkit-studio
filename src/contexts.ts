@@ -8,7 +8,7 @@ const topology = new WeakMap<
 export interface Target {
   uri: string
   version: number
-  origin: 'network' | 'diagram' | 'table' | 'monitor' | 'inspector' | 'signals'
+  origin: 'network' | 'diagram' | 'table' | 'monitor' | 'inspector'
   element?: Element
   type?: string
   field?: string

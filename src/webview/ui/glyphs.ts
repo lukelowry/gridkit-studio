@@ -7,6 +7,8 @@ type Shape = string | readonly [cx: number, cy: number, r: number]
 /** The glyphs by name. */
 export const GLYPHS = {
   close: ['M4 4l8 8M12 4l-8 8'],
+  chevron: ['M4 6.5 8 10.5 12 6.5'],
+  check: ['m3 8 3 3 7-7'],
   plus: ['M8 3.5v9M3.5 8h9'],
 
   // The network projections.
@@ -28,6 +30,7 @@ export const GLYPHS = {
   // Playback.
   play: ['M5 3.5v9l7.5-4.5z'],
   pause: ['M5.5 3.5v9M10.5 3.5v9'],
+  stop: ['M4.5 4.5h7v7h-7z'],
   'play-once': ['M4 3.5v9l6-4.5zM12 3.5v9'],
   // Play again from the start: an arrow turning back on itself.
   replay: ['M3.5 8.5A4.5 4.5 0 1 0 4.8 5', 'M3.25 2.75v2.75H6'],

@@ -58,8 +58,10 @@ export class Simulation implements Command {
       values[name] = value
     }
     const command = commandOf(this.kase, values as Arguments<Parameters>)
+    this.info.span = [command.domain[0], command.domain[1]]
     const outputs = selections(this.kase, context.outputs)
-    if (!outputs.length) throw failure('invalid-input', 'Select at least one output in Signals.')
+    if (!outputs.length)
+      throw failure('invalid-input', 'Record at least one signal: turn one on under Monitors.')
     const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
     if (columns * 8 > 8 << 20) throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
     this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)

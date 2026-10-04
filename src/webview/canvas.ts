@@ -100,8 +100,7 @@ function boot() {
     if (canvas.dataset.rendered) fault = message
     else {
       fallback.hidden = false
-      fallback.firstElementChild!.textContent =
-        'This view could not start its WebGPU renderer. ' + message
+      fallback.firstElementChild!.textContent = `The ${kind} could not be drawn. ${message}`
       fallback.setAttribute('role', 'alert')
     }
     host.setAttribute('aria-busy', 'false')
@@ -366,6 +365,8 @@ function boot() {
             open,
           )
           connect(view)
+          // A large diagram is a while in its layout: say so, where the case was loading.
+          fallback.firstElementChild!.textContent = 'Arranging the diagram…'
         }
       }
       rebased = false

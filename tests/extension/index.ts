@@ -225,7 +225,7 @@ export async function run() {
     await until(() => studio.state(uri.toString()).stale, 'invalid source')
     await visible(table, '.c-note--warn')
     await vscode.commands.executeCommand('gridkitStudio.showSource', uri)
-    await vscode.commands.executeCommand('gridkitStudio.stopSolver', uri)
+    await vscode.commands.executeCommand('gridkitStudio.stop', uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'source focus')
     await workbench.locator('.monaco-editor.focused').getByRole('textbox').press('ControlOrMeta+z')
@@ -315,6 +315,7 @@ export async function run() {
     await visible(monitor, 'canvas[data-rendered=true]')
     // Playback is the Monitor's own: its controls change the case's one clock.
     await visible(monitor, '[data-testid="transport"]')
+    await visible(monitor, '[data-testid="monitor-signal"]')
     assert.match((await monitor.locator('.lane__name').first().textContent()) ?? '', /Bus · /)
     const monitorBounds = await monitor.locator('canvas').boundingBox()
     const bottom = await workbench.locator('.part.panel').boundingBox()
@@ -349,7 +350,7 @@ export async function run() {
       .waitFor({ state: 'visible' })
     await capture('monitor-native-menu')
     await workbench.keyboard.press('Escape')
-    // Hide/restore destroys a webview without losing case-owned plot state.
+    // Hidden behind another panel and shown again, the Monitor keeps its plots.
     await vscode.commands.executeCommand('gridkitStudio.openTable', uri)
     await visible(await frame(browser, 'table'), 'tbody .cell')
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
@@ -428,8 +429,10 @@ export async function run() {
     const exporter = await frame(browser, 'export')
     await visible(exporter, '[data-testid="video-export"]')
     await exporter.getByRole('switch', { name: 'Monitor' }).click()
-    await exporter.getByRole('combobox', { name: 'Format' }).selectOption('webm')
-    await exporter.getByRole('combobox', { name: 'Resolution' }).selectOption('720')
+    await exporter.locator('[data-testid="video-format"]').click()
+    await exporter.locator('[role="option"][data-value="webm"]').click()
+    await exporter.locator('[data-testid="video-resolution"]').click()
+    await exporter.locator('[role="option"][data-value="720"]').click()
     await exporter.locator('[data-testid="video-start"]').click()
     const dialog = workbench.locator('.quick-input-widget input')
     await dialog.waitFor({ state: 'visible' })
@@ -445,8 +448,27 @@ export async function run() {
 
     await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
     const simulation = await frame(browser, 'simulation')
-    await visible(simulation, '#tmax')
-    assert.equal(await simulation.locator('button').count(), 0)
+    // The Study panel: typed fields, its own Run, a bus picked from a list, and what to record.
+    await visible(simulation, '[data-testid="field-tmax"]')
+    await visible(simulation, '[data-testid="study-run"]')
+    await simulation.locator('[data-testid="field-fault"]').click()
+    await simulation.locator('[data-testid="field-fault_bus"]').click()
+    await simulation.locator('[role="option"]').nth(2).click()
+    await until(
+      () => /^Bus\//.test(String(session.values.fault_bus ?? '')),
+      'a fault bus picked from the list',
+    )
+    await simulation.locator('[data-testid="field-fault"]').click()
+    await until(() => session.values.fault === false, 'the fault switched off')
+    const recorded = () =>
+      session.outputs.some((output) => output.from === 'Bus' && output.select.includes('Va'))
+    assert.ok(recorded())
+    await simulation.getByRole('button', { name: 'Monitors' }).click()
+    await simulation.locator('[data-testid="monitor-class-Bus"]').click()
+    await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
+    await until(() => !recorded(), 'a signal no longer recorded')
+    await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
+    await until(recorded, 'the signal recorded again')
     assert.equal(await simulation.locator('#output_format').count(), 0)
     assert.equal(await simulation.getByText('Results format', { exact: true }).count(), 0)
     assert.equal(
@@ -490,7 +512,7 @@ export async function run() {
       const imported = session.run?.id
       const painted = () => live.evaluate<number>('gridkitStats().frames')
       const before = await painted()
-      await vscode.commands.executeCommand('gridkitStudio.runSolver', uri)
+      await vscode.commands.executeCommand('gridkitStudio.run', uri)
       await until(
         () => session.run && session.run.id !== imported && session.run.frames > 0,
         'frames arrive',

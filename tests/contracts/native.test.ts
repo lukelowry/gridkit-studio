@@ -46,7 +46,6 @@ describe('native workbench contract', () => {
         'gridkitStudio.inspector',
         'gridkitStudio.bindings',
         'gridkitStudio.simulation',
-        'gridkitStudio.signals',
         'gridkitStudio.export',
       ],
     )

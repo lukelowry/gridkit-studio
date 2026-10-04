@@ -34,6 +34,7 @@ import type {
 } from './messages.js'
 import { ResultCache, Results } from './results/results.js'
 import { importedFields } from './results/selection.js'
+import { nameFieldOf } from './schema.js'
 
 const port = parentPort!
 const catalog = catalogOf(JSON.stringify(catalogJson))
@@ -297,6 +298,16 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
         }
       }
       return { pages }
+    }
+    case 'elements': {
+      const { kase } = get(request.input)
+      const table = kase.tables.get(request.input.type)
+      if (!table) return []
+      const named = nameFieldOf(kase.schema, request.input.type)
+      return Array.from({ length: table.records.length }, (_, row) => {
+        const name = named === null ? null : kase.cell(table, named, row)
+        return { id: kase.id(table, row), name: typeof name === 'string' ? name : '' }
+      })
     }
     case 'complete':
       return completionsAt(catalog, request.input.text, request.input.offset)

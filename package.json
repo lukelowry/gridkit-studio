@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -47,14 +47,15 @@
     "test:solver": "node tests/solver/run.mjs",
     "test:performance": "node tests/performance.mjs",
     "vscode:prepublish": "pnpm build",
-    "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/gridkit-studio-0.3.2.vsix",
+    "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/",
     "format": "prettier --write src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "format:check": "prettier --check src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "lint": "eslint src tests scripts *.mjs *.ts",
     "test:package": "node tests/extension/package.mjs",
     "settings": "node scripts/settings.mjs",
     "settings:check": "node scripts/settings.mjs --check",
-    "test:startup": "pnpm build && node tests/extension/run.mjs --startup"
+    "test:startup": "pnpm build && node tests/extension/run.mjs --startup",
+    "lattice:check": "node scripts/lattice.mjs"
   },
   "dependencies": {
     "@latkit/diagram": "0.8.0",
@@ -114,7 +115,7 @@
         "icon": "$(folder-open)"
       },
       {
-        "command": "gridkitStudio.preview",
+        "command": "gridkitStudio.openNetwork",
         "title": "Open Network",
         "category": "GridKit Studio",
         "icon": "$(globe)",
@@ -219,14 +220,14 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.runSolver",
+        "command": "gridkitStudio.run",
         "title": "Run DynamicSimulation",
         "category": "GridKit Studio",
         "icon": "$(play)",
         "enablement": "gridkitStudio.ready && isWorkspaceTrusted && !gridkitStudio.running"
       },
       {
-        "command": "gridkitStudio.stopSolver",
+        "command": "gridkitStudio.stop",
         "title": "Stop DynamicSimulation",
         "category": "GridKit Studio",
         "icon": "$(debug-stop)",
@@ -247,13 +248,6 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.findSignal",
-        "title": "Find Signal…",
-        "category": "GridKit Studio",
-        "icon": "$(search)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
         "command": "gridkitStudio.removePlot",
         "title": "Remove Plot",
         "category": "GridKit Studio",
@@ -263,13 +257,6 @@
       {
         "command": "gridkitStudio.signalElements",
         "title": "Choose Plot Element…",
-        "category": "GridKit Studio",
-        "icon": "$(list-selection)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.monitorSignals",
-        "title": "Choose Recorded Outputs…",
         "category": "GridKit Studio",
         "icon": "$(list-selection)",
         "enablement": "gridkitStudio.hasCase"
@@ -296,7 +283,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.showSolverOutput",
+        "command": "gridkitStudio.showOutput",
         "title": "Show Simulation Output",
         "category": "GridKit Studio",
         "icon": "$(terminal)"
@@ -484,7 +471,7 @@
         "enablement": "gridkitStudio.hasSamples"
       },
       {
-        "command": "gridkitStudio.signalColormap",
+        "command": "gridkitStudio.colormap",
         "title": "Colormap…",
         "category": "GridKit Studio",
         "icon": "$(symbol-color)",
@@ -505,7 +492,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.monitorOptions",
+        "command": "gridkitStudio.monitorSettings",
         "title": "Monitor Settings",
         "category": "GridKit Studio",
         "icon": "$(settings-gear)",
@@ -622,7 +609,7 @@
       ],
       "explorer/context": [
         {
-          "command": "gridkitStudio.preview",
+          "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
         },
@@ -639,7 +626,7 @@
       ],
       "editor/context": [
         {
-          "command": "gridkitStudio.preview",
+          "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
         },
@@ -686,44 +673,14 @@
           "group": "source@1"
         },
         {
-          "command": "gridkitStudio.runSolver",
-          "when": "view == gridkitStudio.simulation && !gridkitStudio.running && isWorkspaceTrusted",
-          "group": "navigation@1"
-        },
-        {
-          "command": "gridkitStudio.stopSolver",
-          "when": "view == gridkitStudio.simulation && gridkitStudio.running",
-          "group": "navigation@1"
-        },
-        {
-          "command": "gridkitStudio.monitorSignals",
-          "when": "view == gridkitStudio.simulation && gridkitStudio.hasCase",
-          "group": "outputs@1"
-        },
-        {
-          "command": "gridkitStudio.addFault",
-          "when": "view == gridkitStudio.simulation && gridkitStudio.hasCase",
-          "group": "setup@1"
-        },
-        {
           "command": "gridkitStudio.simulationSettings",
           "when": "view == gridkitStudio.simulation",
           "group": "setup@2"
         },
         {
-          "command": "gridkitStudio.showSolverOutput",
+          "command": "gridkitStudio.showOutput",
           "when": "view == gridkitStudio.simulation",
           "group": "output@1"
-        },
-        {
-          "command": "gridkitStudio.findSignal",
-          "when": "view == gridkitStudio.signals",
-          "group": "navigation@1"
-        },
-        {
-          "command": "gridkitStudio.monitorSignals",
-          "when": "view == gridkitStudio.signals",
-          "group": "outputs@1"
         },
         {
           "command": "gridkitStudio.monitorWindow",
@@ -741,7 +698,7 @@
           "group": "display@1"
         },
         {
-          "command": "gridkitStudio.monitorOptions",
+          "command": "gridkitStudio.monitorSettings",
           "when": "view == gridkitStudio.monitor",
           "group": "display@2"
         },
@@ -776,7 +733,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "gridkitStudio.signalColormap",
+          "command": "gridkitStudio.colormap",
           "when": "view == gridkitStudio.bindings && gridkitStudio.hasCase",
           "group": "display@1"
         },
@@ -868,7 +825,7 @@
           "group": "plot@1"
         },
         {
-          "command": "gridkitStudio.monitorOptions",
+          "command": "gridkitStudio.monitorSettings",
           "when": "gridkitOrigin == monitor && gridkitPlot",
           "group": "plot@2"
         },
@@ -929,75 +886,14 @@
           "group": "navigation@2"
         }
       ],
-      "view/item/context": [
-        {
-          "command": "gridkitStudio.elementSource",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitElement/",
-          "group": "navigation@1"
-        },
-        {
-          "command": "gridkitStudio.inspectField",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitElement/",
-          "group": "navigation@2"
-        },
-        {
-          "command": "gridkitStudio.editField",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitEditable/",
-          "group": "inline@1"
-        },
-        {
-          "command": "gridkitStudio.followReference",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitReference/",
-          "group": "inline@2"
-        },
-        {
-          "command": "gridkitStudio.copyReference",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitElement/",
-          "group": "copy@1"
-        },
-        {
-          "command": "gridkitStudio.copyValue",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitField/",
-          "group": "copy@2"
-        },
-        {
-          "command": "gridkitStudio.reveal",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitNetwork/",
-          "group": "view@1"
-        },
-        {
-          "command": "gridkitStudio.revealDiagram",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitDiagram/",
-          "group": "view@2"
-        },
-        {
-          "command": "gridkitStudio.showInTable",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitElement/",
-          "group": "view@3"
-        },
-        {
-          "command": "gridkitStudio.plot",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitRecorded/",
-          "group": "inline@1"
-        },
-        {
-          "command": "gridkitStudio.bind",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitBindable/",
-          "group": "mapping@1"
-        },
-        {
-          "command": "gridkitStudio.unbind",
-          "when": "(view == gridkitStudio.inspector || view == gridkitStudio.signals) && viewItem =~ /gridkitBound/",
-          "group": "mapping@3"
-        }
-      ],
+      "view/item/context": [],
       "commandPalette": [
         {
           "command": "gridkitStudio.openCase",
           "when": "true"
         },
         {
-          "command": "gridkitStudio.preview",
+          "command": "gridkitStudio.openNetwork",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1057,11 +953,11 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.runSolver",
+          "command": "gridkitStudio.run",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.stopSolver",
+          "command": "gridkitStudio.stop",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1073,19 +969,11 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.findSignal",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
           "command": "gridkitStudio.removePlot",
           "when": "gridkitStudio.hasCase"
         },
         {
           "command": "gridkitStudio.signalElements",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.monitorSignals",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1101,7 +989,7 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.showSolverOutput",
+          "command": "gridkitStudio.showOutput",
           "when": "true"
         },
         {
@@ -1209,7 +1097,7 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.signalColormap",
+          "command": "gridkitStudio.colormap",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1221,7 +1109,7 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.monitorOptions",
+          "command": "gridkitStudio.monitorSettings",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1297,10 +1185,6 @@
           "id": "gridkitStudio.simulation",
           "name": "DynamicSimulation",
           "type": "webview"
-        },
-        {
-          "id": "gridkitStudio.signals",
-          "name": "Signals"
         },
         {
           "id": "gridkitStudio.export",
@@ -2932,12 +2816,12 @@
           {
             "id": "run",
             "title": "Run and plot",
-            "description": "Choose Signals, configure DynamicSimulation, then Run. Open Monitor for playback.",
+            "description": "Configure DynamicSimulation, choose what to record under Monitors, then Run. The Monitor shows the result.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
             "completionEvents": [
-              "onCommand:gridkitStudio.runSolver"
+              "onCommand:gridkitStudio.run"
             ]
           }
         ]

@@ -5,7 +5,6 @@ import * as vscode from 'vscode'
 
 import { recordedWhole } from './bindings.js'
 import {
-  type Begin,
   type FromView,
   type RunInfo,
   type Summary,
@@ -18,6 +17,7 @@ import {
 } from './messages.js'
 import { isReference, nameFieldOf, networkOf } from './schema.js'
 import type { Session, Sessions } from './sessions.js'
+import { type Held, holdFor } from './streams.js'
 import { VideoFile } from './video.js'
 
 /** A run's samples a view holds whole; past it the view holds a window of them. */
@@ -29,7 +29,13 @@ const SAMPLE_BYTES = 8
 /** The views that draw the case, and so are streamed its rows and samples. */
 const DRAWN: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor', 'export'])
 /** The commands a view may ask for. */
-const COMMANDS: ReadonlySet<string> = new Set(['elementSource', 'plot', 'removePlot'])
+const COMMANDS: ReadonlySet<string> = new Set([
+  'elementSource',
+  'plot',
+  'removePlot',
+  'run',
+  'stop',
+])
 /** What a view that draws nothing itself shows of the case; it hears of nothing else. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
   table: ({ version, stale, writable, selection, bindings, table }) => [
@@ -40,11 +46,12 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     bindings,
     table,
   ],
-  simulation: ({ uri, stale, values, run }) => [
+  simulation: ({ uri, stale, values, outputs, run }) => [
     uri,
     stale,
     values,
-    run && [run.id, run.state, run.frames, run.domain, run.message],
+    outputs,
+    run && [run.id, run.state, run.frames, run.domain, run.span, run.message],
   ],
   bindings: ({ uri, stale, bindings, editing }) => [uri, stale, bindings, editing],
 }
@@ -62,7 +69,7 @@ interface Demand {
   samples: string
   sampled: FieldSelection[]
   run?: RunInfo
-  held?: Begin['held']
+  held?: Held
   maxBytes?: number
 }
 
@@ -95,7 +102,7 @@ export class View {
   #samples = ''
   #pages = 0
   #frames = 0
-  #held?: Begin['held']
+  #held?: Held
   /** The demand that last failed, which is not asked for again until it changes. */
   #failed = ''
   #failure = ''
@@ -245,6 +252,9 @@ export class View {
         // Kept so the panel opens as it was left; the view that said so knows already.
         if (session) session.editing = message.field ?? undefined
         return
+      case 'record':
+        this.studio.record(this.uri, message.type, message.field, message.on === true)
+        return
       case 'values':
         if (session && message.uri === this.uri && message.values) {
           session.values = message.values
@@ -342,6 +352,10 @@ export class View {
     const entry = studio.documents.entries.get(uri)
     const summary = entry?.summary
     if (!summary || entry?.stale) throw new Error('The view is stale. Fix the case document first.')
+    if (method === 'elements') {
+      const { type } = input as ViewRequests['elements']['input']
+      return studio.client.call('elements', { uri, version: summary.version, type }, signal)
+    }
     if (method === 'query') {
       const query = input as ViewRequests['query']['input']
       if (
@@ -498,10 +512,9 @@ export class View {
   #draws(view: VideoView): boolean {
     return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
   }
-  /** The window of `run` the view holds: what it holds already while that covers what it needs, or
-   *  the times it needs with a margin. A view at the run's head holds from there on, so the frames
-   *  to come are appended. */
-  #window(run: RunInfo, session: Session): NonNullable<Begin['held']> {
+  /** The window of `run` the view holds: the Monitor's visible times, or the few seconds about
+   *  the Network's playhead. A view at the run's head holds from there on. */
+  #window(run: RunInfo, session: Session): Held {
     const { transport } = session
     const [start, end] = run.domain
     const t = transport.currentT()
@@ -509,19 +522,9 @@ export class View {
       this.kind === 'monitor'
         ? (session.window ?? [Math.max(start, end - TAIL), end])
         : (this.#need ?? [t - 1, t + 4])
-    const span = need[1] - need[0]
-    const margin = this.kind === 'monitor' ? span : 0
     const open =
       transport.live && (this.kind === 'monitor' ? !session.window : transport.state.follow)
-    const held = this.#held
-    if (
-      held &&
-      (held.to === undefined) === open &&
-      held.from <= need[0] &&
-      (held.to === undefined ? need[0] - held.from <= 3 * span : held.to >= need[1])
-    )
-      return held
-    return { from: need[0] - margin, ...(!open && { to: need[1] + margin }) }
+    return holdFor(this.#held, need, open, this.kind === 'monitor' ? need[1] - need[0] : 0)
   }
   async #streamed(summary: Summary, demand: Demand, base: boolean, append: boolean, key: string) {
     const { studio, uri } = this
@@ -644,7 +647,8 @@ export function registerViews(studio: Sessions) {
     )
   for (const kind of ['table', 'monitor', 'simulation', 'bindings', 'export'] as const) {
     // An export goes on while its panel is folded away.
-    const hidden = kind === 'export' ? 'working' : 'destroyed'
+    // The Monitor is hidden by every run's terminal and shown again after: it is kept, idle.
+    const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'
     subscriptions.push(
       vscode.window.registerWebviewViewProvider(
         'gridkitStudio.' + kind,
@@ -685,7 +689,7 @@ export function registerViews(studio: Sessions) {
             update()
           },
         },
-        { webviewOptions: { retainContextWhenHidden: hidden === 'working' } },
+        { webviewOptions: { retainContextWhenHidden: hidden !== 'destroyed' } },
       ),
     )
   }

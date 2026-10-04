@@ -1,8 +1,8 @@
-/** The workbench theme as the renderers draw with it, read through the tokens. */
+/** The VS Code theme as the renderers draw with it, read through the tokens. */
 
 import { parseColor, type RGBA } from '@latkit/gpu'
 
-import type { SettingsValues } from '../preferences.js'
+import type { SettingsValues } from '../shared/preferences.js'
 
 /** The token each renderer color is read from, and the color when a theme leaves it out. */
 const PALETTE = {
@@ -48,7 +48,7 @@ export function appearance(settings: SettingsValues | undefined) {
   document.body.dataset.motion = settings?.['accessibility.motion'] ?? 'system'
 }
 
-/** Call `changed` whenever the workbench theme does; returns the stop. */
+/** Call `changed` whenever VS Code theme does; returns the stop. */
 export function watchTheme(changed: () => void): () => void {
   const observer = new MutationObserver(changed)
   observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] })

@@ -23,6 +23,8 @@ import { parametersOf, selections } from './gridkit/parameters.js'
 import { placement } from './gridkit/placement.js'
 import { Simulation } from './gridkit/simulation.js'
 import { applyChanges, presentation, transaction } from './gridkit/transactions.js'
+import { ResultCache, Results } from './results/results.js'
+import { importedFields } from './results/selection.js'
 import type {
   FromWorker,
   Request,
@@ -31,10 +33,8 @@ import type {
   RunRequest,
   Summary,
   ToWorker,
-} from './messages.js'
-import { ResultCache, Results } from './results/results.js'
-import { importedFields } from './results/selection.js'
-import { nameFieldOf } from './schema.js'
+} from './shared/messages.js'
+import { nameFieldOf } from './shared/schema.js'
 
 const port = parentPort!
 const catalog = catalogOf(JSON.stringify(catalogJson))

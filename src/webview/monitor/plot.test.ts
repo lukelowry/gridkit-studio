@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { reader } from '../../preferences.js'
+import { reader } from '../../shared/preferences.js'
 import { axisLabel, axisName, coordinateAt, plotOptions, tracesOf, windowOf } from './plot.js'
 
 describe('the window a plot shows', () => {

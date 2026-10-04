@@ -5,11 +5,11 @@
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
-  import { rowsOf } from '../../cells.js'
-  import type { Plot, ViewState } from '../../messages.js'
-  import { reader } from '../../preferences.js'
-  import { fieldName, typeName } from '../../schema.js'
-  import type { ClockState } from '../../transport.js'
+  import { rowsOf } from '../../shared/cells.js'
+  import type { Plot, ViewState } from '../../shared/messages.js'
+  import { reader } from '../../shared/preferences.js'
+  import { fieldName, typeName } from '../../shared/schema.js'
+  import type { ClockState } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
@@ -107,8 +107,10 @@
         fault = null
       }),
       made.on('select', (items) => {
-        if (items[0])
-          bridge.send({ kind: 'select', element: { id: itemId(items[0]), field: plot.field } })
+        bridge.send({
+          kind: 'select',
+          element: items[0] ? { id: itemId(items[0]), field: plot.field } : null,
+        })
       }),
       made.on('open', () => bridge.command('elementSource')),
       made.on('contextmenu', (event) =>
@@ -152,7 +154,7 @@
       if (monitor === made) monitor = null
     }
   }
-  /** The plot's own menu is the workbench's, opened with the trace under the pointer. */
+  /** The plot's own menu is VS Code's, opened with the trace under the pointer. */
   const stop = (event: Event) => event.stopPropagation()
 
   // Frames arriving are appends the plot takes as they come.
@@ -258,7 +260,7 @@
     }
   })
 
-  /** What each key does on the plot; a key it does not name is left to the workbench. */
+  /** What each key does on the plot; a key it does not name is left to the VS Code. */
   const keys: Readonly<Record<string, () => void>> = {
     PageUp: () => (trace = Math.max(0, trace - 1)),
     PageDown: () => (trace = trace + 1),
@@ -322,7 +324,7 @@
     {:else}
       <div class="c-empty lane__empty">
         <p class="c-empty__text">
-          {view.run ? `This run did not record ${name}.` : `Run the study to plot ${name}.`}
+          {view.run ? `This run did not record ${name}.` : `Run DynamicSimulation to plot ${name}.`}
         </p>
       </div>
     {/if}

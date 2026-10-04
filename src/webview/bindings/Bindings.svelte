@@ -10,9 +10,9 @@
     NUMERIC,
     sameField,
     shortNames,
-  } from '../../bindings.js'
-  import type { ViewState } from '../../messages.js'
-  import { networkOf, typeName } from '../../schema.js'
+  } from '../../shared/bindings.js'
+  import type { ViewState } from '../../shared/messages.js'
+  import { networkOf, typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
@@ -153,7 +153,7 @@
       const before = view.editing
       view = merged(view, message.state)
       appearance(view.settings)
-      // A field the workbench asked to map opens its editor, as one left open does again.
+      // A field VS Code asked to map opens its editor, as one left open does again.
       const field = view.editing ?? null
       const moved = field ? !sameField(before, field) : before !== undefined
       if (moved && (field ? !sameField(editing ?? undefined, field) : editing !== null)) {
@@ -218,7 +218,10 @@
       {said || `${shown} ${shown === 1 ? 'field' : 'fields'} shown.`}
     </p>
 
-    {#if shown === 0}
+    {#if view.error}
+      <p class="c-note c-note--error" role="alert">{view.error}</p>
+    {/if}
+    {#if shown === 0 && !view.error}
       <div class="c-empty">
         <p class="c-empty__text">
           {!view.summary

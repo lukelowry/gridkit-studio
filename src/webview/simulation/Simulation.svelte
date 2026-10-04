@@ -3,14 +3,14 @@
   import type { InputValue, Parameter } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import type { ViewState } from '../../messages.js'
-  import { typeName } from '../../schema.js'
+  import type { ViewState } from '../../shared/messages.js'
+  import { typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
   import Section from '../ui/Section.svelte'
   import Form from './Form.svelte'
-  import Monitors from './Monitors.svelte'
+  import RecordedSignals from './RecordedSignals.svelte'
   import { type Choice, labelOf, type Monitored } from './rows.js'
   import { problemOf, valueOf } from './values.js'
 
@@ -76,7 +76,7 @@
   /** Where the newest run stands, as the bar reads it; nothing before any. */
   const standing = $derived.by(() => {
     if (!run) return ''
-    const frames = `${run.frames.toLocaleString()} frames`
+    const frames = `${run.frames.toLocaleString()} samples`
     switch (run.state) {
       case 'running':
         return percent === null ? frames : `${percent}%`
@@ -134,7 +134,11 @@
 
 <div class="study c-settings" data-testid="study-panel">
   {#if !summary}
-    <div class="c-empty"><p class="c-empty__text">Loading case…</p></div>
+    {#if view.error}
+      <p class="c-note c-note--error" role="alert">{view.error}</p>
+    {:else}
+      <div class="c-empty"><p class="c-empty__text">Loading case…</p></div>
+    {/if}
   {:else}
     <div class="study__draft">
       <div class="study__bar">
@@ -159,7 +163,7 @@
               : invalid
                 ? 'Fix the form to run'
                 : 'Run'}
-            aria-label="Run the simulation"
+            aria-label="Run DynamicSimulation"
             disabled={invalid || view.stale}
             data-testid="study-run"
             onclick={() => bridge.command('run')}
@@ -186,7 +190,9 @@
         {/if}
       </div>
       {#if view.stale}
-        <p class="c-note c-note--warn" role="status">Resolve case errors before running.</p>
+        <p class="c-note c-note--warn" role="status">
+          {view.error ?? 'Source is updating. Wait for the current revision before running.'}
+        </p>
       {:else if run?.state === 'failed' && run.message}
         <p class="c-note c-note--error" role="alert">{run.message}</p>
       {/if}
@@ -202,8 +208,8 @@
       />
     </div>
 
-    <Section label="Monitors" collapsible open={false}>
-      <Monitors
+    <Section label="Recorded signals" collapsible open={false}>
+      <RecordedSignals
         types={recordable}
         {recorded}
         disabled={running}

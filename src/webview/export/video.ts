@@ -7,9 +7,9 @@ import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
-import type { Cameras, Plot, VideoView, ViewState } from '../../messages.js'
-import { reader } from '../../preferences.js'
-import { diagramOf, fieldName, networkOf } from '../../schema.js'
+import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
+import { reader } from '../../shared/preferences.js'
+import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
 import { diagramData, diagrammed } from '../diagram/diagram.js'
 import { diagramStyle } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
@@ -81,9 +81,10 @@ export function plotsOf({ run, plots = [] }: ViewState): Plot[] {
 
 /** What keeps the export from starting, in words; null when it can. */
 export function blockedReason(settings: VideoSettings, state: ViewState): string | null {
+  if (!state.summary && state.error) return state.error
   const range = state.run?.domain
   if (!state.summary || !range || !(range[1] > range[0]))
-    return 'Run the study to export its recorded history.'
+    return 'Run DynamicSimulation to export its recorded history.'
   if (settings.views.length === 0) return 'Choose at least one view.'
   if (settings.views.includes('monitor') && plotsOf(state).length === 0)
     return 'Choose a signal in Monitor.'
@@ -107,7 +108,7 @@ export function blockedReason(settings: VideoSettings, state: ViewState): string
 }
 
 /** Export the video to `output` as it is made. The views draw on renderers of their own, in their
- *  current framing and selection order, so the workbench stays usable; the run is colored by all of
+ *  current framing and selection order, so VS Code stays usable; the run is colored by all of
  *  it. The caller closes or aborts `output`. */
 export async function exportVideo(
   gpu: Gpu,

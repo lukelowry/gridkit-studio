@@ -43,10 +43,10 @@
     "build": "pnpm typecheck && node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run --project unit",
-    "test:workbench": "pnpm build && node tests/workbench/launch.mjs",
-    "test:package": "node tests/workbench/package.mjs",
+    "test:vscode": "pnpm build && node tests/vscode/launch.mjs",
+    "test:package": "node tests/vscode/package.mjs",
     "test:simulation": "vitest run --project simulation",
-    "test:startup": "pnpm build && node tests/workbench/launch.mjs tests/benchmarks/startup.ts",
+    "test:startup": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/startup.ts",
     "test:performance": "node tests/benchmarks/performance.mjs",
     "vscode:prepublish": "pnpm build",
     "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/",
@@ -54,7 +54,10 @@
     "format:check": "prettier --check src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "lint": "eslint src tests scripts *.mjs *.ts",
     "settings": "node scripts/settings.mjs",
-    "settings:check": "node scripts/settings.mjs --check"
+    "settings:check": "node scripts/settings.mjs --check",
+    "quality": "pnpm format:check && pnpm lint && pnpm settings:check && pnpm typecheck && pnpm test",
+    "test:watch": "vitest --project unit",
+    "test:trust": "pnpm build && node tests/vscode/launch.mjs --untrusted tests/vscode/trust.ts"
   },
   "dependencies": {
     "@latkit/diagram": "0.8.0",
@@ -310,14 +313,14 @@
       },
       {
         "command": "gridkitStudio.previousSample",
-        "title": "Previous Frame",
+        "title": "Previous Sample",
         "category": "GridKit Studio",
         "icon": "$(debug-step-back)",
         "enablement": "gridkitStudio.hasSamples"
       },
       {
         "command": "gridkitStudio.nextSample",
-        "title": "Next Frame",
+        "title": "Next Sample",
         "category": "GridKit Studio",
         "icon": "$(debug-step-over)",
         "enablement": "gridkitStudio.hasSamples"
@@ -1158,7 +1161,7 @@
       "panel": [
         {
           "id": "gridkitStudio-case",
-          "title": "Case",
+          "title": "Case Table",
           "icon": "assets/gridkit.svg"
         },
         {
@@ -1172,7 +1175,8 @@
       "gridkitStudio": [
         {
           "id": "gridkitStudio.inspector",
-          "name": "Inspector"
+          "name": "Inspector",
+          "visibility": "collapsed"
         },
         {
           "id": "gridkitStudio.bindings",
@@ -1187,7 +1191,7 @@
         },
         {
           "id": "gridkitStudio.export",
-          "name": "Export",
+          "name": "Video Export",
           "type": "webview",
           "visibility": "collapsed"
         }
@@ -1195,7 +1199,7 @@
       "gridkitStudio-case": [
         {
           "id": "gridkitStudio.table",
-          "name": "Case",
+          "name": "Case Table",
           "type": "webview"
         }
       ],
@@ -1820,13 +1824,13 @@
         "title": "GridKit Studio: Monitor",
         "order": 3,
         "properties": {
-          "gridkitStudio.monitor.coordinateAxis": {
+          "gridkitStudio.monitor.coordinateAxis.visible": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Time axis",
             "type": "boolean"
           },
-          "gridkitStudio.monitor.valueAxis": {
+          "gridkitStudio.monitor.valueAxis.visible": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Value axis",
@@ -2396,7 +2400,7 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.diagram.labels": {
+          "gridkitStudio.diagram.labels.visible": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Labels — Titles. Show block, wire and group titles.",
@@ -2775,7 +2779,7 @@
           {
             "id": "open",
             "title": "Open a case",
-            "description": "[Open Case](command:gridkitStudio.openCase). Network and Diagram are document editors; Case and Monitor use the bottom panel.",
+            "description": "[Open Case](command:gridkitStudio.openCase). Network and Diagram are document editors; Case Table and Monitor use the bottom panel.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -2786,7 +2790,7 @@
           {
             "id": "inspect",
             "title": "Inspect and edit",
-            "description": "Select an element and use Inspector or Table. Edits participate in native undo and redo.",
+            "description": "Select an element and use Inspector or Case Table. Edits participate in native undo and redo.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -2797,7 +2801,7 @@
           {
             "id": "run",
             "title": "Run and plot",
-            "description": "Configure DynamicSimulation, choose what to record under Monitors, then Run. The Monitor shows the result.",
+            "description": "Configure DynamicSimulation, choose what to record under Recorded signals, then Run. The Monitor shows the result.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },

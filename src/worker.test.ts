@@ -6,7 +6,7 @@ import { Worker } from 'node:worker_threads'
 import { build } from 'esbuild'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import type { FromWorker, Method, Requests } from './messages.js'
+import type { FromWorker, Method, Requests } from './shared/messages.js'
 
 const entry = resolve('output/tests/contract-worker.cjs')
 beforeAll(async () => {

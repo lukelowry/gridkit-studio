@@ -25,5 +25,9 @@ tsconfig.json
 tsconfig.webview.json
 vitest.config.ts
 scripts/**
+PRODUCT.md
+DESIGN.md
+REWRITE.md
+.prettierignore
 assets/borders.bin
 .gridkit-run-*/**

@@ -1,4 +1,4 @@
-import type { FromView, ToView, ViewRequests, ViewState } from '../messages.js'
+import type { FromView, ToView, ViewRequests, ViewState } from '../shared/messages.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
   getState(): unknown

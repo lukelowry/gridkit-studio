@@ -3,9 +3,9 @@
   import type { Data, Domain } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../messages.js'
-  import { fieldName, typeName } from '../../schema.js'
-  import { type ClockState, IDLE } from '../../transport.js'
+  import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../shared/messages.js'
+  import { fieldName, typeName } from '../../shared/schema.js'
+  import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
@@ -31,7 +31,7 @@
   /** Grows each time the GPU stops, so every plot draws again on a new one. */
   let epoch = $state(0)
   let fault = $state<string | null>(null)
-  /** Whether the workbench shows the view; a hidden one keeps its webview and stands still. */
+  /** Whether VS Code shows the view; a hidden one keeps its webview and stands still. */
   let visible = $state(true)
   let hidden = $state(document.hidden)
   const paused = $derived(!visible || hidden)
@@ -67,7 +67,7 @@
   /** The run in a line: what it is, how it stands, and how much of it there is. */
   const about = $derived(
     run
-      ? `${run.name} · ${run.state} · ${run.frames.toLocaleString()} frames`
+      ? `${run.name} · ${run.state} · ${run.frames.toLocaleString()} samples`
       : (view.summary?.name ?? ''),
   )
   const warning = $derived(
@@ -196,12 +196,12 @@
       </div>
     {/if}
   </div>
-  {#if fault ?? warning}
+  {#if fault ?? view.error ?? warning}
     <p
-      class={['c-note', fault ? 'c-note--error' : 'c-note--warn']}
-      role={fault ? 'alert' : 'status'}
+      class={['c-note', fault || view.error ? 'c-note--error' : 'c-note--warn']}
+      role={fault || view.error ? 'alert' : 'status'}
     >
-      {fault ?? warning}
+      {fault ?? view.error ?? warning}
     </p>
   {/if}
   {#if plots.length === 0 || !run}
@@ -210,7 +210,7 @@
         {!view.summary
           ? 'Loading case…'
           : !run
-            ? 'Run the study or import results to plot recorded signals.'
+            ? 'Run DynamicSimulation or import results to plot recorded signals.'
             : 'Choose a signal to plot it.'}
       </p>
     </div>

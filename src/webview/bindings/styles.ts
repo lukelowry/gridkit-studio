@@ -4,7 +4,7 @@ import type { Colormap, ColorScale, Scale, ScaleDomain } from '@latkit/gpu'
 import type { Data, FieldInput } from '@latkit/model'
 import type { EdgeOptions, VertexOptions } from '@latkit/network'
 
-import type { Bindings, Channel, FieldRef } from '../../bindings.js'
+import type { Bindings, Channel, FieldRef } from '../../shared/bindings.js'
 
 /** A sampled field read from a run: its frames, and the values its colors span, which the renderer
  *  measures: over a window of the run, or `auto` for the frame on show. */

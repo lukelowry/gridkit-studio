@@ -2,7 +2,7 @@
 
 GridKit Studio is a desktop VS Code extension for inspecting, editing, and simulating GridKit power-system cases.
 
-The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, and Export fold in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
+The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case Table and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, and Video Export fold in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
 
 Studio draws through the published Latkit APIs with compact styling, and exposes 139 Network, Diagram, Monitor, and accessibility settings. VS Code owns theme selection. No browser shell or compatibility subsystem is retained. Controls that belong to a view are drawn in it: the Network's projection, rotation and fit controls, the Monitor's playback, the Mappings panel, and video export.
 
@@ -10,7 +10,7 @@ Diagram supports navigation, selection, editable fields, block placement, automa
 
 The single authored domain definition is catalog.json imported from GridKit Server. Schemas, parser mappings, source intelligence, validation, and simulation parameters derive from it. Adjacent repositories are implementation references, not runtime dependencies.
 
-The operating environment is VS Code 1.135 or later, including workspace extension hosts in remote development. DynamicSimulation requires Workspace Trust and GridKit installed on the workspace host; Studio starts no container and pulls no image. Arrow and CSV are current supported result formats. Video export writes MP4 or WebM through the workbench's own codecs. There is no .solver.json compatibility, reference-comparison adapter, or remote-model connection.
+The operating environment is VS Code 1.135 or later, including workspace extension hosts in remote development. DynamicSimulation requires Workspace Trust and GridKit installed on the workspace host; Studio starts no container and pulls no image. Arrow and CSV are current supported result formats. Video export writes MP4 or WebM through VS Code's own codecs. There is no .solver.json compatibility, reference-comparison adapter, or remote-model connection.
 
 Views remain responsive through off-thread case parsing, incremental source messages, bounded row queries, acknowledged data streams, and a shared bounded sample cache. The case has one playback clock: it changes in the extension, and each view integrates it locally between changes. A view holds a run's samples whole while they are few, appended as frames arrive, and a window of them past that. Canvas views require WebGPU; Case, JSON, Inspector, and simulation remain usable without it.
 

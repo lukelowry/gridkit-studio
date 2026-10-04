@@ -4,8 +4,8 @@ import { arrange, type Diagram } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { type FieldValues, itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
-import type { Mutation, ViewState } from '../../messages.js'
-import { reader } from '../../preferences.js'
+import type { Mutation, ViewState } from '../../shared/messages.js'
+import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
 
 /** The moves that put each block where `positions` says. */
@@ -29,14 +29,18 @@ function moves(diagram: Diagram, positions: Readonly<Record<string, FieldValues>
   return changes
 }
 
-/** An edit the case refused is said where the workbench says everything else. */
-const refused = (error: unknown) =>
-  bridge.send({ kind: 'notify', message: error instanceof Error ? error.message : String(error) })
-
 /** Commit `diagram`'s edits to the case; returns the arrangement of all its blocks. */
-export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
+export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, signal: AbortSignal) {
   let busy = false
+  const refused = (error: unknown) => {
+    if (!signal.aborted)
+      bridge.send({
+        kind: 'notify',
+        message: error instanceof Error ? error.message : String(error),
+      })
+  }
   async function commit(changes: Mutation[], label: string, expected = state().summary?.version) {
+    signal.throwIfAborted()
     const current = state()
     if (
       busy ||
@@ -79,7 +83,7 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
     void (async () => {
       // The first move of a diagram laid out for the reader saves where every block stood.
       const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.position)
-      const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config))
+      const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config, { signal }))
       const changes = new Map(all.map((change) => ['id' in change ? change.id : '', change]))
       for (const move of proposal.moves)
         changes.set(itemId(move.vertex), {
@@ -100,16 +104,20 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
   return async () => {
     const expected = state().summary?.version
     const s = reader(state().settings)
-    const positions = await arrange(gpu, {
-      ...diagram.config,
-      layout: {
-        algorithm: s.get('diagram.layout.algorithm'),
-        direction: s.get('diagram.layout.direction'),
-        vertexGap: s.get('diagram.layout.vertexGap'),
-        rankGap: s.get('diagram.layout.rankGap'),
-        sweeps: s.get('diagram.layout.sweeps'),
+    const positions = await arrange(
+      gpu,
+      {
+        ...diagram.config,
+        layout: {
+          algorithm: s.get('diagram.layout.algorithm'),
+          direction: s.get('diagram.layout.direction'),
+          vertexGap: s.get('diagram.layout.vertexGap'),
+          rankGap: s.get('diagram.layout.rankGap'),
+          sweeps: s.get('diagram.layout.sweeps'),
+        },
       },
-    })
+      { signal },
+    )
     await commit(moves(diagram, positions), 'Arrange diagram', expected)
   }
 }

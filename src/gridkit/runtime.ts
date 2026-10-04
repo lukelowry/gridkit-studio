@@ -7,7 +7,7 @@ import { delimiter, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
 
-import type { RuntimeProcess } from '../messages.js'
+import type { RuntimeProcess } from '../shared/messages.js'
 
 /** The simulation program, as a GridKit install names it. */
 const PROGRAM = process.platform === 'win32' ? 'DynamicSimulation.exe' : 'DynamicSimulation'

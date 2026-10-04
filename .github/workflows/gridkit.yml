@@ -20,7 +20,7 @@ jobs:
             GRIDKIT_TEST_GREP=^Run
           runCmd: |
             pnpm test:simulation
-            xvfb-run -a pnpm test:workbench
+            xvfb-run -a pnpm test:vscode
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

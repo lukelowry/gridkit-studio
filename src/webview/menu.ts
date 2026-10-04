@@ -1,5 +1,5 @@
-import { menuContext, type Target } from '../contexts.js'
-import type { Element, Plot, ViewState } from '../messages.js'
+import { menuContext, type Target } from '../shared/contexts.js'
+import type { Element, Plot, ViewState } from '../shared/messages.js'
 /** Latkit picks asynchronously; a separate element hands the exact hit to VS Code's native menu. */
 export function nativeMenu(
   canvas: HTMLCanvasElement,

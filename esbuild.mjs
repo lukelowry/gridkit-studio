@@ -17,7 +17,7 @@ const common = {
 }
 const builds = [
   {
-    entryPoints: { extension: 'src/extension.ts', worker: 'src/worker.ts' },
+    entryPoints: { extension: 'src/extension/index.ts', worker: 'src/worker.ts' },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },
     platform: 'node',

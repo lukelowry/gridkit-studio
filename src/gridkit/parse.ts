@@ -201,14 +201,6 @@ function shared(array: Uint32Array, count: number): Uint32Array {
   return out
 }
 
-/** What a worker parses: ranges of records, taken in turn through `next`. */
-export interface Job {
-  readonly bytes: Uint8Array
-  readonly ranges: readonly Range[]
-  readonly next: Int32Array
-  readonly catalog: string
-}
-
 /** Records of one array, the first of them record `first`. */
 export interface Range {
   readonly array: ArrayName

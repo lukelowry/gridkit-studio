@@ -2,7 +2,7 @@
 <script lang="ts">
   import type { Axis, Domain } from '@latkit/model'
 
-  import type { ClockState, LoopMode } from '../../transport.js'
+  import type { ClockState, LoopMode } from '../../shared/transport.js'
   import type { Clock } from '../clock.js'
   import { formatNumber } from '../format.js'
   import type { IconName } from '../ui/glyphs.js'
@@ -38,8 +38,8 @@
   /** The two frame steps: which way each moves, and its tooltip, which names the key that does the
    *  same on the playback controls. */
   const STEPS = {
-    back: { direction: -1, hint: 'Previous frame (Left arrow on playback controls)' },
-    forward: { direction: 1, hint: 'Next frame (Right arrow on playback controls)' },
+    back: { direction: -1, hint: 'Previous sample (Left arrow on playback controls)' },
+    forward: { direction: 1, hint: 'Next sample (Right arrow on playback controls)' },
   } as const
   /** The repeat modes in the order the control steps through them, each with its name and symbol. */
   const REPEATS: readonly { readonly mode: LoopMode; readonly label: string; glyph: IconName }[] = [
@@ -106,7 +106,7 @@
     type="button"
     class="c-icon-btn"
     title={STEPS[way].hint}
-    aria-label={`Step ${way} one frame`}
+    aria-label={`Step ${way} one sample`}
     disabled={!open}
     data-testid={`transport-step-${way}`}
     onclick={() => step(STEPS[way].direction)}

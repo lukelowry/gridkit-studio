@@ -8,7 +8,7 @@ import type { Diagram } from '@latkit/diagram'
 import type { Data, FieldValues } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
-import type { Begin, Element, ViewState } from '../messages.js'
+import type { Begin, Element, ViewState } from '../shared/messages.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu } from './gpu.js'
@@ -65,7 +65,7 @@ function boot() {
   let asked = false
   let places: Record<string, FieldValues> = {}
   let closed = false
-  /** Whether the workbench shows the view; a hidden one keeps its webview and stands still. */
+  /** Whether VS Code shows the view; a hidden one keeps its webview and stands still. */
   let shown = true
   let rendering = false
   let queued = false
@@ -88,12 +88,19 @@ function boot() {
   /** Say the newest problem, or that the case on show is not the one being typed. */
   const say = () => {
     const stale = !!state.stale && !!state.summary
-    notice.hidden = fault === null && !stale
-    notice.classList.toggle('canvas-host__fault--warn', fault === null)
-    notice.setAttribute('role', fault === null ? 'status' : 'alert')
+    const problem = fault ?? state.error
+    notice.hidden = !problem && !stale
+    notice.classList.toggle('canvas-host__fault--warn', !problem)
+    notice.setAttribute('role', problem ? 'alert' : 'status')
     notice.textContent =
-      fault ??
+      problem ??
       'Source is updating or contains errors. Showing the last valid revision; editing is paused.'
+    if (!state.summary && state.error) {
+      fallback.hidden = true
+      host.setAttribute('aria-busy', 'false')
+    } else if (!canvas.dataset.rendered && !state.error) {
+      fallback.hidden = false
+    }
   }
   const error = (reason: unknown) => {
     const message = reason instanceof Error ? reason.message : String(reason)
@@ -138,8 +145,8 @@ function boot() {
   void rendererReady.catch(error)
   void owner.get(lost).catch(error)
 
-  const select = (element: Element) => {
-    own = keyOf(element)
+  const select = (element: Element | null) => {
+    own = keyOf(element ?? undefined)
     bridge.send({ kind: 'select', element })
   }
   const open = (element: Element) => {

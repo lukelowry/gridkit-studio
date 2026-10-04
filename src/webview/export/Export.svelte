@@ -1,10 +1,10 @@
-<!-- Configure and export video using separate renderers so the workbench stays usable. -->
+<!-- Configure and export video using separate renderers so VS Code stays usable. -->
 <script lang="ts">
   import type { Data, FieldValues } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
-  import type { VideoView, ViewState } from '../../messages.js'
+  import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { receive } from '../stream.js'
@@ -317,7 +317,7 @@
           }
         }
       />
-      <p class="c-note">Writes directly to your file as the video is exported.</p>
+      <p class="c-note">Saves the video when export finishes.</p>
     </Section>
   </fieldset>
   <div class="export__footer">

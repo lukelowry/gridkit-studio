@@ -10,7 +10,7 @@ import {
   type SampleBatch,
 } from '@latkit/model'
 
-import type { Begin } from '../messages.js'
+import type { Begin } from '../shared/messages.js'
 import { bridge } from './bridge.js'
 
 /** Call `held` each time a stream ends, with the case and the run samples it holds and with the

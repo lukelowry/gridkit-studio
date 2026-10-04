@@ -10,9 +10,9 @@ import {
   type Projection,
 } from '@latkit/network'
 
-import type { Element, ViewState } from '../../messages.js'
-import { defaults } from '../../preferences.js'
-import { networkOf } from '../../schema.js'
+import type { Element, ViewState } from '../../shared/messages.js'
+import { defaults } from '../../shared/preferences.js'
+import { networkOf } from '../../shared/schema.js'
 import { nativeMenu } from '../menu.js'
 
 /** What a network renderer of `source` draws. Places the extension laid out are flat, so they draw
@@ -60,13 +60,13 @@ export function mountNetwork(
   data: ReturnType<typeof networkData>,
   style: Parameters<Network['set']>[0],
   state: () => ViewState,
-  select: (element: Element) => void,
+  select: (element: Element | null) => void,
   open: (element: Element) => void,
 ): Network {
   const network = createNetwork(gpu, { canvas, ...data })
   network.set(style)
   network.on('select', (items) => {
-    if (items[0]) select({ id: itemId(items[0]) })
+    select(items[0] ? { id: itemId(items[0]) } : null)
   })
   network.on('open', (item) => open({ id: itemId(item) }))
   network.on('contextmenu', (event) =>

@@ -1,6 +1,6 @@
 import { findNodeAtLocation, getLocation, parseTree } from 'jsonc-parser'
 
-import type { SourceContext } from '../messages.js'
+import type { SourceContext } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { Catalog } from './definition.js'
 import { nativePath, recordOf, sourceRange, textOffset } from './edits.js'

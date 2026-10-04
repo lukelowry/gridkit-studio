@@ -9,7 +9,7 @@ import catalogJson from '../../catalog.json'
 import { Case } from '../gridkit/case.js'
 import { catalogOf } from '../gridkit/definition.js'
 import { selections } from '../gridkit/parameters.js'
-import type { RunInfo } from '../messages.js'
+import type { RunInfo } from '../shared/messages.js'
 import { ResultCache, Results } from './results.js'
 describe('native results and ownership', () => {
   it('takes ownership of reused decoder buffers before resolving', () => {

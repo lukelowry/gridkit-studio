@@ -5,15 +5,15 @@ import { join } from 'node:path'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import type { Sessions } from '../../src/sessions.js'
-import { attach } from '../workbench/harness.js'
+import type { Sessions } from '../../src/extension/sessions.js'
+import { attach } from '../vscode/harness.js'
 
 export async function run() {
   const root = process.env.GRIDKIT_TEST_ROOT!
   const output = process.env.GRIDKIT_TEST_OUTPUT!
   await mkdir(join(output, 'tests'), { recursive: true })
   await mkdir(join(output, 'playwright'), { recursive: true })
-  const { browser, page: workbench } = await attach()
+  const { browser, page: codeWindow } = await attach()
   const results: unknown[] = []
   try {
     for (const [name, fixture] of [
@@ -32,7 +32,7 @@ export async function run() {
       let view: Frame | undefined
       const limit = started + 60000
       while (performance.now() < limit) {
-        for (const candidate of workbench.frames()) {
+        for (const candidate of codeWindow.frames()) {
           if (
             await candidate
               .locator('body[data-kind="network"] canvas[data-rendered="true"]')
@@ -93,7 +93,7 @@ export async function run() {
       results.push(row)
       console.log('Network startup:', JSON.stringify(row))
       await vscode.commands.executeCommand('notifications.clearAll')
-      await workbench.screenshot({ path: join(output, 'playwright', 'startup-' + name + '.png') })
+      await codeWindow.screenshot({ path: join(output, 'playwright', 'startup-' + name + '.png') })
       if (name === 'ACTIVSg10k') {
         // The first-frame optimization must preserve live native border settings.
         const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
@@ -107,13 +107,13 @@ export async function run() {
           '(segments) => gridkitStats().segments > segments',
           without.segments,
         )
-        await workbench.screenshot({ path: join(output, 'playwright', 'network-borders-on.png') })
+        await codeWindow.screenshot({ path: join(output, 'playwright', 'network-borders-on.png') })
         await settings.update('network.borders', false, vscode.ConfigurationTarget.Workspace)
         await view.waitForFunction(
           '(segments) => gridkitStats().segments === segments',
           without.segments,
         )
-        await workbench.screenshot({ path: join(output, 'playwright', 'network-borders-off.png') })
+        await codeWindow.screenshot({ path: join(output, 'playwright', 'network-borders-off.png') })
         await settings.update('network.borders', undefined, vscode.ConfigurationTarget.Workspace)
         console.log('Native Borders setting: on/off geometry verified')
       }

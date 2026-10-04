@@ -1,7 +1,7 @@
 /*
   The structural and color tokens every screen is written against, with the colors and the
-  faces read from the workbench theme rather than a palette of Studio's own. A view sits on the
-  surface of the part of the workbench that holds it: the editor, the panel, or the side bar.
+  faces read from VS Code theme rather than a palette of Studio's own. A view sits on the
+  surface of the part of VS Code that holds it: the editor, the panel, or the side bar.
   Higher contrast and reduced motion, asked for by the theme or chosen in the settings, rewrite a few.
 */
 
@@ -134,7 +134,7 @@ body {
   line-height: 1.5;
 }
 
-/* The workbench pads a webview's body; these views fill theirs. */
+/* The VS Code pads a webview's body; these views fill theirs. */
 body[data-kind] {
   padding: 0;
 }

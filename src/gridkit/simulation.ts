@@ -9,8 +9,8 @@ import {
   type Parameters,
 } from '@latkit/model'
 
-import type { RunInfo, RunRequest, RuntimeProcess } from '../messages.js'
 import { type ResultCache, Results } from '../results/results.js'
+import type { RunInfo, RunRequest, RuntimeProcess } from '../shared/messages.js'
 import type { Case } from './case.js'
 import { diagnose } from './edits.js'
 import { commandOf, parametersOf, selections } from './parameters.js'
@@ -61,7 +61,10 @@ export class Simulation implements Command {
     this.info.span = [command.domain[0], command.domain[1]]
     const outputs = selections(this.kase, context.outputs)
     if (!outputs.length)
-      throw failure('invalid-input', 'Record at least one signal: turn one on under Monitors.')
+      throw failure(
+        'invalid-input',
+        'Record at least one signal: turn one on under Recorded signals.',
+      )
     const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
     if (columns * 8 > 8 << 20) throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
     this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)

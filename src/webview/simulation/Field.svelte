@@ -1,4 +1,4 @@
-<!-- Labeled Study form control with units, required state, and validation feedback. -->
+<!-- Labeled DynamicSimulation form control with units and validation feedback. -->
 <script lang="ts">
   import Select from '../ui/Select.svelte'
   import type { Row } from './rows.js'
@@ -78,6 +78,7 @@
   }
 
   .entry__unit {
+    margin-inline-start: 0.25em;
     color: var(--color-text-3);
     font-weight: 400;
   }

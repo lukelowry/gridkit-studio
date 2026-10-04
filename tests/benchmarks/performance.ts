@@ -3,7 +3,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import type { FromWorker, Method, Requests } from '../../src/messages.js'
+import type { FromWorker, Method, Requests } from '../../src/shared/messages.js'
 async function main() {
   const worker = new Worker(join(process.cwd(), 'dist/worker.cjs'), {
     workerData: { scratch: join(process.cwd(), 'output/performance-runs') },

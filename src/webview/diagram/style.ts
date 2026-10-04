@@ -3,9 +3,9 @@
 import type { Diagram } from '@latkit/diagram'
 import type { Data, FieldValues } from '@latkit/model'
 
-import type { ViewState } from '../../messages.js'
-import { reader } from '../../preferences.js'
-import { diagramOf } from '../../schema.js'
+import type { ViewState } from '../../shared/messages.js'
+import { reader } from '../../shared/preferences.js'
+import { diagramOf } from '../../shared/schema.js'
 import { font, palette } from '../theme.js'
 import { labelsOf } from './labels.js'
 import { diagramOptions } from './options.js'

@@ -1,8 +1,8 @@
 /** The case's clock as this view reads it. The extension holds the clock and tells every view when
  *  it changes; between changes each view integrates it here, a frame at a time, with no messages. */
 
-import type { TransportAction } from '../messages.js'
-import { advance, type ClockState, IDLE } from '../transport.js'
+import type { TransportAction } from '../shared/messages.js'
+import { advance, type ClockState, IDLE } from '../shared/transport.js'
 import { bridge } from './bridge.js'
 
 export interface Clock {

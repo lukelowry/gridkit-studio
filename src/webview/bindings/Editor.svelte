@@ -9,8 +9,8 @@
     channelsFor,
     type FieldRef,
     sameField,
-  } from '../../bindings.js'
-  import { networkOf, placementOf } from '../../schema.js'
+  } from '../../shared/bindings.js'
+  import { networkOf, placementOf } from '../../shared/schema.js'
   import { bridge } from '../bridge.js'
 
   let {

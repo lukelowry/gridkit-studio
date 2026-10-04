@@ -14,7 +14,7 @@ import {
 
 import type { Case } from '../gridkit/case.js'
 import type { Field } from '../gridkit/parameters.js'
-import type { RunInfo } from '../messages.js'
+import type { RunInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
 import { readResults, samplesOf } from './decode.js'
 

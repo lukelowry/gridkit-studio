@@ -8,6 +8,13 @@
       "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/cases"],
       "outFiles": ["${workspaceFolder}/dist/**/*.cjs"],
       "preLaunchTask": "Build extension"
+    },
+    {
+      "name": "Run GridKit Studio (watch)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/cases"],
+      "outFiles": ["${workspaceFolder}/dist/**/*.cjs"]
     }
   ]
 }

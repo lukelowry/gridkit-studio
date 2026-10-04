@@ -11,8 +11,8 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import catalogJson from '../../catalog.json'
-import { rowsOf } from '../cells.js'
-import { diagramOf, networkOf } from '../schema.js'
+import { rowsOf } from '../shared/cells.js'
+import { diagramOf, networkOf } from '../shared/schema.js'
 import { Case } from './case.js'
 import { catalogOf } from './definition.js'
 import { diagnose, editField, sourceRange } from './edits.js'

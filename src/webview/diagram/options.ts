@@ -1,6 +1,6 @@
 import type { Diagram } from '@latkit/diagram'
 
-import type { SettingsReader } from '../../preferences.js'
+import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
 /** The same options drive the live view and an export. Null explicitly resets a color or font. */
 export function diagramOptions(
@@ -38,7 +38,7 @@ export function diagramOptions(
     junctions: s.get('diagram.junctions'),
     edgeWidthPx: s.get('diagram.edgeWidthPx'),
     routeClearance: s.get('diagram.routeClearance'),
-    labels: s.get('diagram.labels'),
+    labels: s.get('diagram.labels.visible'),
     hoverWidthPx: s.get('diagram.hoverWidthPx'),
     selectedWidthPx: s.get('diagram.selectedWidthPx'),
     animationMs: s.get('diagram.animationMs'),

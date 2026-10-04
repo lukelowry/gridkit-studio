@@ -3,7 +3,7 @@
 import type { Axis, Domain } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
-import { defaults, type SettingsReader } from '../../preferences.js'
+import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import type { Palette } from '../theme.js'
 import { color } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
@@ -61,7 +61,7 @@ export function plotOptions(
     fontSizePx: s.get('monitor.fontSizePx'),
     font: s.get('monitor.font') || font ? { family: s.get('monitor.font') || font! } : null,
     paddingPx: [...MARGIN_PX],
-    coordinateAxis: s.get('monitor.coordinateAxis')
+    coordinateAxis: s.get('monitor.coordinateAxis.visible')
       ? {
           label: axis,
           grid: s.get('monitor.coordinateAxis.grid'),
@@ -70,7 +70,7 @@ export function plotOptions(
           ...(coordinatePrecision !== null && { precision: coordinatePrecision }),
         }
       : false,
-    valueAxis: s.get('monitor.valueAxis')
+    valueAxis: s.get('monitor.valueAxis.visible')
       ? {
           label: s.get('monitor.valueAxis.label') ? valueLabel : '',
           grid: s.get('monitor.valueAxis.grid'),

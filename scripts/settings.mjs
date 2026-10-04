@@ -1,7 +1,7 @@
 import { build } from 'esbuild'
 import { readFile, writeFile } from 'node:fs/promises'
 const result = await build({
-  entryPoints: ['src/preferences.ts'],
+  entryPoints: ['src/shared/preferences.ts'],
   bundle: true,
   write: false,
   platform: 'node',

@@ -1,8 +1,8 @@
 import { failure, type FieldValues } from '@latkit/model'
 import { findNodeAtLocation, modify, parseTree } from 'jsonc-parser'
 
-import type { Mutation, SourceEdit } from '../messages.js'
-import { diagramOf } from '../schema.js'
+import type { Mutation, SourceEdit } from '../shared/messages.js'
+import { diagramOf } from '../shared/schema.js'
 import type { Case } from './case.js'
 import { editField, nativePath, recordOf, textOffset } from './edits.js'
 

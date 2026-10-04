@@ -2,9 +2,9 @@
   import type { RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
-  import { display, referenceNames, rowsOf } from '../../cells.js'
-  import { menuContext } from '../../contexts.js'
-  import type { ViewState } from '../../messages.js'
+  import { display, referenceNames, rowsOf } from '../../shared/cells.js'
+  import { menuContext } from '../../shared/contexts.js'
+  import type { ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   let view = $state<ViewState>({})
@@ -278,7 +278,9 @@
 </script>
 
 <main class="table">
-  {#if view.stale}
+  {#if view.error}
+    <p class="c-note c-note--error" role="alert">{view.error}</p>
+  {:else if view.stale && view.summary}
     <p class="c-note c-note--warn" role="status">
       Source is updating or invalid. Showing the last valid revision; editing is paused.
     </p>

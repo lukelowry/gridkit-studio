@@ -4,8 +4,8 @@ import { createDiagram, type Diagram, type DiagramConfig, type DiagramItem } fro
 import type { Gpu } from '@latkit/gpu'
 import { type Data, itemId, rowAt, rowCount, selectRows } from '@latkit/model'
 
-import type { Element, ViewState } from '../../messages.js'
-import { diagramOf, placementOf } from '../../schema.js'
+import type { Element, ViewState } from '../../shared/messages.js'
+import { diagramOf, placementOf } from '../../shared/schema.js'
 import { bridge } from '../bridge.js'
 import { nativeMenu } from '../menu.js'
 import { editing } from './edit.js'
@@ -42,7 +42,7 @@ export function mountDiagram(
   source: Data,
   style: Parameters<Diagram['set']>[0],
   state: () => ViewState,
-  select: (element: Element) => void,
+  select: (element: Element | null) => void,
   open: (element: Element) => void,
 ): Diagram {
   const diagram = createDiagram(gpu, { canvas, ...diagramData(source) })
@@ -51,7 +51,7 @@ export function mountDiagram(
     const element = item ? elementOf(item) : null
     if (element) then(element)
   }
-  diagram.on('select', (items) => pick(items[0], select))
+  diagram.on('select', (items) => select(items[0] ? elementOf(items[0]) : null))
   diagram.on('open', (item) => pick(item, open))
   diagram.on('contextmenu', (event) =>
     nativeMenu(
@@ -62,7 +62,9 @@ export function mountDiagram(
       'diagram',
     ),
   )
-  const arrange = editing(diagram, gpu, state)
+  const lifetime = new AbortController()
+  const signal = AbortSignal.any([lifetime.signal, gpu.signal])
+  const arrange = editing(diagram, gpu, state, signal)
   const stop = bridge.on((message) => {
     if (message.kind !== 'action') return
     if (message.command === 'diagramEditing' && message.value === true) {
@@ -74,10 +76,13 @@ export function mountDiagram(
       }
     }
     if (message.command === 'arrangeDiagram')
-      void arrange().catch((error) => bridge.send({ kind: 'notify', message: String(error) }))
+      void arrange().catch((error) => {
+        if (!signal.aborted) bridge.send({ kind: 'notify', message: String(error) })
+      })
   })
   const destroy = diagram.destroy.bind(diagram)
   diagram.destroy = () => {
+    lifetime.abort()
     stop()
     destroy()
   }

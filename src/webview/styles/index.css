@@ -1,3 +1,3 @@
-/* The design system on the workbench theme: tokens and element defaults, then components. */
+/* The design system on VS Code theme: tokens and element defaults, then components. */
 @import './tokens.css';
 @import './components.css';

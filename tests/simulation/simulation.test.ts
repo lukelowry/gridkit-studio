@@ -13,8 +13,8 @@ import { Case } from '../../src/gridkit/case.js'
 import { catalogOf } from '../../src/gridkit/definition.js'
 import { dynamicSimulation } from '../../src/gridkit/runtime.js'
 import { Simulation } from '../../src/gridkit/simulation.js'
-import type { RunInfo, RunRequest, RuntimeProcess } from '../../src/messages.js'
 import { ResultCache } from '../../src/results/results.js'
+import type { RunInfo, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 
 const gridkit = process.env.GRIDKIT_PATH ?? ''
 

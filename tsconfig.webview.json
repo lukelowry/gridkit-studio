@@ -4,6 +4,6 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable", "ESNext.Disposable"],
     "types": ["@webgpu/types"]
   },
-  "include": ["src/webview/**/*.ts", "src/webview/**/*.svelte", "src/messages.ts"],
+  "include": ["src/webview/**/*.ts", "src/webview/**/*.svelte", "src/shared/messages.ts"],
   "exclude": []
 }

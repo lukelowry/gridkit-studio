@@ -33,7 +33,14 @@ await copyFile(
 
 const extensionTestsPath = path.join(root, 'output/tests/host.cjs')
 await build({
-  entryPoints: [path.join(root, 'tests/extension/index.ts')],
+  entryPoints: [
+    path.join(
+      root,
+      process.argv.includes('--startup')
+        ? 'tests/extension/startup.ts'
+        : 'tests/extension/index.ts',
+    ),
+  ],
   outfile: extensionTestsPath,
   bundle: true,
   platform: 'node',
@@ -50,6 +57,7 @@ await runTests({
   extensionTestsEnv: {
     ELECTRON_RUN_AS_NODE: undefined,
     GRIDKIT_TEST_PROFILE: profile,
+    GRIDKIT_TEST_ROOT: root,
     GRIDKIT_TEST_OUTPUT: process.env.GRIDKIT_TEST_OUTPUT ?? path.join(root, 'output'),
     GRIDKIT_TEST_PACKAGED: process.env.GRIDKIT_TEST_EXTENSION_PATH ? '1' : undefined,
     GRIDKIT_TEST_SOLVER: process.env.GRIDKIT_TEST_SOLVER,

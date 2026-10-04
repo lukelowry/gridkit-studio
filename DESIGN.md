@@ -65,6 +65,8 @@ Studio uses Lattice's compact visual vocabulary inside VS Code. The workbench ow
 
 The visual system is restrained and data dense: flat surfaces, narrow separators, readable identifiers and units, and linked selection. User-selected VS Code themes and renderer settings are authoritative; the dark review screenshots are examples, not a fixed brand palette.
 
+Network and Diagram fill their editor with zero body padding and no selection or status footer; stale warnings overlay the canvas and editing instructions remain in its accessible name. DynamicSimulation provides the sidebar parameter form without a Results format selector. Arrow remains the default; programmatic CSV support remains available. Case table status and Monitor status/timeline are unchanged.
+
 **Key Characteristics:**
 
 - Native workbench controls around focused data surfaces.
@@ -100,13 +102,13 @@ Use stable element identifiers when a name is missing. Editing must expose reada
 
 ## Layout
 
-Network and Diagram occupy native editor groups. Case and Monitor are native bottom-panel views. Inspector, Signals, and Simulation occupy the GridKit sidebar. Users retain normal workbench docking, splitting, and resizing.
+Network and Diagram occupy native editor groups. Case and Monitor are native bottom-panel views. Inspector, Signals, and DynamicSimulation occupy the GridKit sidebar. Users retain normal workbench docking, splitting, and resizing.
 
 The spacing scale follows Lattice's compact rhythm. Table rows use the table-cell height; sticky headers and the identity column preserve context during scrolling. Cells stay on one line, truncate long values, and expose horizontal scrolling. Numeric values align right.
 
 Monitor plots use an automatic grid: columns prefer a minimum width of 420px but shrink to the available panel width; plot rows have a 160px minimum height. One-pixel separators join plots. A compact timeline sits beneath them with a flexible range input and tabular time readout.
 
-Simulation uses a two-column label/control grid with an 8px gap and 12px outer padding. The form scrolls within the sidebar. Renderer canvases fill their surfaces without a separate page container. Layout responds to workbench dimensions, not website device breakpoints.
+DynamicSimulation uses a two-column label/control grid with an 8px gap and 12px outer padding. The form scrolls within the sidebar. Network and Diagram canvases fill the editor with zero body padding and no selection or status footer. Layout responds to workbench dimensions, not website device breakpoints.
 
 ## Elevation & Depth
 
@@ -130,13 +132,13 @@ Place workflow commands in editor/view title actions, contributed context menus,
 
 Use a real table with sticky column labels, element identities, catalog units, and linked row selection. Cells have quiet hover feedback and an inset visible focus outline. Arrow keys move between cells; F2, Enter, or double-click begins editing. An inline input temporarily replaces the value. Native context menus supply field actions.
 
-### Simulation fields
+### DynamicSimulation fields
 
-Use associated labels and native-looking input, select, and checkbox controls. Optional fault fields appear when enabled. Run/Stop remain native title actions. Keep error and run status text adjacent to the form.
+Use associated labels and native-looking input and checkbox controls. Optional fault fields appear when enabled. Run/Stop remain native title actions. Keep error and run status text adjacent to the form. Results format is not a form control: Arrow remains the default, while programmatic CSV support remains available.
 
 ### Network and Diagram canvases
 
-Render directly through Latkit using current settings and theme mappings. Selection, hover, focus, and source reveal share element identity with native trees and the Case table. Diagram editing focuses a readable neighborhood and shows full detail; placement and wiring operate on the case document.
+Render directly through Latkit using current settings and theme mappings. Selection, hover, focus, and source reveal share element identity with native trees and the Case table. Diagram editing focuses a readable neighborhood and shows full detail; placement and wiring operate on the case document. Editing instructions remain in the canvas accessible name rather than a visible footer.
 
 ### Monitor
 
@@ -144,7 +146,7 @@ Each plot has a compact heading identifying the type, field, and optional elemen
 
 ### Status, warnings, and empty states
 
-Use short text within the existing surface. Invalid intermediate source keeps the last valid view visible with an explicit stale warning and paused editing. Recovery and cancellation remain accessible through native commands. Empty states explain what the user can do next without adding a separate application shell.
+Use short text within the existing surface. Invalid intermediate source keeps the last valid view visible with an explicit stale warning and paused editing. Network and Diagram show that warning as an overlay, preserving canvas dimensions. The Case table status and Monitor status/timeline remain in their respective panels. Recovery and cancellation remain accessible through native commands. Empty states explain what the user can do next without adding a separate application shell.
 
 ## Do's and Don'ts
 
@@ -164,4 +166,4 @@ Use short text within the existing surface. Invalid intermediate source keeps th
 - Don't replace dense engineering views with decorative cards or oversized headings.
 - Don't present stale or incomplete data as current and complete.
 
-Implementation sources: `src/webview/theme.css`, `monitor.css`, `Table.svelte`, `Simulation.svelte`, `palette.ts`, renderer option modules, and `src/preferences.ts`. Reviewed workbench captures are in `.impeccable/review/`.
+Implementation sources: `src/webview/theme.css`, `monitor.css`, `Table.svelte`, `Simulation.svelte`, `palette.ts`, renderer option modules, and `src/preferences.ts`. Current corrective-pass captures are in `output/network-corrections/playwright/` and `output/startup-final/playwright/`; earlier reviewed workbench captures are in `.impeccable/review/`.

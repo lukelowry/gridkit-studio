@@ -86,6 +86,20 @@ export async function run() {
     await visible(network, 'canvas[data-rendered=true]')
     assert.equal(studio.state(uri.toString()).summary?.counts.Bus, 39)
     assert.equal(await network.locator('.toolbar').count(), 0)
+    assert.equal(await network.locator('.status').count(), 0)
+    const bounds = await network.evaluate<string>(
+      "JSON.stringify((() => { const r = document.querySelector('canvas').getBoundingClientRect(); return [r.x, r.y, r.width - innerWidth, r.height - innerHeight] })())",
+    )
+    assert.ok(
+      JSON.parse(bounds).every((n: number) => Math.abs(n) < 1),
+      'Network must fill its editor',
+    )
+    assert.equal(
+      extension.packageJSON.contributes.customEditors.find(
+        (entry: { viewType: string }) => entry.viewType === 'gridkitStudio.network',
+      ).displayName,
+      'Network',
+    )
     report.network = JSON.parse(
       (await network.locator('canvas').getAttribute('data-stats')) ?? '{}',
     )
@@ -163,7 +177,8 @@ export async function run() {
     await capture('diagram-workbench')
     await vscode.commands.executeCommand('gridkitStudio.toggleDiagramEditing', uri)
     await until(
-      async () => (await diagram.locator('.status').innerText()).includes('Editing:'),
+      async () =>
+        (await diagram.locator('canvas').getAttribute('aria-label'))?.includes('Diagram editing.'),
       'diagram edit mode',
     )
     await vscode.commands.executeCommand('gridkitStudio.arrangeDiagram', uri)
@@ -326,6 +341,14 @@ export async function run() {
     const simulation = await frame(browser, 'simulation')
     await visible(simulation, '#tmax')
     assert.equal(await simulation.locator('button').count(), 0)
+    assert.equal(await simulation.locator('#output_format').count(), 0)
+    assert.equal(await simulation.getByText('Results format', { exact: true }).count(), 0)
+    assert.equal(
+      extension.packageJSON.contributes.views['gridkitStudio'].find(
+        (entry: { id: string }) => entry.id === 'gridkitStudio.simulation',
+      ).name,
+      'DynamicSimulation',
+    )
     await capture('simulation-workbench')
     await vscode.workspace
       .getConfiguration()

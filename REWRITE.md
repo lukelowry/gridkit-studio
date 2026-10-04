@@ -50,3 +50,9 @@ The 0.3.1 package also passed installation and automatic case-file activation us
 Reports are written under output/tests; packaged tests write under output/packaged-*/tests. Run timings vary with machine/GPU and competing processes.
 
 Installed DynamicSimulation, Podman, non-Windows workbenches, and remote development are supported by the code paths but were not exercised locally. CI defines OS/build and VS Code host coverage. Arbitrary component creation, incremental column reparsing, remote model connections, and video export remain outside this implementation.
+
+## Network opening, 0.3.2
+
+Network uses the full editor area: no webview padding or selection footer. GPU and renderer initialization overlap worker parsing; the first frame uses current settings immediately. The Network stream contains only drawn types. Geographic boundaries load after the first network frame and cannot block case interaction. DynamicSimulation has no results-format selector; Arrow remains the default.
+
+Measured locally on VS Code 1.135 using pnpm test:startup: ACTIVSg2000 first visible frame decreased from 2,526 to 446 ms; ACTIVSg10k from 3,390 to 981 ms. These are sequential opens in one fresh extension-host session, not cold GPU measurements for each case. The first IEEE39 open still costs roughly 1.3–1.5 seconds for cold workbench/GPU startup. Reports and stage timings are under output/startup-before and output/startup-final; results vary by hardware.

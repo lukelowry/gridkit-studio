@@ -5,7 +5,9 @@
   import { bridge } from './bridge.js'
   let view = $state<ViewState>({})
   let values = $state<Record<string, unknown>>({})
-  const parameters = $derived(Object.entries(view.summary?.parameters ?? {}))
+  const parameters = $derived(
+    Object.entries(view.summary?.parameters ?? {}).filter(([name]) => name !== 'output_format'),
+  )
   function update(name: string, value: unknown) {
     values = { ...values, [name]: value }
     bridge.send({ kind: 'values', uri: view.uri!, values: $state.snapshot(values) })

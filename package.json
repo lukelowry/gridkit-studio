@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -47,13 +47,14 @@
     "test:solver": "node tests/solver/run.mjs",
     "test:performance": "node tests/performance.mjs",
     "vscode:prepublish": "pnpm build",
-    "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/gridkit-studio-0.3.1.vsix",
+    "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/gridkit-studio-0.3.2.vsix",
     "format": "prettier --write src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "format:check": "prettier --check src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "lint": "eslint src tests scripts *.mjs *.ts",
     "test:package": "node tests/extension/package.mjs",
     "settings": "node scripts/settings.mjs",
-    "settings:check": "node scripts/settings.mjs --check"
+    "settings:check": "node scripts/settings.mjs --check",
+    "test:startup": "pnpm build && node tests/extension/run.mjs --startup"
   },
   "dependencies": {
     "@latkit/diagram": "0.8.0",
@@ -218,14 +219,14 @@
       },
       {
         "command": "gridkitStudio.runSolver",
-        "title": "Run Simulation",
+        "title": "Run DynamicSimulation",
         "category": "GridKit Studio",
         "icon": "$(play)",
         "enablement": "gridkitStudio.ready && isWorkspaceTrusted && !gridkitStudio.running"
       },
       {
         "command": "gridkitStudio.stopSolver",
-        "title": "Stop Simulation",
+        "title": "Stop DynamicSimulation",
         "category": "GridKit Studio",
         "icon": "$(debug-stop)",
         "enablement": "gridkitStudio.running"
@@ -1332,7 +1333,7 @@
     "customEditors": [
       {
         "viewType": "gridkitStudio.network",
-        "displayName": "GridKit Network",
+        "displayName": "Network",
         "selector": [
           {
             "filenamePattern": "*.[cC][aA][sS][eE].[jJ][sS][oO][nN]"
@@ -1342,7 +1343,7 @@
       },
       {
         "viewType": "gridkitStudio.diagram",
-        "displayName": "GridKit Diagram",
+        "displayName": "Diagram",
         "selector": [
           {
             "filenamePattern": "*.[cC][aA][sS][eE].[jJ][sS][oO][nN]"
@@ -1380,7 +1381,7 @@
         },
         {
           "id": "gridkitStudio.simulation",
-          "name": "Simulation",
+          "name": "DynamicSimulation",
           "type": "webview"
         },
         {
@@ -1423,7 +1424,7 @@
           },
           "values": {
             "type": "object",
-            "description": "Current catalog simulation parameters; the same values as the Simulation form."
+            "description": "Current catalog simulation parameters; the same values as the DynamicSimulation form."
           }
         }
       }
@@ -3011,7 +3012,7 @@
           {
             "id": "run",
             "title": "Run and plot",
-            "description": "Choose Signals, configure Simulation, then Run. Open Monitor for playback.",
+            "description": "Choose Signals, configure DynamicSimulation, then Run. Open Monitor for playback.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },

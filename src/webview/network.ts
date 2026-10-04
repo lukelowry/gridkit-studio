@@ -5,13 +5,13 @@ import { createNetwork, type Network, type NetworkItem, type VertexOptions } fro
 import type { Element, ViewState } from '../messages.js'
 import { bridge } from './bridge.js'
 import { nativeMenu } from './context.js'
-import { nameFieldOf, networkOf } from './topology.js'
+import { networkOf } from './topology.js'
 export function networkTopology(source: Data, positions: Record<string, FieldValues> = {}) {
   const drawn = networkOf(source.schema)
   const vertices: Record<string, VertexOptions> = {}
   for (const type of drawn.vertices) {
     const position = positions[type]
-    vertices[type] = { labels: nameFieldOf(source.schema, type), ...(position ? { position } : {}) }
+    vertices[type] = position ? { position } : {}
   }
   return {
     vertices,
@@ -27,20 +27,14 @@ export function mountNetwork(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
   source: Data,
-  style: object,
+  style: Parameters<Network['set']>[0],
   state: () => ViewState,
   positions: Record<string, FieldValues> = {},
 ) {
   const topology = networkTopology(source, positions)
-  const network = createNetwork(gpu, {
-    canvas,
-    source,
-    ...topology,
-    ...(Object.values(topology.vertices).some((vertex) => vertex.position)
-      ? { camera: { projection: 'flat' as const, fit: true } }
-      : {}),
-    ...style,
-  })
+  const network = createNetwork(gpu, { canvas, source, ...topology })
+  // Apply the complete style synchronously, before the renderer can prepare its first frame.
+  network.set(style)
   network.on('select', (items) => {
     const item = items[0]
     if (item) {

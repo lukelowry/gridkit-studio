@@ -13,22 +13,26 @@ import {
 import type { Network } from '@latkit/network'
 
 import type { ViewState } from '../messages.js'
+import { loadBorders } from './borders.js'
 import { bridge } from './bridge.js'
 import { CanvasGpu } from './gpu.js'
 import { accessibility, diagramStyle, networkStyle } from './style.js'
 import { diagramOf, networkOf } from './topology.js'
 
 function boot() {
+  const mark = (name: string) => {
+    if (!performance.getEntriesByName(name).length) performance.mark(name)
+  }
+  mark('canvas:boot')
   const kind = document.body.dataset.kind
   if (kind !== 'network' && kind !== 'diagram') return
   document.getElementById('app')!.innerHTML =
     '<main class="shell"><div class="warning" hidden role="status"></div><div class="surface"><canvas tabindex="0" aria-label="' +
     kind +
-    ' view. Right-click an element for actions; press F2 to edit the selected field."></canvas><div class="empty" role="status">Loading case…</div></div><div class="status" role="status"></div></main>'
+    ' view. Right-click an element for actions; press F2 to edit the selected field."></canvas><div class="empty" role="status">Loading case…</div></div></main>'
   const canvas = document.querySelector('canvas')!
   const empty = document.querySelector<HTMLElement>('.empty')!
   const warning = document.querySelector<HTMLElement>('.warning')!
-  const status = document.querySelector<HTMLElement>('.status')!
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const owner = new CanvasGpu()
   let networkModule: typeof import('./network.js') | undefined
@@ -46,8 +50,9 @@ function boot() {
   let closed = false
   let rendering = false
   let queued = false
-  let styleTurn = 0
   let geographic = false
+  let borders: Data | null = null
+  let borderRequest: Promise<void> | undefined
   let selectionKey = ''
   let preferredProjection: string | undefined
   const error = (reason: unknown) => {
@@ -58,17 +63,56 @@ function boot() {
       '. Use the native Reload action, or inspect this case in Case, Inspector, or JSON.'
     bridge.send({ kind: 'error', message: String(reason) })
   }
+  const lost = () => {
+    view?.destroy()
+    view = undefined
+    delete canvas.dataset.connected
+    delete canvas.dataset.rendered
+    error('WebGPU device lost')
+  }
+  // Load independent renderer resources while the worker prepares the case.
+  const rendererReady =
+    kind === 'network'
+      ? import('./network.js').then((module) => {
+          networkModule = module
+        })
+      : import('./diagram.js').then((module) => {
+          diagramModule = module
+        })
+  void rendererReady.catch(error)
+  void owner.get(lost).catch(error)
+  function decorate() {
+    if (
+      kind !== 'network' ||
+      !geographic ||
+      state.settings?.['network.borders'] === false ||
+      borders ||
+      borderRequest ||
+      closed
+    )
+      return
+    borderRequest = loadBorders()
+      .then((value) => {
+        if (closed) return
+        borders = value
+        return paint()
+      })
+      .catch((reason) => {
+        // Optional map decoration must never prevent interaction with the case.
+        bridge.send({ kind: 'error', message: 'Map boundaries: ' + String(reason) })
+      })
+  }
   async function paint() {
     if (!view || !data) return
-    const turn = ++styleTurn
     const current = view
     accessibility(state)
     const patch =
       kind === 'diagram'
         ? diagramStyle(data, state, positions)
-        : await networkStyle(data, state, geographic)
-    if (turn === styleTurn && !closed && view === current) {
+        : networkStyle(data, state, geographic, borders)
+    if (!closed && view === current) {
       current.set(patch as never)
+      if (canvas.dataset.rendered) decorate()
       if (kind === 'network') {
         const preference = state.settings?.['network.camera.projection'] ?? 'globe'
         const projection = preference === 'globe' && !geographic ? 'flat' : preference
@@ -126,34 +170,52 @@ function boot() {
           'This case has no directed signal components. Use Network to inspect its electrical topology.'
         return
       }
-      const gpu = await owner.get(() => {
-        view?.destroy()
-        view = undefined
-        delete canvas.dataset.connected
-        error('WebGPU device lost')
-      })
+      const [gpu] = await Promise.all([owner.get(lost), rendererReady])
+      mark('canvas:gpu')
       if (closed) return
       if (kind === 'network') {
-        networkModule ??= await import('./network.js')
+        if (!networkModule) return
+        mark('canvas:module')
         if (closed) return
         const topology = networkModule.networkTopology(data, positions)
         geographic =
           networkOf(data.schema).geographic &&
           !Object.values(topology.vertices).some((vertex) => vertex.position)
-        if (!view) view = networkModule.mountNetwork(gpu, canvas, data, {}, () => state, positions)
-        else view.set({ source: data, ...topology } as never)
+        if (!view) {
+          const preference = state.settings?.['network.camera.projection'] ?? 'globe'
+          preferredProjection = preference === 'globe' && !geographic ? 'flat' : preference
+          view = networkModule.mountNetwork(
+            gpu,
+            canvas,
+            data,
+            {
+              ...networkStyle(data, state, geographic, borders),
+              camera: {
+                projection: preferredProjection as 'flat' | 'globe' | 'tilt',
+                orbit: false,
+                fit: true,
+              },
+            },
+            () => state,
+            positions,
+          )
+        } else view.set({ source: data, ...topology } as never)
       } else {
-        diagramModule ??= await import('./diagram.js')
+        if (!diagramModule) return
         if (closed) return
         if (!view) view = diagramModule.mountDiagram(gpu, canvas, data, {}, () => state)
         else view.set({ source: data })
       }
+      mark('canvas:mounted')
       if (!canvas.dataset.connected) {
         canvas.dataset.connected = 'true'
         const events = view as Network
         events.on('error', error)
         events.on('frame', () => {
+          if (!canvas.dataset.rendered) mark('canvas:frame')
           canvas.dataset.rendered = 'true'
+          empty.hidden = true
+          decorate()
           canvas.dataset.stats = JSON.stringify(view?.stats())
         })
         events.on('camera', (camera) => bridge.save({ uri: state.uri, camera }))
@@ -169,7 +231,7 @@ function boot() {
       }
       view.set({ at: state.at })
       await paint()
-      empty.hidden = true
+      mark('canvas:styled')
       selection(true)
     } finally {
       rendering = false
@@ -187,13 +249,16 @@ function boot() {
       const beforeEditing = state.diagramEditing
       const beforeStale = state.stale
       state = { ...state, ...message.state }
-      warning.hidden = !state.stale
+      canvas.setAttribute(
+        'aria-label',
+        state.diagramEditing
+          ? 'Diagram editing. Drag ports to wire and blocks to place. Right-click for actions.'
+          : kind +
+              ' view. Right-click an element for actions; press F2 to edit the selected field.',
+      )
+      warning.hidden = !state.stale || !state.summary
       warning.textContent =
         'Source is updating or contains errors. Showing the last valid revision; editing is paused.'
-      status.textContent =
-        (state.selection?.id ?? 'Select an element to inspect') +
-        (state.run ? ' · ' + state.run.state : '') +
-        (state.diagramEditing ? ' · Editing: drag ports to wire, drag blocks to place' : '')
       view?.set({ at: state.at })
       selection()
       if (
@@ -205,6 +270,7 @@ function boot() {
       )
         void paint().catch(error)
     } else if (message.kind === 'begin') {
+      mark('canvas:begin')
       stream = message.stream
       revision = message.revision.version
       batches = []
@@ -215,6 +281,7 @@ function boot() {
       if (message.stream === stream) batches.push(...message.batches)
       bridge.send({ kind: 'ack', stream: message.stream, sequence: message.sequence })
     } else if (message.kind === 'end' && message.stream === stream && schema) {
+      mark('canvas:data')
       try {
         if (replaceBase)
           base = createData(
@@ -239,6 +306,8 @@ function boot() {
         view?.destroy()
         view = undefined
         delete canvas.dataset.connected
+        delete canvas.dataset.rendered
+        borderRequest = undefined
         void render().catch(error)
         return
       }
@@ -268,7 +337,6 @@ function boot() {
   document.addEventListener('visibilitychange', () => view?.set({ paused: document.hidden }))
   window.addEventListener('pagehide', () => {
     closed = true
-    styleTurn++
     observer.disconnect()
     view?.destroy()
     view = undefined

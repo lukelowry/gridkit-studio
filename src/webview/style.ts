@@ -6,7 +6,7 @@ import type { Network } from '@latkit/network'
 import type { ViewState } from '../messages.js'
 import { reader } from '../preferences.js'
 import { edgeStylesOf, vertexStylesOf } from './binding-style.js'
-import { BORDERS, loadBorders } from './borders.js'
+import { BORDERS } from './borders.js'
 import { diagramOptions } from './diagram-options.js'
 import { labelsOf } from './labels.js'
 import { networkOptions } from './network-options.js'
@@ -88,11 +88,12 @@ export function diagramStyle(
     ),
   }
 }
-export async function networkStyle(
+export function networkStyle(
   source: Data,
   state: ViewState,
   geographic: boolean,
-): Promise<Parameters<Network['set']>[0]> {
+  borders: Data | null = null,
+): Parameters<Network['set']>[0] {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
   const p = palette()
@@ -109,7 +110,6 @@ export async function networkStyle(
     return on && field ? { field, maxCount: s.get('network.labels.maxCount') } : null
   }
   const cmap = colormaps[s.get('network.colormap')]
-  const borders = geographic ? await loadBorders() : null
   const border = color(s.get('network.borderColor'), p.text3)
   const weight = { Coast: [1, 0.5], Country: [1, 0.5], Province: [0.75, 0.3] } as const
   return {
@@ -133,21 +133,21 @@ export async function networkStyle(
         },
       ]),
     ),
-    paths: borders
-      ? Object.fromEntries(
-          BORDERS.map((type) => [
-            type,
-            {
-              source: borders,
-              points: 'points',
-              widthPx: weight[type][0] * s.get('network.borderWidthPx'),
-              visible: s.get('network.borders') ? null : hiddenRows(borders, type),
-              baseColor: border
-                ? ([border[0], border[1], border[2], border[3] * weight[type][1]] as const)
-                : null,
-            },
-          ]),
-        )
-      : {},
+    paths:
+      geographic && s.get('network.borders') && borders
+        ? Object.fromEntries(
+            BORDERS.map((type) => [
+              type,
+              {
+                source: borders,
+                points: 'points',
+                widthPx: weight[type][0] * s.get('network.borderWidthPx'),
+                baseColor: border
+                  ? ([border[0], border[1], border[2], border[3] * weight[type][1]] as const)
+                  : null,
+              },
+            ]),
+          )
+        : null,
   }
 }

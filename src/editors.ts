@@ -5,7 +5,7 @@ import * as vscode from 'vscode'
 
 import type { EditorKind, FromView, Summary, ToView } from './messages.js'
 import type { Sessions } from './sessions.js'
-import { nameFieldOf } from './webview/topology.js'
+import { nameFieldOf, networkOf } from './webview/topology.js'
 
 export function html(
   webview: vscode.Webview,
@@ -371,7 +371,12 @@ export class View {
           })
         })
       }
+      const network = this.kind === 'network' ? networkOf(summary.schema) : undefined
+      const drawnTypes = network
+        ? new Set([...network.vertices, ...network.edges.map((edge) => edge.type)])
+        : undefined
       const fields = staticFields(summary.schema)
+        .filter((field) => !drawnTypes || drawnTypes.has(field.from))
         .map((f) => ({
           ...f,
           select: f.select.filter((name) => {
@@ -464,13 +469,10 @@ export function registerEditors(studio: Sessions) {
       vscode.window.registerCustomEditorProvider(
         'gridkitStudio.' + kind,
         {
-          async resolveCustomTextEditor(document, panel) {
+          resolveCustomTextEditor(document, panel) {
             new View(studio, panel, document.uri.toString(), kind)
-            try {
-              await studio.open(document)
-            } catch (error) {
-              studio.output.error(String(error))
-            }
+            // Let VS Code display and initialize the webview while the worker parses.
+            void studio.open(document).catch((error) => studio.output.error(String(error)))
           },
         },
         {

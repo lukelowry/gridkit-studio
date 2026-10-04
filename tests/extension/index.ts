@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -53,15 +53,18 @@ export async function run() {
     openCaseMs: performance.now() - started,
     latkit: extension.packageJSON.dependencies,
   }
-  const document = await vscode.workspace.openTextDocument(uri)
-  const text = document.getText()
-  const original = JSON.parse(text)
   const [port] = (
     await readFile(join(process.env.GRIDKIT_TEST_PROFILE!, 'DevToolsActivePort'), 'utf8')
   ).split('\n')
   const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port)
   const workbench = browser.contexts().flatMap((context) => context.pages())[0]!
   await workbench.setViewportSize({ width: 1600, height: 1000 })
+  // Playwright follows the frames it sees attach, so the editor opens again now that it watches.
+  await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+  await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
+  const document = await vscode.workspace.openTextDocument(uri)
+  const text = document.getText()
+  const original = JSON.parse(text)
   const errors: string[] = []
   workbench.on('pageerror', (error) => errors.push(error.message))
   const output = process.env.GRIDKIT_TEST_OUTPUT ?? join(extension.extensionPath, 'output')
@@ -85,7 +88,13 @@ export async function run() {
     const network = await frame(browser, 'network')
     await visible(network, 'canvas[data-rendered=true]')
     assert.equal(studio.state(uri.toString()).summary?.counts.Bus, 39)
-    assert.equal(await network.locator('.toolbar').count(), 0)
+    // The canvas's own controls: three projections, of which one shows, rotation, and fit.
+    await visible(network, '[data-testid="view-toolbar"]')
+    assert.equal(await network.locator('.toolbar button').count(), 5)
+    await until(
+      async () => (await network.locator('.toolbar button[aria-pressed="true"]').count()) === 1,
+      'the projection on show is pressed',
+    )
     assert.equal(await network.locator('.status').count(), 0)
     const bounds = await network.evaluate<string>(
       "JSON.stringify((() => { const r = document.querySelector('canvas').getBoundingClientRect(); return [r.x, r.y, r.width - innerWidth, r.height - innerHeight] })())",
@@ -100,9 +109,9 @@ export async function run() {
       ).displayName,
       'Network',
     )
-    report.network = JSON.parse(
-      (await network.locator('canvas').getAttribute('data-stats')) ?? '{}',
-    )
+    report.network = await network.evaluate('gridkitStats()')
+    // Marked, so that the view shown again later can be told from one built again.
+    await network.evaluate('window.gridkitKept = true')
     await capture('network-workbench')
 
     await vscode.commands.executeCommand('gridkitStudio.openTable', uri)
@@ -171,9 +180,7 @@ export async function run() {
     )
     let diagram = await frame(browser, 'diagram')
     await visible(diagram, 'canvas[data-rendered=true]')
-    report.diagram = JSON.parse(
-      (await diagram.locator('canvas').getAttribute('data-stats')) ?? '{}',
-    )
+    report.diagram = await diagram.evaluate('gridkitStats()')
     await capture('diagram-workbench')
     await vscode.commands.executeCommand('gridkitStudio.toggleDiagramEditing', uri)
     await until(
@@ -216,10 +223,9 @@ export async function run() {
     invalid.insert(uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)
     await until(() => studio.state(uri.toString()).stale, 'invalid source')
-    await visible(table, '.warning')
+    await visible(table, '.c-note--warn')
     await vscode.commands.executeCommand('gridkitStudio.showSource', uri)
     await vscode.commands.executeCommand('gridkitStudio.stopSolver', uri)
-    await vscode.commands.executeCommand('gridkitStudio.pauseTimeline', uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'source focus')
     await workbench.locator('.monaco-editor.focused').getByRole('textbox').press('ControlOrMeta+z')
@@ -273,13 +279,17 @@ export async function run() {
     const bus = original.buses[0]
     await vscode.workspace.fs.writeFile(
       csv,
+      // Every bus's voltage, each a little out of step with the last.
       new TextEncoder().encode(
-        'time,Bus_' +
-          bus.name +
-          '_Vm\n' +
+        ['time', ...original.buses.map((each: { name: string }) => 'Bus_' + each.name + '_Vm')] +
+          '\n' +
           Array.from(
             { length: 100 },
-            (_, i) => i / 100 + ',' + (1 + 0.1 * Math.sin(i / 10)) + '\n',
+            (_, i) =>
+              [
+                i / 100,
+                ...original.buses.map((_: unknown, k: number) => 1 + 0.1 * Math.sin(i / 10 + k)),
+              ] + '\n',
           ).join(''),
       ),
     )
@@ -303,26 +313,34 @@ export async function run() {
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     let monitor = await frame(browser, 'monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
-    assert.equal(
-      await monitor.locator('button').count(),
-      0,
-      'Monitor commands belong in native title actions',
-    )
+    // Playback is the Monitor's own: its controls change the case's one clock.
+    await visible(monitor, '[data-testid="transport"]')
+    assert.match((await monitor.locator('.lane__name').first().textContent()) ?? '', /Bus · /)
     const monitorBounds = await monitor.locator('canvas').boundingBox()
     const bottom = await workbench.locator('.part.panel').boundingBox()
     assert.ok(
       bottom && monitorBounds && monitorBounds.y >= bottom.y,
       'Monitor must be in the bottom panel',
     )
-    report.monitor = JSON.parse(
-      (await monitor.locator('canvas').getAttribute('data-stats')) ?? '{}',
-    )
     await capture('monitor-workbench')
-    await vscode.commands.executeCommand('gridkitStudio.seekTime', 0)
+    const clock = () => session.transport.state
+    assert.equal(clock().status, 'paused')
+    await vscode.commands.executeCommand('gridkitStudio.seekTime', 0.5)
+    assert.equal(session.transport.currentT(), 0.5)
+    await until(
+      async () =>
+        (await monitor.locator('[data-testid="transport-time"]').textContent())?.includes('0.50'),
+      'the playhead reaches the view',
+    )
+    await monitor.locator('[data-testid="transport-play"]').click()
+    await until(() => clock().status === 'playing', 'playback from the view')
     await vscode.commands.executeCommand('gridkitStudio.toggleTimeline')
-    await until(() => session.playing, 'playback')
-    await vscode.commands.executeCommand('gridkitStudio.pauseTimeline')
-    assert.equal(session.playing, false)
+    assert.equal(clock().status, 'paused')
+    await monitor.locator('[data-testid="transport-loop"]').click()
+    await until(() => clock().loop === 'wrap', 'repeat from the view')
+    const paused = session.transport.currentT()
+    await monitor.locator('[data-testid="transport-step-forward"]').click()
+    await until(() => session.transport.currentT() > paused, 'frame step from the view')
     await monitor.locator('canvas').click({ button: 'right' })
     await workbench
       .getByRole('menuitem')
@@ -337,6 +355,94 @@ export async function run() {
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     monitor = await frame(browser, 'monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
+    // Mappings stage a field's channels and apply them at once.
+    await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
+    const mappings = await frame(browser, 'bindings')
+    await mappings.locator('[data-testid="bindings-link-Bus-column-kv"]').click()
+    await visible(mappings, '[data-testid="binding-editor"]')
+    assert.deepEqual(session.bindings, {})
+    await mappings.locator('[data-testid="binding-vertexColor"]').check()
+    await mappings.locator('[data-testid="binding-apply"]').click()
+    await until(() => session.bindings.vertexColor?.field === 'kv', 'mapping applied')
+    assert.equal(await mappings.locator('[data-testid="binding-editor"]').count(), 0)
+    await capture('mappings-workbench')
+    await vscode.commands.executeCommand('gridkitStudio.unbind', {
+      uri: uri.toString(),
+      version: (await current()).version,
+      origin: 'inspector',
+      type: 'Bus',
+      field: 'kv',
+    })
+    assert.deepEqual(session.bindings, {})
+
+    // A mapped signal colors the network from the run, at the playhead every view shares: the
+    // network draws frame after frame while the clock plays, with no word from the extension.
+    await vscode.commands.executeCommand(
+      'vscode.openWith',
+      uri,
+      'gridkitStudio.network',
+      vscode.ViewColumn.One,
+    )
+    const colored = await frame(browser, 'network')
+    await visible(colored, 'canvas[data-rendered=true]')
+    assert.equal(
+      await colored.evaluate('window.gridkitKept'),
+      true,
+      'A hidden canvas keeps its webview',
+    )
+    studio.bind(uri.toString(), { type: 'Bus', field: 'Vm' }, ['vertexColor'])
+    await until(
+      async () => (await mappings.locator('.bindings__field--bound').count()) === 1,
+      'the bound signal is listed',
+    )
+    const drawn = () => colored.evaluate<number>('gridkitStats().frames')
+    session.transport.seek(0)
+    const still = await drawn()
+    session.transport.play()
+    await until(async () => (await drawn()) > still + 10, 'the network paints the playhead')
+    session.transport.pause()
+    assert.equal(await colored.locator('.canvas-host__fault:not([hidden])').count(), 0)
+    await capture('network-mapped-signal')
+    // Hidden behind another editor, the canvas stands still while the clock plays on.
+    await vscode.commands.executeCommand(
+      'vscode.openWith',
+      uri,
+      'gridkitStudio.diagram',
+      vscode.ViewColumn.One,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const hidden = await drawn()
+    session.transport.play()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    assert.equal(session.transport.state.status, 'playing')
+    assert.equal(await drawn(), hidden, 'A hidden canvas draws nothing')
+    session.transport.pause()
+    studio.bind(uri.toString(), { type: 'Bus', field: 'Vm' }, [])
+
+    // A video of the run is written to the file the reader picks, as it is made.
+    const video = vscode.Uri.joinPath(root, 'two bus.webm')
+    await vscode.workspace
+      .getConfiguration()
+      .update('files.simpleDialog.enable', true, vscode.ConfigurationTarget.Global)
+    await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)
+    const exporter = await frame(browser, 'export')
+    await visible(exporter, '[data-testid="video-export"]')
+    await exporter.getByRole('switch', { name: 'Monitor' }).click()
+    await exporter.getByRole('combobox', { name: 'Format' }).selectOption('webm')
+    await exporter.getByRole('combobox', { name: 'Resolution' }).selectOption('720')
+    await exporter.locator('[data-testid="video-start"]').click()
+    const dialog = workbench.locator('.quick-input-widget input')
+    await dialog.waitFor({ state: 'visible' })
+    await dialog.fill(video.fsPath)
+    await dialog.press('Enter')
+    await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120000 })
+    report.videoBytes = (await stat(video.fsPath)).size
+    assert.ok((report.videoBytes as number) > 1000, 'The exported video has frames')
+    await capture('export-workbench')
+    await vscode.workspace
+      .getConfiguration()
+      .update('files.simpleDialog.enable', undefined, vscode.ConfigurationTarget.Global)
+
     await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
     const simulation = await frame(browser, 'simulation')
     await visible(simulation, '#tmax')
@@ -369,6 +475,55 @@ export async function run() {
     )
     await workbench.setViewportSize({ width: 1280, height: 800 })
     await capture('compact-workbench')
+    if (process.env.GRIDKIT_TEST_LIVE) {
+      // A live run through the views: frames are appended as they arrive, the playhead follows
+      // the head, and the finished run scrubs from what each view holds.
+      await vscode.commands.executeCommand(
+        'vscode.openWith',
+        uri,
+        'gridkitStudio.network',
+        vscode.ViewColumn.One,
+      )
+      const live = await frame(browser, 'network')
+      await visible(live, 'canvas[data-rendered=true]')
+      studio.bind(uri.toString(), { type: 'Bus', field: 'Vm' }, ['vertexColor', 'vertexHeight'])
+      const imported = session.run?.id
+      const painted = () => live.evaluate<number>('gridkitStats().frames')
+      const before = await painted()
+      await vscode.commands.executeCommand('gridkitStudio.runSolver', uri)
+      await until(
+        () => session.run && session.run.id !== imported && session.run.frames > 0,
+        'frames arrive',
+        180000,
+      )
+      const followed = session.run!.state !== 'running' || session.transport.state.follow
+      await until(() => session.run?.state !== 'running', 'the run ends', 300000)
+      assert.equal(session.run?.state, 'complete', session.run?.message)
+      assert.ok(followed, 'The playhead follows a run as it arrives')
+      const [, end] = session.run!.domain
+      assert.equal(session.transport.state.follow, false)
+      assert.equal(session.transport.currentT(), end)
+      // The task's terminal took the panel while it ran; the finished run shows the Monitor again.
+      const lanes = await frame(browser, 'monitor')
+      await visible(lanes, 'canvas[data-rendered=true]')
+      await until(
+        async () =>
+          (await lanes.locator('[data-testid="transport-time"]').textContent())
+            ?.replace(/\s+/g, ' ')
+            .includes(end.toFixed(2) + ' /'),
+        'the Monitor rests at the end of the run',
+      )
+      const arrived = (await painted()) - before
+      // The finished run scrubs: a seek repaints the network from the samples it holds.
+      const rested = await painted()
+      session.transport.seek(end / 2)
+      await until(async () => (await painted()) > rested, 'a seek repaints the network')
+      assert.equal(await lanes.locator('.c-note--error').count(), 0)
+      assert.equal(await live.locator('.canvas-host__fault:not([hidden])').count(), 0)
+      report.live = { frames: session.run!.frames, domain: session.run!.domain, arrived }
+      await capture('live-run')
+      studio.bind(uri.toString(), { type: 'Bus', field: 'Vm' }, [])
+    }
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
     assert.equal(tools.length, 4)
     const ai = await vscode.lm.invokeTool('gridkit_query_rows', {

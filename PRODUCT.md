@@ -2,17 +2,17 @@
 
 GridKit Studio is a desktop VS Code extension for inspecting, editing, and simulating GridKit power-system cases.
 
-The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case and Monitor are native bottom-panel views. Inspector, DynamicSimulation, and Signals live in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
+The source of truth is the open .case.json TextDocument. Network and Diagram are custom text editors; Case and Monitor are native bottom-panel views. Inspector, Mappings, DynamicSimulation, Signals, and Export fold in the GridKit sidebar. Saving, dirty state, undo/redo, Problems, source navigation, context menus, Settings, tasks, and Git remain native VS Code workflows.
 
-The user explicitly requires Lattice's useful settings and interaction model, compact styling, and direct published Latkit APIs. Studio exposes all 139 applicable Network, Diagram, Monitor, and accessibility settings using Lattice defaults. VS Code owns theme selection. No browser shell or compatibility subsystem is retained.
+The user explicitly requires Lattice's useful settings and interaction model, compact styling, and direct published Latkit APIs. Studio exposes all 139 applicable Network, Diagram, Monitor, and accessibility settings using Lattice defaults. VS Code owns theme selection. No browser shell or compatibility subsystem is retained. Controls that belong to a canvas are Lattice's own, in the view: the Network's projection, rotation and fit controls, the Monitor's playback, the Mappings panel, and video export.
 
 Diagram supports navigation, selection, editable fields, block placement, automatic arrangement, signal-port connection/disconnection, and guarded deletion. Wiring unconnected ports can create a Signal record. Arbitrary component creation remains a future consumer of the document transaction boundary.
 
 The single authored domain definition is catalog.json imported from GridKit Server. Schemas, parser mappings, source intelligence, validation, and simulation parameters derive from it. Adjacent repositories are implementation references, not runtime dependencies.
 
-The operating environment is VS Code 1.135 or later, including workspace extension hosts in remote development. DynamicSimulation requires Workspace Trust and an installed DynamicSimulation, Docker, or Podman runtime. Arrow and CSV are current supported result formats. There is no .solver.json compatibility, reference-comparison adapter, or remote-model connection.
+The operating environment is VS Code 1.135 or later, including workspace extension hosts in remote development. DynamicSimulation requires Workspace Trust and an installed DynamicSimulation, Docker, or Podman runtime. Arrow and CSV are current supported result formats. Video export writes MP4 or WebM through the workbench's own codecs. There is no .solver.json compatibility, reference-comparison adapter, or remote-model connection.
 
-Views remain responsive through off-thread case parsing, incremental source messages, bounded row queries, acknowledged data streams, windowed results, and a shared bounded sample cache. Canvas views require WebGPU; Case, JSON, Inspector, and simulation remain usable without it.
+Views remain responsive through off-thread case parsing, incremental source messages, bounded row queries, acknowledged data streams, and a shared bounded sample cache. The case has one playback clock: it changes in the extension, and each view integrates it locally between changes. A view holds a run's samples whole while they are few, appended as frames arrive, and a window of them past that. Canvas views require WebGPU; Case, JSON, Inspector, and simulation remain usable without it.
 
 Four read-only VS Code language-model tools inspect open cases and runs. Studio introduces no separate chat interface, model provider, or credentials.
 

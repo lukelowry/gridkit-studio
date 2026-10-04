@@ -64,6 +64,11 @@ export function registerTasks(studio: Sessions) {
               write.fire(
                 `\r\n${result.state}: ${result.frames} frames${result.message ? ' — ' + result.message : ''}\r\n`,
               )
+              // The task's terminal took the panel; a run with results gives it to the Monitor.
+              if (result.state === 'complete' && result.frames > 0)
+                void vscode.commands.executeCommand('gridkitStudio.monitor.focus', {
+                  preserveFocus: true,
+                })
               close.fire(result.state === 'complete' ? 0 : 1)
             })()
               .catch((error) => {

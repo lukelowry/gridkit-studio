@@ -1,39 +1,42 @@
 import { type FieldSelection, sampledFields } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import type { Bindings } from './bindings.js'
+import { type Bindings, bound, type Channel, channelsFor, type FieldRef } from './bindings.js'
 import { Client } from './client.js'
 import { Documents } from './documents.js'
-import type { Element, Plot, RunInfo, ViewState } from './messages.js'
+import type { Cameras, Element, Plot, RunInfo, TableState, ViewState } from './messages.js'
 import type { SettingsValues } from './preferences.js'
+import { networkOf, placementOf } from './schema.js'
 import { settingsFor } from './settings.js'
+import { Transport } from './transport.js'
 
 export interface Session {
   uri: string
   diagramEditing: boolean
-  playing: boolean
-  overlaps?: Element[]
   bindings: Bindings
+  /** The field the Mappings editor is open for. */
+  editing?: FieldRef
   selection?: Element
   run?: RunInfo
   previous?: RunInfo
-  at?: number
   plots: Plot[]
   outputs: FieldSelection[]
   values: Record<string, unknown>
-  follow: boolean
-  loop: 'none' | 'wrap' | 'pingpong'
-  speed: number
-  direction: 1 | -1
+  /** The case's playhead: it changes here, and every view integrates it between changes. */
+  transport: Transport
   settings: SettingsValues
+  /** The times the Monitor's reader chose to show; absent, the plots show the run. */
   window?: readonly [number, number]
-  table: { type?: string; fields?: string[]; filter?: string }
+  cameras: Cameras
+  table: TableState
 }
 export class Sessions {
   readonly client: Client
   readonly documents: Documents
   readonly all = new Map<string, Session>()
   readonly changed = new vscode.EventEmitter<string>()
+  /** A case's clock changed, or its following playhead moved with the head. */
+  readonly clock = new vscode.EventEmitter<string>()
   readonly action = new vscode.EventEmitter<{
     uri: string
     command: string
@@ -55,12 +58,14 @@ export class Sessions {
             session.run.state = 'failed'
             session.run.message = error.message
           }
-          session.playing = false
+          session.transport.pause()
+          session.transport.setLive(false)
           this.changed.fire(session.uri)
         }
       }),
       this.documents.changed.event((uri) => {
         if (!this.documents.entries.has(uri)) {
+          this.all.get(uri)?.transport.dispose()
           this.all.delete(uri)
           if (this.active === uri) this.active = this.all.keys().next().value
         }
@@ -73,9 +78,7 @@ export class Sessions {
         }
         const session = this.all.get(event.info.revision.uri)
         if (!session) return
-        if (session.run && session.run.id !== event.info.id) session.previous = session.run
-        session.run = event.info
-        if (session.follow) session.at = event.info.domain[1]
+        this.show(session, event.info)
         this.changed.fire(session.uri)
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
@@ -108,11 +111,7 @@ export class Sessions {
         !entry.stale &&
         vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) !== false,
       running: session?.run?.state === 'running',
-      hasRun: !!session?.run,
       hasSamples: (session?.run?.frames ?? 0) > 0,
-      playing: !!session?.playing,
-      following: !!session?.follow,
-      looping: session?.loop !== undefined && session.loop !== 'none',
       hasSelection: !!session?.selection,
       tableFiltered: !!session?.table.filter,
       tableReady: !!entry?.summary,
@@ -135,13 +134,10 @@ export class Sessions {
         plots: saved.plots ?? [],
         outputs: [],
         values: saved.values ?? {},
-        follow: true,
-        loop: 'none',
-        speed: 1,
-        direction: 1,
-        playing: false,
+        transport: new Transport(() => this.clock.fire(uri)),
         diagramEditing: false,
         settings: settingsFor(vscode.Uri.parse(uri)),
+        cameras: {},
         table: saved.table ?? {},
       })
     }
@@ -178,20 +174,17 @@ export class Sessions {
         !!entry && vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) !== false,
       navigate: vscode.workspace
         .getConfiguration('gridkitStudio', vscode.Uri.parse(uri))
-        .get('navigateOnSelection', true),
+        .get('navigateOnSelection', false),
       diagramEditing: session?.diagramEditing,
       settings: session?.settings,
-      playing: session?.playing,
-      follow: session?.follow,
-      loop: session?.loop,
-      speed: session?.speed,
       bindings: session?.bindings,
+      editing: session?.editing,
       summary: entry?.summary,
       stale: entry?.stale,
       selection: session?.selection,
       run: session?.run,
-      at: session?.at,
       plots: session?.plots,
+      window: session?.window,
       values: session?.values,
       table: session?.table,
     }
@@ -202,16 +195,79 @@ export class Sessions {
     session.selection = element
     this.changed.fire(uri)
   }
+  /** Show `run` on `session`'s clock: another run takes its span over, and the frames of the one on
+   *  show extend it; none stills the clock. */
+  show(session: Session, run: RunInfo | undefined) {
+    const { transport } = session
+    const shown = session.run
+    if (shown && run && shown.id !== run.id) session.previous = shown
+    session.run = run
+    if (!run) {
+      session.previous = undefined
+      session.window = undefined
+      transport.clear()
+      return
+    }
+    const live = run.state === 'running'
+    // A run's span starts where its first frames do.
+    if (shown?.id !== run.id || (shown.frames === 0 && run.frames > 0)) {
+      session.window = undefined
+      transport.setSpan(run.domain, { live })
+      return
+    }
+    transport.extend(run.domain[1])
+    if (transport.noteHead(run.domain[1])) this.clock.fire(session.uri)
+    transport.setLive(live)
+  }
+  /** Step one frame of the run on show, and pause there. */
+  async step(session: Session, direction: 1 | -1) {
+    if (!session.run) return
+    const t = await this.client.call('step', {
+      run: session.run.id,
+      at: session.transport.currentT(),
+      direction,
+    })
+    session.transport.pause()
+    session.transport.seek(t)
+  }
+  /** Make `field` drive exactly `channels`. A mapped signal is recorded by the runs to come. */
+  bind(
+    uri: string,
+    field: FieldRef,
+    channels: readonly Channel[],
+    domain?: readonly [number, number],
+  ) {
+    const session = this.all.get(uri)
+    const schema = this.documents.entries.get(uri)?.summary?.schema
+    if (!session || !schema) throw new Error('Open a GridKit case first.')
+    const allowed = channelsFor(placementOf(networkOf(schema), field.type))
+    session.bindings = bound(session.bindings, allowed, field, channels, domain)
+    if (channels.length && schema.types[field.type]?.fields[field.field]?.sampled) {
+      const recorded = session.outputs.find((output) => output.from === field.type)
+      if (!recorded)
+        session.outputs = [...session.outputs, { from: field.type, select: [field.field] }]
+      else if (!recorded.select.includes(field.field))
+        session.outputs = session.outputs.map((output) =>
+          output === recorded ? { ...output, select: [...output.select, field.field] } : output,
+        )
+    }
+    this.persist(session)
+    this.changed.fire(uri)
+  }
   async dispose() {
     await Promise.all(
       [...this.all.values()]
         .filter((session) => session.run?.state === 'running')
         .map((session) => this.client.call('stop', { uri: session.uri }).catch(() => {})),
     )
-    for (const session of this.all.values()) this.persist(session)
+    for (const session of this.all.values()) {
+      this.persist(session)
+      session.transport.dispose()
+    }
     this.documents.dispose()
     for (const disposable of this.disposables) disposable.dispose()
     this.changed.dispose()
+    this.clock.dispose()
     this.action.dispose()
     this.output.dispose()
     return this.client.dispose()

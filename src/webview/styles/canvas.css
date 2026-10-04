@@ -1,0 +1,58 @@
+/* A renderer's canvas filling its host, with what overlays it: an alert for a problem the renderer
+   recovered from, a fallback for one it did not, and the view's controls. From Lattice's CanvasHost
+   and Toolbar. */
+.canvas-host {
+  position: relative;
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 0;
+}
+
+.canvas-host__canvas {
+  inline-size: 100%;
+  block-size: 100%;
+  outline-offset: -2px;
+}
+
+.canvas-host__fallback {
+  position: absolute;
+  inset: 0;
+}
+
+/* An alert on the dimmed red surface, over the canvas and whatever overlays it: the red border
+   carries the tone and the message stays in the primary text color. */
+.canvas-host__fault {
+  position: absolute;
+  z-index: 2;
+  inset-block-start: var(--spacing-md);
+  inset-inline: var(--spacing-md);
+  max-inline-size: 44rem;
+  margin: 0 auto;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--color-red);
+  border-radius: var(--radius-md);
+  background: var(--color-red-dim);
+  color: var(--color-text-1);
+  font-size: var(--text-sm);
+}
+
+/* The case's source is mid-edit: the last valid revision stays on show, said in the warning tone. */
+.canvas-host__fault--warn {
+  border-color: var(--color-warning-text);
+  background: var(--color-bg);
+}
+
+/* The view's controls, over its top right. */
+.toolbar {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: var(--spacing-sm);
+  inset-inline-end: var(--spacing-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2xs);
+  padding: var(--spacing-2xs);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-1);
+}

@@ -2,16 +2,16 @@ import type { ExtensionContext } from 'vscode'
 
 import { registerAI } from './ai.js'
 import { registerCommands } from './commands.js'
-import { registerEditors } from './editors.js'
 import { registerNavigation } from './navigation.js'
 import { Sessions } from './sessions.js'
 import { registerTrees } from './trees.js'
+import { registerViews } from './views.js'
 let studio: Sessions | undefined
 export function activate(context: ExtensionContext) {
   const started = performance.now()
   studio = new Sessions(context)
   context.subscriptions.push(
-    ...registerEditors(studio),
+    ...registerViews(studio),
     ...registerCommands(studio),
     ...registerTrees(studio),
     ...registerNavigation(studio),

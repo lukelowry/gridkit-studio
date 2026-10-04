@@ -1,21 +1,26 @@
+/** The network styles the bindings give each type; from Lattice. */
+
 import type { Colormap, ColorScale, Scale, ScaleDomain } from '@latkit/gpu'
 import type { Data, FieldInput } from '@latkit/model'
 import type { EdgeOptions, VertexOptions } from '@latkit/network'
 
-import type { Binding as FieldRef, Bindings as Sources, Channel } from '../bindings.js'
-interface Sampled {
-  source: Data
-  domain: ScaleDomain
+import type { Bindings, Channel, FieldRef } from '../../bindings.js'
+
+/** A sampled field read from a run: its frames, and the values its colors span, which the renderer
+ *  measures: over a window of the run, or `auto` for the frame on show. */
+export interface Sampled {
+  readonly source: Data
+  readonly domain: ScaleDomain
 }
-/** Adapted from Lattice 8100c24e binding styles. */
-/** The vertex styles `sources` give type `type`; see `edgeStylesOf`. */
+
+/** The vertex styles `bindings` give type `type`; see `edgeStylesOf`. */
 export function vertexStylesOf(
-  sources: Sources,
+  bindings: Bindings,
   type: string,
   colormap: Colormap,
   sampledOf: (field: FieldRef) => Sampled | null | undefined,
 ): Pick<VertexOptions, 'color' | 'sizePx' | 'height'> {
-  const { color, scale } = styles(sources, type, colormap, sampledOf)
+  const { color, scale } = styles(bindings, type, colormap, sampledOf)
   return {
     color: color('vertexColor'),
     sizePx: scale('vertexSize', [2, 12]),
@@ -23,35 +28,37 @@ export function vertexStylesOf(
   }
 }
 
-/** The edge styles `sources` give type `type`: each channel's field, read from the model or, for a
+/** The edge styles `bindings` give type `type`: each channel's field, read from the case or, for a
  *  sampled field `sampledOf` finds in a run, from that run over the values `sampledOf` says
  *  (`sampledOf` gives null for a sampled field no run on show has, and undefined for a field of the
- *  model). A channel with no field clears its style. */
+ *  case). A range the reader set for a binding stands in for the measured one. A channel with no
+ *  field clears its style. */
 export function edgeStylesOf(
-  sources: Sources,
+  bindings: Bindings,
   type: string,
   colormap: Colormap,
   sampledOf: (field: FieldRef) => Sampled | null | undefined,
 ): Pick<EdgeOptions, 'color' | 'dash'> {
-  const { color, input } = styles(sources, type, colormap, sampledOf)
+  const { color, input } = styles(bindings, type, colormap, sampledOf)
   return { color: color('edgeColor'), dash: input('edgeDash')?.field ?? null }
 }
 
 function styles(
-  sources: Sources,
+  bindings: Bindings,
   type: string,
   colormap: Colormap,
   sampledOf: (field: FieldRef) => Sampled | null | undefined,
 ) {
   const input = (channel: Channel): { field: FieldInput; domain?: ScaleDomain } | null => {
-    const ref = sources[channel]
-    if (ref === undefined || ref.type !== type) return null
-    const sampled = sampledOf(ref)
-    if (sampled === undefined) return { field: ref.field, domain: ref.domain }
+    const binding = bindings[channel]
+    if (binding === undefined || binding.type !== type) return null
+    const sampled = sampledOf(binding)
+    if (sampled === undefined)
+      return { field: binding.field, ...(binding.domain && { domain: binding.domain }) }
     if (sampled === null) return null
     return {
-      field: { source: sampled.source, from: type, field: ref.field },
-      domain: ref.domain ?? sampled.domain,
+      field: { source: sampled.source, from: type, field: binding.field },
+      domain: binding.domain ?? sampled.domain,
     }
   }
   const color = (channel: Channel): ColorScale | null => {

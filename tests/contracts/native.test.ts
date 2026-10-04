@@ -40,13 +40,35 @@ describe('native workbench contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    expect(
-      manifest.contributes.menus['view/title'].some(
-        (item: { command: string; when: string }) =>
-          item.command === 'gridkitStudio.pauseTimeline' &&
-          item.when.includes('gridkitStudio.playing'),
-      ),
-    ).toBe(true)
+    // The side bar folds the case's panels, Mappings and Export among them.
+    expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
+      [
+        'gridkitStudio.inspector',
+        'gridkitStudio.bindings',
+        'gridkitStudio.simulation',
+        'gridkitStudio.signals',
+        'gridkitStudio.export',
+      ],
+    )
+    // Playback and the camera belong to the views; the title bars carry none of their commands.
+    const titled = ['view/title', 'editor/title'].flatMap((menu) =>
+      manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
+    )
+    for (const command of [
+      'toggleTimeline',
+      'nextSample',
+      'loopTime',
+      'fit',
+      'projection',
+      'orbit',
+    ])
+      expect(titled).not.toContain('gridkitStudio.' + command)
+    // Every command a menu names is contributed.
+    const commands = new Set(
+      manifest.contributes.commands.map((command: { command: string }) => command.command),
+    )
+    for (const items of Object.values(manifest.contributes.menus) as { command?: string }[][])
+      for (const { command } of items) if (command) expect(commands).toContain(command)
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
     const schema = catalogOf(JSON.stringify(catalogJson)).schema

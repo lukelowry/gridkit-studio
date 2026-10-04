@@ -3,10 +3,11 @@
 import type { Axis, Domain } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
-import { defaults, type SettingsReader } from '../preferences.js'
-import type { Palette } from './palette.js'
-import { color } from './palette.js'
-type Plotted = { type: string; field: string }
+import { defaults, type SettingsReader } from '../../preferences.js'
+import type { Palette } from '../theme.js'
+import { color } from '../theme.js'
+/** A recorded field a plot draws: every row of its type, or the one `id` names. */
+type Plotted = { type: string; field: string; id?: string }
 
 /** Bounded plot caches; the application owns the complete run separately. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
@@ -19,10 +20,10 @@ const TRACE = 'plotted'
  *  labels are the margin. */
 const MARGIN_PX = [8, 12, 0, 0] as const
 
-/** The trace of `plotted`: a line for each row of its type. */
+/** The trace of `plotted`: a line for each row of its type, or for the one row it names. */
 export function tracesOf(
   settings: SettingsReader,
-  { type, field }: Plotted,
+  { type, field, id }: Plotted,
 ): MonitorConfig['traces'] {
   const baseColor = color(settings.get('monitor.baseColor') ?? defaults['monitor.baseColor'])
   return {
@@ -31,6 +32,7 @@ export function tracesOf(
       field,
       widthPx: settings.get('monitor.widthPx'),
       interpolation: settings.get('monitor.interpolation'),
+      ...(id !== undefined && { rows: { kind: 'ids', ids: [id] } }),
       ...(baseColor !== null && { baseColor }),
     },
   }

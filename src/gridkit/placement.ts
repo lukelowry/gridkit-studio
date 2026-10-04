@@ -1,6 +1,6 @@
 import type { FieldValues } from '@latkit/model'
 
-import { networkOf } from '../webview/topology.js'
+import { networkOf } from '../schema.js'
 import type { Case } from './case.js'
 
 const cache = new WeakMap<Case, Record<string, FieldValues>>()

@@ -1,8 +1,8 @@
 import type { Diagram } from '@latkit/diagram'
 
-import type { SettingsReader } from '../preferences.js'
-import { color, type Palette } from './palette.js'
-/** Adapted from Lattice 8100c24e diagram options. */
+import type { SettingsReader } from '../../preferences.js'
+import { color, type Palette } from '../theme.js'
+/** The same options drive the live view and an export. Null explicitly resets a color or font. */
 export function diagramOptions(
   s: SettingsReader,
   palette: Palette | null,

@@ -2,7 +2,7 @@
 
 Notices for the packaged extension and bundled development cases.
 
-## @latkit/diagram, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network
+## @latkit/diagram, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network, @latkit/video
 
 MIT License
 
@@ -28,7 +28,11 @@ SOFTWARE.
 
 ## Adapted Lattice and GridKit Server code
 
-Settings, renderer configuration, topology/layout, binding styles, the catalog compiler, parser, staging, and result readers include adaptations from Lattice 8100c24e and GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above. See REWRITE.md for source provenance.
+Settings, renderer configuration, topology/layout, binding styles, the playback clock, the interface tokens, components and glyphs, the Monitor, Mappings and Export panels, the catalog compiler, parser, staging, and result readers include adaptations from Lattice 8100c24e and 4d7e9cf2 and GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above. See REWRITE.md for source provenance.
+
+## mediabunny
+
+Copyright (c) 2026-present, Vanilagy and contributors. Bundled unmodified with video export under the Mozilla Public License 2.0, whose text is at https://mozilla.org/MPL/2.0/. Source: https://github.com/Vanilagy/mediabunny.
 
 ## jsonc-parser
 

@@ -1,0 +1,339 @@
+/*
+  Lattice's global component classes, which screens compose by name: buttons (c-btn and its size
+  and primary variants, c-icon-btn), the empty state, the text field, the form field (c-field), the
+  native select, the checkbox (c-check), notes, and the instrument row (c-row) that Switch and Row
+  share. Keyboard focus rings come from tokens.css.
+*/
+
+/* Buttons. A pressed or expanded button takes the selection tint; hover lifts the text. */
+.c-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  min-height: var(--control-h);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-2);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--motion-mid) var(--motion-hover),
+    background-color var(--motion-mid) var(--motion-hover),
+    opacity var(--motion-mid) var(--motion-hover);
+}
+
+.c-btn svg {
+  flex: 0 0 auto;
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.c-btn:hover:not(:disabled) {
+  background: var(--color-row-hover);
+  color: var(--color-text-1);
+}
+
+.c-btn:is([aria-expanded='true'], [aria-pressed='true']) {
+  background: var(--color-selected);
+  color: var(--color-primary-text);
+}
+
+.c-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* The small button sits tighter around its label. */
+.c-btn--sm {
+  padding: var(--spacing-2xs) var(--spacing-sm);
+}
+
+.c-btn--primary {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.c-btn--primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, var(--color-primary));
+  color: var(--color-on-primary);
+}
+
+/* A square button holding one glyph. Inside a group of them, the pressed one marks the active
+   option through its ARIA state alone. */
+.c-icon-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-h);
+  min-height: var(--control-h);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-2);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color var(--motion-mid) var(--motion-hover),
+    background-color var(--motion-mid) var(--motion-hover);
+}
+
+.c-icon-btn svg {
+  flex-shrink: 0;
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+.c-icon-btn:hover:not(:disabled) {
+  background: var(--color-row-hover);
+  color: var(--color-text-1);
+}
+
+/* After the hover rule, which it must outrank at equal specificity. */
+.c-icon-btn:is([aria-pressed='true'], [aria-expanded='true']):not(:disabled) {
+  background: var(--color-selected);
+  color: var(--color-primary-text);
+}
+
+.c-icon-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* An empty state: centered caption copy with room around it. */
+.c-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-xl) var(--spacing-lg);
+  color: var(--color-text-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.c-empty__text {
+  max-width: 280px;
+}
+
+/* A search or filter field one row tall: mono type in a recessed well. */
+.c-input,
+.c-select {
+  inline-size: 100%;
+  min-block-size: var(--spacing-row-h);
+  padding-inline: var(--spacing-sm);
+  border: 1px solid var(--vscode-input-border, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-input);
+  color: var(--vscode-input-foreground, var(--color-text-1));
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.c-input::placeholder {
+  color: var(--color-text-2);
+}
+
+.c-input:focus-visible,
+.c-select:focus-visible {
+  outline-offset: -1px;
+}
+
+/* The workbench's own list of options, one row tall: a native select keeps the platform's menu. */
+.c-select {
+  background: var(--vscode-dropdown-background, var(--color-input));
+  color: var(--vscode-dropdown-foreground, var(--color-text-1));
+  border-color: var(--vscode-dropdown-border, var(--color-border));
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.c-select:disabled,
+.c-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* A form field: a recessed box one row tall holding an input. The
+   box, not the input, answers hover and draws the focus ring; the input inside is bare. */
+.c-field {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  inline-size: 100%;
+  min-block-size: var(--spacing-row-h);
+  padding-inline: var(--spacing-sm);
+  border: 1px solid var(--vscode-input-border, var(--color-border));
+  border-radius: var(--radius-md);
+  background: var(--color-input);
+  color: var(--vscode-input-foreground, var(--color-text-1));
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--motion-fast) var(--motion-hover);
+}
+
+.c-field:hover {
+  border-color: var(--color-text-3);
+}
+
+.c-field:has(:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.c-field > input {
+  flex: 1;
+  align-self: stretch;
+  min-inline-size: 0;
+  outline: none;
+}
+
+.c-field > input::placeholder {
+  color: var(--color-text-2);
+}
+
+/* Arrow keys step a number; the box keeps its width for the digits. */
+.c-field > input[type='number'] {
+  appearance: textfield;
+}
+
+.c-field > input::-webkit-inner-spin-button,
+.c-field > input::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.c-field:has(:disabled) {
+  opacity: 0.45;
+}
+
+/* A checkbox, before its label when it has one (which takes the press too). */
+.c-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--color-text-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.c-check > input {
+  flex: none;
+  inline-size: 14px;
+  block-size: 14px;
+  accent-color: var(--color-primary);
+  cursor: inherit;
+}
+
+.c-check:has(:disabled) {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Explanatory copy under a group of rows, indented to the row label; the tones carry errors and
+   warnings in the same place. */
+.c-note {
+  margin: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
+  color: var(--color-text-3);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.c-note--error {
+  color: var(--color-error-text);
+}
+
+.c-note--warn {
+  color: var(--color-warning-text);
+}
+
+/* The instrument row: a label on the left and a control or readout on the right, on one grid. As a
+   button (a Switch) the whole row is the hit target, and its focus ring sits inside it. */
+.c-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-sm);
+  inline-size: 100%;
+  min-height: var(--spacing-header-h);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  color: var(--color-text-2);
+}
+
+.c-row__label {
+  min-width: 0;
+  color: var(--color-text-1);
+  font-size: var(--text-md);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.c-row__value {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+button.c-row {
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--motion-hover),
+    color var(--motion-fast) var(--motion-hover);
+}
+
+button.c-row:focus-visible {
+  outline-offset: -2px;
+}
+
+button.c-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button.c-row:hover:not(:disabled) {
+  background: var(--color-row-hover);
+  color: var(--color-text-1);
+}
+
+/* A settings body. Its rows answer the panel's width: label and control share the row in halves,
+   and stack, the control stretched to the full width, once the panel is narrow. */
+.c-settings {
+  container: settings / inline-size;
+  min-inline-size: 0;
+  padding: var(--spacing-sm);
+}
+
+.c-setting-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@container settings (max-width: 15rem) {
+  .c-setting-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+}
+
+/* Out of sight but still read by assistive technology. */
+.c-sr-only {
+  position: absolute !important;
+  inline-size: 1px !important;
+  block-size: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+  clip-path: inset(50%) !important;
+}

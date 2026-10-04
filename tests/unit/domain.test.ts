@@ -18,7 +18,7 @@ import { diagnose, editField, sourceRange } from '../../src/gridkit/edits.js'
 import { completionsAt } from '../../src/gridkit/navigation.js'
 import { parametersOf, selections } from '../../src/gridkit/parameters.js'
 import { caseFile, monitorsOf } from '../../src/gridkit/staging.js'
-import { diagramOf, networkOf } from '../../src/webview/topology.js'
+import { diagramOf, networkOf } from '../../src/schema.js'
 
 const catalog = catalogOf(JSON.stringify(catalogJson))
 const source = `{

@@ -10,7 +10,7 @@ import {
   textColumn,
 } from '@latkit/model'
 
-import { nameFieldOf } from './topology.js'
+import { nameFieldOf } from '../../schema.js'
 const cache = new WeakMap<TableData, FieldInput>()
 /** Labels may fall back to stable identities without changing the domain schema or document. */
 export function labelsOf(source: Data, type: string): FieldInput | null {

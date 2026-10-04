@@ -61,6 +61,8 @@ await runTests({
     GRIDKIT_TEST_OUTPUT: process.env.GRIDKIT_TEST_OUTPUT ?? path.join(root, 'output'),
     GRIDKIT_TEST_PACKAGED: process.env.GRIDKIT_TEST_EXTENSION_PATH ? '1' : undefined,
     GRIDKIT_TEST_SOLVER: process.env.GRIDKIT_TEST_SOLVER,
+    // Opt in to a real run through the views; it needs DynamicSimulation, Docker, or Podman.
+    GRIDKIT_TEST_LIVE: process.env.GRIDKIT_TEST_LIVE,
   },
   version: process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
   ...(process.env.VSCODE_EXECUTABLE_PATH && {

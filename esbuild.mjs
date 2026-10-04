@@ -32,6 +32,8 @@ const builds = [
       table: 'src/webview/table.ts',
       simulation: 'src/webview/simulation.ts',
       monitor: 'src/webview/monitor.ts',
+      bindings: 'src/webview/bindings.ts',
+      export: 'src/webview/export.ts',
     },
     outdir: 'dist/webview',
     platform: 'browser',

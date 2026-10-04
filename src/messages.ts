@@ -6,12 +6,15 @@ import type {
   Parameters,
   Query,
   QueryBlock,
+  RowsBlock,
+  RowsQuery,
   Schema,
   Value,
 } from '@latkit/model'
 
-import type { Bindings } from './bindings.js'
+import type { Bindings, Channel, FieldRef } from './bindings.js'
 import type { SettingsValues } from './preferences.js'
+import type { ClockState, LoopMode } from './transport.js'
 export interface SourceRange {
   offset: number
   length: number
@@ -107,8 +110,13 @@ export interface Requests {
       run?: string
       window?: Domain
       includeStatic?: boolean
+      /** The first of the run's pages to send; the ones before it the view holds already. */
+      fromPage?: number
+      /** The most the stream may carry. */
+      maxBytes?: number
     }
-    output: null
+    /** How many of the run's pages the stream covered. */
+    output: { pages: number }
   }
   locate: { input: Revision & Element; output: SourceRange }
   edit: { input: Revision & Element & { field: string; value: Value }; output: SourceEdit[] }
@@ -141,58 +149,112 @@ export type FromWorker =
   | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
   | { kind: 'run'; info: RunInfo }
   | { kind: 'log'; uri: string; message: string }
-export type EditorKind = 'network' | 'diagram' | 'table'
+/** Every webview a case shows in. */
+export type ViewKind =
+  'network' | 'diagram' | 'table' | 'monitor' | 'simulation' | 'bindings' | 'export'
+/** A view a video export can draw. */
+export type VideoView = 'network' | 'diagram' | 'monitor'
 export interface Plot {
   from: string
   field: string
   id?: string
 }
+export interface TableState {
+  type?: string
+  fields?: string[]
+  filter?: string
+}
+/** How long a tail of a run a view holds when the whole run is too much to hold, in seconds. */
+export const TAIL = 10
 export interface ViewState {
   uri?: string
   version?: number
   writable?: boolean
   settings?: SettingsValues
-  loop?: 'none' | 'wrap' | 'pingpong'
-  speed?: number
   values?: Record<string, unknown>
-  table?: { type?: string; fields?: string[]; filter?: string }
-
+  table?: TableState
   diagramEditing?: boolean
-  playing?: boolean
   navigate?: boolean
-  follow?: boolean
   bindings?: Bindings
+  /** The field the Mappings editor is open for. */
+  editing?: FieldRef
   summary?: Summary
   stale?: boolean
   selection?: Element
   run?: RunInfo
-  at?: number
   plots?: Plot[]
+  /** The times the Monitor's reader chose to show; absent, the plots show the run. */
+  window?: Domain
+}
+/** How Network and Diagram were last framed, which a video export keeps. */
+export interface Cameras {
+  network?: unknown
+  diagram?: unknown
+}
+/** The start of a stream of rows and samples, which ends with its `end`. */
+export interface Begin {
+  kind: 'begin'
+  stream: number
+  schema: Schema
+  revision: Revision
+  /** Whether the rows that follow replace the case the view holds. */
+  base: boolean
+  /** Whether the samples that follow continue those the view holds, rather than replace them. */
+  append: boolean
+  /** The times whose samples the view holds once the stream ends: from `from` on, to `to` when it
+   *  ends; absent, the whole run. */
+  held?: { from: number; to?: number }
+  /** Places for a network whose vertices have none of their own. */
+  placement?: Record<string, FieldValues>
+  /** Where the diagram's blocks were arranged. */
+  presentation?: Record<string, FieldValues>
 }
 export type ToView =
   | { kind: 'state'; state: ViewState }
-  | {
-      kind: 'begin'
-      stream: number
-      schema: Schema
-      revision: Revision
-      base: boolean
-      window?: Domain
-      positions?: Record<string, FieldValues>
-    }
+  /** The clock settled as it is sent, and the newest of this view's own changes it includes. */
+  | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
+  | Begin
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
   | { kind: 'end'; stream: number }
   | { kind: 'reply'; id: number; value?: unknown; error?: string }
   | { kind: 'action'; command: string; value?: unknown }
+/** A change a view makes to the clock, numbered so the view can tell its own echo. */
+export type TransportAction =
+  | { action: 'seek' | 'rate'; value: number }
+  | { action: 'loop'; value: LoopMode }
+  | { action: 'step'; value: 1 | -1 }
+  | { action: 'playPause' | 'goLive' }
+/** What a view asks of the extension and waits on. */
+export interface ViewRequests {
+  /** Rows of the case; read at a time, of the run on show. */
+  query: { input: RowsQuery; output: RowsBlock[] }
+  edit: { input: Element & { field: string; value: Value; version: number }; output: void }
+  transact: {
+    input: { version: number; mutations: readonly Mutation[]; label?: string }
+    output: void
+  }
+  /** Choose where a video is written: the file to write, or null when the reader chose nowhere. */
+  videoOpen: { input: { name: string; format: 'mp4' | 'webm' }; output: number | null }
+  /** Hold what the `views` draw over `window`; resolves, with their framing, once the view does. */
+  videoData: { input: { views: readonly VideoView[]; window: Domain }; output: Cameras }
+  videoWrite: { input: { file: number; position: number; bytes: Uint8Array }; output: void }
+  /** Finish the file, or give it up; resolves to where the finished video is. */
+  videoClose: { input: { file: number; abort?: boolean }; output: string | null }
+}
 export type FromView =
-  | { kind: 'cancel'; id: number }
-  | { kind: 'overlap'; elements: Element[] }
-  | { kind: 'window'; bounds: Domain }
-  | { kind: 'values'; uri: string; values: Record<string, unknown> }
-  | { kind: 'tableState'; table: { type?: string; fields?: string[]; filter?: string } }
   | { kind: 'ready' }
   | { kind: 'ack'; stream: number; sequence: number }
-  | { kind: 'select'; element: Element }
-  | { kind: 'request'; id: number; method: 'query' | 'edit' | 'transact'; input: unknown }
+  | { kind: 'cancel'; id: number }
+  | { kind: 'request'; id: number; method: keyof ViewRequests; input: unknown }
   | { kind: 'command'; command: string; value?: unknown }
+  | { kind: 'select'; element: Element }
+  | { kind: 'window'; bounds: Domain }
+  | { kind: 'camera'; camera: unknown }
+  | ({ kind: 'transport'; seq: number } & TransportAction)
+  | { kind: 'bind'; field: FieldRef; channels: readonly Channel[]; domain?: Domain }
+  | { kind: 'editing'; field: FieldRef | null }
+  | { kind: 'values'; uri: string; values: Record<string, unknown> }
+  | { kind: 'tableState'; table: TableState }
+  | { kind: 'busy'; busy: boolean }
+  | { kind: 'notify'; message: string }
   | { kind: 'error'; message: string }

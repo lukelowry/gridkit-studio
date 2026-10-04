@@ -260,12 +260,13 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
           select: f.select.filter((name) => !kase.schema.types[f.from]!.fields[name]!.sampled),
         }))
         .filter((f) => f.select.length > 0)
+      const maxBytes = request.input.maxBytes ?? 64 << 20
       let sentBytes = 0
       const bounded = async (batch: DataBatch) => {
         sentBytes += blockByteLength(batch)
-        if (sentBytes > 64 << 20)
+        if (sentBytes > maxBytes)
           throw new Error(
-            'Visible data exceeds 64 MiB. Narrow the time window or select fewer signals.',
+            `Visible data exceeds ${maxBytes >> 20} MiB. Narrow the time window or select fewer signals.`,
           )
         await emit(request.id, [batch], signal)
       }
@@ -276,23 +277,26 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
           buffers: 'owned',
         }))
           await bounded(batch)
+      // Pages are immutable once published: a view that holds the first of them asks for the rest.
+      let pages = request.input.fromPage ?? 0
       if (run) {
-        for (let p = 0; p < run.pages.length; p++) {
-          const page = run.pages[p]!
-          const window = request.input.window
+        const sampled = fields.filter((f) =>
+          f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
+        )
+        const window = request.input.window
+        for (; pages < run.pages.length; pages++) {
+          const page = run.pages[pages]!
           if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
-          const data = await run.pageData(p, signal)
-          for await (const batch of selectBatches(
-            data,
-            fields.filter((f) =>
-              f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
-            ),
-            { signal, maxBlockBytes: 256 << 10, buffers: 'owned' },
-          ))
+          const data = await run.pageData(pages, signal)
+          for await (const batch of selectBatches(data, sampled, {
+            signal,
+            maxBlockBytes: 256 << 10,
+            buffers: 'owned',
+          }))
             if (batch.kind === 'samples') await bounded(batch)
         }
       }
-      return null
+      return { pages }
     }
     case 'complete':
       return completionsAt(catalog, request.input.text, request.input.offset)

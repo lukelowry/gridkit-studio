@@ -1,4 +1,4 @@
-import type { FromView, ToView } from '../messages.js'
+import type { FromView, ToView, ViewRequests, ViewState } from '../messages.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
   getState(): unknown
@@ -11,7 +11,7 @@ const pending = new Map<
   {
     resolve(value: unknown): void
     reject(error: Error): void
-    timer: ReturnType<typeof setTimeout>
+    timer?: ReturnType<typeof setTimeout>
     dispose(): void
   }
 >()
@@ -33,36 +33,51 @@ export const bridge = {
   save(value: unknown) {
     api.setState(value)
   },
-  request<T>(
-    method: 'query' | 'edit' | 'transact',
-    input: unknown,
+  /** Ask the extension for `method` of `input`. It gives up after `timeout` milliseconds; none
+   *  waits as long as the work takes. */
+  request<K extends keyof ViewRequests>(
+    method: K,
+    input: ViewRequests[K]['input'],
     signal?: AbortSignal,
-  ): Promise<T> {
+    timeout = 15000,
+  ): Promise<ViewRequests[K]['output']> {
     if (signal?.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'))
     if (pending.size >= 16) return Promise.reject(new Error('Too many pending view requests.'))
     const id = ++next
     return new Promise((resolve, reject) => {
-      const cancel = () => {
+      const settle = () => {
         const entry = pending.get(id)
-        if (!entry) return
+        if (!entry) return false
         entry.dispose()
         clearTimeout(entry.timer)
         pending.delete(id)
         api.postMessage({ kind: 'cancel', id })
-        reject(new DOMException('Cancelled', 'AbortError'))
+        return true
+      }
+      const cancel = () => {
+        if (settle()) reject(new DOMException('Cancelled', 'AbortError'))
       }
       const dispose = () => signal?.removeEventListener('abort', cancel)
-      const timer = setTimeout(() => {
-        dispose()
-        pending.delete(id)
-        api.postMessage({ kind: 'cancel', id })
-        reject(new Error('The extension did not respond.'))
-      }, 15000)
-      pending.set(id, { resolve: (value) => resolve(value as T), reject, timer, dispose })
+      const timer = timeout
+        ? setTimeout(() => {
+            if (settle()) reject(new Error('The extension did not respond.'))
+          }, timeout)
+        : undefined
+      pending.set(id, {
+        resolve: (value) => resolve(value as ViewRequests[K]['output']),
+        reject,
+        timer,
+        dispose,
+      })
       signal?.addEventListener('abort', cancel, { once: true })
       api.postMessage({ kind: 'request', id, method, input })
     })
   },
+}
+/** The view's state after `incoming`. Each message carries all of it but the case's summary and the
+ *  settings, which are large and are sent when they change. */
+export function merged(state: ViewState, incoming: ViewState): ViewState {
+  return { summary: state.summary, settings: state.settings, ...incoming }
 }
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data

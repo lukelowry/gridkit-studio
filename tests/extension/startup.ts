@@ -72,7 +72,7 @@ export async function run() {
     canvas: [rect.x, rect.y, rect.width, rect.height],
     bodyPadding: getComputedStyle(document.body).padding,
     status: document.querySelector('.status')?.textContent,
-    stats: JSON.parse(canvas.dataset.stats ?? '{}'),
+    stats: gridkitStats(),
   }
 })()`)
       assert.equal(metrics.bodyPadding, '0px')
@@ -101,24 +101,20 @@ export async function run() {
       if (name === 'ACTIVSg10k') {
         // The first-frame optimization must preserve live native border settings.
         const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
-        const stats = async () =>
-          JSON.parse((await view.locator('canvas').getAttribute('data-stats')) ?? '{}')
+        const stats = () => view.evaluate<{ frames: number; segments: number }>('gridkitStats()')
         const before = await stats()
         await settings.update('network.borders', false, vscode.ConfigurationTarget.Workspace)
-        await view.waitForFunction(
-          "(frames) => JSON.parse(document.querySelector('canvas').dataset.stats).frames > frames",
-          before.frames,
-        )
+        await view.waitForFunction('(frames) => gridkitStats().frames > frames', before.frames)
         const without = await stats()
         await settings.update('network.borders', true, vscode.ConfigurationTarget.Workspace)
         await view.waitForFunction(
-          "(segments) => JSON.parse(document.querySelector('canvas').dataset.stats).segments > segments",
+          '(segments) => gridkitStats().segments > segments',
           without.segments,
         )
         await workbench.screenshot({ path: join(output, 'playwright', 'network-borders-on.png') })
         await settings.update('network.borders', false, vscode.ConfigurationTarget.Workspace)
         await view.waitForFunction(
-          "(segments) => JSON.parse(document.querySelector('canvas').dataset.stats).segments === segments",
+          '(segments) => gridkitStats().segments === segments',
           without.segments,
         )
         await workbench.screenshot({ path: join(output, 'playwright', 'network-borders-off.png') })

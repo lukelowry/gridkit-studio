@@ -1,16 +1,17 @@
 import type { RowsBlock, Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { type Channel, CHANNELS, channelsFor } from './bindings.js'
+import { channelsFor, channelsOf, NUMERIC } from './bindings.js'
 import { display, rowsOf } from './cells.js'
 import type { Target } from './contexts.js'
 import { reviewChanges } from './git.js'
 import type { Element, Plot, Summary } from './messages.js'
 import { definitions } from './preferences.js'
+import { networkOf, placementOf } from './schema.js'
 import type { Session, Sessions } from './sessions.js'
 import { registerTasks } from './tasks.js'
+import type { LoopMode } from './transport.js'
 import { Node } from './trees.js'
-import { networkOf, placementOf } from './webview/topology.js'
 
 interface Context {
   session: Session
@@ -23,8 +24,6 @@ interface Context {
 export function registerCommands(studio: Sessions) {
   const tasks = registerTasks(studio)
   const registrations: vscode.Disposable[] = [tasks.provider]
-  let playing: Session | undefined
-  let playback: ReturnType<typeof setInterval> | undefined
   const targetOf = (value?: unknown, supplied?: { uri?: string; view?: string }) => {
     let target: Target | undefined
     if (value instanceof Node) target = value.target
@@ -127,28 +126,17 @@ export function registerCommands(studio: Sessions) {
         },
       })) as RowsBlock[],
     )
-  async function chooseField(
+  /** The recorded field the command is about, or one the reader picks. */
+  async function chooseSignal(
     context: Context,
-    sampledOnly: boolean,
   ): Promise<{ type: string; field: string } | undefined> {
-    const existing =
-      context.type && context.field
-        ? context.summary.schema.types[context.type]?.fields[context.field]
-        : undefined
-    if (existing && (!sampledOnly || existing.sampled))
-      return { type: context.type!, field: context.field! }
+    const { schema, counts } = context.summary
+    if (context.type && context.field && schema.types[context.type]?.fields[context.field]?.sampled)
+      return { type: context.type, field: context.field }
     const choice = await vscode.window.showQuickPick(
-      Object.entries(context.summary.schema.types).flatMap(([type, definition]) =>
+      Object.entries(schema.types).flatMap(([type, definition]) =>
         Object.entries(definition.fields)
-          .filter(
-            ([, field]) =>
-              context.summary.counts[type] &&
-              (sampledOnly
-                ? field.sampled
-                : ['float64', 'float32', 'int32', 'uint32', 'boolean'].includes(
-                    String(field.type),
-                  )),
-          )
+          .filter(([, field]) => counts[type] && field.sampled)
           .map(([field, spec]) => ({
             label: type + '.' + field,
             description: spec.unit,
@@ -157,7 +145,7 @@ export function registerCommands(studio: Sessions) {
             field,
           })),
       ),
-      { title: sampledOnly ? 'Plot recorded field' : 'Choose a field' },
+      { title: 'Plot recorded field' },
     )
     return choice ? { type: choice.type, field: choice.field } : undefined
   }
@@ -346,15 +334,12 @@ export function registerCommands(studio: Sessions) {
   )
   command('clearRun', async (context) => {
     const session = context.session
-    if (playing === session) pause()
     await studio.client.call('clear', { uri: session.uri })
-    session.run = session.previous = undefined
-    session.at = undefined
-    session.window = undefined
+    studio.show(session, undefined)
     changed(session)
   })
   const plot = async (context: Context) => {
-    const selected = await chooseField(context, true)
+    const selected = await chooseSignal(context)
     if (!selected) return
     const id = context.element?.id.startsWith(selected.type + '/') ? context.element.id : undefined
     const plot: Plot = { from: selected.type, field: selected.field, ...(id ? { id } : {}) }
@@ -465,124 +450,45 @@ export function registerCommands(studio: Sessions) {
     )
     studio.output.show()
   })
-  const pause = () => {
-    clearInterval(playback)
-    playback = undefined
-    if (playing) {
-      playing.playing = false
-      studio.changed.fire(playing.uri)
-      playing = undefined
-    }
-  }
-  register('pauseTimeline', () => pause())
-  command('toggleTimeline', (context) => {
-    const session = context.session
-    if (playing === session) return pause()
-    pause()
-    if ((session.run?.frames ?? 0) < 2) return
-    playing = session
-    session.playing = true
-    session.follow = false
-    const run = session.run!
-    if ((session.at ?? run.domain[1]) >= run.domain[1]) session.at = run.domain[0]
-    let before = performance.now()
-    session.direction = 1
-    studio.changed.fire(session.uri)
-    playback = setInterval(() => {
-      const run = session.run
-      if (!run || !studio.all.has(session.uri)) return pause()
-      const now = performance.now()
-      let next =
-        (session.at ?? run.domain[0]) + ((now - before) / 1000) * session.speed * session.direction
-      before = now
-      const [start, end] = run.domain
-      const span = end - start
-      if (span <= 0) return pause()
-      if (next > end || next < start) {
-        if (session.loop === 'wrap') next = start + ((((next - start) % span) + span) % span)
-        else if (session.loop === 'pingpong') {
-          const phase = (((next - start) % (2 * span)) + 2 * span) % (2 * span)
-          next = start + (phase <= span ? phase : 2 * span - phase)
-          session.direction = phase <= span ? 1 : -1
-        } else {
-          session.at = Math.max(start, Math.min(end, next))
-          studio.changed.fire(session.uri)
-          return pause()
-        }
-      }
-      session.at = next
-      studio.changed.fire(session.uri)
-    }, 50)
-  })
-  command('seekTime', async (context, value) => {
-    const run = context.session.run
-    if (!run) return
+  // Playback is the case's clock; these are its keyboard and palette entries.
+  command('toggleTimeline', ({ session }) => session.transport.playPause())
+  command('followTime', ({ session }) => session.transport.goLive())
+  command('seekTime', async ({ session }, value) => {
+    const { transport } = session
+    if (transport.state.status === 'idle') return
     const text =
       typeof value === 'number'
         ? String(value)
         : await vscode.window.showInputBox({
             title: 'Time [s]',
-            value: String(context.session.at ?? run.domain[0]),
+            value: String(transport.currentT()),
           })
     if (text === undefined) return
     if (!text.trim() || !Number.isFinite(Number(text))) throw new Error('Time must be finite.')
-    if (playing === context.session) pause()
-    context.session.at = Math.max(run.domain[0], Math.min(run.domain[1], Number(text)))
-    context.session.follow = false
-    changed(context.session)
+    transport.pause()
+    transport.seek(Number(text))
   })
   for (const [id, direction] of [
     ['previousSample', -1],
     ['nextSample', 1],
   ] as const)
-    command(id, async (context) => {
-      const session = context.session
-      if (!session.run) return
-      if (playing === session) pause()
-      session.at = await studio.client.call('step', {
-        run: session.run.id,
-        at: session.at ?? session.run.domain[0],
-        direction,
-      })
-      session.follow = false
-      changed(session)
-    })
-  command('followTime', (context) => {
-    pause()
-    context.session.follow = true
-    context.session.at = context.session.run?.domain[1]
-    changed(context.session)
-  })
-  command('unfollowTime', (context) => {
-    context.session.follow = false
-    changed(context.session)
-  })
-  command('loopTime', async (context) => {
-    const loop = await vscode.window.showQuickPick(
+    command(id, ({ session }) => studio.step(session, direction))
+  command('loopTime', async ({ session }) => {
+    const loop = await vscode.window.showQuickPick<{ label: string; value: LoopMode }>(
       [
         { label: 'Once', value: 'none' },
         { label: 'Loop', value: 'wrap' },
         { label: 'Bounce', value: 'pingpong' },
-      ] as const,
+      ],
       { title: 'Repeat playback' },
     )
-    if (loop) {
-      context.session.loop = loop.value
-      changed(context.session)
-    }
+    if (loop) session.transport.setLoop(loop.value)
   })
-  command('unloopTime', (context) => {
-    context.session.loop = 'none'
-    changed(context.session)
-  })
-  command('timeSpeed', async (context) => {
-    const rate = await vscode.window.showQuickPick(['0.25', '0.5', '1', '2', '4'], {
+  command('timeSpeed', async ({ session }) => {
+    const rate = await vscode.window.showQuickPick(['0.5', '1', '2', '4'], {
       title: 'Simulated seconds per second',
     })
-    if (rate) {
-      context.session.speed = Number(rate)
-      changed(context.session)
-    }
+    if (rate) session.transport.setRate(Number(rate))
   })
   for (const id of ['fit', 'neighborhood', 'orbit', 'retryMonitor'] as const)
     command(id, (context) =>
@@ -590,7 +496,6 @@ export function registerCommands(studio: Sessions) {
     )
   command('resetMonitorWindow', (context) => {
     context.session.window = undefined
-    context.session.follow = true
     action(context, 'resetMonitorWindow', undefined, 'monitor')
     changed(context.session)
   })
@@ -604,14 +509,12 @@ export function registerCommands(studio: Sessions) {
     const range = value.split(/[, ]+/).map(Number)
     if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
       throw new Error('Enter two increasing finite bounds.')
-    context.session.follow = false
     context.session.window = [range[0]!, range[1]!]
-    action(context, 'monitorWindow', range.join(','), 'monitor')
     changed(context.session)
   })
   command('chooseOverlapping', async (context) => {
     const selected = await vscode.window.showQuickPick(
-      (context.target?.items ?? context.session.overlaps ?? []).map((element) => ({
+      (context.target?.items ?? []).map((element) => ({
         label: element.id,
         description: element.field,
         element,
@@ -715,82 +618,26 @@ export function registerCommands(studio: Sessions) {
     })
     if (value) action(context, 'projection', value, 'network')
   })
+  // Mapping is the Mappings panel's: a command about a field opens the panel's editor on it.
   command('bind', async (context) => {
-    const selected = await chooseField(context, false)
-    if (!selected) return
-    const allowed = channelsFor(placementOf(networkOf(context.summary.schema), selected.type))
-    if (!allowed.length) throw new Error('This type has no network display channels.')
-    const channels = await vscode.window.showQuickPick(
-      allowed.map((channel) => {
-        const owner = context.session.bindings[channel]
-        return {
-          label: CHANNELS[channel].label,
-          description: owner ? owner.type + '.' + owner.field : undefined,
-          channel,
-          picked: owner?.type === selected.type && owner.field === selected.field,
-        }
-      }),
-      { title: 'Map ' + selected.type + '.' + selected.field, canPickMany: true },
-    )
-    if (!channels) return
-    for (const channel of allowed) {
-      const current = context.session.bindings[channel]
-      if (channels.some((item) => item.channel === channel))
-        context.session.bindings[channel] = selected
-      else if (current?.type === selected.type && current.field === selected.field)
-        delete context.session.bindings[channel]
-    }
-    changed(context.session)
+    const { schema } = context.summary
+    const definition = context.type ? schema.types[context.type]?.fields[context.field ?? ''] : null
+    const field =
+      context.type && context.field && NUMERIC.has(definition?.type)
+        ? { type: context.type, field: context.field }
+        : undefined
+    if (field && !channelsFor(placementOf(networkOf(schema), field.type)).length)
+      throw new Error('This type has no network display channels.')
+    context.session.editing = field
+    studio.activate(context.session.uri)
+    await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
   })
   command('unbind', async (context) => {
-    if (context.type && context.field) {
-      for (const [channel, binding] of Object.entries(context.session.bindings))
-        if (binding.type === context.type && binding.field === context.field)
-          delete context.session.bindings[channel as Channel]
-    } else {
-      const selected = await vscode.window.showQuickPick(
-        Object.entries(context.session.bindings).map(([channel, binding]) => ({
-          label: CHANNELS[channel as Channel].label,
-          description: binding.type + '.' + binding.field,
-          channel,
-        })),
-        { title: 'Remove mapping' },
-      )
-      if (!selected) return
-      delete context.session.bindings[selected.channel as Channel]
-    }
-    changed(context.session)
-  })
-  command('bindingRange', async (context) => {
-    const choices = Object.entries(context.session.bindings)
-      .filter(
-        ([, binding]) =>
-          !context.field || (binding.field === context.field && binding.type === context.type),
-      )
-      .map(([channel, binding]) => ({
-        label: CHANNELS[channel as Channel].label,
-        description: binding.type + '.' + binding.field,
-        binding,
-      }))
-    const selected =
-      choices.length === 1
-        ? choices[0]
-        : await vscode.window.showQuickPick(choices, { title: 'Mapping range' })
-    if (!selected) return
-    const input = await vscode.window.showInputBox({
-      title: 'Mapping input range',
-      prompt: 'Minimum, maximum; empty restores automatic range',
-      value: selected.binding.domain?.join(', ') ?? '',
-    })
-    if (input === undefined) return
-    if (!input.trim()) delete selected.binding.domain
-    else {
-      const range = input.split(/[, ]+/).map(Number)
-      if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
-        throw new Error('Enter two increasing finite bounds.')
-      selected.binding.domain = [range[0]!, range[1]!]
-    }
-    changed(context.session)
+    const field =
+      context.type && context.field ? { type: context.type, field: context.field } : undefined
+    if (field && channelsOf(context.session.bindings, field).length)
+      studio.bind(context.session.uri, field, [])
+    else await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
   })
   command('signalRange', async (context) => {
     const plot =
@@ -832,7 +679,13 @@ export function registerCommands(studio: Sessions) {
     if (name)
       await vscode.workspace
         .getConfiguration('gridkitStudio', vscode.Uri.parse(context.session.uri))
-        .update('network.colormap', name.value, vscode.ConfigurationTarget.Workspace)
+        .update(
+          'network.colormap',
+          name.value,
+          vscode.workspace.workspaceFolders?.length
+            ? vscode.ConfigurationTarget.Workspace
+            : vscode.ConfigurationTarget.Global,
+        )
   })
   for (const [id, category] of [
     ['networkSettings', 'network'],
@@ -864,6 +717,9 @@ export function registerCommands(studio: Sessions) {
   command('reviewChanges', async (context) => {
     await reviewChanges(vscode.Uri.parse(context.session.uri))
   })
-  registrations.push({ dispose: pause })
+  command('exportVideo', async (context) => {
+    studio.activate(context.session.uri)
+    await vscode.commands.executeCommand('gridkitStudio.export.focus')
+  })
   return registrations
 }

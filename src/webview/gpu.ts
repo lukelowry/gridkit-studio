@@ -1,37 +1,26 @@
-import { createGpu, type Gpu, parseColor } from '@latkit/gpu'
-export function theme(kind: 'network' | 'diagram' | 'monitor' = 'monitor') {
-  const css = getComputedStyle(document.body)
-  const color = (name: string, fallback: string) =>
-    parseColor(css.getPropertyValue(name).trim() || fallback)!
-  const foreground = color('--vscode-foreground', '#cccccc')
-  return {
-    background: color('--vscode-editor-background', '#1e1e1e'),
-    textColor: foreground,
-    ...(kind === 'network' ? { surfaceColor: color('--vscode-editor-background', '#1e1e1e') } : {}),
-    gridColor: color('--vscode-editorIndentGuide-background1', '#404040'),
-    ...(kind !== 'monitor'
-      ? {
-          vertexBaseColor:
-            kind === 'network' ? foreground : color('--vscode-editorWidget-background', '#252526'),
-          edgeBaseColor: foreground,
-        }
-      : {}),
-    ...(kind === 'diagram' ? { outlineColor: color('--vscode-contrastBorder', '#808080') } : {}),
-    selectedColor: color('--vscode-focusBorder', '#007fd4'),
-    hoverColor: color('--vscode-editorHoverWidget-border', '#454545'),
-    motion: 'auto' as const,
-  }
+import { createGpu, type Gpu } from '@latkit/gpu'
+
+/** The largest image a view draws or a video holds: 4K. */
+export const MAX_OUTPUT_PIXELS = 3840 * 2160
+
+/** Lattice's budget: a 4K canvas and a 4K export, each with old and new targets alive, at 40 bytes
+ *  a pixel for 4x color, depth and the resolved image, plus 256 MiB for geometry and caches. An
+ *  admission limit, not an allocation; ordinary windows use much less. */
+const GPU_BUDGET = {
+  gpuBytes: 4 * MAX_OUTPUT_PIXELS * 40 + 256 * 1024 ** 2,
+  cpuBytes: 256 * 1024 ** 2,
+  stagingBytes: 64 * 1024 ** 2,
 }
+
+/** The view's GPU: made when first asked for, and again once it stops. */
 export class CanvasGpu {
   gpu?: Gpu
   #pending?: Promise<Gpu>
   #closed = false
+  /** The GPU, calling `lost` if it stops while the view is open. */
   async get(lost: () => void): Promise<Gpu> {
     if (this.gpu) return this.gpu
-    return (this.#pending ??= createGpu({
-      budget: { cpuBytes: 64 << 20, gpuBytes: 128 << 20, stagingBytes: 16 << 20 },
-      maxFramesInFlight: 2,
-    })
+    return (this.#pending ??= createGpu({ budget: GPU_BUDGET, maxFramesInFlight: 2 })
       .then((gpu) => {
         if (this.#closed) {
           gpu.destroy()

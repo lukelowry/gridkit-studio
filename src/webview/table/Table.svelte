@@ -1,12 +1,12 @@
 <script lang="ts">
-  import type { RowsBlock, RowsQuery, Value } from '@latkit/model'
+  import type { RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
-  import { display, referenceNames, rowsOf } from '../cells.js'
-  import { menuContext } from '../contexts.js'
-  import type { ViewState } from '../messages.js'
-  import { bridge } from './bridge.js'
-  import { accessibility } from './style.js'
+  import { display, referenceNames, rowsOf } from '../../cells.js'
+  import { menuContext } from '../../contexts.js'
+  import type { ViewState } from '../../messages.js'
+  import { bridge, merged } from '../bridge.js'
+  import { appearance } from '../theme.js'
   let view = $state<ViewState>({})
   let type = $state(bridge.state({ type: 'Bus' }).type)
   let fields = $state<string[]>([])
@@ -109,14 +109,10 @@
             }
           : {}),
       }
-      const blocks = await bridge.request<RowsBlock[]>(
-        'query',
-        $state.snapshot(query),
-        request.signal,
-      )
+      const blocks = await bridge.request('query', $state.snapshot(query), request.signal)
       if (generation !== current) return
       const references = await referenceNames(blocks, (query) =>
-        bridge.request<RowsBlock[]>('query', query, request.signal),
+        bridge.request('query', query, request.signal),
       )
       if (generation !== current) return
       rows = rowsOf(blocks, references)
@@ -215,7 +211,7 @@
       order = undefined
     }
     try {
-      const blocks = await bridge.request<RowsBlock[]>('query', {
+      const blocks = await bridge.request('query', {
         kind: 'rows',
         from: next,
         select: [],
@@ -237,8 +233,8 @@
       if (message.kind === 'state') {
         const first = !view.summary
         const before = view.selection?.id
-        view = { ...view, ...message.state }
-        accessibility(view)
+        view = merged(view, message.state)
+        appearance(view.settings)
         if (
           view.selection?.id &&
           view.selection.id !== before &&
@@ -281,11 +277,13 @@
   })
 </script>
 
-<main class="shell">
-  {#if view.stale}<div class="warning" role="status">
+<main class="table">
+  {#if view.stale}
+    <p class="c-note c-note--warn" role="status">
       Source is updating or invalid. Showing the last valid revision; editing is paused.
-    </div>{/if}
-  {#if error}<div class="error" role="alert">{error}</div>{/if}
+    </p>
+  {/if}
+  {#if error}<p class="c-note c-note--error" role="alert">{error}</p>{/if}
   <div
     class="table-scroll"
     bind:this={scroll}
@@ -386,13 +384,13 @@
           </tr>{/if}
       </tbody>
     </table>
-    {#if !view.summary}<div class="empty">Loading case…</div>{:else if !total && !loading}<div
-        class="empty"
-      >
-        No matching elements.
-      </div>{/if}
+    {#if !view.summary || (!total && !loading)}
+      <div class="c-empty">
+        <p class="c-empty__text">{view.summary ? 'No matching elements.' : 'Loading case…'}</p>
+      </div>
+    {/if}
   </div>
-  <div class="status" aria-live="polite">
+  <div class="table__status" aria-live="polite">
     {total.toLocaleString()} elements · revision {view.summary?.version ?? '…'}{loading
       ? ' · Loading rows…'
       : ''}
@@ -400,6 +398,11 @@
 </main>
 
 <style>
+  .table {
+    display: flex;
+    flex-direction: column;
+    block-size: 100%;
+  }
   .table-scroll {
     flex: 1;
     min-height: 0;
@@ -409,46 +412,56 @@
     border-collapse: separate;
     border-spacing: 0;
     width: 100%;
-    white-space: nowrap;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
   thead {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--vscode-editor-background);
+    background: var(--color-surface-1);
   }
   th,
   td {
-    height: 28px;
-    padding: 0 6px;
-    border-bottom: 1px solid var(--vscode-panel-border);
+    height: var(--spacing-row-h);
+    padding: 0 var(--spacing-xs);
+    border-bottom: 1px solid var(--color-border);
     text-align: left;
     font-weight: normal;
+  }
+  thead th {
+    color: var(--color-text-2);
+    font-weight: 600;
   }
   th button,
   .cell {
     display: block;
-    background: transparent;
-    color: inherit;
-    border: 0;
     width: 100%;
-    text-align: left;
-    padding: 4px;
-    min-height: 28px;
+    min-height: var(--spacing-row-h);
     max-width: 28rem;
+    padding: var(--spacing-xs);
     overflow: hidden;
+    text-align: left;
     text-overflow: ellipsis;
+    cursor: pointer;
   }
   .cell:hover {
-    background: var(--vscode-list-hoverBackground);
+    background: var(--color-row-hover);
   }
-  tr.selected {
-    background: var(--vscode-list-inactiveSelectionBackground);
+  tr.selected,
+  tr.selected th {
+    background: var(--color-selected);
   }
   td input {
     width: 100%;
     min-width: 7rem;
+    min-height: var(--spacing-row-h);
+    padding-inline: var(--spacing-xs);
+    border: 1px solid var(--vscode-input-border, var(--color-border));
+    border-radius: var(--radius-sm);
+    background: var(--color-input);
+    color: var(--vscode-input-foreground, var(--color-text-1));
   }
   .spacer {
     padding: 0;
@@ -457,18 +470,22 @@
   tbody th {
     position: sticky;
     left: 0;
-    background: var(--vscode-editor-background);
-    border-right: 1px solid var(--vscode-panel-border);
+    border-right: 1px solid var(--color-border);
+    background: var(--color-surface-1);
   }
   .numeric .cell {
+    font-family: var(--font-mono);
     text-align: right;
-    font-family: var(--vscode-editor-font-family, monospace);
-  }
-  tr.selected th {
-    background: var(--vscode-list-inactiveSelectionBackground);
   }
   .cell:focus-visible {
-    outline-offset: -2px;
-    background: var(--vscode-list-focusBackground);
+    outline-offset: calc(-1 * var(--focus-width));
+    background: var(--vscode-list-focusBackground, var(--color-row-hover));
+  }
+  .table__status {
+    flex: none;
+    padding: var(--spacing-2xs) var(--spacing-md);
+    border-top: 1px solid var(--color-border);
+    color: var(--color-text-2);
+    font-size: var(--text-xs);
   }
 </style>

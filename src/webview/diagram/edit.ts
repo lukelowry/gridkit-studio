@@ -1,10 +1,14 @@
+/** Turn the diagram's editing gestures into transactions on the case document. */
+
 import { arrange, type Diagram } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { type FieldValues, itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
-import type { Mutation, ViewState } from '../messages.js'
-import { reader } from '../preferences.js'
-import { bridge } from './bridge.js'
+import type { Mutation, ViewState } from '../../messages.js'
+import { reader } from '../../preferences.js'
+import { bridge } from '../bridge.js'
+
+/** The moves that put each block where `positions` says. */
 function moves(diagram: Diagram, positions: Readonly<Record<string, FieldValues>>): Mutation[] {
   const changes: Mutation[] = []
   for (const field of Object.values(positions)) {
@@ -24,14 +28,12 @@ function moves(diagram: Diagram, positions: Readonly<Record<string, FieldValues>
   }
   return changes
 }
-const report = (error: unknown) => {
-  const status = document.querySelector<HTMLElement>('.status')
-  if (status) {
-    status.textContent = String(error)
-    status.setAttribute('role', 'alert')
-  }
-  bridge.send({ kind: 'error', message: String(error) })
-}
+
+/** An edit the case refused is said where the workbench says everything else. */
+const refused = (error: unknown) =>
+  bridge.send({ kind: 'notify', message: error instanceof Error ? error.message : String(error) })
+
+/** Commit `diagram`'s edits to the case; returns the arrangement of all its blocks. */
 export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
   let busy = false
   async function commit(changes: Mutation[], label: string, expected = state().summary?.version) {
@@ -57,7 +59,7 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
   }
   diagram.on('connect', (proposal) => {
     if (proposal.from.kind !== 'port') {
-      report('Start a connection at a signal port.')
+      refused('Start a connection at a signal port.')
       return
     }
     const from = { id: itemId(proposal.from), field: proposal.from.port }
@@ -70,11 +72,12 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
     void commit(
       [{ kind: 'connect', from, to }],
       to ? 'Connect signal ports' : 'Disconnect signal port',
-    ).catch(report)
+    ).catch(refused)
   })
   diagram.on('move', (proposal) => {
     const expected = state().summary?.version
     void (async () => {
+      // The first move of a diagram laid out for the reader saves where every block stood.
       const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.position)
       const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config))
       const changes = new Map(all.map((change) => ['id' in change ? change.id : '', change]))
@@ -85,14 +88,14 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState) {
           position: move.position,
         })
       await commit([...changes.values()], 'Move diagram blocks', expected)
-    })().catch(report)
+    })().catch(refused)
   })
   diagram.on('delete', (items) => {
     if (items.length)
       void commit(
         [{ kind: 'remove', ids: items.map((item) => itemId(item)) }],
         'Delete diagram elements',
-      ).catch(report)
+      ).catch(refused)
   })
   return async () => {
     const expected = state().summary?.version

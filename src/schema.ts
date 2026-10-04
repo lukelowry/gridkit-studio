@@ -10,7 +10,7 @@
 import type { FieldDefinition, Schema } from '@latkit/model'
 
 /** A field of one type that names a row of another. */
-export interface Reference {
+interface Reference {
   readonly field: string
   readonly to: string
   readonly direction?: 'in' | 'out'
@@ -39,7 +39,7 @@ export function typeName(schema: Schema, type: string): string {
 }
 
 /** The fields of `type`; none for a type the schema lacks. */
-export function fieldsOf(schema: Schema, type: string): Readonly<Record<string, FieldDefinition>> {
+function fieldsOf(schema: Schema, type: string): Readonly<Record<string, FieldDefinition>> {
   return schema.types[type]?.fields ?? {}
 }
 
@@ -67,23 +67,11 @@ export function nameFieldOf(schema: Schema, type: string): string | null {
 }
 
 /** The fields of `type` that name a row of another type. */
-export function referencesOf(schema: Schema, type: string): Reference[] {
+function referencesOf(schema: Schema, type: string): Reference[] {
   return Object.entries(fieldsOf(schema, type)).flatMap(([field, { type: data, direction }]) =>
     typeof data === 'object' && data.kind === 'reference'
       ? [{ field, to: data.to, ...(direction !== undefined && { direction }) }]
       : [],
-  )
-}
-
-/** Where rows of other types name rows of `type`: each referring type and its field. */
-export function referrersOf(
-  schema: Schema,
-  type: string,
-): (Reference & { readonly type: string })[] {
-  return Object.keys(schema.types).flatMap((from) =>
-    referencesOf(schema, from)
-      .filter(({ to }) => to === type)
-      .map((reference) => ({ type: from, ...reference })),
   )
 }
 

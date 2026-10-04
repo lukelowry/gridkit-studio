@@ -2,9 +2,9 @@
 import { viewStyle } from '@latkit/gpu'
 import type { Network } from '@latkit/network'
 
-import type { SettingsReader } from '../preferences.js'
-import type { Palette } from './palette.js'
-import { color } from './palette.js'
+import type { SettingsReader } from '../../preferences.js'
+import type { Palette } from '../theme.js'
+import { color } from '../theme.js'
 
 export function networkOptions(
   s: SettingsReader,

@@ -1,6 +1,6 @@
-import type { Bindings } from './bindings.js'
+import { type Bindings, NUMERIC } from './bindings.js'
 import type { Element, Summary } from './messages.js'
-import { diagramOf, networkOf, placementOf } from './webview/topology.js'
+import { diagramOf, networkOf, placementOf } from './schema.js'
 const topology = new WeakMap<
   Summary['schema'],
   { network: ReturnType<typeof networkOf>; diagram: ReturnType<typeof diagramOf> }
@@ -32,9 +32,6 @@ export function menuContext(
     )
   const network = type ? placementOf(drawn.network, type) : null
   const diagram = type ? placementOf(drawn.diagram, type) : null
-  const numeric =
-    definition &&
-    ['float64', 'float32', 'int32', 'uint32', 'boolean'].includes(String(definition.type))
   return {
     preventDefaultContextMenuItems: true,
     gridkitTarget: target,
@@ -47,7 +44,7 @@ export function menuContext(
     gridkitEdge: network === 'edge',
     gridkitEditable: !!(target.element && type && field && summary.editable[type]?.includes(field)),
     gridkitReference: typeof definition?.type === 'object' && definition.type.kind === 'reference',
-    gridkitBindable: !!network && !!numeric,
+    gridkitBindable: !!network && NUMERIC.has(definition?.type),
     gridkitBound: Object.values(bindings).some(
       (binding) => binding.type === type && binding.field === field,
     ),

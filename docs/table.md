@@ -18,7 +18,7 @@ Document-change events send revisioned UTF-16 deltas to a worker source mirror. 
 
 Toggle editing with the native editor-title action. Drag blocks to place them, drag compatible ports to wire them, and use native context actions to disconnect or delete. Required connections and remaining references guard deletion. A net has at most one output driver through the wiring operation; input fan-out is allowed. Two disconnected ports allocate one new stable Signal ID.
 
-Positions live in each record's extension.diagram.position as [x, y]. The first move captures the automatic arrangement before changing the dragged blocks, preserving the rest of the layout. Arrange Diagram applies the selected Lattice layout settings and writes one undoable transaction. Stored positions select manual placement until arranged again.
+Positions live in each record's extension.diagram.position as [x, y]. The first move captures the automatic arrangement before changing the dragged blocks, preserving the rest of the layout. Arrange Diagram applies the selected layout settings and writes one undoable transaction. Stored positions select manual placement until arranged again.
 
 Transactions are bounded to 10,000 changes and 4 MiB inserted text. New diagram gestures should produce these domain mutations rather than serializing the document or editing column arrays.
 

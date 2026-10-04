@@ -1,4 +1,4 @@
-<!-- Stage a field's channel assignments until Apply. Cancel and Escape leave mappings unchanged. From Lattice. -->
+<!-- Stage a field's channel assignments until Apply. Cancel and Escape leave mappings unchanged. -->
 <script lang="ts">
   import type { Schema } from '@latkit/model'
 

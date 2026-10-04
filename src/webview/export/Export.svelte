@@ -1,4 +1,4 @@
-<!-- Configure and export video using separate renderers so the workbench stays usable. From Lattice. -->
+<!-- Configure and export video using separate renderers so the workbench stays usable. -->
 <script lang="ts">
   import type { Data, FieldValues } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'

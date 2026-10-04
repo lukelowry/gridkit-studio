@@ -53,15 +53,10 @@ export interface Summary extends Revision {
   issues: Issue[]
   parseMs: number
 }
+/** A simulation process under way, which its owner stops if the data worker cannot. */
 export interface RuntimeProcess {
   pid: number
   executable: string
-  container?: string
-}
-export interface RuntimeOptions {
-  method: 'auto' | 'installed' | 'docker' | 'podman'
-  executable: string
-  image: string
 }
 export interface RunInfo {
   id: string
@@ -82,7 +77,8 @@ export interface RunInfo {
 export interface RunRequest extends Revision {
   values: Record<string, unknown>
   outputs: readonly FieldSelection[]
-  runtime: RuntimeOptions
+  /** Where GridKit is installed; empty finds its DynamicSimulation on PATH. */
+  gridkit: string
   cacheBytes: number
 }
 export interface SourceContext {

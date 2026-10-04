@@ -1,4 +1,4 @@
-<!-- Render command parameters as typed inputs, choices, and switches. From Lattice. -->
+<!-- Render command parameters as typed inputs, choices, and switches. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
 

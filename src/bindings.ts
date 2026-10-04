@@ -1,6 +1,6 @@
 /**
  * The network's display channels a field can drive, and how the Mappings panel names them: in full
- * where there is room (`Vertex Color`), and by one word each in a dense row (`color`). From Lattice.
+ * where there is room (`Vertex Color`), and by one word each in a dense row (`color`).
  */
 
 import type { FieldSelection } from '@latkit/model'

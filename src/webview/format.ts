@@ -1,4 +1,4 @@
-/** Format numbers and failures; from Lattice. Six significant digits hide float conversion noise. */
+/** Format numbers and failures. Six significant digits hide float conversion noise. */
 
 /** `value` as the views show a number. */
 export function formatNumber(value: number): string {

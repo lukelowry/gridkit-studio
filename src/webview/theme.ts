@@ -1,4 +1,4 @@
-/** The workbench theme as the renderers draw with it, read through Lattice's tokens. */
+/** The workbench theme as the renderers draw with it, read through the tokens. */
 
 import { parseColor, type RGBA } from '@latkit/gpu'
 
@@ -32,7 +32,7 @@ export function palette(): Palette {
   ) as Palette
 }
 
-/** The face the renderers label with: the editor's, as Lattice labels in mono. */
+/** The face the renderers label with: the editor's. */
 export function font(): string {
   return getComputedStyle(document.body).getPropertyValue('--font-mono').trim()
 }

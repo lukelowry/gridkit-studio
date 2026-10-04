@@ -1,5 +1,5 @@
 /*
-  Lattice's global component classes, which screens compose by name: buttons (c-btn and its size
+  The global component classes, which screens compose by name: buttons (c-btn and its size
   and primary variants, c-icon-btn), the empty state, the text field, the form field (c-field), the
   checkbox (c-check), notes, and the instrument row (c-row) that Switch and Row
   share. Keyboard focus rings come from tokens.css.

@@ -13,23 +13,21 @@ Each webview owns its renderer and GPU. Monitor plots share one GPU within their
 
 A view is streamed the case's rows once, and the samples of the fields it draws. While a run's samples for those fields fit in 48 MiB the view holds the whole run, and each publication appends only its new pages; past that it holds a window of the run (the Monitor's visible times with a margin, the Network's few seconds around the playhead), re-requested as it is left. The Network keeps the case as its topology source and reads samples through its styles, so appended frames restyle without redrawing geometry; over a finished run held whole, bound colors span the run's range rather than each frame's.
 
-Playback is one clock a case, Lattice's Transport, held in the extension. It changes only on play, pause, seek, rate, repeat, and arriving frames; each view integrates it locally on its own animation frames, so playing and scrubbing cross no process boundary per frame. A view's seek paints at once and is confirmed to the others.
+Playback is one clock a case, held in the extension. It changes only on play, pause, seek, rate, repeat, and arriving frames; each view integrates it locally on its own animation frames, so playing and scrubbing cross no process boundary per frame. A view's seek paints at once and is confirmed to the others.
 
-Network and Diagram are custom text editors. Case and Monitor are native bottom-panel WebviewViews; Mappings, DynamicSimulation, and Export are sidebar WebviewViews. Inspector uses a native tree; workbench actions use native menus, title actions, Quick Picks, Settings, and tasks, while controls coupled to a canvas (projection, rotation, fit, playback, mapping, export) are drawn in the view with Lattice's components. Camera changes survive data updates and a replaced GPU. Incompatible sample overlays are withheld.
+Network and Diagram are custom text editors. Case and Monitor are native bottom-panel WebviewViews; Mappings, DynamicSimulation, and Export are sidebar WebviewViews. Inspector uses a native tree; workbench actions use native menus, title actions, Quick Picks, Settings, and tasks, while controls coupled to a canvas (projection, rotation, fit, playback, mapping, export) are drawn in the view with the shared components. Camera changes survive data updates and a replaced GPU. Incompatible sample overlays are withheld.
 
 ## Single definitions
 
 `catalog.json` is the only authored domain definition. The compiler derives the Latkit schema, parser plans, field editing, diagnostics, completions, and simulation parameters.
 
-`src/preferences.ts` is the single typed display-settings catalog adapted from Lattice. `pnpm settings` generates native manifest settings, and `pnpm settings:check` checks for drift. All 139 applicable settings retain Lattice defaults; VS Code supplies theme selection.
+`src/preferences.ts` is the single typed display-settings catalog. `pnpm settings` generates native manifest settings, and `pnpm settings:check` checks for drift. VS Code supplies theme selection.
 
 ## Provenance
 
 - GridKit Server `d0824fc`: imported catalog, parser/column compiler, simulation parameter and staging contract, Arrow/CSV decoding. Adapted into Studio; no sibling runtime dependencies.
-- Lattice `8100c24e`: topology interpretation, settings/defaults, Network/Diagram/Monitor option mapping, field-binding styles, semantic palette roles, plot axes/scrubbing, deterministic unplaced-network layout, geographic border decoder/data.
-- Lattice `4d7e9cf2`: the playback Transport and its tests, the token and component layers (re-pointed at workbench theme colors), glyphs, CanvasHost, Section, Switch and Row, the Monitor header and Transport, the Mappings panel and editor, the view toolbar, and video export over `@latkit/video` 0.6.0.
 - Unplaced layout has bounded work, yields for cancellation in the data worker, and uses a circle beyond 2,000 vertices.
-- Geographic border data is Lattice's Natural Earth 5.1.2 derivative (public domain), copied to the packaged webview asset directory.
+- Geographic border data is a Natural Earth 5.1.2 derivative (public domain), copied to the packaged webview asset directory.
 - Git review uses the built-in `vscode.git` version 1 API and `vscode.diff`. It adds no SCM provider or shell Git execution to the extension.
 
 See THIRD_PARTY_NOTICES.md for upstream licenses.
@@ -62,9 +60,9 @@ Network uses the full editor area: no webview padding or selection footer. GPU a
 
 Measured locally on VS Code 1.135 using pnpm test:startup: ACTIVSg2000 first visible frame decreased from 2,526 to 446 ms; ACTIVSg10k from 3,390 to 981 ms. These are sequential opens in one fresh extension-host session, not cold GPU measurements for each case. The first IEEE39 open still costs roughly 1.3–1.5 seconds for cold workbench/GPU startup. Reports and stage timings are under output/startup-before and output/startup-final; results vary by hardware.
 
-## Lattice interface
+## Interface
 
-The views now carry Lattice's own controls: the Network toolbar, the Monitor header and Transport, the Mappings panel, and video export, written against Lattice's tokens on the workbench theme. See DESIGN.md.
+The views carry their own controls: the Network toolbar, the Monitor header and transport, the Mappings panel, the DynamicSimulation form, and video export, written against one set of tokens on the workbench theme. See DESIGN.md.
 
 Measured locally on 2026-10-04 with VS Code 1.135, single runs:
 - The host suite applies a mapping from the panel, plays and steps from the Monitor, checks that the Network draws frame after frame from a mapped signal while the clock plays, and exports a 720p WebM of Network and Monitor (51.5 KB for a one-second run).
@@ -75,6 +73,6 @@ Measured locally on 2026-10-04 with VS Code 1.135, single runs:
 
 - The rule for the window of a run a view holds, and the worker's window filter, have unit and contract tests; no test drives a run large enough to take that path through the views.
 
-The Signals tree is gone: what a run records is chosen under Monitors in the DynamicSimulation panel, which is Lattice's Study panel with its own Run, and a signal is plotted from the list in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
+The Signals tree is gone: what a run records is chosen under Monitors in the DynamicSimulation panel, which has its own Run, and a signal is plotted from the list in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
 
 Not exercised: video export under CI's software GPU. Known and open: the Diagram's layout is latkit's and is superlinear; measured here, 1,338 blocks (ACTIVSg2000) take 18 to 30 s to a first frame and ACTIVSg10k exceeds the layout time limit.

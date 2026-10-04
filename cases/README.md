@@ -1,6 +1,6 @@
 # Cases
 
-These cases were copied through Lattice from [GridKit's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/main/cases/PhasorDynamics).
+These cases come from [GridKit's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/main/cases/PhasorDynamics).
 GridKit provides the dynamics models; the original networks are credited below.
 
 | Cases | Original source |

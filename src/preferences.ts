@@ -1,4 +1,4 @@
-/** Adapted from Lattice 8100c24e src/settings.ts. VS Code owns appearance.theme. */
+/** The display settings of Network, Diagram and Monitor, each defined once. VS Code owns the theme. */
 /** The settings catalog: controls, defaults, types and validation share these definitions. */
 
 import type { ColormapName } from '@latkit/gpu'

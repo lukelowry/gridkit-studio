@@ -80,7 +80,7 @@ function linesOf(type: Border, { starts, points }: Lines): RowBatch {
   const count = starts.length - 1
   return {
     kind: 'rows',
-    index: { source: 'lattice:borders', type, version: VERSION },
+    index: { source: 'studio:borders', type, version: VERSION },
     rows: { kind: 'range', offset: 0, count },
     ids: textColumn(Array.from({ length: count }, (_, row) => `${type}/${row}`)),
     columns: {

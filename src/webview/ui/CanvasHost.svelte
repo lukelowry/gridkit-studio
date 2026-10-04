@@ -1,6 +1,5 @@
 <!-- @component
-  Own a renderer's canvas and cleanup, including late mounts. Children overlay the canvas; failures
-  replace it. From Lattice.
+  Own a renderer's canvas and cleanup, including late mounts. Children overlay the canvas; failures replace it.
 -->
 <script lang="ts">
   import { type Snippet, untrack } from 'svelte'

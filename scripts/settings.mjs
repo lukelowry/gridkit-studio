@@ -65,5 +65,5 @@ if (process.argv.includes('--check')) {
 } else await writeFile(path, text)
 console.log(
   groups.reduce((n, group) => n + Object.keys(group.properties).length, 0) +
-    ' Lattice settings contribute to native VS Code Settings.',
+    ' display settings contribute to native VS Code Settings.',
 )

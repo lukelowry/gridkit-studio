@@ -1,6 +1,6 @@
 ---
 name: GridKit Studio
-description: Lattice's compact engineering views within the native VS Code workbench.
+description: Compact engineering views within the native VS Code workbench.
 colors:
   background: 'var(--vscode-editor-background)'
   panel-background: 'var(--vscode-panel-background)'
@@ -74,22 +74,22 @@ components:
 
 ## Overview
 
-**Creative North Star: "Lattice in the workbench"**
+**Creative North Star: "The native engineering workbench"**
 
-Studio is Lattice's interface inside VS Code. The workbench owns navigation, documents, menus, settings, and tasks. The views own what Lattice's views own: the canvas, and the controls that belong to it. Those controls are Lattice's components, written against Lattice's tokens, with every color and face read from the workbench theme.
+The workbench owns navigation, documents, menus, settings, and tasks. The views own the canvas and the controls that belong to it, drawn with one set of components and tokens whose every color and face is read from the workbench theme. Lattice is the standard for how the views look and feel.
 
 The visual system is restrained and data dense: flat surfaces, narrow separators, readable identifiers and units, and linked selection. User-selected VS Code themes and renderer settings are authoritative; the dark review screenshots are examples, not a fixed brand palette.
 
 **Key Characteristics:**
 
-- Lattice's tokens, components, glyphs, and renderer settings, on the workbench theme.
+- One set of tokens, components, and glyphs, on the workbench theme.
 - Canvas controls in the view; workbench actions in native menus and title bars.
 - One playback clock a case, painted by every view of it.
 - Compact spacing, visible keyboard focus, and explicit source/run state.
 
 ## Tokens
 
-`src/webview/styles/tokens.css` defines Lattice's token names (`--color-*`, `--text-*`, `--spacing-*`, `--radius-*`, `--motion-*`, `--focus-ring`) from workbench theme variables, so a component ported from Lattice keeps its class names and rules. `components.css` carries Lattice's global classes: `c-btn`, `c-icon-btn`, `c-input`, `c-field`, `c-check`, `c-note`, `c-row`, `c-empty`, `c-sr-only`. `src/webview/ui/` holds Lattice's components as they are there: `Select` (searched and windowed past fifty options), `Switch`, `Section`, `Accordion`, `CanvasHost`, `Icon`. Write new view styles against these; do not read `--vscode-*` variables in a component unless no token names the role.
+`src/webview/styles/tokens.css` defines the tokens (`--color-*`, `--text-*`, `--spacing-*`, `--radius-*`, `--motion-*`, `--focus-ring`) from workbench theme variables. `components.css` carries the global classes: `c-btn`, `c-icon-btn`, `c-input`, `c-field`, `c-check`, `c-note`, `c-row`, `c-empty`, `c-sr-only`. `src/webview/ui/` holds the components: `Select` (searched and windowed past fifty options), `Switch`, `Section`, `Accordion`, `CanvasHost`, `Icon`. Write new view styles against these; do not read `--vscode-*` variables in a component unless no token names the role.
 
 A view sits on the surface of the part of the workbench that holds it: `--color-bg` is the editor background for Network and Diagram, the panel background for Case and Monitor, and the side bar background for Mappings, DynamicSimulation, and Export. Renderers clear with the same token, so a canvas and the chrome around it are one surface.
 
@@ -113,7 +113,7 @@ Warning and error tokens communicate stale documents, validation failures, and e
 
 ## Typography
 
-Body text inherits the VS Code font family and size. Labels are 12px, captions 11px. Numbers, the playback time, and everything a renderer labels (axes, vertices, blocks, ports) use the editor font, as Lattice labels in mono.
+Body text inherits the VS Code font family and size. Labels are 12px, captions 11px. Numbers, the playback time, and everything a renderer labels (axes, vertices, blocks, ports) use the editor font.
 
 There is no display-font layer. Labels use sentence case and include units where the catalog supplies them, as `name [unit]`. A type and field are named by their catalog labels (`Bus · Voltage magnitude [p.u.]`), not their keys.
 
@@ -143,7 +143,7 @@ Diagram block geometry is renderer-owned and configurable. Rounded blocks defaul
 
 ### What lives where
 
-What Lattice draws in a panel, Studio draws in that panel with Lattice's component: the Network's projection, Auto-rotate and Fit; the Monitor's signal list and playback; the Mappings panel; the DynamicSimulation form with its Run and Stop; video export. A workbench action lives in native surfaces: open, import, export CSV, settings, source, Git, field editing, and context menus on the clicked element. Each has one home. The palette keeps commands for the in-view controls, for keybindings.
+A control that belongs to a view is drawn in that view, with the shared components: the Network's projection, Auto-rotate and Fit; the Monitor's signal list and playback; the Mappings panel; the DynamicSimulation form with its Run and Stop; video export. A workbench action lives in native surfaces: open, import, export CSV, settings, source, Git, field editing, and context menus on the clicked element. Each has one home. The palette keeps commands for the in-view controls, for keybindings.
 
 ### Network and Diagram canvases
 
@@ -165,7 +165,7 @@ A property sheet: Views (switches), Arrangement, Time (start, end, speed), Outpu
 
 A real table with sticky column labels, element identities, catalog units, and linked row selection; F2, Enter, or double-click edits in place.
 
-DynamicSimulation is Lattice's Study panel. A bar reads where the newest run stands (frames, a percentage while it runs, Failed, Stopped) beside Run, which becomes Stop; a hairline under it fills as frames arrive. The parameters follow as rows: numbers in a fixed-width mono field at the right, a choice or an element of the case (a fault's bus) in a Select, a flag as a Switch. A value that cannot run says why under its row and disables Run. Monitors, folded by default, lists each type's recordable signals as switches.
+In DynamicSimulation a bar reads where the newest run stands (frames, a percentage while it runs, Failed, Stopped) beside Run, which becomes Stop; a hairline under it fills as frames arrive. The parameters follow as rows: numbers in a fixed-width mono field at the right, a choice or an element of the case (a fault's bus) in a Select, a flag as a Switch. A value that cannot run says why under its row and disables Run. Monitors, folded by default, lists each type's recordable signals as switches.
 
 ### Status, warnings, and empty states
 
@@ -176,13 +176,13 @@ One short sentence in the existing surface, in the caption color, centered for a
 ### Do:
 
 - Do write views against the tokens and the `c-` classes.
-- Do port a Lattice component rather than restyle a native one, for anything coupled to a canvas.
+- Do draw a view's own controls with the shared components rather than restyling native ones.
 - Do keep identifiers, units, selection, source revision, and run state legible.
 - Do respect renderer preferences, high contrast, and reduced motion.
 
 ### Don't:
 
-- Don't copy Lattice's shell (header, dock, routing, settings panel, theme switch) into a webview.
+- Don't build an application shell (header, dock, routing, settings panel, theme switch) in a webview.
 - Don't give one action two homes.
 - Don't hard-code a screenshot's theme as a brand palette.
 - Don't replace dense engineering views with decorative cards or oversized headings.

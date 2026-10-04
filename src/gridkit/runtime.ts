@@ -1,108 +1,65 @@
+/** Run GridKit's DynamicSimulation from where GridKit is installed, and stop it with all it started. */
+
 import { type ChildProcess, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, stat } from 'node:fs/promises'
-import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
 
-import type { RuntimeOptions, RuntimeProcess } from '../messages.js'
+import type { RuntimeProcess } from '../messages.js'
 
-async function executable(name: string): Promise<string | undefined> {
-  const paths = isAbsolute(name)
-    ? [name]
+/** The simulation program, as a GridKit install names it. */
+const PROGRAM = process.platform === 'win32' ? 'DynamicSimulation.exe' : 'DynamicSimulation'
+
+async function runs(path: string): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isFile()) return false
+    await access(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** The DynamicSimulation of the GridKit installed at `install` (its `bin`, the folder itself, or
+ *  the program named outright), or with none given, the one on PATH. */
+export async function dynamicSimulation(install: string): Promise<string> {
+  const folders = install
+    ? [join(install, 'bin'), install]
     : (process.env.PATH ?? process.env.Path ?? '')
         .split(delimiter)
+        .map((folder) => folder.replace(/^"|"$/g, ''))
         .filter(isAbsolute)
-        .map((p) => join(p.replace(/^"|"$/g, ''), name))
-  for (const path of paths)
-    for (const candidate of process.platform === 'win32' && !/\.(exe|com)$/i.test(path)
-      ? [path + '.exe', path + '.com']
-      : [path]) {
-      try {
-        if ((await stat(candidate)).isFile()) {
-          await access(candidate, constants.X_OK)
-          return candidate
-        }
-      } catch {
-        /* next PATH entry */
-      }
-    }
-}
-export async function resolveRuntime(options: RuntimeOptions, root: string) {
-  const methods =
-    options.method === 'auto' ? (['installed', 'docker', 'podman'] as const) : [options.method]
-  for (const method of methods) {
-    const path = await executable(
-      method === 'installed'
-        ? options.executable
-          ? resolve(root, options.executable)
-          : 'DynamicSimulation'
-        : method,
-    )
-    if (path) return { method, path }
-    if (method === 'installed' && options.executable)
-      throw new Error('Configured DynamicSimulation executable was not found.')
-  }
+  for (const folder of folders) if (await runs(join(folder, PROGRAM))) return join(folder, PROGRAM)
+  if (install && (await runs(install))) return install
   throw new Error(
-    'Install DynamicSimulation, Docker, or Podman, or set GridKit Studio: Dynamic Simulation Path.',
+    install
+      ? `GridKit's DynamicSimulation was not found under ${install}. Check GridKit Studio: GridKit Path.`
+      : 'GridKit is not installed here. Set GridKit Studio: GridKit Path to its install folder, or open this folder where GridKit is installed, such as a dev container.',
   )
 }
+
+/** Stop `child` and every process it started. */
 function stopProcess(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  if (process.platform === 'win32')
-    return new Promise((resolve) => {
-      const task = spawn(
-        join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe'),
-        ['/PID', String(child.pid), '/T', '/F'],
-        { windowsHide: true, stdio: 'ignore' },
-      )
-      task.once('error', () => {
-        child.kill()
-        resolve()
-      })
-      task.once('close', () => resolve())
-    })
-  try {
-    process.kill(-child.pid, 'SIGKILL')
-  } catch {
+  return terminateRuntime({ pid: child.pid, executable: child.spawnfile }).catch(() => {
     child.kill('SIGKILL')
-  }
-  return Promise.resolve()
+  })
 }
+
+/** Run DynamicSimulation on the `input.json` staged in `directory`. `log` hears each line it
+ *  prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. */
 export async function launch(
-  options: RuntimeOptions,
+  install: string,
   directory: string,
   signal: AbortSignal,
   log: (text: string) => void,
   lifecycle: (process?: RuntimeProcess) => void = () => {},
 ) {
-  const runtime = await resolveRuntime(options, directory)
+  const executable = await dynamicSimulation(install)
   signal.throwIfAborted()
-  const name = 'gridkit-' + crypto.randomUUID()
-  const container = runtime.method !== 'installed'
-  if (container && directory.includes(','))
-    throw new Error('Container mount paths cannot contain commas.')
-  const args = container
-    ? [
-        'run',
-        '--rm',
-        '--name',
-        name,
-        '--mount',
-        `type=bind,source=${directory},target=/work`,
-        '--workdir',
-        '/work',
-        ...(runtime.method === 'podman'
-          ? ['--userns=keep-id']
-          : process.platform !== 'win32' && process.getuid
-            ? ['--user', `${process.getuid()}:${process.getgid!()}`]
-            : []),
-        options.image,
-        'DynamicSimulation',
-        'input.json',
-      ]
-    : ['input.json']
-  const child = spawn(runtime.path, args, {
+  const child = spawn(executable, ['input.json'], {
     cwd: directory,
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -113,28 +70,10 @@ export async function launch(
       OPENBLAS_NUM_THREADS: process.env.OPENBLAS_NUM_THREADS ?? '1',
     },
   })
-  if (child.pid)
-    lifecycle({
-      pid: child.pid,
-      executable: runtime.path,
-      ...(container ? { container: name } : {}),
-    })
+  if (child.pid) lifecycle({ pid: child.pid, executable })
   let ended = false
   let cleanup: Promise<void> | undefined
-  const stop = () =>
-    (cleanup ??= (async () => {
-      if (container)
-        await new Promise<void>((resolve) => {
-          const command = spawn(runtime.path, ['rm', '--force', name], {
-            windowsHide: true,
-            stdio: 'ignore',
-            timeout: 15000,
-          })
-          command.once('error', () => resolve())
-          command.once('close', () => resolve())
-        })
-      await stopProcess(child)
-    })())
+  const stop = () => (cleanup ??= stopProcess(child))
   const onAbort = () => {
     void stop()
   }
@@ -162,18 +101,9 @@ export async function launch(
   return { done, stop, ended: () => ended }
 }
 
-/** Emergency owner cleanup if the data worker exits before its normal finally block. */
+/** Stop the process `owned` names and every process it started; also the owner's emergency
+ *  cleanup, should the data worker exit before its own. */
 export async function terminateRuntime(owned: RuntimeProcess): Promise<void> {
-  if (owned.container)
-    await new Promise<void>((resolve) => {
-      const child = spawn(owned.executable, ['rm', '--force', owned.container!], {
-        windowsHide: true,
-        stdio: 'ignore',
-        timeout: 15000,
-      })
-      child.once('error', () => resolve())
-      child.once('close', () => resolve())
-    })
   if (process.platform === 'win32')
     await new Promise<void>((resolve) => {
       const child = spawn(

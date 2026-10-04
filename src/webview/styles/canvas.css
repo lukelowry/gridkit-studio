@@ -1,6 +1,5 @@
 /* A renderer's canvas filling its host, with what overlays it: an alert for a problem the renderer
-   recovered from, a fallback for one it did not, and the view's controls. From Lattice's CanvasHost
-   and Toolbar. */
+   recovered from, a fallback for one it did not, and the view's controls. */
 .canvas-host {
   position: relative;
   inline-size: 100%;

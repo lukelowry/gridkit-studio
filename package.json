@@ -42,20 +42,19 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit && svelte-check --tsconfig tsconfig.webview.json",
     "build": "pnpm typecheck && node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "test": "vitest run",
-    "test:host": "pnpm build && node tests/extension/run.mjs",
-    "test:solver": "node tests/solver/run.mjs",
-    "test:performance": "node tests/performance.mjs",
+    "test": "vitest run --project unit",
+    "test:workbench": "pnpm build && node tests/workbench/launch.mjs",
+    "test:package": "node tests/workbench/package.mjs",
+    "test:simulation": "vitest run --project simulation",
+    "test:startup": "pnpm build && node tests/workbench/launch.mjs tests/benchmarks/startup.ts",
+    "test:performance": "node tests/benchmarks/performance.mjs",
     "vscode:prepublish": "pnpm build",
     "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/",
     "format": "prettier --write src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "format:check": "prettier --check src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "lint": "eslint src tests scripts *.mjs *.ts",
-    "test:package": "node tests/extension/package.mjs",
     "settings": "node scripts/settings.mjs",
-    "settings:check": "node scripts/settings.mjs --check",
-    "test:startup": "pnpm build && node tests/extension/run.mjs --startup",
-    "lattice:check": "node scripts/lattice.mjs"
+    "settings:check": "node scripts/settings.mjs --check"
   },
   "dependencies": {
     "@latkit/diagram": "0.8.0",
@@ -67,6 +66,7 @@
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
+    "@types/mocha": "10.0.10",
     "@types/node": "^24.19.0",
     "@types/vscode": "1.134.0",
     "@typescript-eslint/parser": "^8.70.0",
@@ -77,6 +77,7 @@
     "esbuild-svelte": "^0.9.5",
     "eslint": "^10.10.0",
     "eslint-plugin-simple-import-sort": "^14.0.0",
+    "mocha": "11.8.0",
     "playwright-core": "1.63.0",
     "prettier": "3.9.4",
     "prettier-plugin-svelte": "^4.1.1",
@@ -96,9 +97,7 @@
       "supported": "limited",
       "description": "Inspect and edit cases. Simulation requires Workspace Trust.",
       "restrictedConfigurations": [
-        "gridkitStudio.simulationMethod",
-        "gridkitStudio.dynamicSimulationPath",
-        "gridkitStudio.containerImage"
+        "gridkitStudio.gridkitPath"
       ]
     },
     "virtualWorkspaces": {
@@ -500,7 +499,7 @@
       },
       {
         "command": "gridkitStudio.simulationSettings",
-        "title": "Runtime Settings",
+        "title": "GridKit Path",
         "category": "GridKit Studio",
         "icon": "$(settings-gear)",
         "enablement": "gridkitStudio.hasCase"
@@ -1237,29 +1236,11 @@
       {
         "title": "GridKit Studio",
         "properties": {
-          "gridkitStudio.simulationMethod": {
-            "type": "string",
-            "enum": [
-              "auto",
-              "installed",
-              "docker",
-              "podman"
-            ],
-            "default": "auto",
-            "scope": "machine-overridable",
-            "description": "Auto checks DynamicSimulation, Docker, then Podman."
-          },
-          "gridkitStudio.dynamicSimulationPath": {
+          "gridkitStudio.gridkitPath": {
             "type": "string",
             "default": "",
             "scope": "machine-overridable",
-            "description": "DynamicSimulation executable. Empty searches PATH."
-          },
-          "gridkitStudio.containerImage": {
-            "type": "string",
-            "default": "ghcr.io/lukelowry/gridkit:arrow",
-            "scope": "machine-overridable",
-            "description": "Container image, pulled only when missing. Resolved image identity is recorded."
+            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds `DynamicSimulation` on `PATH`."
           },
           "gridkitStudio.navigateOnSelection": {
             "type": "boolean",

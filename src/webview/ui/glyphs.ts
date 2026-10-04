@@ -1,4 +1,4 @@
-/** Lattice's glyphs on a 16-unit grid. Strings are paths; triples are circles. The icon supplies
+/** Glyphs on a 16-unit grid. Strings are paths; triples are circles. The icon supplies
  *  the shared stroke settings. */
 
 /** One shape of a glyph: path data, or a circle as `[cx, cy, r]`. */

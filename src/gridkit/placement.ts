@@ -4,7 +4,7 @@ import { networkOf } from '../schema.js'
 import type { Case } from './case.js'
 
 const cache = new WeakMap<Case, Record<string, FieldValues>>()
-// Adapted from Lattice's deterministic unplaced-network layout. Bound work and yield in the data worker.
+// A deterministic layout for a network with no places of its own. Bound work and yield in the data worker.
 export async function placement(
   kase: Case,
   signal: AbortSignal,

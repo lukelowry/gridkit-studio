@@ -19,11 +19,11 @@ Network, Diagram, Case, and JSON share native saving, dirty state, undo/redo, an
 
 ## Settings and simulation
 
-The native Settings UI exposes **139 Lattice settings** for Network, Diagram, Monitor, and accessibility. Search `gridkitStudio.network`, `gridkitStudio.diagram`, or `gridkitStudio.monitor`; canvas context menus open the relevant settings. This includes geometry, labels, ports, routing/layout, colors, colormaps, lighting, camera, picking, input, antialiasing, trace/axis styling, and motion. VS Code supplies the theme and font. Five field-mapping channels control vertex color/size/height and edge color/dashes; the Mappings panel assigns them.
+The native Settings UI exposes **139 display settings** for Network, Diagram, Monitor, and accessibility. Search `gridkitStudio.network`, `gridkitStudio.diagram`, or `gridkitStudio.monitor`; canvas context menus open the relevant settings. This includes geometry, labels, ports, routing/layout, colors, colormaps, lighting, camera, picking, input, antialiasing, trace/axis styling, and motion. VS Code supplies the theme and font. Five field-mapping channels control vertex color/size/height and edge color/dashes; the Mappings panel assigns them.
 
 DynamicSimulation uses current catalog-derived command parameters. Fill the DynamicSimulation panel (a fault's bus is picked from the case's buses), choose what to record under Monitors, and press Run. The run shows in a native task terminal; one that completes shows the Monitor. Stopping the task cancels and cleans up the process. Unsaved case content is captured at run start. There is no legacy solver-configuration or reference-comparison adapter.
 
-Execution requires a trusted workspace and **DynamicSimulation**, **Docker**, or **Podman**. Auto searches in that order. Configure the executable path or container image in Settings. The default container is `ghcr.io/lukelowry/gridkit:arrow`. Runs use Arrow by default without a format selector; CSV remains supported for programmatic execution and file exchange. **Import Results…** accepts Arrow/CSV; **Export CSV…** exports a run. In SSH, WSL, or a devcontainer, execution and files belong to the workspace extension host.
+Execution requires a trusted workspace and GridKit installed where the workspace is. Studio runs GridKit's own `DynamicSimulation` and starts nothing else: it finds it on `PATH`, or under **GridKit Path** (`gridkitStudio.gridkitPath`, such as `/opt/gridkit`). Where GridKit is installed elsewhere, open the folder there, in a dev container or over SSH or WSL; execution and files belong to the workspace extension host. Runs use Arrow by default without a format selector; CSV remains supported for programmatic execution and file exchange. **Import Results…** accepts Arrow/CSV; **Export CSV…** exports a run.
 
 Each run retains its input revision. Incompatible results never silently overlay an edited case. Failed/cancelled runs keep available partial samples visibly incomplete. Current and previous runs remain until cleared or closed; exported files remain user-owned. Raw files back windowed reads, with a shared 256 MiB sample cache by default.
 
@@ -36,19 +36,26 @@ Use Node.js 24 and pnpm 10.30.0. Published Latkit dependencies are pinned exactl
 ```sh
 pnpm install --frozen-lockfile
 pnpm settings:check
-pnpm lattice:check
 pnpm lint
 pnpm format:check
 pnpm test
-pnpm test:host
-pnpm test:solver
-pnpm test:performance
-pnpm test:startup
+pnpm test:workbench
+pnpm test:simulation
 pnpm package
 pnpm test:package
+pnpm test:startup
+pnpm test:performance
 ```
 
-`pnpm lattice:check` runs beside a Lattice checkout and lists the ported files whose Lattice sources have changed since they were taken. F5 opens a development host. Packaging writes `dist/gridkit-studio-<version>.vsix`. The host suite uses actual VS Code and webviews and requires WebGPU; with `GRIDKIT_TEST_LIVE=1` it also runs a real simulation through the views. The solver suite defaults to Docker; `GRIDKIT_TEST_SOLVER` selects an installed executable and `GRIDKIT_TEST_IMAGE` selects another compatible image. Large CSV benchmarks run when the ignored local result fixtures are available.
+F5 opens a development host. Packaging writes `dist/gridkit-studio-<version>.vsix`.
+
+Tests are in three layers:
+
+- **Unit** (`pnpm test`): beside the code they test, as `src/**/*.test.ts`. They run anywhere.
+- **Workbench** (`pnpm test:workbench`): `tests/workbench/`, a suite for each view, run by Mocha inside an actual VS Code with its webviews, so they require WebGPU. Each suite starts from the case alone in its Network editor; `GRIDKIT_TEST_GREP=Monitor` runs one. `pnpm test:package` runs them against the installed VSIX.
+- **Simulation** (`pnpm test:simulation`): `tests/simulation/`, GridKit's own DynamicSimulation run on a case. It needs GridKit installed, as does the workbench's Run suite, which is skipped without it.
+
+The dev container in `.devcontainer/` is built from `ghcr.io/lukelowry/gridkit:arrow` and has GridKit installed; CI runs the simulation layer in it. `GRIDKIT_PATH` names an install elsewhere. `test:startup` and `test:performance` are benchmarks; the large CSV ones run when the ignored local result fixtures are available.
 
 See [REWRITE.md](REWRITE.md) for architecture, provenance, and verification, and [document editing](docs/table.md) for the transaction boundary.
 

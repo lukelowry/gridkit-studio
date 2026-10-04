@@ -2,7 +2,7 @@ import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import type { RunRequest, RuntimeOptions } from './messages.js'
+import type { RunRequest } from './messages.js'
 import type { Sessions } from './sessions.js'
 export function registerTasks(studio: Sessions) {
   const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
@@ -33,22 +33,19 @@ export function registerTasks(studio: Sessions) {
               const session = await studio.open(document)
               const summary = await studio.documents.ensure(document)
               const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
-              const runtime: RuntimeOptions = {
-                method: settings.get('simulationMethod', 'auto'),
-                executable: settings.get<string>('dynamicSimulationPath', '')
-                  ? resolve(
-                      vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath),
-                      settings.get<string>('dynamicSimulationPath')!,
-                    )
-                  : '',
-                image: settings.get('containerImage', 'ghcr.io/lukelowry/gridkit:arrow'),
-              }
+              // A relative install path is the workspace's own.
+              const install = settings.get<string>('gridkitPath', '')
               const request: RunRequest = {
                 uri: uri.toString(),
                 version: summary.version,
                 values: structuredClone(values ?? session.values),
                 outputs: session.outputs,
-                runtime,
+                gridkit: install
+                  ? resolve(
+                      vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath),
+                      install,
+                    )
+                  : '',
                 cacheBytes: settings.get<number>('resultCacheMiB', 256) * (1 << 20),
               }
               write.fire(

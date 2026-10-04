@@ -1,4 +1,4 @@
-/** Render selected views from a fixed run snapshot into a video file. From Lattice. */
+/** Render selected views from a fixed run snapshot into a video file. */
 
 import { createDiagram } from '@latkit/diagram'
 import { createComposition, type Gpu, type View } from '@latkit/gpu'

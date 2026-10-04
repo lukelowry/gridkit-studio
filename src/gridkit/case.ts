@@ -433,7 +433,7 @@ function references(native: readonly Chunk[], starts: Uint32Array, target: Table
 }
 
 /** Every table's static fields as one Data, sharing the parsed chunks. An empty table keeps its columns. Row IDs are
- *  written when first read: Lattice monitors fields alone, so most loads never pay for them. */
+ *  written when first read: a view watching fields alone never pays for them. */
 function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
   const batches: RowBatch[] = []
   for (const [type, table] of tables) {

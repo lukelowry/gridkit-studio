@@ -90,7 +90,7 @@ export class Simulation implements Command {
 
     await writeFile(join(this.directory, 'input.json'), text)
     const process = await launch(
-      this.request.runtime,
+      this.request.gridkit,
       this.directory,
       context.signal,
       (message) => context.log({ severity: 'info', message }),

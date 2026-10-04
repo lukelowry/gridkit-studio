@@ -1,0 +1,30 @@
+name: GridKit
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # GridKit is installed in the dev container, so what runs it is tested there.
+      - uses: devcontainers/ci@v0.3
+        with:
+          push: never
+          env: |
+            GRIDKIT_TEST_SOFTWARE_GPU=1
+            GRIDKIT_TEST_GREP=^Run
+          runCmd: |
+            pnpm test:simulation
+            xvfb-run -a pnpm test:workbench
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: gridkit
+          path: |
+            output/playwright
+            output/tests

@@ -1,4 +1,4 @@
-/** The network styles the bindings give each type; from Lattice. */
+/** The network styles the bindings give each type. */
 
 import type { Colormap, ColorScale, Scale, ScaleDomain } from '@latkit/gpu'
 import type { Data, FieldInput } from '@latkit/model'

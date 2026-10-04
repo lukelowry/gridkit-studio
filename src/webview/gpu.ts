@@ -3,7 +3,7 @@ import { createGpu, type Gpu } from '@latkit/gpu'
 /** The largest image a view draws or a video holds: 4K. */
 export const MAX_OUTPUT_PIXELS = 3840 * 2160
 
-/** Lattice's budget: a 4K canvas and a 4K export, each with old and new targets alive, at 40 bytes
+/** The budget: a 4K canvas and a 4K export, each with old and new targets alive, at 40 bytes
  *  a pixel for 4x color, depth and the resolved image, plus 256 MiB for geometry and caches. An
  *  admission limit, not an allocation; ordinary windows use much less. */
 const GPU_BUDGET = {

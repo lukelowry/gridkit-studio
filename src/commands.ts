@@ -657,7 +657,7 @@ export function registerCommands(studio: Sessions) {
     ['networkSettings', 'network'],
     ['diagramSettings', 'diagram'],
     ['monitorSettings', 'monitor'],
-    ['simulationSettings', 'simulationMethod'],
+    ['simulationSettings', 'gridkitPath'],
   ] as const)
     command(id, () =>
       vscode.commands.executeCommand('workbench.action.openSettings', 'gridkitStudio.' + category),

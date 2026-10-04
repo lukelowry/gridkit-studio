@@ -1,4 +1,4 @@
-<!-- Run the simulation and choose what it records. From Lattice's Study panel. -->
+<!-- Run the simulation and choose what it records. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
   import { onMount } from 'svelte'

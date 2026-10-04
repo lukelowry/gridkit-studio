@@ -1,4 +1,4 @@
-<!-- Accessible playback controls. Size time readouts from the full span to prevent layout shifts. From Lattice. -->
+<!-- Accessible playback controls. Size time readouts from the full span to prevent layout shifts. -->
 <script lang="ts">
   import type { Axis, Domain } from '@latkit/model'
 

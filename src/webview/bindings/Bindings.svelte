@@ -1,4 +1,4 @@
-<!-- Map numeric fields to display channels. Mapping a signal also records it in future runs. From Lattice. -->
+<!-- Map numeric fields to display channels. Mapping a signal also records it in future runs. -->
 <script lang="ts">
   import { onMount, tick } from 'svelte'
 

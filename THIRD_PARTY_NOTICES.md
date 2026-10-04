@@ -26,9 +26,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Adapted Lattice and GridKit Server code
+## Adapted GridKit Server code
 
-Settings, renderer configuration, topology/layout, binding styles, the playback clock, the interface tokens, components and glyphs, the Monitor, Mappings and Export panels, the catalog compiler, parser, staging, and result readers include adaptations from Lattice 8100c24e and 4d7e9cf2 and GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above. See REWRITE.md for source provenance.
+The catalog compiler, parser, staging, and result readers include adaptations from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above.
 
 ## mediabunny
 
@@ -84,7 +84,7 @@ Original color tables by Nathaniel J. Smith, Stefan van der Walt, and Eric Firin
 CC0 / public domain: https://creativecommons.org/publicdomain/zero/1.0/
 Source: https://github.com/BIDS/colormap/blob/master/colormaps.py
 
-Geographic borders are the Lattice 8100c24e derivative of Natural Earth 5.1.2 public-domain map data, packaged as dist/webview/borders.bin.
+Geographic borders are derived from Natural Earth 5.1.2 public-domain map data, packaged as dist/webview/borders.bin.
 Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
 
 ## Studio icons

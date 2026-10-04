@@ -1,4 +1,4 @@
-/** Playback state machine with seeking, loops, and live-head following; from Lattice.
+/** Playback state machine with seeking, loops, and live-head following.
  * Between state changes, readers integrate t(now) = fold(t0 + elapsed * rate * direction). */
 
 /** What a playhead does at the ends of its span. */

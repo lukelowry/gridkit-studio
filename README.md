@@ -51,7 +51,13 @@ _An IEEE39 generator with its exciter and stabilizer in the diagram_
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
 
 - Video export to MP4 or WebM
-- Chat tools so agents can read your cases and results, and propose edits or simulations for you to approve
+- AI chat that reads your cases and results, and suggests edits or simulations for you to approve
+
+## AI chat
+
+VS Code chat can read your cases and results. Edits and simulations it suggests wait until you choose **Apply Changes**, **Run Simulation** or **Discard**.
+
+To use another AI app, such as Codex, run **GridKit Studio: Connect AI Client…** and copy what it shows into that app's settings.
 
 ## Author
 

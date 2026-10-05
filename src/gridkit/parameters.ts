@@ -12,7 +12,6 @@ import type {
 } from '@latkit/model'
 import { failure, selectRows, validateSelection } from '@latkit/model'
 
-import type { ResultFormat } from '../results/decode.js'
 import type { Case } from './case.js'
 import type { Catalog, OptionSpec } from './definition.js'
 
@@ -27,8 +26,6 @@ export interface Fault {
 export interface SimulationCommand {
   readonly options: readonly { readonly option: OptionSpec; readonly value: number | string }[]
   readonly fault: Fault | null
-  readonly format: ResultFormat
-  readonly frames: number
   /** The times the run covers: from 0 to its end time. */
   readonly domain: Domain
 }
@@ -61,12 +58,6 @@ export function parametersOf(catalog: Catalog): CommandParameters {
       fault_R: { label: 'Resistance', type: 'number', unit: 'pu', min: 0, default: 0 },
       fault_X: { label: 'Reactance', type: 'number', unit: 'pu', min: 0, default: 0.01 },
     })
-  parameters.output_format = {
-    label: 'Results format',
-    type: 'choice',
-    default: 'arrow',
-    choices: ['arrow', 'csv'],
-  }
   return parameters
 }
 
@@ -146,8 +137,6 @@ export function commandOf(kase: Case, values: Arguments<CommandParameters>): Sim
   return {
     options,
     fault,
-    format: values.output_format as ResultFormat,
-    frames,
     domain: [0, values.tmax as number],
   }
 }

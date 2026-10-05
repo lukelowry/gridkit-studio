@@ -149,10 +149,10 @@
   <div class="monitor__head">
     <div class="monitor__signal">
       <Select
-        label="Signal"
+        label="Plots"
         options={signals}
         key={({ type, field }) => `${type}/${field}`}
-        placeholder="Add signal"
+        placeholder="Add plot"
         compact
         hideLabel
         disabled={signals.length === 0}
@@ -196,6 +196,9 @@
       </div>
     {/if}
   </div>
+  {#if run?.message}
+    <p class="c-note c-note--error" role="alert">{run.message}</p>
+  {/if}
   {#if fault ?? view.error ?? warning}
     <p
       class={['c-note', fault || view.error ? 'c-note--error' : 'c-note--warn']}
@@ -213,6 +216,11 @@
             ? 'Run DynamicSimulation or import results to plot recorded signals.'
             : 'Choose a signal to plot it.'}
       </p>
+      {#if view.summary}
+        <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
+          Choose monitored signals
+        </button>
+      {/if}
     </div>
   {:else}
     <div class="monitor__lanes" data-testid="monitor-lanes">

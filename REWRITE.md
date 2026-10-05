@@ -62,7 +62,7 @@ Direct execution of installed DynamicSimulation, non-Windows VS Code windows, an
 
 ## Network opening, 0.3.2
 
-Network uses the full editor area: no webview padding or selection footer. GPU and renderer initialization overlap worker parsing; the first frame uses current settings immediately. The Network stream contains only drawn types. Geographic boundaries load after the first network frame and cannot block case interaction. DynamicSimulation has no results-format selector; Arrow remains the default.
+Network uses the full editor area: no webview padding or selection footer. GPU and renderer initialization overlap worker parsing; the first frame uses current settings immediately. The Network stream contains only drawn types. Geographic boundaries load after the first network frame and cannot block case interaction. DynamicSimulation has no results-format selector. This revision used Arrow by default; the compatibility correction below replaces that unverified default.
 
 Measured locally on VS Code 1.135 using pnpm test:startup: ACTIVSg2000 first visible frame decreased from 2,526 to 446 ms; ACTIVSg10k from 3,390 to 981 ms. These are sequential opens in one fresh extension-host session, not cold GPU measurements for each case. The first IEEE39 open still costs roughly 1.3–1.5 seconds for cold VS Code/GPU startup. Reports and stage timings are under output/startup-before and output/startup-final; results vary by hardware.
 
@@ -79,6 +79,14 @@ Measured locally on 2026-10-04 with VS Code 1.135, single runs:
 
 - The rule for the window of a run a view holds, and the worker's window filter, have unit and contract tests; no test drives a run large enough to take that path through the views.
 
-The Signals tree is gone: what a run records is chosen under Recorded signals in the DynamicSimulation panel, which has its own Run, and a signal is plotted from the list in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
+The Signals tree is gone: what a run records is chosen under Monitored signals in the DynamicSimulation panel, which has its own Run, and a signal is plotted from Add plot in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
 
 Not exercised: video export under CI's software GPU. Known and open: the Diagram's layout is latkit's and is superlinear; measured here, 1,338 blocks (ACTIVSg2000) take 18 to 30 s to a first frame and ACTIVSg10k exceeds the layout time limit.
+
+## DynamicSimulation compatibility correction
+
+The earlier checks above did not establish native compatibility. The verified GridKit image reads monitor destinations from the staged case, supports CSV output, and reads Ieeet1.Ispdlim as a real number. Studio now preserves that native type, replaces inherited output destinations in the case, and runs CSV only, with no results-format parameter. Arrow imports remain supported. Native errors and a bounded solver log survive failures, including native failures that exit with code zero.
+
+Run opens Monitor immediately. The first sample publication makes a run readable before views request its samples; this prevents a startup race that previously left an empty plot. Native result tests check both IEEE39 and TwoArea, including actual trace pixels and inspected values, fault events, cancellation, and retry. Network source revisions replace geometry and field inputs together, including switching between calculated and geographic positions.
+
+`pnpm test:devcontainer` is the required full verification command. It fails on missing GridKit or skipped UI tests, checks an installed VSIX, compares reviewed pixel baselines, and exercises Workspace Trust. Solver artifacts and failed UI inputs/logs/reports remain under `output/`. The historical large-Diagram layout limitation above remains outside this correction.

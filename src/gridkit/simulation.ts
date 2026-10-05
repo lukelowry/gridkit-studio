@@ -34,7 +34,7 @@ export class Simulation implements Command {
     context.signal.throwIfAborted()
     this.kase.checkSignals()
     const invalid = diagnose(this.kase).find((issue) => issue.severity === 'error')
-    if (invalid) throw failure('invalid-input', invalid.message)
+    if (invalid) throw failure('invalid-input', `${invalid.id ?? 'Case'}: ${invalid.message}`)
     for (const name of Object.keys(input))
       if (!(name in this.parameters))
         throw failure('invalid-input', 'Unknown simulation parameter: ' + name)
@@ -61,10 +61,7 @@ export class Simulation implements Command {
     this.info.span = [command.domain[0], command.domain[1]]
     const outputs = selections(this.kase, context.outputs)
     if (!outputs.length)
-      throw failure(
-        'invalid-input',
-        'Record at least one signal: turn one on under Recorded signals.',
-      )
+      throw failure('invalid-input', 'Choose at least one monitored signal to run.')
     const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
     if (columns * 8 > 8 << 20) throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
     this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)
@@ -77,19 +74,11 @@ export class Simulation implements Command {
       fs.open(join(this.directory, 'case.json'), 'w'),
     )
     try {
-      for (const bytes of staged) await handle.write(bytes)
+      for (const bytes of staged) await handle.writeFile(bytes)
     } finally {
       await handle.close()
     }
-    const text = inputOf(
-      command,
-      'case.json',
-      {
-        file: 'results.' + command.format,
-        rows: Math.max(1, Math.min(64, Math.floor(context.maxBlockBytes / (columns * 8)))),
-      },
-      faultOrdinal(this.kase),
-    )
+    const text = inputOf(command, 'case.json', faultOrdinal(this.kase))
 
     await writeFile(join(this.directory, 'input.json'), text)
     const process = await launch(
@@ -109,6 +98,16 @@ export class Simulation implements Command {
         })
       })
       await process.done
+      if (!this.info.frames) throw new Error('DynamicSimulation produced no samples.')
+    } catch (error) {
+      context.signal.throwIfAborted()
+      // A native error is more useful than the missing result file it caused.
+      if (process.ended()) await process.done
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+        throw new Error(
+          `DynamicSimulation produced no results. See ${join(this.directory, 'solver.log')}.`,
+        )
+      throw error
     } finally {
       await process.stop()
       await process.done.catch(() => {})

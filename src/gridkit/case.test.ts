@@ -122,6 +122,20 @@ describe('single catalog and source ownership', () => {
     expect(JSON.parse(text).buses[1].mon).toEqual(['Vm', 'Va'])
     expect(text).toContain('"kv":230.000')
     expect(text).toContain('"keep":1.000')
+    expect(JSON.parse(text).monitors).toEqual([{ file_name: 'results.csv', format: 'csv' }])
+  })
+  it('replaces inherited monitor destinations and preserves real parameter tokens', async () => {
+    const kase = await Case.parse(
+      source.replace(
+        '"signals":',
+        '"monitors":[{"file_name":"/outside/results.csv","format":"csv"}], "signals":',
+      ),
+      catalog,
+    )
+    const text = Buffer.concat(caseFile(kase, new Map(), null)).toString()
+    expect(JSON.parse(text).monitors).toEqual([{ file_name: 'results.csv', format: 'csv' }])
+    expect(text).not.toContain('/outside/')
+    expect(text).toContain('230.000')
   })
   it('handles native infinite buses and reports invalid known values from the catalog', async () => {
     const kase = await Case.parse(
@@ -151,5 +165,15 @@ describe('single catalog and source ownership', () => {
     )
     expect(kase.table('Bus').records.length).toBe(10)
     expect(kase.data.tables.Branch).toBeDefined()
+    expect(diagnose(kase)).toEqual([])
+    expect(catalog.schema.types.Ieeet1.fields.Ispdlim.type).toBe('float64')
+    const id = kase.id(kase.table('Ieeet1'), 0)
+    const changed = apply(new TextDecoder().decode(kase.file), editField(kase, id, 'Ispdlim', 1))
+    expect(changed).toMatch(/"Ispdlim":\s*1\.0/)
+    const invalid = await Case.parse(
+      changed.replace(/"Ispdlim":\s*1\.0/, '"Ispdlim":false'),
+      catalog,
+    )
+    expect(diagnose(invalid).some((issue) => issue.field === 'Ispdlim')).toBe(true)
   })
 })

@@ -24,8 +24,8 @@
     /** What the runs to come record. */
     recorded: Monitored
     disabled: boolean
-    /** Record, or stop recording, `field` of every element of `type`. */
-    onrecord: (type: string, field: string, on: boolean) => void
+    /** Record exactly `select` of every element of `type`. */
+    onrecord: (type: string, select: readonly string[]) => void
   } = $props()
 
   /** What the section says for a model with nothing to record. */
@@ -38,7 +38,12 @@
   function summary(type: (typeof types)[number]): string {
     const on = recorded[type.type] ?? []
     const labels = type.fields.filter(({ field }) => on.includes(field)).map(({ label }) => label)
-    return labels.length === 0 ? 'none' : labels.join(', ')
+    return `${labels.length}/${type.fields.length} · ${labels.length === 0 ? 'none' : labels.join(', ')}`
+  }
+
+  function toggle(type: string, field: string, on: boolean): void {
+    const rest = (recorded[type] ?? []).filter((name) => name !== field)
+    onrecord(type, on ? [...rest, field] : rest)
   }
 </script>
 
@@ -49,13 +54,29 @@
     data-testid={`monitor-class-${type.type}`}
     bind:open={() => expanded[type.type] === true, (open) => (expanded[type.type] = open)}
   >
+    <div class="signal-actions">
+      <button
+        class="c-btn c-btn--sm"
+        {disabled}
+        onclick={() =>
+          onrecord(
+            type.type,
+            type.fields.map(({ field }) => field),
+          )}
+      >
+        Select all
+      </button>
+      <button class="c-btn c-btn--sm" {disabled} onclick={() => onrecord(type.type, [])}>
+        Clear
+      </button>
+    </div>
     {#each type.fields as { field, label, unit } (field)}
       <Switch
         label={withUnit(label, unit)}
         {disabled}
         data-testid={`monitor-${type.type}-${field}`}
         bind:checked={
-          () => (recorded[type.type] ?? []).includes(field), (on) => onrecord(type.type, field, on)
+          () => (recorded[type.type] ?? []).includes(field), (on) => toggle(type.type, field, on)
         }
       />
     {/each}
@@ -63,3 +84,11 @@
 {:else}
   <p class="c-note">{NOTHING_TO_RECORD}</p>
 {/each}
+
+<style>
+  .signal-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-lg);
+  }
+</style>

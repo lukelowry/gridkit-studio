@@ -2,7 +2,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, stat } from 'node:fs/promises'
+import { access, stat, writeFile } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
@@ -72,6 +72,8 @@ export async function launch(
   })
   if (child.pid) lifecycle({ pid: child.pid, executable })
   let ended = false
+  const tail: string[] = []
+  let nativeError: string | undefined
   let cleanup: Promise<void> | undefined
   const stop = () => (cleanup ??= stopProcess(child))
   const onAbort = () => {
@@ -80,14 +82,19 @@ export async function launch(
   signal.addEventListener('abort', onAbort, { once: true })
   if (signal.aborted) onAbort()
   for (const pipe of [child.stdout, child.stderr])
-    createInterface({ input: pipe, crlfDelay: Infinity }).on('line', (line) =>
-      log(stripVTControlCharacters(line).slice(0, 8192)),
-    )
+    createInterface({ input: pipe, crlfDelay: Infinity }).on('line', (line) => {
+      const text = stripVTControlCharacters(line).slice(0, 8192)
+      tail.push(text)
+      if (tail.length > 64) tail.shift()
+      if (/\[ERROR\]/i.test(text)) nativeError ??= text
+      log(text)
+    })
   const done = new Promise<void>((resolve, reject) => {
     child.once('error', reject)
     child.once('close', (code) => {
       ended = true
       if (signal.aborted) reject(signal.reason)
+      else if (nativeError) reject(new Error(nativeError))
       else if (code !== 0) reject(new Error(`DynamicSimulation exited with code ${code}.`))
       else resolve()
     })
@@ -95,7 +102,11 @@ export async function launch(
     ended = true
     signal.removeEventListener('abort', onAbort)
     await cleanup
-    lifecycle()
+    try {
+      await writeFile(join(directory, 'solver.log'), tail.join('\n') + '\n')
+    } finally {
+      lifecycle()
+    }
   })
   void done.catch(() => {})
   return { done, stop, ended: () => ended }

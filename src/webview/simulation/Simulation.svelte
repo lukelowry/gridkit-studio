@@ -10,7 +10,7 @@
   import Icon from '../ui/Icon.svelte'
   import Section from '../ui/Section.svelte'
   import Form from './Form.svelte'
-  import RecordedSignals from './RecordedSignals.svelte'
+  import MonitoredSignals from './MonitoredSignals.svelte'
   import { type Choice, labelOf, type Monitored } from './rows.js'
   import { problemOf, valueOf } from './values.js'
 
@@ -22,6 +22,7 @@
   /** Each type's elements as choices, read once for each revision of the case. */
   let read: Record<string, Promise<readonly Choice[]>> = {}
   let revision: number | undefined
+  let choosingSignals = $state(false)
 
   const summary = $derived(view.summary)
   const run = $derived(view.run)
@@ -29,7 +30,7 @@
   /** The parameters the form shows: a fault's, only while there is one. */
   const parameters = $derived(
     Object.entries(summary?.parameters ?? {}).filter(
-      ([name]) => name !== 'output_format' && (!name.startsWith('fault_') || values.fault === true),
+      ([name]) => !name.startsWith('fault_') || values.fault === true,
     ),
   )
   const value = (name: string, parameter: Parameter): InputValue | undefined =>
@@ -57,6 +58,9 @@
   /** What the runs to come record, by type. */
   const recorded = $derived<Monitored>(
     Object.fromEntries((view.outputs ?? []).map(({ from, select }) => [from, select])),
+  )
+  const selectedCount = $derived(
+    (view.outputs ?? []).reduce((n, output) => n + output.select.length, 0),
   )
   /** The types with values a run can record: those the case has elements of. */
   const recordable = $derived(
@@ -121,6 +125,10 @@
         text = {}
       }
       view = merged(view, message.state)
+      if (view.choosingSignals) {
+        choosingSignals = true
+        bridge.command('signalsShown')
+      }
       appearance(view.settings)
       if (view.summary?.version !== revision) {
         revision = view.summary?.version
@@ -162,9 +170,11 @@
               ? 'Resolve case errors to run'
               : invalid
                 ? 'Fix the form to run'
-                : 'Run'}
+                : selectedCount === 0
+                  ? 'Choose at least one monitored signal to run'
+                  : 'Run'}
             aria-label="Run DynamicSimulation"
-            disabled={invalid || view.stale}
+            disabled={invalid || view.stale || selectedCount === 0}
             data-testid="study-run"
             onclick={() => bridge.command('run')}
           >
@@ -196,6 +206,19 @@
       {:else if run?.state === 'failed' && run.message}
         <p class="c-note c-note--error" role="alert">{run.message}</p>
       {/if}
+      <Section
+        label="Monitored signals"
+        meta={`${selectedCount} selected`}
+        collapsible
+        bind:open={choosingSignals}
+      >
+        <MonitoredSignals
+          types={recordable}
+          {recorded}
+          disabled={running}
+          onrecord={(type, select) => bridge.send({ kind: 'record', type, select })}
+        />
+      </Section>
       <Form
         {parameters}
         {text}
@@ -207,15 +230,6 @@
         ontoggle={(name, on) => give(name, on)}
       />
     </div>
-
-    <Section label="Recorded signals" collapsible open={false}>
-      <RecordedSignals
-        types={recordable}
-        {recorded}
-        disabled={running}
-        onrecord={(type, field, on) => bridge.send({ kind: 'record', type, field, on })}
-      />
-    </Section>
   {/if}
 </div>
 

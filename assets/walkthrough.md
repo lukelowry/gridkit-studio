@@ -2,4 +2,4 @@
 
 Open a case, select an element, and explore it in Network, Diagram, Case Table, or JSON.
 
-Choose the signals to record, configure DynamicSimulation, and use Monitor to plot and replay the result.
+Choose **Monitored signals** in DynamicSimulation, then press **Run**. Monitor opens and plots the result automatically; use its controls to replay and inspect samples.

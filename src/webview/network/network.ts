@@ -26,7 +26,10 @@ export function networkData(
   return {
     source,
     vertices: Object.fromEntries(
-      vertices.map((type) => [type, places[type] ? { position: places[type] } : {}]),
+      vertices.map((type) => [
+        type,
+        { position: places[type] ?? source.schema.types[type]!.spatial!.field },
+      ]),
     ),
     edges: Object.fromEntries(
       edges.map(({ type, ends, bends }) => [
@@ -52,13 +55,37 @@ export function projectionOf(preferred: Projection, geographic: boolean): Projec
   return preferred === 'globe' && !geographic ? 'flat' : preferred
 }
 
+type Patch = Parameters<Network['set']>[0]
+
+/** A new source with its geometry and style in one patch: source and field inputs share row
+ *  identities, so the new revision never meets the previous one's labels or mappings. */
+export function rebase(data: ReturnType<typeof networkData>, style: Patch): Patch {
+  return {
+    ...style,
+    source: data.source,
+    vertices: Object.fromEntries(
+      Object.entries(data.vertices).map(([type, geometry]) => [
+        type,
+        { ...geometry, ...style.vertices?.[type] },
+      ]),
+    ),
+    // A placed layout drops the bends the case drew for longitude and latitude.
+    edges: Object.fromEntries(
+      Object.entries(data.edges ?? {}).map(([type, geometry]) => [
+        type,
+        { ...geometry, bends: geometry.bends ?? null, ...style.edges?.[type] },
+      ]),
+    ),
+  }
+}
+
 /** The case's network on `canvas`, styled before it can prepare its first frame. `select` hears of
  *  the element the reader picks, and `open` of the one they open. */
 export function mountNetwork(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
   data: ReturnType<typeof networkData>,
-  style: Parameters<Network['set']>[0],
+  style: Patch,
   state: () => ViewState,
   select: (element: Element | null) => void,
   open: (element: Element) => void,

@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto'
 import { setup, suite, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import type { Sessions } from '../../src/extension/sessions.js'
+import { plotsFor, type Sessions } from '../../src/extension/sessions.js'
+import type { RunInfo } from '../../src/shared/messages.js'
 
 suite('Sessions', () => {
   let studio: Sessions
@@ -24,11 +25,28 @@ suite('Sessions', () => {
 
   test('keeps an empty recording selection when the case is opened again', async () => {
     const session = studio.current()
-    for (const { from, select } of session.outputs ?? [])
-      for (const field of select) studio.record(session.uri, from, field, false)
+    for (const { from } of session.outputs ?? []) studio.record(session.uri, from, [])
     assert.deepEqual(session.outputs, [])
     await studio.open(document)
     assert.deepEqual(session.outputs, [])
+  })
+
+  test('drops the results format saved by older prereleases', async () => {
+    const session = studio.current()
+    session.values = { tmax: 2, output_format: 'arrow' }
+    await studio.persist(session)
+    session.transport.dispose()
+    studio.all.delete(session.uri)
+    const restored = await studio.open(document)
+    assert.deepEqual(restored.values, { tmax: 2 })
+  })
+
+  test('a new run keeps the plots it recorded, else plots its first signal', () => {
+    const run = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as RunInfo
+    const vm = { from: 'Bus', field: 'Vm' }
+    assert.deepEqual(plotsFor(run, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
+    assert.deepEqual(plotsFor(run, [{ from: 'Gen', field: 'Pg' }]), [{ from: 'Bus', field: 'Va' }])
+    assert.deepEqual(plotsFor({ outputs: [] } as unknown as RunInfo, [vm]), [])
   })
 
   for (const outputs of [[], [{ from: 'Bus', select: ['Vm'] }]])

@@ -25,9 +25,9 @@ GridKit app names stay explicit: `DynamicSimulation` and `ContingencyAnalysis`. 
 
 If you customized earlier prerelease settings, rename the boolean keys `gridkitStudio.monitor.coordinateAxis`, `gridkitStudio.monitor.valueAxis`, and `gridkitStudio.diagram.labels` by appending `.visible`. This prevents those toggles from hiding their nested formatting settings in VS Code.
 
-DynamicSimulation uses current catalog-derived command parameters. Fill the DynamicSimulation panel (a fault's bus is picked from the case's buses), choose what to record under Recorded signals, and press Run. The run shows in a native task terminal; one that completes shows the Monitor. Stopping the task cancels and cleans up the process. Unsaved case content is captured at run start. There is no legacy solver-configuration or reference-comparison adapter.
+DynamicSimulation uses catalog-derived command parameters. **Monitored signals**, directly below Run, chooses what the next run records, with Select all and Clear for each component type. Existing results and their plots keep their recorded signals. Press **Run** to open Monitor immediately; its first plot is selected automatically from the run's signals. Add further plots with **Add plot**. Native task terminals and **Show Output** retain solver logs without taking over the Monitor. Stop cancels the process and keeps available partial results. Unsaved case content is captured at run start.
 
-Execution requires a trusted workspace and GridKit installed where the workspace is. Studio runs GridKit's own `DynamicSimulation` and starts nothing else: it finds it on `PATH`, or under **GridKit Path** (`gridkitStudio.gridkitPath`, such as `/opt/gridkit`). Where GridKit is installed elsewhere, open the folder there, in a dev container or over SSH or WSL; execution and files belong to the workspace extension host. Runs use Arrow by default without a format selector; CSV remains supported for programmatic execution and file exchange. **Import Results…** accepts Arrow/CSV; **Export CSV…** exports a run.
+Execution requires a trusted workspace and GridKit installed where the workspace is. Studio finds `DynamicSimulation` on `PATH`, or under **GridKit Path** (`gridkitStudio.gridkitPath`, such as `/opt/gridkit`). Open the folder in a dev container, over SSH, or in WSL when GridKit is installed there. Runs write **CSV**, the format the verified runtime supports; there is no results-format parameter. **Import Results…** accepts Arrow and CSV; **Export CSV…** exports a run. Each staged case owns its output destination, replacing inherited monitor paths. Native failures retain a bounded `solver.log` beside the staged inputs.
 
 Each run retains its input revision. Incompatible results never silently overlay an edited case. Failed/cancelled runs keep available partial samples visibly incomplete. Current and previous runs remain until cleared or closed; exported files remain user-owned. Raw files back windowed reads, with a shared 256 MiB sample cache by default.
 
@@ -43,6 +43,7 @@ pnpm quality
 pnpm test:vscode
 pnpm test:trust
 pnpm test:simulation
+pnpm test:devcontainer
 pnpm package
 pnpm test:package
 pnpm test:startup
@@ -69,9 +70,11 @@ Tests are in three layers:
 
 - **Unit** (`pnpm test`): beside the code they test, as `src/**/*.test.ts`. They run anywhere.
 - **VS Code** (`pnpm test:vscode`): `tests/vscode/`, a suite for each view, run by Mocha inside an actual VS Code with its webviews, with WebGPU required for the canvas suites. UI suites reset parameters, recordings, plots, mappings, results, and selection before starting; `GRIDKIT_TEST_GREP=Monitor` runs one. `pnpm test:package` runs them against an isolated installed VSIX. `pnpm test:trust` checks inspection and blocked execution in an untrusted workspace.
-- **Simulation** (`pnpm test:simulation`): `tests/simulation/`, GridKit's own DynamicSimulation run on a case. It needs GridKit installed, as does VS Code's Run suite, which is skipped without it.
+- **Simulation** (`pnpm test:simulation`): real IEEE39 and TwoArea runs, diagnostics, native output columns, sample counts/times/reference voltages, cancellation, unsupported formats, initialization errors, and retry. Inputs, results, and logs stay in `output/simulation/` for inspection.
 
-The dev container in `.devcontainer/` is built from `ghcr.io/lukelowry/gridkit:arrow` and has GridKit installed; CI runs the simulation layer in it. `GRIDKIT_PATH` names an install elsewhere. `test:startup` and `test:performance` are benchmarks; the large CSV ones run when the ignored local result fixtures are available.
+The dev container pins the verified GridKit image by digest. Inside it, **`pnpm test:devcontainer`** runs quality checks, real solver tests, packaging, the installed VSIX's full UI suite, and Workspace Trust checks. Missing GridKit, skipped tests, or filtered runs fail this required check. Ordinary host UI tests may skip the real Run suite when GridKit is absent. `GRIDKIT_PATH` names an installation elsewhere.
+
+Linux UI tests with `GRIDKIT_TEST_SOFTWARE_GPU=1` compare committed pixel baselines for dark, light, high contrast, narrow, and geographic views. To deliberately update them in the dev container, run `GRIDKIT_UPDATE_BASELINES=1 GRIDKIT_TEST_SOFTWARE_GPU=1 GRIDKIT_TEST_GREP='Visual baselines' dbus-run-session -- xvfb-run -a pnpm test:vscode`, inspect the images in `tests/vscode/baselines/`, then run `pnpm test:devcontainer` without the update flag. Failing screenshots and diffs stay under `output/`; CI uploads them. `test:startup` and `test:performance` remain separate benchmarks.
 
 See [REWRITE.md](REWRITE.md) for architecture, provenance, and verification, and [document editing](docs/table.md) for the transaction boundary.
 

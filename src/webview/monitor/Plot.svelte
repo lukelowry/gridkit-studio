@@ -319,12 +319,16 @@
     onfocusin={() => (inspecting = true)}
     onfocusout={() => (inspecting = false)}
   >
-    {#if recorded && source}
+    {#if recorded && source && view.run?.frames}
       <CanvasHost {mount} {fault} label={`${name}. Right-click a trace for actions.`} />
     {:else}
       <div class="c-empty lane__empty">
         <p class="c-empty__text">
-          {view.run ? `This run did not record ${name}.` : `Run DynamicSimulation to plot ${name}.`}
+          {view.run?.state === 'running'
+            ? 'Waiting for samples…'
+            : view.run
+              ? `This run did not record ${name}.`
+              : `Run DynamicSimulation to plot ${name}.`}
         </p>
       </div>
     {/if}

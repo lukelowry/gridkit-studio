@@ -22,6 +22,8 @@ export interface Session {
   bindings: Bindings
   /** The field the Mappings editor is open for. */
   editing?: FieldRef
+  /** Keep a chooser request until the Simulation webview acknowledges it. */
+  choosingSignals?: boolean
   selection?: Element
   run?: RunInfo
   previous?: RunInfo
@@ -37,6 +39,15 @@ export interface Session {
   cameras: Cameras
   table: TableState
 }
+/** The plots `run` can draw: those it recorded, else its first recorded signal. */
+export function plotsFor(run: RunInfo, plots: readonly Plot[]): Plot[] {
+  const kept = plots.filter((plot) =>
+    run.outputs.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
+  )
+  const first = run.outputs.find(({ select }) => select.length > 0)
+  return kept.length || !first ? kept : [{ from: first.from, field: first.select[0]! }]
+}
+
 export class Sessions {
   readonly client: Client
   readonly documents: Documents
@@ -135,12 +146,14 @@ export class Sessions {
       const saved = this.context.workspaceState.get<
         Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table' | 'outputs'>>
       >('case:' + uri, {})
+      // Earlier prereleases saved a results format; runs now write CSV only.
+      const { output_format: _, ...values } = saved.values ?? {}
       this.all.set(uri, {
         uri,
         bindings: saved.bindings ?? {},
         plots: saved.plots ?? [],
         outputs: saved.outputs,
-        values: saved.values ?? {},
+        values,
         transport: new Transport(() => this.clock.fire(uri)),
         diagramEditing: false,
         settings: settingsFor(vscode.Uri.parse(uri)),
@@ -189,6 +202,7 @@ export class Sessions {
       settings: session?.settings,
       bindings: session?.bindings,
       editing: session?.editing,
+      choosingSignals: session?.choosingSignals,
       summary: entry?.summary,
       stale: entry?.stale,
       error: entry?.error,
@@ -221,6 +235,10 @@ export class Sessions {
       return
     }
     const live = run.state === 'running'
+    if (shown?.id !== run.id) {
+      session.plots = plotsFor(run, session.plots)
+      this.persist(session)
+    }
     // A run's span starts where its first frames do.
     if (shown?.id !== run.id || (shown.frames === 0 && run.frames > 0)) {
       session.window = undefined
@@ -242,20 +260,18 @@ export class Sessions {
     session.transport.pause()
     session.transport.seek(t)
   }
-  /** Record `field` of every `type` element in the runs to come, or stop; a signal no longer
-   *  recorded is no longer plotted. */
-  record(uri: string, type: string, field: string, on: boolean) {
+  /** Choose the fields of `type` future runs record; plots of the current results are
+   *  independent, and the next run keeps those it records. */
+  record(uri: string, type: string, select: readonly string[]) {
     const session = this.all.get(uri)
     if (!session) return
-    const outputs = session.outputs ?? []
-    const others = outputs.filter((output) => output.from !== type)
-    const select = (outputs.find((output) => output.from === type)?.select ?? []).filter(
-      (name) => name !== field,
-    )
-    if (on) select.push(field)
-    session.outputs = select.length ? [...others, { from: type, select }] : others
-    if (!on)
-      session.plots = session.plots.filter((plot) => plot.from !== type || plot.field !== field)
+    const others = (session.outputs ?? []).filter((output) => output.from !== type)
+    session.outputs = select.length ? [...others, { from: type, select: [...select] }] : others
+    // Without results, a plot only waits for a field the next run records.
+    if (!session.run)
+      session.plots = session.plots.filter(
+        (plot) => plot.from !== type || select.includes(plot.field),
+      )
     this.persist(session)
     this.changed.fire(uri)
   }

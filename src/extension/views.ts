@@ -35,6 +35,8 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'removePlot',
   'run',
   'stop',
+  'chooseSignals',
+  'signalsShown',
 ])
 /** What a view that draws nothing itself shows of the case; it hears of nothing else. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
@@ -47,12 +49,13 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     bindings,
     table,
   ],
-  simulation: ({ uri, stale, error, values, outputs, run }) => [
+  simulation: ({ uri, stale, error, values, outputs, run, choosingSignals }) => [
     uri,
     stale,
     error,
     values,
     outputs,
+    choosingSignals,
     run && [run.id, run.state, run.frames, run.domain, run.span, run.message],
   ],
   bindings: ({ uri, stale, error, bindings, editing }) => [uri, stale, error, bindings, editing],
@@ -256,7 +259,8 @@ export class View {
         if (session) session.editing = message.field ?? undefined
         return
       case 'record':
-        this.studio.record(this.uri, message.type, message.field, message.on === true)
+        if (Array.isArray(message.select))
+          this.studio.record(this.uri, message.type, message.select)
         return
       case 'values':
         if (session && message.uri === this.uri && message.values) {
@@ -472,7 +476,9 @@ export class View {
       .filter((field) => field.select.length > 0)
     // The network draws only a run of the case as it stands; a plot draws whichever run is on show.
     const current = shown?.fingerprint === summary.fingerprint
-    const run = draws('monitor') || current ? shown : undefined
+    // The worker publishes a run's result pages before reporting its first samples. Until then
+    // only stream the case; the run ID does not yet identify readable results.
+    const run = shown?.frames && (draws('monitor') || current) ? shown : undefined
     const base =
       (kind === 'monitor' && run ? run.fingerprint : summary.fingerprint) +
       ':' +

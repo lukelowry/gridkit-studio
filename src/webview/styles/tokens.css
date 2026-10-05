@@ -46,7 +46,7 @@
   --color-primary-text: var(--vscode-textLink-foreground);
   --color-focus-ring: var(--vscode-focusBorder);
   /* Unmapped network geometry. */
-  --color-network: var(--vscode-charts-blue);
+  --color-network: var(--vscode-editor-foreground);
   --color-row-hover: var(--vscode-list-hoverBackground);
   --color-selected: var(--vscode-list-inactiveSelectionBackground);
   --color-red: var(--vscode-errorForeground);

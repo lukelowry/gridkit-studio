@@ -47,7 +47,7 @@
 
 <style>
   .accordion {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(5rem, 1fr) minmax(0, 2fr) auto;
   }
 
   .accordion__summary {

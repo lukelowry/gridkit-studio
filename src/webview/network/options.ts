@@ -3,20 +3,20 @@ import { viewStyle } from '@latkit/gpu'
 import type { Network } from '@latkit/network'
 
 import type { SettingsReader } from '../../shared/preferences.js'
-import type { Palette } from '../theme.js'
-import { color } from '../theme.js'
+import { color, type Palette } from '../theme.js'
 
 export function networkOptions(
   s: SettingsReader,
-  palette: Palette | null,
-  font: string | null,
+  palette: Palette,
+  font: string,
   geographic: boolean,
 ): Parameters<Network['set']>[0] {
   const highlight = s.get('network.focusEnabled')
   const ends = s.get('network.focusEnds')
-  const hover = color(s.get('network.hoverColor'), palette?.focus) ?? viewStyle.hoverColor
+  const hover = color(s.get('network.hoverColor'), palette.focus) ?? viewStyle.hoverColor
   const selected =
-    color(s.get('network.selectedColor'), palette?.focus) ?? viewStyle.selectedColor ?? hover
+    color(s.get('network.selectedColor'), palette.focus) ?? viewStyle.selectedColor ?? hover
+  const family = s.get('network.font') || font
   return {
     markers: s.get('network.markers'),
     poles: s.get('network.poles'),
@@ -50,12 +50,12 @@ export function networkOptions(
       wheel: s.get('network.input.wheel'),
       keyboard: s.get('network.input.keyboard'),
     },
-    font: s.get('network.font') || font ? { family: s.get('network.font') || font! } : null,
+    font: family ? { family } : null,
     fontSizePx: s.get('network.fontSizePx'),
-    textColor: color(s.get('network.textColor')),
-    background: color(s.get('network.background'), palette?.background),
-    surfaceColor: color(s.get('network.surfaceColor'), palette?.surface2),
-    gridColor: color(s.get('network.gridColor'), palette?.border),
+    textColor: color(s.get('network.textColor'), palette.text1),
+    background: color(s.get('network.background'), palette.background),
+    surfaceColor: color(s.get('network.surfaceColor'), palette.surface2),
+    gridColor: color(s.get('network.gridColor'), palette.border),
     hoverColor: [hover[0], hover[1], hover[2], highlight ? s.get('network.hoverAlpha') : 0],
     selectedColor: [
       selected[0],
@@ -63,7 +63,9 @@ export function networkOptions(
       selected[2],
       highlight ? s.get('network.selectedAlpha') : 0,
     ],
-    vertexBaseColor: color(s.get('network.vertexBaseColor'), palette?.network),
-    edgeBaseColor: color(s.get('network.edgeBaseColor')),
+    vertexBaseColor: color(s.get('network.vertexBaseColor'), palette.network),
+    // A branch carries no bus value: one theme color unless a branch field drives it. Null would
+    // blend each line between its ends' colors.
+    edgeBaseColor: color(s.get('network.edgeBaseColor'), palette.text3),
   }
 }

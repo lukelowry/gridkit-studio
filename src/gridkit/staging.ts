@@ -13,6 +13,14 @@ export function caseFile(kase: Case, monitors: Monitors, fault: string | null): 
     for (const [row, outputs] of rows) records.set(table.records[row]!, JSON.stringify(outputs))
   }
   const edits: { readonly at: number; readonly end: number; readonly text: string }[] = []
+  // GridKit reads sinks from the system model, not input.json. Replace inherited destinations
+  // so a simulation can only write its own result file in its staging directory.
+  const sink = JSON.stringify([{ file_name: 'results.csv', format: 'csv' }])
+  edits.push(
+    kase.monitors
+      ? { at: kase.monitors.value, end: kase.monitors.end, text: sink }
+      : { at: kase.close, end: kase.close, text: `, "monitors": ${sink}` },
+  )
   for (const [name, array] of Object.entries(kase.arrays)) {
     const records = lists.get(name)
     for (let record = 0; record < array.starts.length; record++) {
@@ -89,12 +97,7 @@ export function faultOrdinal(kase: Case): number {
   return faults === undefined ? 0 : faults.starts[faults.starts.length - 1]!
 }
 
-export function inputOf(
-  command: SimulationCommand,
-  caseFile: string,
-  output: { readonly file: string; readonly rows: number } | null,
-  ordinal: number,
-): string {
+export function inputOf(command: SimulationCommand, caseFile: string, ordinal: number): string {
   const members = command.options.map(({ option, value }) => {
     const text =
       option.type === 'choice'
@@ -112,22 +115,10 @@ export function inputOf(
           `{"time": ${realText(fault.start)}, "type": "fault_on", "element_id": ${ordinal}}`,
           `{"time": ${realText(fault.start + fault.duration)}, "type": "fault_off", "element_id": ${ordinal}}`,
         ]
-  const monitors =
-    output === null
-      ? []
-      : [
-          JSON.stringify({
-            file_name: output.file,
-            ...(command.format === 'csv'
-              ? { format: 'csv' }
-              : { format: 'arrow_stream', batch_rows: output.rows }),
-          }),
-        ]
   return `{\n  ${[
     ...members,
     `"events": [${events.join(', ')}]`,
     `"system_model_file": ${JSON.stringify(caseFile)}`,
-    `"monitors": [${monitors.join(', ')}]`,
   ].join(',\n  ')}\n}\n`
 }
 

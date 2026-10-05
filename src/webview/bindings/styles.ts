@@ -23,7 +23,7 @@ export function vertexStylesOf(
   const { color, scale } = styles(bindings, type, colormap, sampledOf)
   return {
     color: color('vertexColor'),
-    sizePx: scale('vertexSize', [2, 12]),
+    sizePx: scale('vertexSize', [2, 7]),
     height: scale('vertexHeight', [0, 1]),
   }
 }

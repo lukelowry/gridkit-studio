@@ -2,8 +2,8 @@
  *  through the extension's own exports and from outside by Playwright over its DevTools port. */
 
 import assert from 'node:assert/strict'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 import { sampledFields } from '@latkit/model'
 import { type Browser, chromium, type Frame, type Page } from 'playwright-core'
@@ -87,7 +87,7 @@ export class TestHost {
       extensionVersion: extension.packageJSON.version,
       latkit: extension.packageJSON.dependencies,
     }
-    page.on('pageerror', (error) => this.errors.push(error.message))
+    page.on('pageerror', (error) => this.errors.push(error.stack ?? error.message))
   }
 
   static async start(): Promise<TestHost> {
@@ -277,6 +277,14 @@ export class TestHost {
   async failed(test: string): Promise<void> {
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
+    for (const run of [this.session?.run, this.session?.previous]) {
+      if (!run) continue
+      const directory = join(this.output, 'tests', name, run.id)
+      await mkdir(directory, { recursive: true })
+      for (const file of ['case.json', 'input.json', 'solver.log'])
+        await cp(join(dirname(run.path), file), join(directory, file)).catch(() => {})
+      await writeFile(join(directory, 'run.json'), JSON.stringify(run, null, 2))
+    }
     for (const page of this.browser.contexts().flatMap((context) => context.pages()))
       for (const frame of page.frames()) {
         const text = await frame

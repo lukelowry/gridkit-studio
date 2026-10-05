@@ -329,7 +329,7 @@ function boot() {
         const drawn = networkModule.networkData(rows, places)
         // Samples arriving change how the case is styled, not what is drawn.
         if (view) {
-          if (rebased) view.set(drawn as never)
+          if (rebased) (view as Network).set(networkModule.rebase(drawn, networkPatch()))
         } else {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
@@ -360,7 +360,7 @@ function boot() {
           return
         }
         if (view) {
-          if (rebased) view.set({ source: rows })
+          if (rebased) (view as Diagram).set({ source: rows, ...diagramPatch() })
         } else {
           view = diagramModule.mountDiagram(
             gpu,

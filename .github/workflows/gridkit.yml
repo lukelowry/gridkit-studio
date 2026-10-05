@@ -15,16 +15,10 @@ jobs:
       - uses: devcontainers/ci@v0.3
         with:
           push: never
-          env: |
-            GRIDKIT_TEST_SOFTWARE_GPU=1
-            GRIDKIT_TEST_GREP=^Run
-          runCmd: |
-            pnpm test:simulation
-            xvfb-run -a pnpm test:vscode
+          runCmd: pnpm test:devcontainer
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: gridkit
           path: |
-            output/playwright
-            output/tests
+            output/

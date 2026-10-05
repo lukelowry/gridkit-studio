@@ -99,7 +99,7 @@ Color follows the active VS Code theme. The frontmatter records live CSS referen
 
 ### Primary
 
-The VS Code focus color marks keyboard focus and the default Network/Diagram hover and selection glow. The link foreground is the accent: the Monitor cursor and selected trace, a pressed control, and a bound field. The button background fills a primary button. Chart blue is the default Network vertex color. Explicit renderer color settings override these defaults.
+The VS Code focus color marks keyboard focus and the default Network/Diagram hover and selection glow. The link foreground is the accent: the Monitor cursor and selected trace, a pressed control, and a bound field. The button background fills a primary button. Explicit renderer color settings override these defaults.
 
 ### Neutral
 
@@ -113,7 +113,7 @@ Warning and error tokens communicate stale documents, validation failures, and e
 
 ## Typography
 
-Body text inherits VS Code font family and size. Labels are 12px, captions 11px. Numbers, the playback time, and everything a renderer labels (axes, vertices, blocks, ports) use the editor font.
+Body text inherits VS Code font family and size. Labels are 12px, captions 11px; Network vertex and edge labels are 10px, beside 3px markers, so dense cases stay legible. Numbers, the playback time, and everything a renderer labels (axes, vertices, blocks, ports) use the editor font.
 
 There is no display-font layer. Labels use sentence case and include units where the catalog supplies them, as `name [unit]`. A type and field are named by their catalog labels (`Bus · Voltage magnitude [p.u.]`), not their keys.
 
@@ -165,7 +165,7 @@ A property sheet: Views (switches), Arrangement, Time (start, end, speed), Outpu
 
 A real table with sticky column labels, element identities, catalog units, and linked row selection; F2, Enter, or double-click edits in place.
 
-In DynamicSimulation a bar reads where the newest run stands (samples, a percentage while it runs, Failed, Stopped) beside Run, which becomes Stop; a hairline under it fills as samples arrive. The parameters follow as rows: numbers in a fixed-width mono field at the right, a choice or an element of the case (a fault's bus) in a Select, a flag as a Switch. A value that cannot run says why under its row and disables Run. Recorded signals, folded by default, lists each type's recordable signals as switches.
+In DynamicSimulation a bar reads where the newest run stands (samples, a percentage while it runs, Failed, Stopped) beside Run, which becomes Stop; a hairline under it fills as samples arrive. Monitored signals follows immediately, showing the selected field count even when folded. Expanding it offers per-type switches, Select all, and Clear. An empty selection disables Run. The parameters follow as rows: numbers in a fixed-width mono field at the right, a choice or an element of the case (a fault's bus) in a Select, a flag as a Switch. A value that cannot run says why under its row and disables Run.
 
 ### Status, warnings, and empty states
 
@@ -190,4 +190,6 @@ One short sentence in the existing surface, in the caption color, centered for a
 
 Implementation sources: `src/webview/styles/`, `src/webview/ui/`, the view folders under `src/webview/`, and `src/shared/preferences.ts`. VS Code captures from the host suite are in `output/playwright/`.
 
-GridKit app names remain `DynamicSimulation` and `ContingencyAnalysis`; do not replace them with generic labels. The current run form is DynamicSimulation. Inspector, Mappings, and Video Export start collapsed; DynamicSimulation starts expanded. Recorded signals describes what the next run saves, while Monitor displays the recorded plots.
+GridKit app names remain `DynamicSimulation` and `ContingencyAnalysis`; do not replace them with generic labels. The current run form is DynamicSimulation. Inspector, Mappings, and Video Export start collapsed; DynamicSimulation starts expanded. Monitored signals describes what the next run saves, while Plots describes what Monitor displays from the current results. Changing future recordings preserves existing plots. Run reveals Monitor immediately and supplies a first valid plot. Task logs remain available without taking over the panel.
+
+Unmapped vertices and labels follow VS Code's editor foreground; unmapped edges use secondary text, one color per edge, so mapped vertex colors read first and never bleed into the lines between them. Mapped values use the selected colormap. Vertex labels start enabled, subject to Latkit's label density and the existing 200-label limit. Light, dark, high contrast, narrow, geographic, and mapped-color views have Linux software-GPU pixel baselines.

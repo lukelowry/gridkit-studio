@@ -46,6 +46,7 @@
     "test:vscode": "pnpm build && node tests/vscode/launch.mjs",
     "test:package": "node tests/vscode/package.mjs",
     "test:simulation": "vitest run --project simulation",
+    "test:devcontainer": "node scripts/devcontainer.mjs",
     "test:startup": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/startup.ts",
     "test:performance": "node tests/benchmarks/performance.mjs",
     "vscode:prepublish": "pnpm build",
@@ -71,6 +72,7 @@
   "devDependencies": {
     "@types/mocha": "10.0.10",
     "@types/node": "^24.19.0",
+    "@types/pngjs": "6.0.5",
     "@types/vscode": "1.134.0",
     "@typescript-eslint/parser": "^8.70.0",
     "@vscode/test-electron": "2.5.2",
@@ -81,7 +83,9 @@
     "eslint": "^10.10.0",
     "eslint-plugin-simple-import-sort": "^14.0.0",
     "mocha": "11.8.0",
+    "pixelmatch": "7.2.0",
     "playwright-core": "1.63.0",
+    "pngjs": "7.0.0",
     "prettier": "3.9.4",
     "prettier-plugin-svelte": "^4.1.1",
     "svelte": "^5.57.1",
@@ -219,6 +223,12 @@
         "title": "Copy Value",
         "category": "GridKit Studio",
         "icon": "$(copy)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.chooseSignals",
+        "title": "Choose Monitored Signals",
+        "category": "GridKit Studio",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -1337,7 +1347,7 @@
             "type": "boolean"
           },
           "gridkitStudio.network.vertexRadiusPx": {
-            "default": 4,
+            "default": 3,
             "scope": "resource",
             "markdownDescription": "Size — Vertex radius. Marker radius before a bound size scales it.",
             "type": "number",
@@ -1377,7 +1387,7 @@
             "maximum": 4
           },
           "gridkitStudio.network.vertices.labels": {
-            "default": false,
+            "default": true,
             "scope": "resource",
             "markdownDescription": "Labels — Vertex labels. Name each vertex beside its marker.",
             "type": "boolean"
@@ -1389,7 +1399,7 @@
             "type": "boolean"
           },
           "gridkitStudio.network.fontSizePx": {
-            "default": 12,
+            "default": 10,
             "scope": "resource",
             "markdownDescription": "Labels — Size",
             "type": "integer",
@@ -2801,7 +2811,7 @@
           {
             "id": "run",
             "title": "Run and plot",
-            "description": "Configure DynamicSimulation, choose what to record under Recorded signals, then Run. The Monitor shows the result.",
+            "description": "Choose Monitored signals in DynamicSimulation, then Run. The Monitor opens and plots the result automatically.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },

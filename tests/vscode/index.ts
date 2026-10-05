@@ -14,13 +14,25 @@ export async function run(): Promise<void> {
   })
   mocha.rootHooks({
     async afterEach(this: Mocha.Context) {
-      if (this.currentTest?.state === 'failed') await failed(this.currentTest.fullTitle())
+      if (this.currentTest?.state === 'failed') {
+        console.error(this.currentTest.err?.stack)
+        await failed(this.currentTest.fullTitle())
+      }
     },
     afterAll: finish,
   })
   // A suite registers as its module loads, which is once Mocha listens for it.
   mocha.suite.emit('pre-require', globalThis, 'VS Code', mocha)
   await import('./suites.js')
-  const failures = await new Promise<number>((resolve) => mocha.run(resolve))
+  let pending = 0
+  let passed = 0
+  const failures = await new Promise<number>((resolve) =>
+    mocha
+      .run(resolve)
+      .on('pending', () => pending++)
+      .on('pass', () => passed++),
+  )
+  if (process.env.GRIDKIT_TEST_REQUIRED === '1' && (pending || !passed))
+    throw new Error(`Required VS Code suite: ${pending} skipped, ${passed} passed.`)
   if (failures) throw new Error(failures + (failures === 1 ? ' test' : ' tests') + ' failed.')
 }

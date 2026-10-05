@@ -14,7 +14,7 @@ const PALETTE = {
   text3: ['--color-text-3', '#aaaaaa'],
   border: ['--color-border', '#444444'],
   focus: ['--color-focus-ring', '#007fd4'],
-  network: ['--color-network', '#75beff'],
+  network: ['--color-network', '#cccccc'],
   primaryText: ['--color-primary-text', '#3794ff'],
 } as const
 

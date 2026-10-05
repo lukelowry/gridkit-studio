@@ -56,16 +56,15 @@ export function registerTasks(studio: Sessions) {
                   write.fire(event.message.replace(/\r?\n/g, '\r\n') + '\r\n')
               })
               if (cancelled) throw new Error('Task cancelled before launch.')
+              await vscode.commands.executeCommand('gridkitStudio.monitor.focus', {
+                preserveFocus: true,
+              })
+              if (cancelled) throw new Error('Task cancelled before launch.')
               started = true
               const result = await studio.client.call('run', request)
               write.fire(
                 `\r\n${result.state}: ${result.frames} samples${result.message ? ' — ' + result.message : ''}\r\n`,
               )
-              // The task's terminal took the panel; a run with results gives it to the Monitor.
-              if (result.state === 'complete' && result.frames > 0)
-                void vscode.commands.executeCommand('gridkitStudio.monitor.focus', {
-                  preserveFocus: true,
-                })
               close.fire(result.state === 'complete' ? 0 : 1)
             })()
               .catch((error) => {
@@ -85,7 +84,7 @@ export function registerTasks(studio: Sessions) {
       [],
     )
     task.presentationOptions = {
-      reveal: vscode.TaskRevealKind.Always,
+      reveal: vscode.TaskRevealKind.Never,
       panel: vscode.TaskPanelKind.Dedicated,
       clear: true,
     }

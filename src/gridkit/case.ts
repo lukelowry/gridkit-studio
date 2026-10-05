@@ -37,6 +37,7 @@ import { type ArrayName, CASE, CASE_ROW, type Catalog, type Shape, SIGNAL } from
 import {
   ARRAYS,
   type Layout,
+  type Member,
   Members,
   NONE,
   type Parsed,
@@ -137,6 +138,8 @@ export class Case {
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
     /** The top-level object's closing brace. */
     readonly close: number,
+    /** The case's own `monitors` member, which a simulation's case file replaces. */
+    readonly monitors: Member | undefined,
   ) {}
 
   /** Every static field and row ID, as a host reads them. Assembled on first read rather than while the parse's
@@ -336,6 +339,7 @@ function joined(
     file,
     arrays,
     layout.close,
+    layout.members.find((member) => member.name === 'monitors'),
   )
 }
 

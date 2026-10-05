@@ -21,9 +21,6 @@ suite('DynamicSimulation', () => {
   test("shows the study's typed fields and its own Run", async () => {
     await visible(simulation, '[data-testid="field-tmax"]')
     await visible(simulation, '[data-testid="study-run"]')
-    // The results format is the extension's business, not a field of the study.
-    assert.equal(await simulation.locator('#output_format').count(), 0)
-    assert.equal(await simulation.getByText('Results format', { exact: true }).count(), 0)
     await bench.capture('simulation-vscode')
   })
 
@@ -41,7 +38,7 @@ suite('DynamicSimulation', () => {
 
   test('chooses which signals the next run records', async () => {
     assert.ok(recorded())
-    await simulation.getByRole('button', { name: 'Recorded signals' }).click()
+    await simulation.getByRole('button', { name: 'Monitored signals', exact: true }).click()
     await simulation.locator('[data-testid="monitor-class-Bus"]').click()
     await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
     await until(() => !recorded(), 'a signal no longer recorded')

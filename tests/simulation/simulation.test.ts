@@ -1,16 +1,16 @@
 /** GridKit's own DynamicSimulation, run where GridKit is installed: the dev container has it, and
  *  GRIDKIT_PATH names an install elsewhere. */
 
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { type Arguments, type Parameters, read } from '@latkit/model'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { type Arguments, type FieldSelection, type Parameters, read } from '@latkit/model'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import catalog from '../../catalog.json'
 import { Case } from '../../src/gridkit/case.js'
 import { catalogOf } from '../../src/gridkit/definition.js'
+import { diagnose } from '../../src/gridkit/edits.js'
 import { dynamicSimulation } from '../../src/gridkit/runtime.js'
 import { Simulation } from '../../src/gridkit/simulation.js'
 import { ResultCache } from '../../src/results/results.js'
@@ -23,7 +23,9 @@ describe('DynamicSimulation', () => {
   let kase: Case
 
   beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'gridkit-studio-simulation-'))
+    await mkdir('output/simulation', { recursive: true })
+    root = await mkdtemp('output/simulation/run-')
+    console.log('Simulation inputs, results and logs:', root)
     // Without GridKit there is nothing to test, and that is a failure said once.
     await dynamicSimulation(gridkit)
     kase = await Case.parse(
@@ -31,7 +33,6 @@ describe('DynamicSimulation', () => {
       catalogOf(JSON.stringify(catalog)),
     )
   })
-  afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 3 }))
 
   /** Run the case into its own folder under `name`, until it ends or `signal` aborts; `publish`
    *  hears each block of frames, and may stop the run. */
@@ -40,23 +41,27 @@ describe('DynamicSimulation', () => {
     values: RunRequest['values'],
     signal: AbortSignal,
     publish: (stop: (reason: Error) => void) => void = () => {},
+    model = kase,
+    outputs: readonly FieldSelection[] = [
+      { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } },
+    ],
   ) {
     const directory = join(root, name)
     await mkdir(directory)
-    const format = values.output_format as RunInfo['format']
+    const format = 'csv'
     const request: RunRequest = {
       uri: 'file:///test.case.json',
       version: 1,
       values,
-      outputs: [{ from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } }],
+      outputs,
       gridkit,
       cacheBytes: 1 << 20,
     }
     const info: RunInfo = {
       id: name,
       revision: request,
-      fingerprint: kase.version,
-      name: 'IEEE39',
+      fingerprint: model.version,
+      name: model.name,
       state: 'running',
       path: join(directory, 'results.' + format),
       format,
@@ -68,7 +73,7 @@ describe('DynamicSimulation', () => {
     let owned: RuntimeProcess | undefined
     let released = false
     const simulation = new Simulation(
-      kase,
+      model,
       request,
       directory,
       new ResultCache(1 << 20),
@@ -108,32 +113,118 @@ describe('DynamicSimulation', () => {
     return values
   }
 
-  it('records the same samples as Arrow and as CSV', async ({ signal }) => {
-    const recorded: { frames: number; values: number[] }[] = []
-    for (const output_format of ['arrow', 'csv']) {
+  for (const [fixture, expected] of [
+    ['IEEE39', [1.0485160677316046, 1.051597761407972]],
+    ['TwoArea', [1.0000062524673949, 0.9976070932623818]],
+  ] as const)
+    it(`${fixture}: diagnoses, stages and records native CSV with reference voltages`, async ({
+      signal,
+    }) => {
+      const model = await Case.read(`tests/fixtures/${fixture}.case.json`, kase.catalog)
+      expect(diagnose(model)).toEqual([])
       const { simulation, info, done, released } = await run(
-        output_format,
-        { tmax: 0.1, dt_monitor: 0.01, output_format },
+        fixture,
+        { tmax: 0.1, dt_monitor: 0.01 },
         signal,
+        undefined,
+        model,
       )
       await done
       expect(released()).toBe(true)
-      expect(info.frames).toBeGreaterThanOrEqual(10)
-      recorded.push({ frames: info.frames, values: await samples(simulation) })
-    }
-    const [arrow, csv] = recorded
-    expect(arrow!.values.every(Number.isFinite)).toBe(true)
-    expect(csv!.frames).toBe(arrow!.frames)
-    expect(csv!.values).toHaveLength(arrow!.values.length)
-    arrow!.values.forEach((value, i) =>
-      expect(Math.abs(value - csv!.values[i]!)).toBeLessThan(1e-5),
+      expect(info.frames).toBe(11)
+      expect(info.domain).toEqual([0, 0.1])
+      const csv = (await readFile(info.path, 'utf8')).trim().split('\n')
+      expect(csv.shift()).toBe('t,Bus_1_Vm,Bus_2_Vm')
+      const rows = csv.map((row) => row.split(',').map(Number))
+      rows.forEach((row, i) => {
+        expect(row[0]).toBeCloseTo(i * 0.01, 12)
+        expect(row.every(Number.isFinite)).toBe(true)
+      })
+      expected.forEach((value, i) => expect(rows[0]![i + 1]).toBeCloseTo(value, 6))
+      const decoded = await samples(simulation)
+      expect(decoded).toHaveLength(22)
+      expect(decoded.every(Number.isFinite)).toBe(true)
+      expect(decoded).toEqual(rows.flatMap((row) => row.slice(1)))
+    })
+
+  it('records multiple fields in native column order', async ({ signal }) => {
+    const { info, done } = await run(
+      'multiple',
+      { tmax: 0.1, dt_monitor: 0.01 },
+      signal,
+      undefined,
+      kase,
+      [{ from: 'Bus', select: ['Va', 'Vm'], rows: { kind: 'ids', ids: ['Bus/2'] } }],
     )
+    await done
+    expect((await readFile(info.path, 'utf8')).split('\n')[0]).toBe('t,Bus_2_Vm,Bus_2_Va')
+    expect(info.frames).toBe(11)
+  })
+
+  it('simulates a staged bus fault and records the event boundaries', async ({ signal }) => {
+    const { info, done } = await run(
+      'fault',
+      {
+        tmax: 0.2,
+        dt_monitor: 0.01,
+        fault: true,
+        fault_bus: 'Bus/1',
+        fault_start: 0.05,
+        fault_duration: 0.05,
+        fault_R: 0,
+        fault_X: 0.01,
+      },
+      signal,
+    )
+    await done
+    const rows = (await readFile(info.path, 'utf8'))
+      .trim()
+      .split('\n')
+      .slice(1)
+      .map((row) => row.split(',').map(Number))
+    expect(info.frames).toBe(23)
+    expect(info.domain).toEqual([0, 0.2])
+    expect(rows.filter((row) => Math.abs(row[0]! - 0.05) < 1e-12)).toHaveLength(2)
+    expect(rows.filter((row) => Math.abs(row[0]! - 0.1) < 1e-12)).toHaveLength(2)
+    expect(rows.every((row) => row.every(Number.isFinite))).toBe(true)
+    expect(Math.min(...rows.map((row) => row[1]!))).toBeLessThan(0.8)
+  })
+
+  it('rejects a results format before starting a process: runs write CSV only', async ({
+    signal,
+  }) => {
+    const { done, owned } = await run('unsupported', { output_format: 'arrow' }, signal)
+    await expect(done).rejects.toThrow('Unknown simulation parameter: output_format')
+    expect(owned()).toBeUndefined()
+  })
+
+  it('reports native initialization errors and retains the solver log, then retries successfully', async ({
+    signal,
+  }) => {
+    const text = await readFile('tests/fixtures/TwoArea.case.json', 'utf8')
+    const invalid = await Case.parse(
+      text.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'),
+      kase.catalog,
+    )
+    const failed = await run('native-error', { tmax: 0.1 }, signal, undefined, invalid)
+    await expect(failed.done).rejects.toThrow(/Ispdlim|code/)
+    expect(failed.released()).toBe(true)
+    expect(await readFile(join(root, 'native-error', 'solver.log'), 'utf8')).toMatch(/Ispdlim/)
+    const retry = await run('retry', { tmax: 0.1, dt_monitor: 0.01 }, signal)
+    await retry.done
+    expect(retry.info.frames).toBe(11)
+  })
+
+  it('rejects an empty signal selection before starting a process', async ({ signal }) => {
+    const { done, owned } = await run('empty', {}, signal, undefined, kase, [])
+    await expect(done).rejects.toThrow('monitored signal')
+    expect(owned()).toBeUndefined()
   })
 
   it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
     const { info, done, owned, released } = await run(
       'cancel',
-      { tmax: 1000, dt_monitor: 0.001, output_format: 'arrow' },
+      { tmax: 1000, dt_monitor: 0.001 },
       signal,
       (stop) => stop(new Error('Cancelled by the test')),
     )

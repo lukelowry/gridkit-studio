@@ -16,7 +16,7 @@ import type { Case } from '../gridkit/case.js'
 import type { Field } from '../gridkit/parameters.js'
 import type { RunInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
-import { readResults, samplesOf } from './decode.js'
+import { type Layout, readResults, samplesOf } from './decode.js'
 
 /** Decoder arrays are borrowed and reused. Copy only exposed views, never their backing allocations. */
 function ownedSamples(publication: Publication): SampleBatch[] {
@@ -97,6 +97,8 @@ export class ResultCache {
 export class Results {
   readonly pages: Page[] = []
   header = new Uint8Array()
+  /** How every page of this run reads, from its header. */
+  readonly #layout: Layout = {}
   #at = 0
   #last = -Infinity
   constructor(
@@ -106,12 +108,38 @@ export class Results {
     readonly cache: ResultCache,
     readonly ownedDirectory?: string,
   ) {}
+  /** The frames between `start` and `end` of the file, the first of them frame `first`; `held` is
+   *  those bytes when the caller has them already. */
   async decode(
     start: number,
     end: number,
     first: number,
     signal: AbortSignal,
+    held?: Uint8Array,
   ): Promise<SampleBatch[]> {
+    const bytes = held ?? (await this.#read(start, end))
+    const batches: SampleBatch[] = []
+    await readResults(
+      Readable.from([this.header, bytes]),
+      this.fields,
+      this.kase,
+      {
+        signal,
+        publish: (frames) => {
+          batches.push(
+            ...ownedSamples(
+              samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
+            ),
+          )
+        },
+      },
+      this.info.format,
+      64,
+      this.#layout,
+    )
+    return batches
+  }
+  async #read(start: number, end: number): Promise<Uint8Array> {
     const file = await open(this.info.path, 'r')
     try {
       const bytes = new Uint8Array(end - start)
@@ -121,24 +149,7 @@ export class Results {
         if (!bytesRead) throw new Error('Result file changed while being read.')
         read += bytesRead
       }
-      const batches: SampleBatch[] = []
-      await readResults(
-        Readable.from([this.header, bytes]),
-        this.fields,
-        this.kase,
-        {
-          signal,
-          publish: (frames) => {
-            batches.push(
-              ...ownedSamples(
-                samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
-              ),
-            )
-          },
-        },
-        this.info.format,
-      )
-      return batches
+      return bytes
     } finally {
       await file.close()
     }
@@ -148,8 +159,9 @@ export class Results {
     end: number,
     signal: AbortSignal,
     publish: (batches: Publication) => Promise<void>,
+    held?: Uint8Array,
   ) {
-    const batches = await this.decode(start, end, this.info.frames, signal)
+    const batches = await this.decode(start, end, this.info.frames, signal, held)
     const coordinates = batches
       .filter(
         (b) =>
@@ -191,7 +203,9 @@ export class Results {
       let csvRows = 0
       let scan = 0
       let quoted = false
-      const chunk = Buffer.alloc(256 << 10)
+      // A wide run's frame is megabytes: read in pieces of that order, so a frame is not regathered
+      // from many small reads.
+      const chunk = Buffer.alloc(4 << 20)
       while (true) {
         signal.throwIfAborted()
         const { bytesRead } = await file.read(chunk, 0, chunk.length, this.#at)
@@ -221,22 +235,32 @@ export class Results {
               if (this.header.length) throw new Error('Repeated Arrow schema.')
               this.header = pending.subarray(0, length).slice()
             } else if (message.header.kind === 'batch')
-              await this.append(start, start + length, signal, publish)
+              await this.append(start, start + length, signal, publish, pending.subarray(0, length))
             start += length
             pending = pending.subarray(length)
           }
         } else {
           while (scan < pending.length) {
-            const byte = pending[scan++]!
-            if (!this.header.length && byte === 34) quoted = !quoted
-            if (byte !== 10 || quoted) continue
+            // Only the header quotes; past it, a frame ends at its newline.
+            if (this.header.length) {
+              const newline = pending.indexOf(10, scan)
+              if (newline < 0) {
+                scan = pending.length
+                break
+              }
+              scan = newline + 1
+            } else {
+              const byte = pending[scan++]!
+              if (byte === 34) quoted = !quoted
+              if (byte !== 10 || quoted) continue
+            }
             if (!this.header.length) {
               this.header = pending.subarray(0, scan).slice()
               start += scan
               pending = pending.subarray(scan)
               scan = 0
             } else if (++csvRows >= 64 || scan >= 4 << 20) {
-              await this.append(start, start + scan, signal, publish)
+              await this.append(start, start + scan, signal, publish, pending.subarray(0, scan))
               start += scan
               pending = pending.subarray(scan)
               scan = 0
@@ -244,7 +268,7 @@ export class Results {
             }
           }
           if (finished && pending.length) {
-            await this.append(start, start + pending.length, signal, publish)
+            await this.append(start, start + pending.length, signal, publish, pending)
             pending = Buffer.alloc(0)
           }
         }

@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Readable } from 'node:stream'
 
 import { blockBuffers, read, type SampleBatch, selectBatches, staticFields } from '@latkit/model'
 import { describe, expect, it } from 'vitest'
@@ -10,6 +11,7 @@ import { Case } from '../gridkit/case.js'
 import { catalogOf } from '../gridkit/definition.js'
 import { selections } from '../gridkit/parameters.js'
 import type { RunInfo } from '../shared/messages.js'
+import { type Layout, readResults } from './decode.js'
 import { ResultCache, Results } from './results.js'
 describe('native results and ownership', () => {
   it('takes ownership of reused decoder buffers before resolving', () => {
@@ -53,6 +55,38 @@ describe('native results and ownership', () => {
     }))
       expect(block.columns.number!.kind).toBe('numeric')
   })
+  it('reads every page of a run with the layout its header gave the first', async () => {
+    const kase = await Case.parse(
+      '{"buses":[{"class":"Bus","number":1,"name":"A"}]}',
+      catalogOf(JSON.stringify(catalogJson)),
+    )
+    const fields = selections(kase, [{ from: 'Bus', select: ['Vm'] }])
+    const layout: Layout = {}
+    const page = async (text: string) => {
+      const values: number[] = []
+      await readResults(
+        Readable.from([Buffer.from(text)]),
+        fields,
+        kase,
+        {
+          signal: new AbortController().signal,
+          publish: (frames) => {
+            values.push(...frames.values[0]!)
+          },
+        },
+        'csv',
+        64,
+        layout,
+      )
+      return values
+    }
+    expect(await page('time,Bus_A_Vm\n0,1.5\n')).toEqual([1.5])
+    const plan = layout.plan
+    // A later page's header is not matched name by name again: the first's layout stands.
+    expect(await page('time,unmatched\n0.01,1.25\n')).toEqual([1.25])
+    expect(layout.plan).toBe(plan)
+  })
+
   it('evicts within budget and reloads exact native-file windows', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gridkit-results-test-'))
     try {

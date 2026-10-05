@@ -2,13 +2,11 @@
 
 import { failure } from '@latkit/model'
 
+import type { ArrowField } from './arrow.js'
 import { BATCH_BYTES } from './limits.js'
 
 export type CsvMessage =
-  | {
-      readonly kind: 'schema'
-      readonly fields: readonly { name: string; type: 'float64'; nullable: boolean }[]
-    }
+  | { readonly kind: 'schema'; readonly fields: readonly ArrowField[] }
   | {
       readonly kind: 'rows'
       readonly length: number
@@ -19,9 +17,11 @@ export type CsvMessage =
 const HEADER_CHARS = 16 << 20
 const CELL_CHARS = 1024
 
+/** `known` is the header's columns, when an earlier read of the same results parsed it. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
   batchRows = 64,
+  known?: readonly ArrowField[],
 ): AsyncGenerator<CsvMessage> {
   if (!Number.isSafeInteger(batchRows) || batchRows < 1)
     throw new RangeError('CSV batch rows must be positive.')
@@ -43,21 +43,20 @@ export async function* csvMessages(
         if (code === 34) quoted = !quoted
         if (code === 10 && !quoted) break
       }
-      header += text.slice(0, start)
+      if (!known) header += text.slice(0, start)
       if (header.length > HEADER_CHARS)
         throw failure('resource-limit', 'The CSV header exceeds 16,777,216 characters.')
       if (start === text.length) continue
-      const names = headerOf(header)
+      const fields =
+        known ??
+        headerOf(header).map((name, i) => ({ name, type: 'float64' as const, nullable: i !== 0 }))
       header = ''
-      if (names.length * 8 > BATCH_BYTES)
+      if (fields.length * 8 > BATCH_BYTES)
         throw failure('resource-limit', 'One CSV frame exceeds 8 MiB of numbers.')
-      capacity = Math.min(batchRows, Math.floor(BATCH_BYTES / (8 * names.length)))
-      width = names.length
-      values = new Float64Array(names.length * capacity)
-      yield {
-        kind: 'schema',
-        fields: names.map((name, i) => ({ name, type: 'float64', nullable: i !== 0 })),
-      }
+      capacity = Math.min(batchRows, Math.floor(BATCH_BYTES / (8 * fields.length)))
+      width = fields.length
+      values = new Float64Array(fields.length * capacity)
+      yield { kind: 'schema', fields }
       start++
     }
 

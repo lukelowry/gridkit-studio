@@ -23,6 +23,10 @@ suite('Sessions', () => {
     await studio.open(document)
   })
 
+  test("records each bus's voltage magnitude and angle until the reader chooses", () => {
+    assert.deepEqual(studio.current().outputs, [{ from: 'Bus', select: ['Vm', 'Va'] }])
+  })
+
   test('keeps an empty recording selection when the case is opened again', async () => {
     const session = studio.current()
     studio.record(session.uri, [])

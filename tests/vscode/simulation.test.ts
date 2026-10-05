@@ -38,11 +38,12 @@ suite('DynamicSimulation', () => {
   })
 
   test('chooses which signals the next run records in its own native view', async () => {
-    assert.ok(recorded())
-    await bench.toggleSignal('Bus', 'Va')
-    await until(() => !recorded(), 'a signal no longer recorded')
+    // A case records its buses' voltage magnitude and angle until the reader chooses otherwise.
+    assert.deepEqual(bench.session.outputs, [{ from: 'Bus', select: ['Vm', 'Va'] }])
     const signals = await bench.signals()
     const bus = signals.getByRole('treeitem', { name: /^Bus,/ }).getByRole('checkbox')
+    const bused = () =>
+      (bench.session.outputs ?? []).find((output) => output.from === 'Bus')?.select.length ?? 0
     const whole = (on: boolean) =>
       until(
         async () => (await bus.getAttribute('aria-checked')) === String(on),
@@ -50,18 +51,16 @@ suite('DynamicSimulation', () => {
       )
     await whole(false)
     await bench.toggleSignal('Bus', 'Va')
+    await until(() => !recorded(), 'a signal no longer recorded')
+    await bench.toggleSignal('Bus', 'Va')
     await until(recorded, 'the signal recorded again')
     // A type's own box records all of its values, or none.
+    await bus.click()
+    await until(() => bused() === 4, 'every Bus value recorded')
     await whole(true)
     await bus.click()
-    await until(
-      () => !(bench.session.outputs ?? []).some((output) => output.from === 'Bus'),
-      'Bus recorded not at all',
-    )
+    await until(() => bused() === 0, 'Bus recorded not at all')
     await whole(false)
-    await bus.click()
-    await until(recorded, 'every Bus value recorded again')
-    await whole(true)
   })
 
   test('says Run needs a signal, and opens Monitored Signals from there', async () => {

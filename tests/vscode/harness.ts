@@ -5,12 +5,11 @@ import assert from 'node:assert/strict'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
-import { sampledFields } from '@latkit/model'
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import type { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import type { Sessions } from '../../src/extension/sessions.js'
+import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import type { RunInfo, ViewKind } from '../../src/shared/messages.js'
 
 /** Wait until `get` answers something truthy, and return it. */
@@ -311,9 +310,7 @@ export class TestHost {
     const { session } = this
     this.studio.select(this.key)
     session.values = {}
-    session.outputs = sampledFields((await this.current()).schema).filter(
-      ({ from }) => this.studio.state(this.key).summary!.counts[from],
-    )
+    session.outputs = defaultOutputs(await this.current())
     session.plots = []
     session.bindings = {}
     session.editing = undefined

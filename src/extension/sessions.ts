@@ -1,4 +1,4 @@
-import { type FieldSelection, sampledFields } from '@latkit/model'
+import type { FieldSelection } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import {
@@ -8,7 +8,15 @@ import {
   channelsFor,
   type FieldRef,
 } from '../shared/bindings.js'
-import type { Cameras, Element, Plot, RunInfo, TableState, ViewState } from '../shared/messages.js'
+import type {
+  Cameras,
+  Element,
+  Plot,
+  RunInfo,
+  Summary,
+  TableState,
+  ViewState,
+} from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
@@ -37,6 +45,21 @@ export interface Session {
   cameras: Cameras
   table: TableState
 }
+/** What a case keeps in the workspace between sessions. `recording` is what its runs record; a
+ *  selection saved under any other name is not read. */
+type Saved = Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table'>> & {
+  recording?: FieldSelection[]
+}
+
+/** What a case's runs record until the reader chooses: each bus's voltage magnitude and angle. */
+export function defaultOutputs({ schema, counts }: Summary): FieldSelection[] {
+  return networkOf(schema).vertices.flatMap((type) => {
+    const fields = schema.types[type]!.fields
+    const select = ['Vm', 'Va'].filter((field) => fields[field]?.sampled === true)
+    return counts[type] && select.length ? [{ from: type, select }] : []
+  })
+}
+
 /** The plots `run` can draw: those it recorded, else its first recorded signal. */
 export function plotsFor(run: RunInfo, plots: readonly Plot[]): Plot[] {
   const kept = plots.filter((plot) =>
@@ -141,16 +164,14 @@ export class Sessions {
   activate(uri: string) {
     this.active = uri
     if (!this.all.has(uri)) {
-      const saved = this.context.workspaceState.get<
-        Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table' | 'outputs'>>
-      >('case:' + uri, {})
+      const saved = this.context.workspaceState.get<Saved>('case:' + uri, {})
       // Earlier prereleases saved a results format; runs now write CSV only.
       const { output_format: _, ...values } = saved.values ?? {}
       this.all.set(uri, {
         uri,
         bindings: saved.bindings ?? {},
         plots: saved.plots ?? [],
-        outputs: saved.outputs,
+        outputs: saved.recording,
         values,
         transport: new Transport(() => this.clock.fire(uri)),
         diagramEditing: false,
@@ -166,7 +187,7 @@ export class Sessions {
     const session = this.activate(document.uri.toString())
     const summary = await this.documents.ensure(document)
     if (session.outputs === undefined) {
-      session.outputs = sampledFields(summary.schema).filter((field) => summary.counts[field.from])
+      session.outputs = defaultOutputs(summary)
       this.changed.fire(session.uri)
     }
     return session
@@ -177,13 +198,14 @@ export class Sessions {
     return session
   }
   persist(session: Session) {
-    return this.context.workspaceState.update('case:' + session.uri, {
+    const saved: Saved = {
       bindings: session.bindings,
       values: session.values,
       plots: session.plots,
       table: session.table,
-      outputs: session.outputs,
-    })
+      recording: session.outputs,
+    }
+    return this.context.workspaceState.update('case:' + session.uri, saved)
   }
   state(uri: string): ViewState {
     const entry = this.documents.entries.get(uri)

@@ -24,10 +24,17 @@ export interface Reading {
   /** connect's publish resolves after copying into its frame; other consumers copy what they keep. */
   readonly publish: (frames: Frames) => void | Promise<void>
 }
-interface Plan {
+export interface Plan {
   readonly doubles: Uint8Array
   readonly columns: readonly Int32Array[]
   readonly strides: Int32Array
+}
+/** How a run's results read, learned from their header once: its columns, and the column each
+ *  output's row reads. Every page after the first reuses it, so a wide run is not matched name by
+ *  name again for each of its frames. */
+export interface Layout {
+  fields?: readonly ArrowField[]
+  plan?: Plan
 }
 
 /** One sample batch per output field over the same frames; connect sizes them for the wire. */
@@ -61,6 +68,7 @@ export async function readResults(
   reading: Reading,
   format: ResultFormat = 'arrow',
   batchRows = 64,
+  layout: Layout = {},
 ): Promise<{ readonly frames: number }> {
   let plan: Plan | undefined
   let received = 0
@@ -75,12 +83,13 @@ export async function readResults(
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
     for await (const message of format === 'csv'
-      ? csvMessages(chunks, batchRows)
+      ? csvMessages(chunks, batchRows, layout.fields)
       : messages(chunks)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
         if (plan) throw failure('io', 'The results repeat their schema.')
-        plan = placementOf(message.fields, outputs, kase)
+        layout.fields ??= message.fields
+        plan = layout.plan ??= placementOf(message.fields, outputs, kase)
         continue
       }
       if (!plan) throw failure('io', 'The results hold a batch before their schema.')

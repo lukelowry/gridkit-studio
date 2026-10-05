@@ -31,8 +31,12 @@ await writeFile(
     'workbench.startupEditor': 'none',
     'workbench.secondarySideBar.defaultVisibility': 'hidden',
     'security.workspace.trust.startupPrompt': 'never',
-    // An install of GridKit other than the one on PATH.
+    // An install of GridKit other than the one on PATH, or an image to run without one.
     ...(process.env.GRIDKIT_PATH && { 'gridkitStudio.gridkitPath': process.env.GRIDKIT_PATH }),
+    ...(process.env.GRIDKIT_IMAGE && { 'gridkitStudio.gridkitImage': process.env.GRIDKIT_IMAGE }),
+    ...(process.env.GRIDKIT_CONTAINER_CLI && {
+      'gridkitStudio.containerCli': process.env.GRIDKIT_CONTAINER_CLI,
+    }),
   }),
 )
 const workspace = path.join(run, 'workspace')

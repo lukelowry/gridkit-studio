@@ -2,8 +2,23 @@ import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import type { RunRequest } from '../shared/messages.js'
+import type { GridKit, RunRequest } from '../shared/messages.js'
 import type { Sessions } from './sessions.js'
+
+/** Where GridKit runs for the case at `uri`, as its settings say. A relative install path is the
+ *  workspace's own. */
+export function gridkitOf(uri: vscode.Uri): GridKit {
+  const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
+  const path = settings.get<string>('gridkitPath', '').trim()
+  return {
+    path: path
+      ? resolve(vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath), path)
+      : '',
+    image: settings.get<string>('gridkitImage', '').trim(),
+    cli: settings.get<string>('containerCli', '').trim(),
+  }
+}
+
 export function registerTasks(studio: Sessions) {
   const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
     const definition = {
@@ -33,19 +48,12 @@ export function registerTasks(studio: Sessions) {
               const session = await studio.open(document)
               const summary = await studio.documents.ensure(document)
               const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
-              // A relative install path is the workspace's own.
-              const install = settings.get<string>('gridkitPath', '')
               const request: RunRequest = {
                 uri: uri.toString(),
                 version: summary.version,
                 values: structuredClone(values ?? session.values),
                 outputs: session.outputs ?? [],
-                gridkit: install
-                  ? resolve(
-                      vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath),
-                      install,
-                    )
-                  : '',
+                gridkit: gridkitOf(uri),
                 cacheBytes: settings.get<number>('resultCacheMiB', 256) * (1 << 20),
               }
               write.fire(

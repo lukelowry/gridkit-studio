@@ -90,3 +90,9 @@ The earlier checks above did not establish native compatibility. The verified Gr
 Run opens Monitor immediately. The first sample publication makes a run readable before views request its samples; this prevents a startup race that previously left an empty plot. Native result tests check both IEEE39 and TwoArea, including actual trace pixels and inspected values, fault events, cancellation, and retry. Network source revisions replace geometry and field inputs together, including switching between calculated and geographic positions.
 
 `pnpm test:devcontainer` is the required full verification command. It fails on missing GridKit or skipped UI tests, checks an installed VSIX, compares reviewed pixel baselines, and exercises Workspace Trust. Solver artifacts and failed UI inputs/logs/reports remain under `output/`. The historical large-Diagram layout limitation above remains outside this correction.
+
+## Where GridKit runs
+
+A run uses the first GridKit it finds: GridKit Path, then `DynamicSimulation` on the workspace host's `PATH` (a dev container, SSH remote, or WSL with GridKit), then GridKit Image in Docker or Podman. Studio never pulls an image; one not on the machine is refused with the pull command for the reader to run. Each container run is `run --rm --pull never --network none` with only its run folder mounted, named so Stop, a worker failure, or shutdown removes it by name. On Linux it runs as the reader, or with `--userns keep-id` under Podman, and the mount is labeled for SELinux.
+
+Measured locally on 2026-10-05, Windows with Docker Desktop and no GridKit installed: the solver suite (10 tests, including a cancelled run leaving no container and an image not on the machine refused without pulling) and the VS Code Run and WECC240 suites (13 tests) passed against `ghcr.io/lukelowry/gridkit:arrow`. Podman's arguments are unit-tested; no Podman host was exercised.

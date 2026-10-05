@@ -109,7 +109,9 @@
       "supported": "limited",
       "description": "Inspect and edit cases. Simulation requires Workspace Trust.",
       "restrictedConfigurations": [
-        "gridkitStudio.gridkitPath"
+        "gridkitStudio.gridkitPath",
+        "gridkitStudio.gridkitImage",
+        "gridkitStudio.containerCli"
       ]
     },
     "virtualWorkspaces": {
@@ -517,10 +519,9 @@
       },
       {
         "command": "gridkitStudio.simulationSettings",
-        "title": "GridKit Path",
+        "title": "Where GridKit Runs",
         "category": "GridKit Studio",
-        "icon": "$(settings-gear)",
-        "enablement": "gridkitStudio.hasCase"
+        "icon": "$(settings-gear)"
       },
       {
         "command": "gridkitStudio.reviewChanges",
@@ -1131,7 +1132,7 @@
         },
         {
           "command": "gridkitStudio.simulationSettings",
-          "when": "gridkitStudio.hasCase"
+          "when": "true"
         },
         {
           "command": "gridkitStudio.reviewChanges",
@@ -1259,7 +1260,22 @@
             "type": "string",
             "default": "",
             "scope": "machine-overridable",
-            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds `DynamicSimulation` on `PATH`."
+            "order": 0,
+            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds `DynamicSimulation` on `PATH`, as a dev container or remote host with GridKit has it."
+          },
+          "gridkitStudio.gridkitImage": {
+            "type": "string",
+            "default": "",
+            "scope": "machine-overridable",
+            "order": 1,
+            "markdownDescription": "A container image with GridKit, such as `ghcr.io/lukelowry/gridkit:arrow`, run in Docker or Podman when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull …` or `podman pull …`): GridKit Studio never pulls images. An installed GridKit is used first."
+          },
+          "gridkitStudio.containerCli": {
+            "type": "string",
+            "default": "",
+            "scope": "machine-overridable",
+            "order": 2,
+            "markdownDescription": "The container CLI that runs **GridKit Image**: `docker`, `podman`, or a path to either. Empty uses `docker`, else `podman`, on `PATH`."
           },
           "gridkitStudio.navigateOnSelection": {
             "type": "boolean",

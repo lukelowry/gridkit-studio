@@ -13,7 +13,8 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { dynamicSimulation } from '../../src/gridkit/runtime.js'
+import { gridkitOf } from '../../src/extension/tasks.js'
+import { runtimeOf } from '../../src/gridkit/runtime.js'
 import { recordedWhole } from '../../src/shared/bindings.js'
 import { pause, type TestHost, testHost, until } from './harness.js'
 
@@ -156,10 +157,11 @@ suite('WECC240 run', function () {
 
   suiteSetup(async function () {
     bench = await testHost()
-    // GridKit runs where it is installed, such as the dev container; elsewhere the suite is skipped.
-    const install = settings().get('gridkitPath', '')
-    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await dynamicSimulation(install)
-    else if (!(await dynamicSimulation(install).catch(() => undefined))) this.skip()
+    // GridKit runs where it is installed, such as the dev container, or in GRIDKIT_IMAGE; without
+    // either the suite is skipped.
+    const gridkit = gridkitOf(bench.uri)
+    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtimeOf(gridkit)
+    else if (!(await runtimeOf(gridkit).catch(() => undefined))) this.skip()
     const source = JSON.parse(
       await readFile(join(process.env.GRIDKIT_TEST_ROOT!, 'cases/WECC240.case.json'), 'utf8'),
     ) as {

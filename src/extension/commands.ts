@@ -666,11 +666,16 @@ export function registerCommands(studio: Sessions) {
     ['networkSettings', 'network'],
     ['diagramSettings', 'diagram'],
     ['monitorSettings', 'monitor'],
-    ['simulationSettings', 'gridkitPath'],
   ] as const)
     command(id, () =>
       vscode.commands.executeCommand('workbench.action.openSettings', 'gridkitStudio.' + category),
     )
+  register('simulationSettings', () =>
+    vscode.commands.executeCommand(
+      'workbench.action.openSettings',
+      '@id:gridkitStudio.gridkitPath,gridkitStudio.gridkitImage,gridkitStudio.containerCli',
+    ),
+  )
   command('disconnectPort', async (context) => {
     if (!context.element || !context.field) return
     await studio.documents.transact(

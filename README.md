@@ -2,6 +2,30 @@
 
 Explore, edit, and simulate GridKit cases inside VS Code with current Latkit renderers.
 
+## Running GridKit
+
+Viewing and editing cases needs nothing else. **Running DynamicSimulation needs GridKit**, and Studio uses the first of these it finds:
+
+1. **GridKit Path** (`gridkitStudio.gridkitPath`): an install folder such as `/opt/gridkit`, or the program itself.
+2. **`DynamicSimulation` on `PATH`** where the workspace is. Studio runs beside the workspace, so in a **dev container**, an **SSH remote**, or **WSL** it finds the GridKit installed there. The `ghcr.io/lukelowry/gridkit:arrow` image has it on `PATH`; a case folder's `.devcontainer/devcontainer.json` can be as small as `{ "image": "ghcr.io/lukelowry/gridkit:arrow" }`.
+3. **GridKit Image** (`gridkitStudio.gridkitImage`): a container image with GridKit, run with **Docker or Podman** where GridKit is not installed, such as Windows or macOS with Docker Desktop or Podman Desktop.
+
+Studio never pulls an image. Pull it yourself, then name it:
+
+```sh
+docker pull ghcr.io/lukelowry/gridkit:arrow    # or: podman pull ghcr.io/lukelowry/gridkit:arrow
+```
+
+```jsonc
+// settings.json
+"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit:arrow",
+"gridkitStudio.containerCli": "podman" // optional: empty uses docker, else podman, on PATH
+```
+
+Each run gets a container of its own: `run --rm --pull never --network none` with only that run's folder mounted, removed when the run ends or you press Stop. On Linux it runs as you (`--user`, or `--userns keep-id` for rootless Podman), and the mount is labeled for SELinux. An image that is not on the machine is refused with the pull command to run.
+
+An installed GridKit always comes first, so one set of user settings works on a laptop with Docker and in a dev container with GridKit. To use a container that is already running, attach VS Code to it with **Dev Containers: Attach to Running Container…**; Studio then runs inside it and finds GridKit on its `PATH`. **Where GridKit Runs**, in the DynamicSimulation panel's menu and the Command Palette, opens these three settings. Runs require a trusted workspace, and an untrusted workspace's values for these settings are ignored.
+
 ## Using the extension
 
 Requires **VS Code 1.135 or later**. Install the prerelease VSIX with **Extensions: Install from VSIX…**, then open a `*.case.json`.
@@ -19,15 +43,13 @@ Network, Diagram, Case Table, and JSON share native saving, dirty state, undo/re
 
 ## Settings and simulation
 
-The native Settings UI exposes **139 display settings** for Network, Diagram, Monitor, and accessibility. Search `gridkitStudio.network`, `gridkitStudio.diagram`, or `gridkitStudio.monitor`; canvas context menus open the relevant settings. This includes geometry, labels, ports, routing/layout, colors, colormaps, lighting, camera, picking, input, antialiasing, trace/axis styling, and motion. VS Code supplies the theme and font. Five field-mapping channels control vertex color/size/height and edge color/dashes; the Mappings panel assigns them.
+The native Settings UI exposes **138 display settings** for Network, Diagram, Monitor, and accessibility. Search `gridkitStudio.network`, `gridkitStudio.diagram`, or `gridkitStudio.monitor`; canvas context menus open the relevant settings. This includes geometry, labels, ports, routing/layout, colors, colormaps, lighting, camera, picking, input, antialiasing, trace/axis styling, and motion. VS Code supplies the theme and font. Six field-mapping channels control vertex color/size/height and edge color/width/dashes; the Mappings panel assigns them.
 
 GridKit app names stay explicit: `DynamicSimulation` and `ContingencyAnalysis`. The current extension runs `DynamicSimulation`.
 
-If you customized earlier prerelease settings, rename the boolean keys `gridkitStudio.monitor.coordinateAxis`, `gridkitStudio.monitor.valueAxis`, and `gridkitStudio.diagram.labels` by appending `.visible`. This prevents those toggles from hiding their nested formatting settings in VS Code.
-
 DynamicSimulation uses catalog-derived command parameters. **Monitored signals**, directly below Run, chooses what the next run records, with Select all and Clear for each component type. Existing results and their plots keep their recorded signals. Press **Run** to open Monitor immediately; its first plot is selected automatically from the run's signals. Add further plots with **Add plot**. Native task terminals and **Show Output** retain solver logs without taking over the Monitor. Stop cancels the process and keeps available partial results. Unsaved case content is captured at run start.
 
-Execution requires a trusted workspace and GridKit installed where the workspace is. Studio finds `DynamicSimulation` on `PATH`, or under **GridKit Path** (`gridkitStudio.gridkitPath`, such as `/opt/gridkit`). Open the folder in a dev container, over SSH, or in WSL when GridKit is installed there. Runs write **CSV**, the format the verified runtime supports; there is no results-format parameter. **Import Results…** accepts Arrow and CSV; **Export CSV…** exports a run. Each staged case owns its output destination, replacing inherited monitor paths. Native failures retain a bounded `solver.log` beside the staged inputs.
+Execution requires a trusted workspace and GridKit, found as [Running GridKit](#running-gridkit) describes. Runs write **CSV**, the format the verified runtime supports; there is no results-format parameter. **Import Results…** accepts Arrow and CSV; **Export CSV…** exports a run. Each staged case owns its output destination, replacing inherited monitor paths. Native failures retain a bounded `solver.log` beside the staged inputs.
 
 Each run retains its input revision. Incompatible results never silently overlay an edited case. Failed/cancelled runs keep available partial samples visibly incomplete. Current and previous runs remain until cleared or closed; exported files remain user-owned. Raw files back windowed reads, with a shared 256 MiB sample cache by default.
 
@@ -70,9 +92,9 @@ Tests are in three layers:
 
 - **Unit** (`pnpm test`): beside the code they test, as `src/**/*.test.ts`. They run anywhere.
 - **VS Code** (`pnpm test:vscode`): `tests/vscode/`, a suite for each view, run by Mocha inside an actual VS Code with its webviews, with WebGPU required for the canvas suites. UI suites reset parameters, recordings, plots, mappings, results, and selection before starting; `GRIDKIT_TEST_GREP=Monitor` runs one. `pnpm test:package` runs them against an isolated installed VSIX. `pnpm test:trust` checks inspection and blocked execution in an untrusted workspace.
-- **Simulation** (`pnpm test:simulation`): real IEEE39, TwoArea, and WECC240 runs, diagnostics, native output columns, sample counts/times/reference voltages and angles, cancellation, unsupported formats, initialization errors, and retry. Inputs, results, and logs stay in `output/simulation/` for inspection.
+- **Simulation** (`pnpm test:simulation`): real IEEE39, TwoArea, and WECC240 runs, diagnostics, native output columns, sample counts/times/reference voltages and angles, cancellation, unsupported formats, initialization errors, and retry. Inputs, results, and logs stay in `output/simulation/` for inspection. Where GridKit is not installed, `GRIDKIT_IMAGE=ghcr.io/lukelowry/gridkit:arrow` runs them through Docker or Podman (`GRIDKIT_CONTAINER_CLI` picks one), checks that a cancelled run leaves no container, and that an image not on the machine is refused, not pulled. The same variables run the VS Code Run and WECC240 suites: `GRIDKIT_IMAGE=… GRIDKIT_TEST_GREP='Run|WECC240' pnpm test:vscode`.
 
-GridKit is Linux-only, so host UI tests on Windows or macOS skip the Run suites; they prove nothing about simulation. **`pnpm test:gridkit`** runs the real thing from any host with Docker: it builds the dev container's image (GridKit pinned by digest), tests a copy of the checkout in it, and leaves the host's `node_modules`, `dist`, and `.vscode-test` alone. It runs the solver tests, then the VS Code Run suites (IEEE39 and TwoArea runs, plots, playback, failures) and the WECC240 suite, which records voltage angle alone and checks each bus's color against the colormap at its recorded angle, each unmapped branch as one color (the average of its ends), and each bus's height against its angle on a tilted network. Results, screenshots, and solver logs land in `output/gridkit/`. `pnpm test:gridkit --required` is the release check that CI runs on every push (`pnpm test:devcontainer` inside the container): quality, real solver tests, the installed VSIX's full UI suite, and Workspace Trust. Missing GridKit, skipped tests, or filtered runs fail it. `GRIDKIT_PATH` names an installation elsewhere.
+GridKit is Linux-only, so host UI tests on Windows or macOS skip the Run suites unless `GRIDKIT_IMAGE` names an image to run them in; without it they prove nothing about simulation. **`pnpm test:gridkit`** runs the real thing from any host with Docker: it builds the dev container's image (GridKit pinned by digest), tests a copy of the checkout in it, and leaves the host's `node_modules`, `dist`, and `.vscode-test` alone. It runs the solver tests, then the VS Code Run suites (IEEE39 and TwoArea runs, plots, playback, failures) and the WECC240 suite, which records voltage angle alone and checks each bus's color against the colormap at its recorded angle, each unmapped branch as one color (the average of its ends), and each bus's height against its angle on a tilted network. Results, screenshots, and solver logs land in `output/gridkit/`. `pnpm test:gridkit --required` is the release check that CI runs on every push (`pnpm test:devcontainer` inside the container): quality, real solver tests, the installed VSIX's full UI suite, and Workspace Trust. Missing GridKit, skipped tests, or filtered runs fail it. `GRIDKIT_PATH` names an installation elsewhere.
 
 Linux UI tests with `GRIDKIT_TEST_SOFTWARE_GPU=1` compare committed pixel baselines for dark, light, high contrast, narrow, geographic, and mapped-color views. `pnpm test:baselines` regenerates them in the container; inspect the images in `tests/vscode/baselines/` before committing them. Failing screenshots and diffs stay under `output/`; CI uploads them.
 

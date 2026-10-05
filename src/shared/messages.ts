@@ -53,10 +53,22 @@ export interface Summary extends Revision {
   issues: Issue[]
   parseMs: number
 }
+/** Where GridKit runs: installed here, else in a container of an image. */
+export interface GridKit {
+  /** Its install folder, or the program itself; empty finds DynamicSimulation on PATH. */
+  readonly path: string
+  /** An image with DynamicSimulation on its PATH, run when GridKit is not installed here; the
+   *  reader pulls it, never Studio. Empty for none. */
+  readonly image: string
+  /** The container CLI: docker, podman, or a path to either; empty finds docker, else podman. */
+  readonly cli: string
+}
 /** A simulation process under way, which its owner stops if the data worker cannot. */
 export interface RuntimeProcess {
   pid: number
   executable: string
+  /** The container it runs in, which its CLI removes by name. */
+  container?: { cli: string; name: string }
 }
 export interface RunInfo {
   id: string
@@ -77,8 +89,8 @@ export interface RunInfo {
 export interface RunRequest extends Revision {
   values: Record<string, unknown>
   outputs: readonly FieldSelection[]
-  /** Where GridKit is installed; empty finds its DynamicSimulation on PATH. */
-  gridkit: string
+  /** Where GridKit runs: installed here, else in a container of an image. */
+  gridkit: GridKit
   cacheBytes: number
 }
 export interface SourceContext {

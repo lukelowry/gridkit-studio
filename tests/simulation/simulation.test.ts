@@ -1,8 +1,10 @@
 /** GridKit's own DynamicSimulation, run where GridKit is installed: the dev container has it, and
- *  GRIDKIT_PATH names an install elsewhere. */
+ *  GRIDKIT_PATH names an install elsewhere. Without one, GRIDKIT_IMAGE runs it in Docker or Podman. */
 
+import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 
 import { type Arguments, type FieldSelection, type Parameters, read } from '@latkit/model'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -11,23 +13,29 @@ import catalog from '../../catalog.json'
 import { Case } from '../../src/gridkit/case.js'
 import { catalogOf } from '../../src/gridkit/definition.js'
 import { diagnose } from '../../src/gridkit/edits.js'
-import { dynamicSimulation } from '../../src/gridkit/runtime.js'
+import { type Runtime, runtimeOf } from '../../src/gridkit/runtime.js'
 import { Simulation } from '../../src/gridkit/simulation.js'
 import { ResultCache } from '../../src/results/results.js'
-import type { RunInfo, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
+import type { GridKit, RunInfo, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 
-const gridkit = process.env.GRIDKIT_PATH ?? ''
+const gridkit: GridKit = {
+  path: process.env.GRIDKIT_PATH ?? '',
+  image: process.env.GRIDKIT_IMAGE ?? '',
+  cli: process.env.GRIDKIT_CONTAINER_CLI ?? '',
+}
 
 describe('DynamicSimulation', () => {
   let root: string
   let kase: Case
+  let runtime: Runtime
 
   beforeAll(async () => {
     await mkdir('output/simulation', { recursive: true })
     root = await mkdtemp('output/simulation/run-')
     console.log('Simulation inputs, results and logs:', root)
     // Without GridKit there is nothing to test, and that is a failure said once.
-    await dynamicSimulation(gridkit)
+    runtime = await runtimeOf(gridkit)
+    console.log('GridKit runs', runtime)
     kase = await Case.parse(
       await readFile('tests/fixtures/IEEE39.case.json', 'utf8'),
       catalogOf(JSON.stringify(catalog)),
@@ -45,6 +53,7 @@ describe('DynamicSimulation', () => {
     outputs: readonly FieldSelection[] = [
       { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } },
     ],
+    using: GridKit = gridkit,
   ) {
     const directory = join(root, name)
     await mkdir(directory)
@@ -54,7 +63,7 @@ describe('DynamicSimulation', () => {
       version: 1,
       values,
       outputs,
-      gridkit,
+      gridkit: using,
       cacheBytes: 1 << 20,
     }
     const info: RunInfo = {
@@ -238,6 +247,30 @@ describe('DynamicSimulation', () => {
     expect(retry.info.frames).toBe(11)
   })
 
+  it('refuses an image this machine does not have, and never pulls it', async ({
+    signal,
+    skip,
+  }) => {
+    if (runtime.kind !== 'container') skip()
+    const { cli } = runtime as Extract<Runtime, { kind: 'container' }>
+    const image = 'ghcr.io/lukelowry/gridkit:studio-never-pulls'
+    const { done, owned } = await run(
+      'unpulled',
+      { tmax: 0.1 },
+      signal,
+      undefined,
+      kase,
+      undefined,
+      {
+        ...gridkit,
+        image,
+      },
+    )
+    await expect(done).rejects.toThrow(`never pulls images. Pull it yourself with`)
+    expect(owned()).toBeUndefined()
+    await expect(promisify(execFile)(cli, ['image', 'inspect', image])).rejects.toThrow()
+  })
+
   it('rejects an empty signal selection before starting a process', async ({ signal }) => {
     const { done, owned } = await run('empty', {}, signal, undefined, kase, [])
     await expect(done).rejects.toThrow('monitored signal')
@@ -255,7 +288,18 @@ describe('DynamicSimulation', () => {
     expect(released()).toBe(true)
     expect(info.frames).toBeGreaterThan(0)
     expect(info.domain[1]).toBeLessThan(1000)
-    // The process is gone, not left to finish its thousand seconds.
+    // The process is gone, not left to finish its thousand seconds, and so is its container.
     expect(() => process.kill(owned()!.pid, 0)).toThrow()
+    const container = owned()!.container
+    if (container) {
+      const { stdout } = await promisify(execFile)(container.cli, [
+        'ps',
+        '--all',
+        '--quiet',
+        '--filter',
+        'name=' + container.name,
+      ])
+      expect(stdout.trim()).toBe('')
+    }
   })
 })

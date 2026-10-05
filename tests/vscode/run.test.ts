@@ -7,7 +7,8 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { dynamicSimulation } from '../../src/gridkit/runtime.js'
+import { gridkitOf } from '../../src/extension/tasks.js'
+import { runtimeOf } from '../../src/gridkit/runtime.js'
 import { colored, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 suite('Run', function () {
@@ -23,12 +24,11 @@ suite('Run', function () {
 
   suiteSetup(async function () {
     bench = await testHost()
-    // GridKit runs where it is installed, such as the dev container; elsewhere the suite is skipped.
-    const install = vscode.workspace
-      .getConfiguration('gridkitStudio', bench.uri)
-      .get('gridkitPath', '')
-    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await dynamicSimulation(install)
-    else if (!(await dynamicSimulation(install).catch(() => undefined))) this.skip()
+    // GridKit runs where it is installed, such as the dev container, or in GRIDKIT_IMAGE; without
+    // either the suite is skipped.
+    const gridkit = gridkitOf(bench.uri)
+    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtimeOf(gridkit)
+    else if (!(await runtimeOf(gridkit).catch(() => undefined))) this.skip()
     network = await bench.open('network')
   })
 

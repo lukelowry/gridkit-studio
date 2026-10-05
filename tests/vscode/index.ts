@@ -2,7 +2,7 @@
 
 import Mocha from 'mocha'
 
-import { extension, failed, finish } from './harness.js'
+import { extension, failed, finish, notifications } from './harness.js'
 
 export async function run(): Promise<void> {
   const mocha = new Mocha({
@@ -18,10 +18,12 @@ export async function run(): Promise<void> {
         console.error(this.currentTest.err?.stack)
         await failed(this.currentTest.fullTitle())
       }
-      // An error the user would see only in the log fails the test; a test that expects one
-      // takes it from `studio.errors` first.
+      // An error the user would see only in the log fails the test, as does a notification; a
+      // test that expects one takes it first.
       const logged = extension().exports.studio.errors.splice(0)
+      const shown = await notifications()
       if (logged.length) throw new Error('GridKit Studio logged errors:\n' + logged.join('\n'))
+      if (shown.length) throw new Error('VS Code showed notifications:\n' + shown.join('\n'))
     },
     afterAll: finish,
   })

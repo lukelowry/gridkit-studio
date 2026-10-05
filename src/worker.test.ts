@@ -139,6 +139,13 @@ describe('real worker protocol', () => {
       )
       const run = await call('import', { ...revision, path, cacheBytes: 32 << 20 }).done
       expect(run).toMatchObject({ state: 'complete', frames: 200 })
+      // Results that cannot be read fail the import, and take no run's place.
+      const broken = join(scratch, 'broken.csv')
+      await writeFile(broken, `time,Bus_${name}_Vm\n0,1\n0.01\n`)
+      await expect(
+        call('import', { ...revision, path: broken, cacheBytes: 32 << 20 }).done,
+      ).rejects.toThrow(/does not match its header/)
+      expect((await call('runs', { uri: revision.uri }).done).map(({ id }) => id)).toEqual([run.id])
       const stream = { ...revision, fields: run.outputs, run: run.id, includeStatic: false }
       const frames = () =>
         batches

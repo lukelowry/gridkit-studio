@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -93,6 +94,21 @@ describe('native VS Code contract', () => {
     )
     for (const items of Object.values(manifest.contributes.menus) as { command?: string }[][])
       for (const { command } of items) if (command) expect(commands).toContain(command)
+  })
+  it('shows notifications from one place, and registers every command through it', async () => {
+    const sources = (await readdir('src', { recursive: true }))
+      .filter((path) => /\.(ts|svelte)$/.test(path) && !path.endsWith('.test.ts'))
+      .map((path) => join('src', path))
+    const notifying: string[] = []
+    const registering: string[] = []
+    for (const path of sources) {
+      const text = await readFile(path, 'utf8')
+      if (/show(Error|Warning|Information)Message|kind: 'notify'/.test(text)) notifying.push(path)
+      if (/commands\.registerCommand/.test(text)) registering.push(path)
+    }
+    // Sessions.report tells the user why what they asked for failed; the rest shows in the views.
+    expect(notifying).toEqual([join('src', 'extension', 'sessions.ts')])
+    expect(registering).toEqual([join('src', 'extension', 'sessions.ts')])
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
     const schema = catalog.schema

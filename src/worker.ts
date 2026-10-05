@@ -37,7 +37,7 @@ import { importedFields, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
 import { rank, sibling } from './results/study.js'
 import type { RunTarget } from './shared/analysis.js'
-import { message } from './shared/format.js'
+import { defect, detail, message } from './shared/format.js'
 import type {
   FromWorker,
   Request,
@@ -70,10 +70,22 @@ const ownerOf = (run: Results): object => {
   }
   return owner
 }
-async function disposeRun(run: Results) {
-  await readers.retire(ownerOf(run))
-  await run.dispose(scratch)
-  if (run.ownedDirectory) owners.delete(run.ownedDirectory)
+/** Releases `run` and deletes its folder. A folder that cannot be deleted yet, as Windows refuses
+ *  while another program holds a file in it, is logged and left for the next start to sweep: it
+ *  never fails the run or request that let it go. */
+async function discard(run: Results) {
+  try {
+    await readers.retire(ownerOf(run))
+    await run.dispose(scratch)
+  } catch (error) {
+    send({
+      kind: 'log',
+      level: 'warn',
+      message: `Could not delete the files of run ${run.info.id}: ${message(error)}`,
+    })
+  } finally {
+    if (run.ownedDirectory) owners.delete(run.ownedDirectory)
+  }
 }
 let analyzing = false
 const cache = new ResultCache()
@@ -156,10 +168,7 @@ async function retain(uri: string, run: Results) {
   const runs = histories.get(uri) ?? []
   runs.unshift(run)
   histories.set(uri, runs)
-  while (runs.length > 2) {
-    const old = runs.pop()!
-    await disposeRun(old)
-  }
+  while (runs.length > 2) await discard(runs.pop()!)
 }
 
 function runCase(input: RunRequest) {
@@ -234,11 +243,15 @@ function runCase(input: RunRequest) {
     } catch (error) {
       info.state = controller.signal.aborted ? 'cancelled' : 'failed'
       info.message = message(error)
+      if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
     } finally {
-      if (!retained && simulation.results) await retain(input.uri, simulation.results)
-      // Without results, nothing else deletes the run's folder.
-      if (!simulation.results) await new Results(info, kase, [], cache, directory).dispose(scratch)
-      send({ kind: 'run', info })
+      // The run's last state goes out whatever its cleanup meets, so it never stays running.
+      try {
+        if (!simulation.results) await discard(new Results(info, kase, [], cache, directory))
+        else if (!retained) await retain(input.uri, simulation.results)
+      } finally {
+        send({ kind: 'run', info })
+      }
     }
     return info
   })().finally(() => running.delete(input.uri))
@@ -510,7 +523,8 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     case 'stop': {
       const run = running.get(request.input.uri)
       run?.controller.abort(new Error('Simulation cancelled.'))
-      await run?.done
+      // A run that could not start has said why to whoever started it.
+      await run?.done.catch(() => {})
       return null
     }
     case 'clear':
@@ -518,10 +532,10 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       const uri = request.input.uri
       const run = running.get(uri)
       run?.controller.abort(new Error('Case closed.'))
-      await run?.done
+      await run?.done.catch(() => {})
       const results = histories.get(uri) ?? []
       histories.delete(uri)
-      for (const result of results) await disposeRun(result)
+      for (const result of results) await discard(result)
       if (request.method === 'release') {
         cases.delete(uri)
         parses.delete(uri)
@@ -547,8 +561,8 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         started: Date.now(),
         outputs,
       }
+      // Results that fail to read take no run's place: the import fails, and the case's runs stay.
       const result = new Results(info, kase, selections(kase, outputs), cache)
-      await retain(request.input.uri, result)
       try {
         await readers.use([ownerOf(result)], signal, (s) =>
           result.ingest(
@@ -557,11 +571,12 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             async () => {},
           ),
         )
-        info.state = 'complete'
       } catch (error) {
-        info.state = 'failed'
-        info.message = String(error)
+        await discard(result)
+        throw error
       }
+      info.state = 'complete'
+      await retain(request.input.uri, result)
       send({ kind: 'run', info })
       return info
     }
@@ -610,21 +625,26 @@ port.on('message', (request: ToWorker) => {
   if (request.kind === 'cancel') return operations.get(request.id)?.abort(new Error('Cancelled'))
   const controller = new AbortController()
   operations.set(request.id, controller)
+  const fail = (error: unknown) =>
+    send({
+      kind: 'error',
+      id: request.id,
+      message: message(error),
+      offset: (error as { offset?: number } | null)?.offset,
+      length: (error as { length?: number } | null)?.length,
+      ...(defect(error) && { defect: true, detail: detail(error) }),
+    })
   void handle(request, controller.signal)
-    .then(
-      (value) =>
+    .then((value) => {
+      try {
         send(
           { kind: 'result', id: request.id, value },
           request.method === 'query' ? blockBuffers(value) : [],
-        ),
-      (error) =>
-        send({
-          kind: 'error',
-          id: request.id,
-          message: message(error),
-          offset: error?.offset,
-          length: error?.length,
-        }),
-    )
+        )
+      } catch (error) {
+        // A value that cannot cross to the extension is a defect, answered as one.
+        fail(Object.assign(new Error(message(error)), { defect: true, detail: detail(error) }))
+      }
+    }, fail)
     .finally(() => operations.delete(request.id))
 })

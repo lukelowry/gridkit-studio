@@ -60,6 +60,8 @@ try {
       'workbench.startupEditor': 'none',
       'workbench.secondarySideBar.defaultVisibility': 'hidden',
       'security.workspace.trust.startupPrompt': 'never',
+      // The workspace sits inside this repository; Git asks nothing about it.
+      'git.openRepositoryInParentFolders': 'never',
       // No AI agent host, experiments, telemetry or update checks: none is part of the run.
       // Chat agents stay enabled, and with them the language-model tools.
       'chat.disableAIFeatures': true,

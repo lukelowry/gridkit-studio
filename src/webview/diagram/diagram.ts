@@ -4,7 +4,6 @@ import { createDiagram, type Diagram, type DiagramConfig, type DiagramItem } fro
 import type { Gpu } from '@latkit/gpu'
 import { type Data, itemId, rowAt, rowCount } from '@latkit/model'
 
-import { message } from '../../shared/format.js'
 import type { Element, ViewState } from '../../shared/messages.js'
 import { diagramOf, elementType, placementOf } from '../../shared/schema.js'
 import { bridge } from '../bridge.js'
@@ -25,8 +24,8 @@ function elementOf(item: DiagramItem): Element | null {
   return { id: itemId(item), ...(item.kind === 'port' && { field: item.port }) }
 }
 
-/** The diagram on `canvas`, telling `select` of the element the user picks and `open` of the one
- *  they open. */
+/** The diagram on `canvas`, telling `select` of the element the user picks, `open` of the one they
+ *  open, and `refuse` why an edit or arrangement did not happen. */
 export function mountDiagram(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
@@ -34,6 +33,7 @@ export function mountDiagram(
   state: () => ViewState,
   select: (element: Element | null) => void,
   open: (element: Element) => void,
+  refuse: (reason: unknown) => void,
 ): Diagram {
   const diagram = createDiagram(gpu, { ...config, canvas })
   const pick = (item: DiagramItem | undefined, then: (element: Element) => void) => {
@@ -53,9 +53,9 @@ export function mountDiagram(
   )
   const lifetime = new AbortController()
   const signal = AbortSignal.any([lifetime.signal, gpu.signal])
-  const arrange = editing(diagram, gpu, state, signal)
-  const notify = (error: unknown) => {
-    if (!signal.aborted) bridge.send({ kind: 'notify', message: message(error) })
+  const arrange = editing(diagram, gpu, state, signal, refuse)
+  const refused = (error: unknown) => {
+    if (!signal.aborted) refuse(error)
   }
   const stop = bridge.on((message) => {
     if (message.kind !== 'action') return
@@ -67,7 +67,7 @@ export function mountDiagram(
         diagram.fit(diagram.neighborhood(item), { animate: false })
       }
     }
-    if (message.command === 'arrangeDiagram') void arrange().catch(notify)
+    if (message.command === 'arrangeDiagram') void arrange().catch(refused)
   })
   const destroy = diagram.destroy.bind(diagram)
   diagram.destroy = () => {

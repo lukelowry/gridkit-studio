@@ -9,7 +9,7 @@
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
-  import { CanvasGpu } from '../gpu.js'
+  import { CanvasGpu, RECOVER_MS } from '../gpu.js'
   import { receive } from '../stream.js'
   import { appearance, font, palette, watchTheme } from '../theme.js'
   import Select from '../ui/Select.svelte'
@@ -44,7 +44,17 @@
   let telling: ReturnType<typeof setTimeout> | undefined
 
   const owner = new CanvasGpu()
-  const gpu = () => owner.get(() => epoch++)
+  /** When the GPU was last replaced: one lost again soon after waits for Reload Monitor. */
+  let recovered = -Infinity
+  const gpu = () =>
+    owner.get(() => {
+      if (performance.now() - recovered < RECOVER_MS) {
+        fault = 'WebGPU device lost.'
+        return
+      }
+      recovered = performance.now()
+      epoch++
+    })
   const clock = createClock(
     (now) => (t = now),
     () => {
@@ -120,6 +130,7 @@
           else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
             fault = null
+            recovered = -Infinity
             epoch++
           } else if (incoming.command === 'error') fault = String(incoming.value)
         }

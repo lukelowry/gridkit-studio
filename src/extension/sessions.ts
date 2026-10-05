@@ -8,6 +8,7 @@ import {
   channelsFor,
   type FieldRef,
 } from '../shared/bindings.js'
+import { cancelled, defect, detail, message } from '../shared/format.js'
 import type {
   Cameras,
   Element,
@@ -35,6 +36,8 @@ export interface Session {
   selection?: Element
   run?: RunInfo
   previous?: RunInfo
+  /** Whether Run was pressed and GridKit's run has not yet begun. */
+  launching: boolean
   plots: Plot[]
   /** Undefined until the first parsed case supplies defaults; an empty array records nothing. */
   outputs?: FieldSelection[]
@@ -109,23 +112,45 @@ export class Sessions {
   /** Log `reason` as an error, unless a case's diagnostic already shows it. */
   error(reason: unknown) {
     if ((reason as { diagnosed?: boolean } | undefined)?.diagnosed) return
-    const text = String(reason)
+    const text = detail(reason)
     this.output.error(text)
     if (this.errors.push(text) > 100) this.errors.shift()
+  }
+  /** Tell the user why what they asked for failed. This is the one place Studio shows a
+   *  notification: what happens on its own shows in the views it concerns. A defect points to the
+   *  log; a cancellation says nothing. */
+  report(reason: unknown) {
+    if (cancelled(reason)) return
+    this.error(reason)
+    if (!defect(reason)) return void vscode.window.showErrorMessage(message(reason))
+    void vscode.window.showErrorMessage(message(reason), 'Show Log').then((choice) => {
+      if (choice) this.output.show()
+    })
+  }
+  /** Register command `id`, reporting why it fails. */
+  command(id: string, run: (...args: unknown[]) => unknown): vscode.Disposable {
+    return vscode.commands.registerCommand(id, async (...args: unknown[]) => {
+      try {
+        return await run(...args)
+      } catch (error) {
+        this.report(error)
+      }
+    })
   }
   constructor(readonly context: vscode.ExtensionContext) {
     this.client = new Client(context)
     this.documents = new Documents(this.client)
     this.disposables.push(
       this.changed.event(() => this.updateContexts()),
+      // A stopped worker takes every run's results with it: a run it was making fails, and the
+      // others leave the views, which would otherwise ask for results no longer there.
       this.client.failure.event((error) => {
+        this.error(error)
         for (const session of this.all.values()) {
-          if (session.run?.state === 'running') {
-            session.run.state = 'failed'
-            session.run.message = error.message
-          }
-          session.transport.pause()
-          session.transport.setLive(false)
+          const lost = session.run
+          this.show(session, undefined)
+          if (lost?.state === 'running')
+            session.run = { ...lost, state: 'failed', message: error.message, frames: 0 }
           this.changed.fire(session.uri)
         }
       }),
@@ -139,13 +164,22 @@ export class Sessions {
       }),
       this.client.event.event((event) => {
         if (event.kind === 'log') {
-          this.output.appendLine(event.message)
+          if (event.level === 'error') this.error(event.message)
+          else if (event.level === 'warn') this.output.warn(event.message)
+          else this.output.appendLine(event.message)
           return
         }
         const session = this.all.get(event.info.revision.uri)
         if (!session) return
         this.show(session, event.info)
         this.changed.fire(session.uri)
+      }),
+      // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
+      vscode.workspace.onDidRenameFiles(({ files }) => {
+        for (const { oldUri, newUri } of files) this.#move(oldUri.toString(), newUri.toString())
+      }),
+      vscode.workspace.onDidDeleteFiles(({ files }) => {
+        for (const uri of files) this.#move(uri.toString())
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
         for (const session of this.all.values())
@@ -173,7 +207,7 @@ export class Sessions {
       diagramEditing: !!session?.diagramEditing,
       ready: !!entry?.summary && !entry.stale,
       editable: !!entry && !entry.stale && isWritable(entry.document),
-      running: session?.run?.state === 'running',
+      running: session?.run?.state === 'running' || !!session?.launching,
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
@@ -195,6 +229,7 @@ export class Sessions {
         outputs: saved.recording,
         values: saved.values ?? {},
         transport: new Transport(() => this.clock.fire(uri)),
+        launching: false,
         diagramEditing: false,
         settings: settingsFor(vscode.Uri.parse(uri)),
         cameras: {},
@@ -228,6 +263,17 @@ export class Sessions {
     }
     return this.context.workspaceState.update('case:' + session.uri, saved)
   }
+  /** Move the saved state of the cases at or under `from` to `to`, or drop it with no `to`. */
+  #move(from: string, to?: string) {
+    const { workspaceState } = this.context
+    for (const key of workspaceState.keys()) {
+      const uri = key.slice('case:'.length)
+      if (!key.startsWith('case:') || (uri !== from && !uri.startsWith(from + '/'))) continue
+      const saved = workspaceState.get<Saved>(key)
+      void workspaceState.update(key, undefined)
+      if (to !== undefined) void workspaceState.update('case:' + to + uri.slice(from.length), saved)
+    }
+  }
   state(uri: string): ViewState {
     const entry = this.documents.entries.get(uri)
     const session = this.all.get(uri)
@@ -246,6 +292,7 @@ export class Sessions {
       error: entry?.error,
       selection: session?.selection,
       run: session?.run,
+      launching: session?.launching,
       outputs: session?.outputs,
       plots: session?.plots,
       window: session?.window,

@@ -52,13 +52,14 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     bindings,
     table,
   ],
-  simulation: ({ uri, stale, error, values, outputs, run }) => [
+  simulation: ({ uri, stale, error, values, outputs, run, launching }) => [
     uri,
     stale,
     error,
     values,
     outputs,
     run && [run.id, run.state, run.frames, run.domain, run.span, run.message, run.contingency],
+    launching,
   ],
 }
 
@@ -156,8 +157,13 @@ class View {
         if (changed === uri) this.tick()
       }),
       studio.action.event((action) => {
-        if (action.uri === uri && (!action.view || action.view === kind))
-          void this.send({ kind: 'action', command: action.command, value: action.value })
+        if (action.uri !== uri || (action.view && action.view !== kind)) return
+        void this.send({ kind: 'action', command: action.command, value: action.value })
+        // A reload asks again for what last failed to stream.
+        if (action.command === 'retryMonitor' || action.command === 'reloadView') {
+          this.#failed = ''
+          void this.update().catch(report)
+        }
       }),
       ('onDidChangeViewState' in panel ? panel.onDidChangeViewState : panel.onDidChangeVisibility)(
         () => {
@@ -271,11 +277,8 @@ class View {
         this.busy = message.busy === true
         if (!this.busy) this.#video = undefined
         return
-      case 'notify':
-        void vscode.window.showWarningMessage(String(message.message))
-        return
       case 'error':
-        this.studio.error(message.message)
+        this.studio.error(String(message.message))
         return
       case 'command':
         if (COMMANDS.has(message.command)) {
@@ -611,9 +614,11 @@ class View {
       this.#held = held
     } catch (error) {
       if (controller.signal.aborted) return
+      // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
+      if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
       this.#failed = key
       this.#failure = message(error)
-      studio.error(this.#failure)
+      studio.error(error)
       await this.send({ kind: 'action', command: 'error', value: this.#failure })
     }
   }

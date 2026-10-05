@@ -436,6 +436,22 @@ export async function testHost(): Promise<TestHost> {
   return bench
 }
 
+/** What VS Code says of the test profile itself, which `--disable-extensions` causes. */
+const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
+
+/** The notifications VS Code shows, which are then cleared. Studio shows one only when something
+ *  the user asked for fails, so a test that sees one expected it or found a fault. */
+export async function notifications(): Promise<string[]> {
+  const bench = await started?.catch(() => undefined)
+  if (!bench) return []
+  const shown = await bench.page
+    .locator('.notifications-toasts .notification-list-item-message')
+    .filter({ visible: true })
+    .allInnerTexts()
+  if (shown.length) await vscode.commands.executeCommand('notifications.clearAll')
+  return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()))
+}
+
 /** Keep what VS Code showed when `test` failed. */
 export async function failed(test: string): Promise<void> {
   await (await started?.catch(() => undefined))?.failed(test)

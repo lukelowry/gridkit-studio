@@ -7,11 +7,11 @@ import type { Diagram, Positions } from '@latkit/diagram'
 import type { Data } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
-import { message } from '../shared/format.js'
+import { defect, detail, message } from '../shared/format.js'
 import type { Begin, Element, ViewState } from '../shared/messages.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
-import { CanvasGpu } from './gpu.js'
+import { CanvasGpu, RECOVER_MS } from './gpu.js'
 import { loadBorders } from './network/borders.js'
 import { DIAGRAM, NETWORK, patchOf } from './patch.js'
 import { receive } from './stream.js'
@@ -20,8 +20,8 @@ import { icon, type IconName } from './ui/glyphs.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
-/** A GPU lost again this soon after its replacement is not replaced again. */
-const RECOVER_MS = 10000
+/** How long the view says why an edit did not happen. */
+const REFUSAL_MS = 5000
 
 const PROJECTIONS: readonly { value: Projection; label: string; icon: IconName }[] = [
   { value: 'flat', label: 'Flat', icon: 'projection-flat' },
@@ -81,6 +81,9 @@ function boot() {
   let preferredProjection: Projection | undefined
   /** A renderer error, shown over the canvas until the next frame. */
   let fault: string | null = null
+  /** Why the user's last edit did not happen, shown for a few seconds. */
+  let refusal: string | null = null
+  let refusing: ReturnType<typeof setTimeout> | undefined
   /** The camera to restore after the GPU is lost, and when the GPU was last replaced. */
   let restore: unknown
   let recovered = -Infinity
@@ -88,15 +91,17 @@ function boot() {
   let sync = () => {}
 
   const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
-  /** Show the newest problem, or that the shown case is not the source being typed. */
+  /** Show the newest problem, else why an edit did not happen, else that the shown case is not the
+   *  source being typed. */
   const say = () => {
     const stale = !!state.stale && !!state.summary
     const problem = fault ?? state.error
-    notice.hidden = !problem && !stale
+    notice.hidden = !problem && !refusal && !stale
     notice.classList.toggle('canvas-host__fault--warn', !problem)
     notice.setAttribute('role', problem ? 'alert' : 'status')
     notice.textContent =
       problem ??
+      refusal ??
       'Source is updating or contains errors. Showing the last valid revision; editing is paused.'
     if (!state.summary && state.error) {
       fallback.hidden = true
@@ -105,7 +110,8 @@ function boot() {
       fallback.hidden = false
     }
   }
-  const error = (reason: unknown) => {
+  /** Show why the view cannot draw, and log it unless the extension, which sent it, already has. */
+  const error = (reason: unknown, log = true) => {
     const text = message(reason)
     if (canvas.dataset.rendered) fault = text
     else {
@@ -115,7 +121,18 @@ function boot() {
     }
     host.setAttribute('aria-busy', 'false')
     say()
-    bridge.send({ kind: 'error', message: text })
+    if (log) bridge.send({ kind: 'error', message: detail(reason) })
+  }
+  /** Say over the view why the user's edit did not happen. */
+  const refuse = (reason: unknown) => {
+    refusal = message(reason)
+    if (defect(reason)) bridge.send({ kind: 'error', message: detail(reason) })
+    clearTimeout(refusing)
+    refusing = setTimeout(() => {
+      refusal = null
+      say()
+    }, REFUSAL_MS)
+    say()
   }
   const drop = () => {
     view?.destroy()
@@ -196,7 +213,7 @@ function boot() {
         paint()
       })
       .catch((reason) => {
-        bridge.send({ kind: 'error', message: 'Map boundaries: ' + message(reason) })
+        bridge.send({ kind: 'error', message: 'Map boundaries: ' + detail(reason) })
       })
   }
   /** Send the view only what changed, so it keeps what it has read, scaled, laid out, and
@@ -289,7 +306,7 @@ function boot() {
   function connect(mounted: Network | Diagram) {
     // Both renderers emit these events; the union's `on` overloads are not callable.
     const events = mounted as Network
-    events.on('error', error)
+    events.on('error', (reason) => error(reason))
     events.on('frame', () => {
       if (!canvas.dataset.rendered) {
         mark('canvas:frame')
@@ -371,7 +388,7 @@ function boot() {
         }
         if (!view) {
           const first = diagramConfig()
-          view = diagramModule.mountDiagram(gpu, canvas, first, () => state, select, open)
+          view = diagramModule.mountDiagram(gpu, canvas, first, () => state, select, open, refuse)
           drawn = first
           connect(view)
           // A large diagram takes a while to lay out.
@@ -425,7 +442,7 @@ function boot() {
       selection()
       paint()
     } else if (message.kind === 'action') {
-      if (message.command === 'error') return error(message.value)
+      if (message.command === 'error') return error(message.value, false)
       if (message.command === 'shown') {
         shown = message.value === true
         view?.set({ paused: !shown || document.hidden, ...(shown && { at: clock.now() }) })
@@ -466,6 +483,7 @@ function boot() {
   window.addEventListener('pagehide', () => {
     closed = true
     clearTimeout(saving)
+    clearTimeout(refusing)
     unwatch()
     clock.stop()
     view?.destroy()

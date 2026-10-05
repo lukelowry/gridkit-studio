@@ -8,17 +8,20 @@ import type { Tasks } from './tasks.js'
 
 vi.mock('vscode', () => ({
   Uri: { parse: (value: string) => value },
+  TabInputText: class {},
+  TabInputTextDiff: class {},
   workspace: {
     fs: { isWritableFileSystem: () => true },
     registerTextDocumentContentProvider: () => ({ dispose() {} }),
     openTextDocument: async () => ({}),
   },
-  commands: { registerCommand: () => ({ dispose() {} }), executeCommand: vi.fn(async () => {}) },
+  commands: { executeCommand: vi.fn(async () => {}) },
   window: {
     showTextDocument: vi.fn(async () => {}),
     showInformationMessage: vi.fn(),
     showErrorMessage: vi.fn(),
     showQuickPick: vi.fn(),
+    tabGroups: { all: [], close: vi.fn(async () => true) },
   },
 }))
 
@@ -36,6 +39,7 @@ function fixture() {
   const transact = vi.fn(async () => {})
   const run = vi.fn(async () => {})
   const studio = {
+    command: () => ({ dispose() {} }),
     documents: {
       entries: new Map([[revision.uri, entry]]),
       changed: { event: () => ({ dispose() {} }) },
@@ -51,26 +55,35 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('reviewed AI proposals', () => {
-  it('previews without writing, captures values, consumes approval once, and retains native transactions', async () => {
+  it('previews without writing or asking, captures values, and applies an approval once', async () => {
     const { revision, proposals, transact } = fixture()
     const changes: Mutation[] = [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }]
     const proposed = proposals.edit(revision, changes, [{ offset: 9, length: 3, text: 'new' }])
     expect(proposals.get(proposed.proposal).after).toBe('{"name":"new"}')
-    expect(transact).not.toHaveBeenCalled()
     changes[0] = { kind: 'set', id: 'Bus/1', field: 'name', value: 'changed after preview' }
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue('Apply edits' as never)
     await proposals.review(proposed.proposal)
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+      'vscode.diff',
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('revision 1'),
+      { preview: false },
+    )
+    // The preview's title bar approves; reviewing asks nothing and writes nothing.
+    expect(vscode.window.showInformationMessage).not.toHaveBeenCalled()
+    expect(transact).not.toHaveBeenCalled()
+    await proposals.approve(proposed.proposal)
     expect(transact).toHaveBeenCalledWith(
       revision.uri,
       1,
       [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }],
       'Apply AI proposal',
     )
-    await expect(proposals.review(proposed.proposal)).rejects.toThrow(/consumed/)
+    await expect(proposals.approve(proposed.proposal)).rejects.toThrow(/consumed/)
     expect(transact).toHaveBeenCalledTimes(1)
     proposals.dispose()
   })
-  it('refuses changed or expired proposals and never silently retargets an approved run', async () => {
+  it('refuses changed, discarded or expired proposals and never silently retargets an approved run', async () => {
     const { revision, proposals, entry, run } = fixture()
     const request: RunRequest = {
       ...revision,
@@ -81,8 +94,7 @@ describe('reviewed AI proposals', () => {
     }
     const first = proposals.run(request, { scenarios: 1 })
     request.values.tmax = 99
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue('Run simulation' as never)
-    await proposals.review(first.proposal)
+    await proposals.approve(first.proposal)
     expect(run).toHaveBeenCalledWith(
       revision.uri,
       expect.objectContaining({
@@ -91,13 +103,13 @@ describe('reviewed AI proposals', () => {
       }),
     )
     const stale = proposals.run(request, {})
-    vi.mocked(vscode.window.showInformationMessage).mockImplementation(async () => {
-      entry.document.version = 2
-      return 'Run simulation' as never
-    })
-    await expect(proposals.review(stale.proposal)).rejects.toThrow(/case changed/)
+    entry.document.version = 2
+    await expect(proposals.approve(stale.proposal)).rejects.toThrow(/case changed/)
     expect(run).toHaveBeenCalledTimes(1)
     entry.document.version = 1
+    const discarded = proposals.run(request, {})
+    await proposals.discard(discarded.proposal)
+    await expect(proposals.approve(discarded.proposal)).rejects.toThrow(/consumed/)
     const expired = proposals.run(request, {})
     vi.spyOn(Date, 'now').mockReturnValue(expired.expires + 1)
     expect(() => proposals.get(expired.proposal)).toThrow(/expired/)

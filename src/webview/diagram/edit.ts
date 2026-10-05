@@ -4,7 +4,6 @@ import { arrange, type Diagram, type Positions } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
-import { message } from '../../shared/format.js'
 import type { Mutation, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
@@ -30,12 +29,18 @@ function moves(diagram: Diagram, positions: Readonly<Record<string, Positions>>)
   return changes
 }
 
-/** Commits `diagram`'s edits to the case; returns a function that arranges every block and commits
- *  the result. */
-export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, signal: AbortSignal) {
+/** Commits `diagram`'s edits to the case, telling `refuse` why one did not happen; returns a
+ *  function that arranges every block and commits the result. */
+export function editing(
+  diagram: Diagram,
+  gpu: Gpu,
+  state: () => ViewState,
+  signal: AbortSignal,
+  refuse: (reason: unknown) => void,
+) {
   let busy = false
   const refused = (error: unknown) => {
-    if (!signal.aborted) bridge.send({ kind: 'notify', message: message(error) })
+    if (!signal.aborted) refuse(error)
   }
   async function commit(changes: Mutation[], label: string, expected = state().summary?.version) {
     signal.throwIfAborted()

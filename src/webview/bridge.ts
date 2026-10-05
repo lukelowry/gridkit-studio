@@ -1,3 +1,4 @@
+import { cancelled, detail } from '../shared/format.js'
 import type { FromView, ToView, ViewRequests, ViewState } from '../shared/messages.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
@@ -73,6 +74,10 @@ export const bridge = {
 export function merged(state: ViewState, incoming: ViewState): ViewState {
   return { summary: state.summary, settings: state.settings, ...incoming }
 }
+/** Log a defect no one caught in Studio's log; a cancellation is none. */
+function report(reason: unknown) {
+  if (!cancelled(reason)) bridge.send({ kind: 'error', message: detail(reason) })
+}
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
@@ -80,8 +85,15 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
     const entry = take(message.id)
     if (message.error) entry?.reject(new Error(message.error))
     else entry?.resolve(message.value)
-  } else for (const listener of listeners) listener(message)
+    return
+  }
+  // One listener's failure leaves the others their message.
+  for (const listener of listeners)
+    try {
+      listener(message)
+    } catch (error) {
+      report(error)
+    }
 })
-window.addEventListener('unhandledrejection', (event) =>
-  bridge.send({ kind: 'error', message: String(event.reason) }),
-)
+window.addEventListener('error', (event) => report(event.error ?? event.message))
+window.addEventListener('unhandledrejection', (event) => report(event.reason))

@@ -11,7 +11,7 @@ import {
 } from '../shared/bindings.js'
 import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
-import { message } from '../shared/format.js'
+import { detail } from '../shared/format.js'
 import type { Element, Plot, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
 import { elementType, networkOf, placementOf, typeName } from '../shared/schema.js'
@@ -33,6 +33,11 @@ interface Context {
 }
 /** The case a webview's command is about. */
 type Supplied = { uri?: string }
+/** The file `uri` names on this machine; the data worker reads and writes files only there. */
+function localPath(uri: vscode.Uri): string {
+  if (uri.scheme !== 'file') throw new Error('Choose a file on this machine.')
+  return uri.fsPath
+}
 /** `low, high` as a mapping range: two finite numbers, low first. */
 function rangeOf(text: string): [number, number] | undefined {
   const [low, high, ...rest] = text.split(',').map((value) => Number(value.trim()))
@@ -88,14 +93,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
   }
   const register = (id: string, run: (value?: unknown, supplied?: Supplied) => unknown) =>
     registrations.push(
-      vscode.commands.registerCommand('gridkitStudio.' + id, async (value, supplied) => {
-        try {
-          return await run(value, supplied)
-        } catch (error) {
-          studio.error(error)
-          void vscode.window.showErrorMessage(message(error))
-        }
-      }),
+      studio.command('gridkitStudio.' + id, (value, supplied) => run(value, supplied as Supplied)),
     )
   const command = (id: string, run: (context: Context, value?: unknown) => unknown) =>
     register(id, async (value, supplied) => run(await resolve(value, supplied), value))
@@ -242,7 +240,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
             id: row.id!,
           }))
       } catch (error) {
-        if (!controller.signal.aborted) studio.output.warn(String(error))
+        if (!controller.signal.aborted) studio.output.warn(detail(error))
       } finally {
         if (current === generation) picker.busy = false
       }
@@ -321,7 +319,9 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
         title: 'Edit ' + element.id,
       }))
     if (!field) return
-    const spec = summary.schema.types[type]!.fields[field]!
+    const spec = summary.schema.types[type]?.fields[field]
+    if (!spec || !summary.editable[type]?.includes(field))
+      throw new Error(leaf(field) + ' cannot be edited.')
     const current = await valueOf(context, type, field, element.id)
     let value: Value
     if (typeof spec.type === 'object' && spec.type.kind === 'reference') {
@@ -357,15 +357,17 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  command('run', (context) => tasks.run(context.session.uri))
-  register('stop', (value, supplied) =>
-    studio.client.call('stop', { uri: targetOf(value, supplied).uri }),
-  )
+  // A second press while the first run starts, as a double click makes, asks for the same run.
+  command('run', ({ session }) => (tasks.active(session.uri) ? undefined : tasks.run(session.uri)))
+  register('stop', (value, supplied) => tasks.stop(targetOf(value, supplied).uri))
   command('showContingency', async ({ session }, value) => {
     if (session.run?.contingency && typeof value === 'number')
       await studio.client.call('contingency', { run: session.run.id, shown: value })
   })
   command('clearRun', async ({ session }) => {
+    // The views let go of the runs before they go, and of the run a running run's end reports.
+    studio.show(session, undefined)
+    changed(session)
     await studio.client.call('clear', { uri: session.uri })
     studio.show(session, undefined)
     changed(session)
@@ -414,7 +416,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     await studio.client.call('import', {
       uri: context.session.uri,
       version: context.summary.version,
-      path: selected[0].fsPath,
+      path: localPath(selected[0]),
       cacheBytes: cacheBytesOf(selected[0]),
     })
     await plot(context)
@@ -422,7 +424,8 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
   command('exportCsv', async (context) => {
     if (!context.session.run) throw new Error('There is no run to export.')
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
-    if (path) await studio.client.call('export', { run: context.session.run.id, path: path.fsPath })
+    if (path)
+      await studio.client.call('export', { run: context.session.run.id, path: localPath(path) })
   })
   register('showOutput', () => studio.output.show())
   command('performance', async (context) => {
@@ -505,8 +508,9 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
   command('chooseColumns', async (context) => {
     const { schema, identities } = context.summary
     const type =
-      context.session.table.type ?? context.type ?? Object.keys(context.summary.counts)[0]!
-    const definitions = schema.types[type]!.fields
+      context.session.table.type ?? context.type ?? Object.keys(context.summary.counts)[0]
+    const definitions = type ? schema.types[type]?.fields : undefined
+    if (!type || !definitions) throw new Error('This case has no elements to show.')
     const fields = Object.keys(definitions).filter(
       (field) => !definitions[field]!.sampled && field !== identities[type],
     )

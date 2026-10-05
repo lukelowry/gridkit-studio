@@ -24,11 +24,18 @@ interface Entry {
   error?: string
   diagnosticsVersion?: number
 }
+/** A worker that stops this many times within `CRASH_MS` is not restarted to read the cases again
+ *  until one of them changes. */
+const CRASHES = 3
+const CRASH_MS = 60_000
+
 export class Documents {
   readonly entries = new Map<string, Entry>()
   readonly changed = new vscode.EventEmitter<string>()
   readonly diagnostics = vscode.languages.createDiagnosticCollection('gridkit')
   readonly disposables: vscode.Disposable[]
+  /** When the worker last stopped. */
+  #crashes: number[] = []
   constructor(readonly client: Client) {
     this.disposables = [
       vscode.workspace.onDidChangeTextDocument((event) => {
@@ -61,14 +68,23 @@ export class Documents {
         this.diagnostics.delete(document.uri)
         void this.client.call('release', { uri }).catch(() => {})
       }),
+      // A new worker reads the open cases again, unless the reading may be what stops it.
       this.client.failure.event((error) => {
+        const now = Date.now()
+        this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
+        const retry = this.#crashes.length < CRASHES
         for (const [uri, entry] of this.entries) {
+          entry.controller?.abort()
+          clearTimeout(entry.timer)
           entry.stale = true
-          entry.error = error.message
+          entry.error = retry
+            ? error.message
+            : `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads the case again once you edit or reopen it.`
           entry.workerVersion = undefined
           entry.changes = []
           entry.pending = undefined
           this.changed.fire(uri)
+          if (retry) void this.parse(entry.document).catch(() => {})
         }
       }),
     ]

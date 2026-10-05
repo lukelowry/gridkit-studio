@@ -2,6 +2,7 @@ import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
+import { message } from '../shared/format.js'
 import type { GridKit, RunRequest } from '../shared/messages.js'
 import type { Sessions } from './sessions.js'
 
@@ -27,7 +28,15 @@ export function cacheBytesOf(uri: vscode.Uri) {
   )
 }
 
+/** A run Run started: settled once GridKit's run begins, rejected with why it could not. */
+interface Launch {
+  begun(): void
+  failed(error: unknown): void
+}
+
 export function registerTasks(studio: Sessions) {
+  /** The runs Run is starting, by case. */
+  const launches = new Map<string, Launch>()
   const make = (uri: vscode.Uri, values?: Record<string, unknown>, captured?: RunRequest) => {
     const definition = {
       type: 'gridkit',
@@ -42,8 +51,10 @@ export function registerTasks(studio: Sessions) {
       new vscode.CustomExecution(async () => {
         const write = new vscode.EventEmitter<string>()
         const close = new vscode.EventEmitter<number>()
+        const launch = launches.get(uri.toString())
         let subscription: vscode.Disposable | undefined
         let started = false
+        let begun = false
         let cancelled = false
         const terminal: vscode.Pseudoterminal = {
           onDidWrite: write.event,
@@ -69,8 +80,17 @@ export function registerTasks(studio: Sessions) {
                 `Captured ${document.isDirty ? 'unsaved ' : ''}case revision ${summary.version}.\r\n`,
               )
               subscription = studio.client.event.event((event) => {
-                if (event.kind === 'log' && event.uri === request.uri)
-                  write.fire(event.message.replace(/\r?\n/g, '\r\n') + '\r\n')
+                if (event.kind === 'log') {
+                  if (!event.level && event.uri === request.uri)
+                    write.fire(event.message.replace(/\r?\n/g, '\r\n') + '\r\n')
+                } else if (
+                  !begun &&
+                  event.info.state === 'running' &&
+                  event.info.revision.uri === request.uri
+                ) {
+                  begun = true
+                  launch?.begun()
+                }
               })
               if (cancelled) throw new Error('Task cancelled before launch.')
               await vscode.commands.executeCommand('gridkitStudio.monitor.focus', {
@@ -88,14 +108,20 @@ export function registerTasks(studio: Sessions) {
               close.fire(result.state === 'complete' ? 0 : 1)
             })()
               .catch((error) => {
-                write.fire(String(error) + '\r\n')
+                write.fire(message(error) + '\r\n')
+                // A run that never began says why to whoever pressed Run.
+                if (!begun) launch?.failed(cancelled ? undefined : error)
                 close.fire(1)
               })
-              .finally(() => subscription?.dispose())
+              .finally(() => {
+                subscription?.dispose()
+                launch?.begun()
+              })
           },
           close() {
             cancelled = true
             subscription?.dispose()
+            launch?.begun()
             if (started) void studio.client.call('stop', { uri: uri.toString() }).catch(() => {})
           },
         }
@@ -110,6 +136,9 @@ export function registerTasks(studio: Sessions) {
     }
     return task
   }
+  /** Whether `execution` is the task that runs the case at `uri`. */
+  const runs = (execution: vscode.TaskExecution, uri: string) =>
+    execution.task.definition.type === 'gridkit' && execution.task.definition.case === uri
   const provider = vscode.tasks.registerTaskProvider('gridkit', {
     provideTasks: () => [...studio.all.keys()].map((uri) => make(vscode.Uri.parse(uri))),
     resolveTask: (task) => {
@@ -127,19 +156,50 @@ export function registerTasks(studio: Sessions) {
       )
     },
   })
+  /** Whether the case at `uri` is running, or Run is starting it. */
+  const active = (uri: string) => launches.has(uri) || studio.all.get(uri)?.run?.state === 'running'
   return {
     provider,
+    active,
+    /** Run the case at `uri`; resolves once GridKit's run begins, and rejects with why it could
+     *  not. The run's own outcome shows in the Simulation view. */
     async run(uri: string, captured?: RunRequest) {
       if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
-      if (studio.all.get(uri)?.run?.state === 'running')
-        throw new Error('A simulation is already active for this case.')
+      if (active(uri)) throw new Error('A simulation is already active for this case.')
+      const session = studio.all.get(uri)
       if (captured) {
         if (captured.uri !== uri) throw new Error('Run proposal targets a different case.')
         studio.documents.require(captured)
       }
-      return vscode.tasks.executeTask(
-        make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)),
-      )
+      let launch!: Launch
+      const launched = new Promise<void>((resolve, reject) => {
+        launch = { begun: resolve, failed: (error) => (error ? reject(error) : resolve()) }
+      })
+      launches.set(uri, launch)
+      if (session) session.launching = true
+      studio.changed.fire(uri)
+      // A task that ends without opening its terminal never began.
+      const ended = vscode.tasks.onDidEndTask(({ execution }) => {
+        if (runs(execution, uri)) launch.begun()
+      })
+      try {
+        await vscode.tasks.executeTask(
+          make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)),
+        )
+        await launched
+      } finally {
+        ended.dispose()
+        launches.delete(uri)
+        if (session) session.launching = false
+        studio.changed.fire(uri)
+      }
+    },
+    /** Stop the case's run, or the run Run is still starting. */
+    async stop(uri: string) {
+      if (launches.has(uri))
+        for (const execution of vscode.tasks.taskExecutions)
+          if (runs(execution, uri)) execution.terminate()
+      await studio.client.call('stop', { uri })
     },
   }
 }

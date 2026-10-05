@@ -170,8 +170,9 @@ export async function run() {
   }>('summarize_run', { uri })
   assert.equal(summarized.current.retained, true)
   assert.equal(summarized.previous.retained, true)
-  await studio.client.call('clear', { uri })
+  await vscode.commands.executeCommand('gridkitStudio.clearRun', vscode.Uri.parse(uri))
   assert.equal((await studio.client.call('stats', {})).cacheBytes, 0)
+  assert.equal(session.run, undefined)
   const invalid = await vscode.workspace.openTextDocument({ language: 'json', content: '{' })
   studio.activate(invalid.uri.toString())
   await studio.documents.ensure(invalid).catch(() => {})
@@ -190,7 +191,29 @@ export async function run() {
     limit: 1,
   })
   assert.equal(explicit.rows.length, 1, 'Switching active case must not retarget a tool')
+  // The review opens a diff with no notification; its title bar approves, once, and closes it.
+  studio.activate(uri)
+  const reviewed = await invoke<{ proposal: string }>('propose_edits', {
+    ...revision,
+    changes: [{ kind: 'set', id: first.rows[0]!.id, field: 'name', value: 'AI approved' }],
+  })
+  await vscode.commands.executeCommand('gridkitStudio.reviewAIProposal', reviewed.proposal)
+  const previewing = () =>
+    vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .some(
+        ({ input }) =>
+          input instanceof vscode.TabInputTextDiff && input.modified.scheme === 'gridkit-proposal',
+      )
+  assert.ok(previewing(), 'Review opens the proposal diff')
+  await vscode.commands.executeCommand('gridkitStudio.approveAIProposal')
+  await until(() => document.getText().includes('AI approved'), 'the approved edit applied')
+  await until(() => !previewing(), 'the approved preview closed')
+  assert.deepEqual(studio.errors.splice(0), [], 'Approval reports nothing')
+  await vscode.window.showTextDocument(document)
+  await vscode.commands.executeCommand('undo')
+  await until(() => document.getText() === original, 'the approved edit undone')
   console.log(
-    'AI native tools: discovery, targeting, pagination, budgets, diagnostics, previews, captured tasks, plots, analysis, comparison, contingency ranking and cleanup passed.',
+    'AI native tools: discovery, targeting, pagination, budgets, diagnostics, previews, captured tasks, plots, analysis, comparison, contingency ranking, cleanup and title-bar approval passed.',
   )
 }

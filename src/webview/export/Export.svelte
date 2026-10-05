@@ -25,7 +25,12 @@
   const ENDS = [0, 1] as const
 
   let view = $state.raw<ViewState>({})
-  let settings = $state.raw<VideoSettings>(DEFAULTS)
+  /** The settings the user chose, kept when the webview reloads. */
+  let settings = $state.raw<VideoSettings>({
+    ...DEFAULTS,
+    ...bridge.state<{ settings?: Partial<VideoSettings> }>({}).settings,
+  })
+  $effect(() => bridge.save({ settings }))
   let progress = $state.raw<VideoProgress | null>(null)
   let status = $state<'idle' | 'running' | 'done' | 'cancelled' | 'failed'>('idle')
   let error = $state<string | null>(null)

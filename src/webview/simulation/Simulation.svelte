@@ -24,7 +24,8 @@
 
   const summary = $derived(view.summary)
   const run = $derived(view.run)
-  const running = $derived(run?.state === 'running')
+  /** Whether a run is under way, or Run was pressed and GridKit is starting. */
+  const running = $derived(run?.state === 'running' || view.launching === true)
   const study = $derived(run?.contingency)
   const program = $derived((values.program ?? 'DynamicSimulation') as Program)
   /** A simulation's fault parameters show while its fault is on; an analysis faults every bus,
@@ -76,6 +77,7 @@
   )
   /** The newest run's status for the bar; empty before any run. */
   const standing = $derived.by(() => {
+    if (view.launching) return 'Starting…'
     if (!run) return ''
     if (study && run.state === 'running')
       return `${study.done.toLocaleString()} of ${study.buses.length.toLocaleString()} contingencies`
@@ -92,14 +94,19 @@
     }
   })
 
-  /** Choices for the elements of `type`, labeled by short id, and name where it differs. */
+  /** Choices for the elements of `type`, labeled by short id, and name where it differs. Choices
+   *  that failed to load are asked for again the next time the form shows them. */
   function elements(type: string): Promise<readonly Choice[]> {
-    return (read[type] ??= bridge.request('elements', { type }).then((found) =>
+    const choices = (read[type] ??= bridge.request('elements', { type }).then((found) =>
       found.map(({ id, name }) => {
         const short = id.slice(type.length + 1)
         return { value: id, label: name !== '' && name !== short ? `${short} - ${name}` : short }
       }),
     ))
+    choices.catch(() => {
+      if (read[type] === choices) delete read[type]
+    })
+    return choices
   }
 
   function give(name: string, entered: InputValue | undefined, typed?: string): void {

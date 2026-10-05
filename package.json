@@ -570,7 +570,19 @@
       {
         "command": "gridkitStudio.reviewAIProposal",
         "title": "Review AI Proposal",
-        "category": "GridKit"
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.approveAIProposal",
+        "title": "Approve AI Proposal",
+        "category": "GridKit Studio",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gridkitStudio.discardAIProposal",
+        "title": "Discard AI Proposal",
+        "category": "GridKit Studio",
+        "icon": "$(close)"
       }
     ],
     "menus": {
@@ -629,6 +641,16 @@
           "command": "gridkitStudio.exportVideo",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
           "group": "view@3"
+        },
+        {
+          "command": "gridkitStudio.approveAIProposal",
+          "when": "resourceScheme == gridkit-proposal",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gridkitStudio.discardAIProposal",
+          "when": "resourceScheme == gridkit-proposal",
+          "group": "navigation@2"
         }
       ],
       "explorer/context": [
@@ -1129,6 +1151,14 @@
         {
           "command": "gridkitStudio.exportVideo",
           "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.approveAIProposal",
+          "when": "resourceScheme == gridkit-proposal"
+        },
+        {
+          "command": "gridkitStudio.discardAIProposal",
+          "when": "resourceScheme == gridkit-proposal"
         }
       ]
     },
@@ -2703,8 +2733,8 @@
       {
         "name": "gridkit_inspect_case",
         "displayName": "Inspect GridKit cases",
-        "modelDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type?s fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
-        "userDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type?s fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
+        "modelDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type's fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
+        "userDescription": "Lists the open GridKit cases, or describes one: its element types, counts, fields and simulation parameters.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_inspect_case",
         "inputSchema": {
@@ -2751,7 +2781,7 @@
         "name": "gridkit_query_rows",
         "displayName": "Query case rows",
         "modelDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Maximum 100 rows, 40 fields and 32 KiB, also respecting the host token budget. Use analyze_run for sampled outputs. Read only.",
-        "userDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Maximum 100 rows, 40 fields and 32 KiB, also respecting the host token budget. Use analyze_run for sampled outputs. Read only.",
+        "userDescription": "Reads field values of a case's elements, with filters, sorting and paging.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_query_rows",
         "inputSchema": {
@@ -2885,7 +2915,7 @@
         "name": "gridkit_read_diagnostics",
         "displayName": "Read case diagnostics",
         "modelDescription": "Read parser and semantic diagnostics, including invalid cases. Reports current, parsed and diagnostic versions separately. Lines and columns are one-based. Follow nextOffset for more. Read only.",
-        "userDescription": "Read parser and semantic diagnostics, including invalid cases. Reports current, parsed and diagnostic versions separately. Lines and columns are one-based. Follow nextOffset for more. Read only.",
+        "userDescription": "Reads a case's parse and validation problems.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_read_diagnostics",
         "inputSchema": {
@@ -2918,7 +2948,7 @@
         "name": "gridkit_summarize_run",
         "displayName": "Inspect run evidence",
         "modelDescription": "Discover current and previous run IDs, stable study IDs, recorded outputs, revision, sample extent, solver state and bounded log evidence. Recording describes future runs, not historical coverage. Failed contingencies are solver failures, not measured worst cases. Read only.",
-        "userDescription": "Discover current and previous run IDs, stable study IDs, recorded outputs, revision, sample extent, solver state and bounded log evidence. Recording describes future runs, not historical coverage. Failed contingencies are solver failures, not measured worst cases. Read only.",
+        "userDescription": "Describes a case's current and previous runs: what they recorded, how far they got, and how they ended.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_summarize_run",
         "inputSchema": {
@@ -2939,8 +2969,8 @@
       {
         "name": "gridkit_analyze_run",
         "displayName": "Analyze recorded signals",
-        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run?s captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
-        "userDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run?s captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
+        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run's captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
+        "userDescription": "Finds each element's minimum and maximum of a recorded signal, and when they happened.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_analyze_run",
         "inputSchema": {
@@ -3020,7 +3050,7 @@
         "name": "gridkit_compare_runs",
         "displayName": "Compare run extrema",
         "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots with the same limits as analyze_run; does not change the UI.",
-        "userDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots with the same limits as analyze_run; does not change the UI.",
+        "userDescription": "Compares a recorded signal's minimums and maximums between two runs.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_compare_runs",
         "inputSchema": {
@@ -3125,8 +3155,8 @@
       {
         "name": "gridkit_rank_contingencies",
         "displayName": "Rank contingency results",
-        "modelDescription": "Rank a completed study?s contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
-        "userDescription": "Rank a completed study?s contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
+        "modelDescription": "Rank a completed study's contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
+        "userDescription": "Ranks the contingencies of a finished contingency analysis by a recorded signal's worst value.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_rank_contingencies",
         "inputSchema": {
@@ -3211,7 +3241,7 @@
         "name": "gridkit_show_element",
         "displayName": "Show an element or plot",
         "modelDescription": "Reveal an element in source, or add its recorded signal to Monitor. Requires explicit case/revision/ID. Plot additionally requires a sampled field and currently displayed run id with matching case content. Changes display and selection only; does not change recording or simulation settings.",
-        "userDescription": "Reveal an element in source, or add its recorded signal to Monitor. Requires explicit case/revision/ID. Plot additionally requires a sampled field and currently displayed run id with matching case content. Changes display and selection only; does not change recording or simulation settings.",
+        "userDescription": "Reveals an element in the case source, or plots one of its recorded signals in the Monitor.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_show_element",
         "inputSchema": {
@@ -3259,8 +3289,8 @@
       {
         "name": "gridkit_propose_edits",
         "displayName": "Propose reviewed field edits",
-        "modelDescription": "Validate 1?100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit: Review AI Proposal to inspect and approve. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
-        "userDescription": "Validate 1?100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit: Review AI Proposal to inspect and approve. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
+        "modelDescription": "Validate 1 to 100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit Studio: Review AI Proposal, then approve or discard it from the preview title bar. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
+        "userDescription": "Prepares field edits for you to review in a diff. Nothing changes until you approve them.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_propose_edits",
         "inputSchema": {
@@ -3328,8 +3358,8 @@
       {
         "name": "gridkit_propose_run",
         "displayName": "Propose a reviewed simulation",
-        "modelDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit: Review AI Proposal. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
-        "userDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit: Review AI Proposal. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
+        "modelDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit Studio: Review AI Proposal, then approve or discard it from the preview title bar. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
+        "userDescription": "Checks a simulation and prepares it for you to review. Nothing runs until you approve it.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_propose_run",
         "inputSchema": {

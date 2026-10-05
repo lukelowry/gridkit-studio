@@ -252,10 +252,20 @@ export type ToWorker = Request | { kind: 'cancel'; id: number } | { kind: 'ack';
 export type FromWorker =
   | { kind: 'process'; uri: string; process?: RuntimeProcess }
   | { kind: 'result'; id: number; value: unknown }
-  | { kind: 'error'; id: number; message: string; offset?: number; length?: number }
+  | {
+      kind: 'error'
+      id: number
+      message: string
+      offset?: number
+      length?: number
+      /** Whether the error is a defect in Studio; `detail` is its stack. */
+      defect?: boolean
+      detail?: string
+    }
   | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
   | { kind: 'run'; info: RunInfo }
-  | { kind: 'log'; uri: string; message: string }
+  /** A solver line of the case's run, or, with a level, a line for Studio's log alone. */
+  | { kind: 'log'; uri?: string; message: string; level?: 'warn' | 'error' }
 
 export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'simulation' | 'export'
 
@@ -293,6 +303,8 @@ export interface ViewState {
   error?: string
   selection?: Element
   run?: RunInfo
+  /** Whether Run was pressed and GridKit's run has not yet begun. */
+  launching?: boolean
   /** What future runs record. */
   outputs?: readonly FieldSelection[]
   plots?: Plot[]
@@ -373,5 +385,5 @@ export type FromView =
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
   | { kind: 'tableState'; table: TableState }
   | { kind: 'busy'; busy: boolean }
-  | { kind: 'notify'; message: string }
+  /** A defect in the view, for Studio's log. */
   | { kind: 'error'; message: string }

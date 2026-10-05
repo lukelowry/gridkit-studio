@@ -148,7 +148,7 @@ export function registerSignals(studio: Sessions) {
     changed,
     view,
     studio.changed.event(refresh),
-    vscode.commands.registerCommand('gridkitStudio.selectAllSignals', every(true)),
-    vscode.commands.registerCommand('gridkitStudio.clearSignals', every(false)),
+    studio.command('gridkitStudio.selectAllSignals', every(true)),
+    studio.command('gridkitStudio.clearSignals', every(false)),
   ]
 }

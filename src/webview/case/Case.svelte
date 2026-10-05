@@ -7,6 +7,7 @@
   import { channelsOf, shortNames } from '../../shared/bindings.js'
   import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
+  import { message } from '../../shared/format.js'
   import type { ViewState } from '../../shared/messages.js'
   import { elementType, isReference, typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
@@ -148,7 +149,7 @@
       rows = rowsOf(blocks, references)
       total = blocks[0]?.total ?? rows.length
     } catch (reason) {
-      if (generation === current && !request.signal.aborted) error = String(reason)
+      if (generation === current && !request.signal.aborted) error = message(reason)
     } finally {
       if (generation === current) loading = false
     }
@@ -232,7 +233,7 @@
         label: 'Edit ' + leaf(edit.field),
       })
     } catch (reason) {
-      error = String(reason)
+      error = message(reason)
     }
   }
   async function reveal(id: string) {
@@ -257,7 +258,7 @@
         if (scroll) scroll.scrollTop = row.row * height
       }
     } catch (reason) {
-      error = String(reason)
+      error = message(reason)
     }
   }
   onMount(() => {

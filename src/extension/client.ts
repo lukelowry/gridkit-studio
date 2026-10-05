@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
@@ -5,6 +6,7 @@ import type { DataBatch } from '@latkit/model'
 import { type CancellationToken, EventEmitter, type ExtensionContext } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
+import { scratchFolder, sweep } from '../results/scratch.js'
 import type { FromWorker, Method, Requests, RuntimeProcess } from '../shared/messages.js'
 
 /** Run `run` with a signal that aborts when `token` is cancelled. */
@@ -24,6 +26,8 @@ export async function cancellable<T>(
 
 export class Client {
   #worker?: Worker
+  /** The folder the worker keeps its runs in, deleted with it. */
+  #scratch?: string
   #next = 0
   #disposed = false
   /** The GridKit process the worker runs for each case, terminated here if the worker dies. */
@@ -44,33 +48,43 @@ export class Client {
   constructor(private readonly context: ExtensionContext) {}
   #get() {
     if (this.#worker) return this.#worker
+    const root = join(this.context.globalStorageUri.fsPath, 'runs')
+    const scratch = (this.#scratch = scratchFolder(root))
+    // Runs left behind by windows that closed without cleaning up, or by an earlier worker here.
+    void sweep(root, scratch)
     const worker = (this.#worker = new Worker(
       join(this.context.extensionPath, 'dist', 'worker.cjs'),
-      { workerData: { scratch: join(this.context.globalStorageUri.fsPath, 'runs') } },
+      { workerData: { scratch } },
     ))
     const failed = (error: Error) => {
       if (this.#worker !== worker) return
       this.#worker = undefined
+      // Set before anyone hears of the failure, so a call it prompts waits for the teardown.
+      const owned = [...this.#owned.values()]
+      this.#owned.clear()
+      this.#cleanup = Promise.all(owned.map(terminateRuntime))
+        .then(async () => {
+          await worker.terminate()
+          await rm(scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
+        })
+        .finally(() => {
+          this.#cleanup = undefined
+        })
       for (const entry of this.#pending.values()) {
         entry.cleanup()
         entry.reject(error)
       }
       this.#pending.clear()
       this.failure.fire(error)
-      this.#cleanup = Promise.all([...this.#owned.values()].map(terminateRuntime))
-        .then(async () => {
-          await worker.terminate()
-        })
-        .finally(() => {
-          this.#owned.clear()
-          this.#cleanup = undefined
-        })
     }
-    worker.on('error', failed)
-    worker.on('exit', (code) => {
-      if (this.#worker === worker)
-        failed(new Error(`Data worker stopped (${code}). Reopen or retry the case.`))
-    })
+    worker.on('error', (error) =>
+      failed(
+        Object.assign(new Error(`The data worker stopped: ${error.message}`), {
+          detail: error.stack,
+        }),
+      ),
+    )
+    worker.on('exit', (code) => failed(new Error(`The data worker stopped (exit code ${code}).`)))
     worker.on('message', (message: FromWorker) => {
       if (message.kind === 'process') {
         if (message.process) this.#owned.set(message.uri, message.process)
@@ -98,6 +112,7 @@ export class Client {
             Object.assign(new Error(message.message), {
               offset: message.offset,
               length: message.length,
+              ...(message.defect && { defect: true, detail: message.detail }),
             }),
           )
         else pending.resolve(message.value)
@@ -147,6 +162,9 @@ export class Client {
     this.#owned.clear()
     await this.#cleanup
     await worker?.terminate()
+    // A window's runs end with it.
+    if (worker && this.#scratch)
+      await rm(this.#scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
     this.event.dispose()
     this.failure.dispose()
   }

@@ -7,6 +7,7 @@ export function registerNavigation(studio: Sessions) {
   // A case that does not parse answers nothing: its diagnostic already says why.
   const parsed = (document: vscode.TextDocument) =>
     studio.documents.ensure(document).catch(() => undefined)
+  /** The case at `position`, with the summary it was read from. */
   const inspect = async (
     document: vscode.TextDocument,
     position: vscode.Position,
@@ -14,7 +15,7 @@ export function registerNavigation(studio: Sessions) {
   ) => {
     const summary = await parsed(document)
     if (!summary) return undefined
-    return cancellable(token, (signal) =>
+    const context = await cancellable(token, (signal) =>
       studio.client.call(
         'context',
         {
@@ -25,6 +26,7 @@ export function registerNavigation(studio: Sessions) {
         signal,
       ),
     )
+    return { ...context, summary }
   }
   return [
     vscode.languages.registerCompletionItemProvider(
@@ -52,11 +54,12 @@ export function registerNavigation(studio: Sessions) {
       async provideHover(document, position, token) {
         const context = await inspect(document, position, token)
         if (!context?.element?.field || !context.range) return
-        const summary = studio.state(document.uri.toString()).summary!
-        const field = summary.schema.types[context.type!]!.fields[context.element.field]!
+        const field = context.type
+          ? context.summary.schema.types[context.type]?.fields[context.element.field]
+          : undefined
         return new vscode.Hover(
           new vscode.MarkdownString().appendText(
-            `${context.element.field}${field.unit ? ' [' + field.unit + ']' : ''}\n${field.description ?? context.reference ?? context.element.id}`,
+            `${context.element.field}${field?.unit ? ' [' + field.unit + ']' : ''}\n${field?.description ?? context.reference ?? context.element.id}`,
           ),
           new vscode.Range(
             document.positionAt(context.range.offset),
@@ -68,12 +71,15 @@ export function registerNavigation(studio: Sessions) {
     vscode.languages.registerDefinitionProvider(selector, {
       async provideDefinition(document, position, token) {
         const context = await inspect(document, position, token)
-        if (!context?.reference) return
-        const range = await studio.client.call('locate', {
-          uri: document.uri.toString(),
-          version: document.version,
-          id: context.reference,
-        })
+        const id = context?.reference
+        if (!id) return
+        const range = await cancellable(token, (signal) =>
+          studio.client.call(
+            'locate',
+            { uri: document.uri.toString(), version: context.summary.version, id },
+            signal,
+          ),
+        )
         return new vscode.Location(
           document.uri,
           new vscode.Range(
@@ -85,11 +91,12 @@ export function registerNavigation(studio: Sessions) {
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(document, token) {
-        if (!(await parsed(document))) return undefined
+        const summary = await parsed(document)
+        if (!summary) return undefined
         const symbols = await cancellable(token, (signal) =>
           studio.client.call(
             'symbols',
-            { uri: document.uri.toString(), version: document.version },
+            { uri: document.uri.toString(), version: summary.version },
             signal,
           ),
         )

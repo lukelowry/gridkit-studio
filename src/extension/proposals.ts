@@ -12,6 +12,24 @@ type Content = Revision & {
 } & ({ kind: 'edit'; mutations: readonly Mutation[] } | { kind: 'run'; request: RunRequest })
 type Proposal = Content & { id: string; expires: number }
 
+/** The scheme of a proposal's preview, `gridkit-proposal://<id>/after.json`. */
+const SCHEME = 'gridkit-proposal'
+
+/** The proposal shown at `uri`, if it shows one. */
+function shown(uri: vscode.Uri | undefined): string | undefined {
+  return uri?.scheme === SCHEME ? uri.authority : undefined
+}
+
+/** The resource of the active editor tab: the proposed side of a diff. */
+function activeResource(): vscode.Uri | undefined {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  return input instanceof vscode.TabInputTextDiff
+    ? input.modified
+    : input instanceof vscode.TabInputText
+      ? input.uri
+      : undefined
+}
+
 /** Short-lived previews. Approval consumes the captured proposal exactly once. */
 export class Proposals implements vscode.Disposable {
   readonly #items = new Map<string, Proposal>()
@@ -20,23 +38,25 @@ export class Proposals implements vscode.Disposable {
     readonly studio: Sessions,
     readonly tasks: Tasks,
   ) {
+    /** The proposal a title-bar button or the palette means: the one on show. */
+    const target = (value?: unknown) => {
+      const id = shown(value instanceof vscode.Uri ? value : activeResource())
+      if (!id) throw new Error('Open an AI proposal to review it first.')
+      return id
+    }
     this.#disposables = [
-      vscode.workspace.registerTextDocumentContentProvider('gridkit-proposal', {
+      vscode.workspace.registerTextDocumentContentProvider(SCHEME, {
         provideTextDocumentContent: (uri) => {
           const proposal = this.get(uri.authority)
           return uri.path === '/before.json' ? proposal.before : proposal.after
         },
       }),
       studio.documents.changed.event(() => this.prune()),
-      vscode.commands.registerCommand('gridkitStudio.reviewAIProposal', async (id?: string) => {
-        try {
-          return await this.review(id)
-        } catch (error) {
-          void vscode.window.showErrorMessage(
-            error instanceof Error ? error.message : String(error),
-          )
-        }
-      }),
+      studio.command('gridkitStudio.reviewAIProposal', (id) =>
+        this.review(typeof id === 'string' ? id : undefined),
+      ),
+      studio.command('gridkitStudio.approveAIProposal', (value) => this.approve(target(value))),
+      studio.command('gridkitStudio.discardAIProposal', (value) => this.discard(target(value))),
     ]
   }
   prune() {
@@ -88,7 +108,7 @@ export class Proposals implements vscode.Disposable {
       expires: item.expires,
       reviewCommand: 'gridkitStudio.reviewAIProposal',
       instruction:
-        'Use GridKit: Review AI Proposal in the Command Palette to inspect and approve. Nothing has been applied or started.',
+        'Use GridKit Studio: Review AI Proposal in the Command Palette to open the preview, then approve or discard it from its title bar. Nothing has been applied or started.',
     }
   }
   edit(revision: Revision, mutations: readonly Mutation[], edits: readonly SourceEdit[]) {
@@ -125,6 +145,7 @@ export class Proposals implements vscode.Disposable {
       after: JSON.stringify({ request, preview }, null, 2),
     })
   }
+  /** Open proposal `id`'s preview, or one the user picks. Its title bar approves or discards it. */
   async review(id?: string) {
     this.prune()
     if (!id)
@@ -143,41 +164,51 @@ export class Proposals implements vscode.Disposable {
       )?.id
     if (!id) return
     const proposal = this.get(id)
-    const after = vscode.Uri.parse(`gridkit-proposal://${id}/after.json`)
+    const after = vscode.Uri.parse(`${SCHEME}://${id}/after.json`)
+    const title = `${proposal.title} (AI proposal for revision ${proposal.version})`
     if (proposal.kind === 'edit')
       await vscode.commands.executeCommand(
         'vscode.diff',
-        vscode.Uri.parse(`gridkit-proposal://${id}/before.json`),
+        vscode.Uri.parse(`${SCHEME}://${id}/before.json`),
         after,
-        `${proposal.title} — AI proposal`,
+        title,
         { preview: false },
       )
     else
       await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(after), {
         preview: false,
       })
-    const choice = proposal.kind === 'edit' ? 'Apply edits' : 'Run simulation'
-    const accepted = await vscode.window.showInformationMessage(
-      `${proposal.title}: review the opened preview. Revision ${proposal.version}; expires in 10 minutes.`,
-      choice,
-      'Discard',
-    )
-    if (accepted === 'Discard') {
-      this.#items.delete(id)
-      return
-    }
-    if (accepted !== choice) return
-    const current = this.get(id)
-    this.studio.documents.require(current)
+  }
+  /** Apply proposal `id`'s edits, or start its run, once. */
+  async approve(id: string) {
+    const proposal = this.get(id)
+    this.studio.documents.require(proposal)
     this.#items.delete(id)
-    if (current.kind === 'edit')
+    await this.#close(id)
+    if (proposal.kind === 'edit')
       await this.studio.documents.transact(
-        current.uri,
-        current.version,
-        current.mutations,
+        proposal.uri,
+        proposal.version,
+        proposal.mutations,
         'Apply AI proposal',
       )
-    else await this.tasks.run(current.uri, current.request)
+    else await this.tasks.run(proposal.uri, proposal.request)
+  }
+  async discard(id: string) {
+    this.#items.delete(id)
+    await this.#close(id)
+  }
+  /** Close the editors that preview proposal `id`. */
+  async #close(id: string) {
+    const tabs = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .filter(({ input }) =>
+        [
+          input instanceof vscode.TabInputTextDiff && input.modified,
+          input instanceof vscode.TabInputText && input.uri,
+        ].some((uri) => uri && shown(uri) === id),
+      )
+    if (tabs.length) await vscode.window.tabGroups.close(tabs)
   }
   dispose() {
     this.#items.clear()

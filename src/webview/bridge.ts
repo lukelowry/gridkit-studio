@@ -1,4 +1,4 @@
-import { cancelled, detail } from '../shared/format.js'
+import { cancelled, defect, detail, message } from '../shared/format.js'
 import type { FromView, ToView, ViewRequests, ViewState } from '../shared/messages.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
@@ -36,33 +36,35 @@ export const bridge = {
   save(value: unknown) {
     api.setState(value)
   },
-  /** Calls `method` in the extension. Rejects after `timeout` ms; 0 waits as long as it takes. */
+  /** Tell the user why something failed, in the one place Studio does: a notification from the
+   *  extension. A cancellation is no failure. */
+  report(reason: unknown) {
+    if (cancelled(reason)) return
+    api.postMessage({
+      kind: 'error',
+      message: message(reason),
+      detail: detail(reason),
+      ...(defect(reason) && { defect: true }),
+    })
+  },
+  /** Calls `method` in the extension, as long as it takes unless `signal` cancels it. */
   request<K extends keyof ViewRequests>(
     method: K,
     input: ViewRequests[K]['input'],
     signal?: AbortSignal,
-    timeout = 15000,
   ): Promise<ViewRequests[K]['output']> {
     if (signal?.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'))
-    if (pending.size >= 16) return Promise.reject(new Error('Too many pending view requests.'))
     const id = ++next
     return new Promise((resolve, reject) => {
-      const fail = (error: Error) => {
+      const cancel = () => {
         if (!take(id)) return
         api.postMessage({ kind: 'cancel', id })
-        reject(error)
+        reject(new DOMException('Cancelled', 'AbortError'))
       }
-      const cancel = () => fail(new DOMException('Cancelled', 'AbortError'))
-      const timer = timeout
-        ? setTimeout(() => fail(new Error('The extension did not respond.')), timeout)
-        : undefined
       pending.set(id, {
         resolve: (value) => resolve(value as ViewRequests[K]['output']),
         reject,
-        release: () => {
-          clearTimeout(timer)
-          signal?.removeEventListener('abort', cancel)
-        },
+        release: () => signal?.removeEventListener('abort', cancel),
       })
       signal?.addEventListener('abort', cancel, { once: true })
       api.postMessage({ kind: 'request', id, method, input })
@@ -74,16 +76,18 @@ export const bridge = {
 export function merged(state: ViewState, incoming: ViewState): ViewState {
   return { summary: state.summary, settings: state.settings, ...incoming }
 }
-/** Log a defect no one caught in Studio's log; a cancellation is none. */
-function report(reason: unknown) {
-  if (!cancelled(reason)) bridge.send({ kind: 'error', message: detail(reason) })
-}
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
   if (message.kind === 'reply') {
     const entry = take(message.id)
-    if (message.error) entry?.reject(new Error(message.error))
+    if (message.error)
+      entry?.reject(
+        Object.assign(new Error(message.error), {
+          detail: message.detail,
+          ...(message.defect && { defect: true }),
+        }),
+      )
     else entry?.resolve(message.value)
     return
   }
@@ -92,8 +96,8 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
     try {
       listener(message)
     } catch (error) {
-      report(error)
+      bridge.report(error)
     }
 })
-window.addEventListener('error', (event) => report(event.error ?? event.message))
-window.addEventListener('unhandledrejection', (event) => report(event.reason))
+window.addEventListener('error', (event) => bridge.report(event.error ?? event.message))
+window.addEventListener('unhandledrejection', (event) => bridge.report(event.reason))

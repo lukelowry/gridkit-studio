@@ -86,11 +86,16 @@ try {
   assert.equal(packaged.version, manifest.version)
   assert.equal(packaged.engines.vscode, manifest.engines.vscode)
   await verify(target)
-  await run(process.execPath, [join(root, 'tests/vscode/launch.mjs')], {
-    ELECTRON_RUN_AS_NODE: undefined,
-    GRIDKIT_TEST_EXTENSION_PATH: target,
-    GRIDKIT_TEST_OUTPUT: scratch,
-  })
+  for (const name of ['extension.cjs', 'worker.cjs', 'mcp.cjs', 'mcp-server.cjs'])
+    assert.ok(existsSync(join(target, 'dist', name)), 'Missing packaged bundle: ' + name)
+  const entries = process.argv.slice(2)
+  if (!entries.length) entries.push('tests/vscode/mcp.ts', 'tests/vscode/index.ts')
+  for (const entry of entries)
+    await run(process.execPath, [join(root, 'tests/vscode/launch.mjs'), entry], {
+      ELECTRON_RUN_AS_NODE: undefined,
+      GRIDKIT_TEST_EXTENSION_PATH: target,
+      GRIDKIT_TEST_OUTPUT: scratch,
+    })
   console.log('Installed VSIX verified:', vsix)
   console.log('VS Code report:', join(scratch, 'tests', 'vscode-report.json'))
 } finally {

@@ -1,18 +1,35 @@
 import * as vscode from 'vscode'
 
-/** Keeps useful leading rows and continuation metadata within both host and byte budgets. */
+/** The result whole, or, where the chat host gives the tool a token budget, its leading rows and
+ *  where to continue. */
 export async function toolResult(
   result: Record<string, unknown>,
   token: vscode.CancellationToken,
   budget?: vscode.LanguageModelToolTokenizationOptions,
 ) {
+  const { text } = await boundedResult(
+    result,
+    () => {
+      if (token.isCancellationRequested) throw new vscode.CancellationError()
+    },
+    budget && (async (text) => (await budget.countTokens(text, token)) <= budget.tokenBudget),
+  )
+  return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)])
+}
+
+/** Fit a response to the host's budget, if it has one, without changing the source object or its
+ *  arrays. */
+export async function boundedResult(
+  source: Record<string, unknown>,
+  check: () => void,
+  accepts?: (text: string) => Promise<boolean>,
+) {
+  check()
+  const result = { ...source }
   if (Array.isArray(result.rows)) result.returned = result.rows.length
   let text = JSON.stringify(result)
-  const fits = async () =>
-    Buffer.byteLength(text) <= 32 << 10 &&
-    (!budget || (await budget.countTokens(text, token)) <= budget.tokenBudget)
-  while (!(await fits())) {
-    if (token.isCancellationRequested) throw new vscode.CancellationError()
+  while (accepts && !(await accepts(text))) {
+    check()
     const lists = Object.entries(result).filter(
       (entry): entry is [string, unknown[]] =>
         ['rows', 'diagnostics', 'types', 'cases'].includes(entry[0]) &&
@@ -41,6 +58,6 @@ export async function toolResult(
     }
     text = JSON.stringify(result)
   }
-  if (token.isCancellationRequested) throw new vscode.CancellationError()
-  return new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)])
+  check()
+  return { result, text }
 }

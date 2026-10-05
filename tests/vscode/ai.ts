@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 
 import * as vscode from 'vscode'
 
-import { registerTasks } from '../../src/extension/tasks.js'
 import type { Analysis, Comparison } from '../../src/shared/analysis.js'
 import type { Requests, RunRequest } from '../../src/shared/messages.js'
 import { extension, folder, until } from './harness.js'
@@ -26,7 +25,7 @@ export async function run() {
       .join('')
     return JSON.parse(text) as T
   }
-  assert.equal(vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_')).length, 10)
+  assert.equal(vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_')).length, 11)
   const document = await vscode.workspace.openTextDocument(
     vscode.Uri.joinPath(folder(), 'IEEE39.case.json'),
   )
@@ -86,8 +85,6 @@ export async function run() {
   )
   assert.ok(preview.getText().includes('AI review only'))
   assert.equal(document.getText(), original)
-  const tasks = registerTasks(studio)
-  tasks.provider.dispose()
   const execute = async (values: Record<string, unknown>) => {
     const proposal = await invoke<{ proposal: string }>('propose_run', {
       ...revision,
@@ -101,7 +98,15 @@ export async function run() {
     const previous = session.run?.id
     session.values = { tmax: 99, fault: false }
     // Execute exactly what the review captured, after changing the live settings.
-    await tasks.run(uri, request)
+    assert.equal(request.values.tmax, values.tmax)
+    await vscode.commands.executeCommand(
+      'gridkitStudio.runAIProposal',
+      vscode.Uri.parse(`gridkit-proposal://${proposal.proposal}/run.json`),
+    )
+    assert.equal(
+      (await invoke<{ status: string }>('action_status', { action: proposal.proposal })).status,
+      'started',
+    )
     const completed = await until(
       () =>
         session.run?.id !== previous && session.run?.state !== 'running' ? session.run : undefined,
@@ -203,7 +208,9 @@ export async function run() {
       .flatMap((group) => group.tabs)
       .some(
         ({ input }) =>
-          input instanceof vscode.TabInputTextDiff && input.modified.scheme === 'gridkit-proposal',
+          input instanceof vscode.TabInputTextDiff &&
+          input.modified.scheme === 'gridkit-proposal' &&
+          input.modified.authority === reviewed.proposal,
       )
   assert.ok(previewing(), 'Review opens the proposal diff')
   await vscode.commands.executeCommand('gridkitStudio.approveAIProposal')

@@ -4,7 +4,6 @@
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
-  import { message } from '../../shared/format.js'
   import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
@@ -32,8 +31,7 @@
   })
   $effect(() => bridge.save({ settings }))
   let progress = $state.raw<VideoProgress | null>(null)
-  let status = $state<'idle' | 'running' | 'done' | 'cancelled' | 'failed'>('idle')
-  let error = $state<string | null>(null)
+  let status = $state<'idle' | 'running' | 'done' | 'cancelled'>('idle')
   /** Where the last video was written. */
   let saved = $state('')
   /** The run the time range came from, and whether the user has edited it since. */
@@ -90,7 +88,6 @@
     const { signal } = control
     status = 'running'
     cancelled = false
-    error = null
     progress = null
     bridge.send({ kind: 'busy', busy: true })
     let file: number | null = null
@@ -100,7 +97,6 @@
         'videoOpen',
         { name: `${name}.${chosen.format}`, format: chosen.format },
         signal,
-        0,
       )
       if (file === null) {
         status = 'idle'
@@ -110,7 +106,6 @@
         'videoData',
         { views: chosen.views, window: chosen.timeRange },
         signal,
-        0,
       )
       if (!rows || !samples) throw new Error('The case could not be read.')
       const gpu = await owner.get()
@@ -122,7 +117,7 @@
       const handle = file
       const output = new WritableStream<VideoWrite>({
         write: ({ position, bytes }) =>
-          bridge.request('videoWrite', { file: handle, position, bytes }, undefined, 0),
+          bridge.request('videoWrite', { file: handle, position, bytes }),
       })
       await exportVideo(
         gpu,
@@ -132,16 +127,16 @@
         signal,
         (made) => (progress = made),
       )
-      saved = (await bridge.request('videoClose', { file }, undefined, 0)) ?? ''
+      saved = (await bridge.request('videoClose', { file })) ?? ''
       file = null
       status = 'done'
     } catch (reason) {
-      status = cancelled ? 'cancelled' : 'failed'
+      status = cancelled ? 'cancelled' : 'idle'
       // Report why the export was aborted, not the abort error it caused.
-      error = message(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
+      if (!cancelled)
+        bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
-      if (file !== null)
-        await bridge.request('videoClose', { file, abort: true }, undefined, 0).catch(() => {})
+      if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
       bridge.send({ kind: 'busy', busy: false })
     }
   }
@@ -353,8 +348,6 @@
               ? 'Exporting video: ' + percent + '%'
               : 'Preparing video...'}
         </p>
-      {:else if status === 'failed'}
-        <p class="c-note c-note--error" role="alert">{error}</p>
       {:else if status === 'done'}
         <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
       {:else if status === 'cancelled'}

@@ -1,44 +1,140 @@
 # Third-party notices
 
-Notices for the packaged extension and bundled development cases.
+GridKit Studio bundles the software below, and its repository holds GridKit's example cases. The full text of each license follows the list.
 
 ## @latkit/diagram, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network, @latkit/video
 
-MIT License
+Copyright (c) 2026 Luke Lowery. MIT License.
 
-Copyright (c) 2026 Luke Lowery
+## GridKit Server
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+The catalog compiler, parser, staging and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## @modelcontextprotocol/server and @modelcontextprotocol/core
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+The MCP TypeScript SDK 2.3.1, from https://github.com/modelcontextprotocol/typescript-sdk. Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC. Its code is under the Apache License 2.0, except contributions that stay under the MIT License while the project moves from one to the other.
 
-## Adapted GridKit Server code
+## zod
 
-The catalog compiler, parser, staging, and result readers include adaptations from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. Distributed under the MIT license reproduced above.
-
-## mediabunny
-
-Copyright (c) 2026-present, Vanilagy and contributors. Bundled unmodified with video export under the Mozilla Public License 2.0, whose text is at https://mozilla.org/MPL/2.0/. Source: https://github.com/Vanilagy/mediabunny.
+Copyright (c) 2025 Colin McDonnell. MIT License.
 
 ## jsonc-parser
 
-The MIT License (MIT)
+Copyright (c) Microsoft. MIT License.
 
-Copyright (c) Microsoft
+## svelte
+
+Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors). MIT License.
+
+## esm-env
+
+Copyright 2022 Benjamin McCann. MIT License.
+
+## culori
+
+Copyright (c) 2018 Dan Burzo. MIT License.
+
+## mediabunny
+
+Copyright (c) 2026-present, Vanilagy and contributors. Bundled unmodified for video export, from https://github.com/Vanilagy/mediabunny, under the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/.
+
+## Color tables
+
+The original color tables by Nathaniel J. Smith, Stefan van der Walt and Eric Firing, from https://github.com/BIDS/colormap. Public domain under CC0, https://creativecommons.org/publicdomain/zero/1.0/.
+
+## Geographic borders
+
+Made from Natural Earth 5.1.2 public-domain map data, and shipped as `dist/webview/borders.bin`. Terms: https://www.naturalearthdata.com/about/terms-of-use/.
+
+## Studio icons
+
+The wrench and lightning bolt in the Studio icons are adapted from Google's Material Design Icons `build` and `bolt`, from https://github.com/google/material-design-icons. Apache License 2.0.
+
+## GridKit case data
+
+The files in `cases/` are [GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics) with their BusFault devices removed by `scripts/cases.mjs`. Studio adds the faults a run asks for. GridKit provides the dynamics models, and the networks come from:
+
+- ACTIVSg2000, ACTIVSg10k and IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
+- WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)
+- TwoArea: Kundur's two-area system
+- TwoBusBasic: GridKit's own example
+
+GridKit's license:
+
+This product includes software produced by UT-Battelle, LLC under Contract
+No. DE-AC05-00OR22725 with the Department of Energy.
+
+Copyright (c) 2025, UT-Battelle.
+All rights reserved.
+
+GridKit™ version 0.1
+
+
+Open Source License:
+
+Subject to the conditions of this License, UT-Battelle, LLC, hereby grants
+free of charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable copyright license to use, copy, modify,
+merge, publish, distribute, and/or sublicense copies of the Software.
+
+1. Redistributions of Software must retain the above open source license grant,
+copyright and license notices, this list of conditions, and the disclaimer
+listed below.  Changes or modifications to, or derivative works of the
+Software must be noted with comments and the contributor and organization's
+name.  If the Software is protected by a proprietary trademark owned by
+UT-Battelle, LLC or the Department of Energy, then derivative works of the
+Software may not be distributed using the trademark without the prior written
+approval of the trademark owner.
+
+2. Neither the names of Licensor nor the Department of Energy may be used to
+endorse or promote products derived from this Software without their specific
+prior written permission.
+
+3. The Software, with or without modification, must include the following
+acknowledgment: "This product includes software produced by UT-Battelle, LLC
+under Contract No. DE-AC05-00OR22725 with the Department of Energy.”
+
+
+
+-------------------------------------------------------------------------------
+
+DISCLAIMER:
+
+UT-BATTELLE, LLC, AND THE GOVERNMENT MAKE NO REPRESENTATIONS AND DISCLAIM ALL
+WARRANTIES, BOTH EXPRESSED AND IMPLIED. THERE ARE NO EXPRESS OR IMPLIED
+WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, OR THAT THE
+USE OF THE SOFTWARE WILL NOT INFRINGE ANY PATENT, COPYRIGHT, TRADEMARK, OR
+OTHER PROPRIETARY RIGHTS, OR THAT THE SOFTWARE WILL ACCOMPLISH THE INTENDED
+RESULTS OR THAT THE SOFTWARE OR ITS USE WILL NOT RESULT IN INJURY OR DAMAGE.
+THE USER ASSUMES RESPONSIBILITY FOR ALL LIABILITIES, PENALTIES, FINES, CLAIMS,
+CAUSES OF ACTION, AND COSTS AND EXPENSES, CAUSED BY, RESULTING FROM OR ARISING
+OUT OF, IN WHOLE OR IN PART THE USE, STORAGE OR DISPOSAL OF THE SOFTWARE.
+
+Disclaimer:
+
+This material was prepared as an account of work sponsored by an agency of the
+United States Government.  Neither the United States Government nor the United
+States Department of Energy, nor UT-Battelle, nor any of their employees, nor
+any jurisdiction or organization that has cooperated in the development of
+these materials, makes any warranty, express or implied, or assumes any legal
+liability or responsibility for the accuracy, completeness, or usefulness or
+any information, apparatus, product, software, or process disclosed, or
+represents that its use would not infringe privately owned rights.
+
+Reference herein to any specific commercial product, process, or service by
+trade name, trademark, manufacturer, or otherwise does not necessarily
+constitute or imply its endorsement, recommendation, or favoring by the United
+States Government or any agency thereof, or UT Batelle. The views and opinions
+of authors expressed herein do not necessarily state or reflect those of the
+United States Government or any agency thereof.
+
+OAK RIDGE NATIONAL LABORATORY
+operated by UT-BATTELLE for the
+UNITED STATES DEPARTMENT OF ENERGY
+under Contract DE-AC05-00OR22725
+
+## MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -58,45 +154,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## esm-env
+## Apache License 2.0
 
-Copyright 2022 Benjamin McCann
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-## svelte
-
-Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-## Color tables and geographic borders
-
-Original color tables by Nathaniel J. Smith, Stefan van der Walt, and Eric Firing.
-CC0 / public domain: https://creativecommons.org/publicdomain/zero/1.0/
-Source: https://github.com/BIDS/colormap/blob/master/colormaps.py
-
-Geographic borders are derived from Natural Earth 5.1.2 public-domain map data, packaged as dist/webview/borders.bin.
-Source and terms: https://www.naturalearthdata.com/about/terms-of-use/
-
-## Studio icons
-
-The wrench and lightning-bolt silhouettes in the Studio icons are adapted from
-Google Material Design Icons (`build` and `bolt`). Material Design Icons are licensed
-under the Apache License 2.0.
-
-- Source: https://github.com/google/material-design-icons
-- License: https://www.apache.org/licenses/LICENSE-2.0
-
-Apache License
+                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
 
@@ -146,9 +206,9 @@ Apache License
       "Contribution" shall mean any work of authorship, including
       the original version of the Work and any modifications or additions
       to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
+      submitted to the Licensor for inclusion in the Work by the copyright
+      owner or by an individual or Legal Entity authorized to submit on behalf
+      of the copyright owner. For the purposes of this definition, "submitted"
       means any form of electronic, verbal, or written communication sent
       to the Licensor or its representatives, including but not limited to
       communication on electronic mailing lists, source code control systems,
@@ -272,137 +332,3 @@ Apache License
       of your accepting any such warranty or additional liability.
 
    END OF TERMS AND CONDITIONS
-
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [yyyy] [name of copyright owner]
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-
-## GridKit case data
-
-The files in `cases/` are copies of
-[GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics)
-with their BusFault devices removed (`scripts/cases.mjs`); GridKit Studio adds the faults a run
-asks for.
-GridKit provides the dynamics models; the networks originate from:
-
-- ACTIVSg2000, ACTIVSg10k, IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
-- WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)
-- TwoArea: Kundur's two-area system; TwoBusBasic: GridKit's own example
-
-This product includes software produced by UT-Battelle, LLC under Contract
-No. DE-AC05-00OR22725 with the Department of Energy.
-
-Copyright (c) 2025, UT-Battelle.
-All rights reserved.
-
-GridKit™ version 0.1
-
-
-Open Source License:
-
-Subject to the conditions of this License, UT-Battelle, LLC, hereby grants
-free of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), a perpetual, worldwide, non-exclusive,
-no-charge, royalty-free, irrevocable copyright license to use, copy, modify,
-merge, publish, distribute, and/or sublicense copies of the Software.
-
-1. Redistributions of Software must retain the above open source license grant,
-copyright and license notices, this list of conditions, and the disclaimer
-listed below.  Changes or modifications to, or derivative works of the
-Software must be noted with comments and the contributor and organization's
-name.  If the Software is protected by a proprietary trademark owned by
-UT-Battelle, LLC or the Department of Energy, then derivative works of the
-Software may not be distributed using the trademark without the prior written
-approval of the trademark owner.
-
-2. Neither the names of Licensor nor the Department of Energy may be used to
-endorse or promote products derived from this Software without their specific
-prior written permission.
-
-3. The Software, with or without modification, must include the following
-acknowledgment: "This product includes software produced by UT-Battelle, LLC
-under Contract No. DE-AC05-00OR22725 with the Department of Energy.”
-
-
-
--------------------------------------------------------------------------------
-
-DISCLAIMER:
-
-UT-BATTELLE, LLC, AND THE GOVERNMENT MAKE NO REPRESENTATIONS AND DISCLAIM ALL
-WARRANTIES, BOTH EXPRESSED AND IMPLIED. THERE ARE NO EXPRESS OR IMPLIED
-WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, OR THAT THE
-USE OF THE SOFTWARE WILL NOT INFRINGE ANY PATENT, COPYRIGHT, TRADEMARK, OR
-OTHER PROPRIETARY RIGHTS, OR THAT THE SOFTWARE WILL ACCOMPLISH THE INTENDED
-RESULTS OR THAT THE SOFTWARE OR ITS USE WILL NOT RESULT IN INJURY OR DAMAGE.
-THE USER ASSUMES RESPONSIBILITY FOR ALL LIABILITIES, PENALTIES, FINES, CLAIMS,
-CAUSES OF ACTION, AND COSTS AND EXPENSES, CAUSED BY, RESULTING FROM OR ARISING
-OUT OF, IN WHOLE OR IN PART THE USE, STORAGE OR DISPOSAL OF THE SOFTWARE.
-
-Disclaimer:
-
-This material was prepared as an account of work sponsored by an agency of the
-United States Government.  Neither the United States Government nor the United
-States Department of Energy, nor UT-Battelle, nor any of their employees, nor
-any jurisdiction or organization that has cooperated in the development of
-these materials, makes any warranty, express or implied, or assumes any legal
-liability or responsibility for the accuracy, completeness, or usefulness or
-any information, apparatus, product, software, or process disclosed, or
-represents that its use would not infringe privately owned rights.
-
-Reference herein to any specific commercial product, process, or service by
-trade name, trademark, manufacturer, or otherwise does not necessarily
-constitute or imply its endorsement, recommendation, or favoring by the United
-States Government or any agency thereof, or UT Batelle. The views and opinions
-of authors expressed herein do not necessarily state or reflect those of the
-United States Government or any agency thereof.
-
-OAK RIDGE NATIONAL LABORATORY
-operated by UT-BATTELLE for the
-UNITED STATES DEPARTMENT OF ENERGY
-under Contract DE-AC05-00OR22725
-
-## culori
-
-MIT License
-
-Copyright (c) 2018 Dan Burzo
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

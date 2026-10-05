@@ -36,7 +36,8 @@
     "workspace"
   ],
   "activationEvents": [
-    "onLanguage:json"
+    "onLanguage:json",
+    "onStartupFinished"
   ],
   "scripts": {
     "build": "pnpm typecheck && node esbuild.mjs",
@@ -59,7 +60,8 @@
     "bench:gate": "pnpm bench && node tests/benchmarks/gate.mjs output/bench/base.json output/bench/head.json",
     "screenshots": "pnpm build && node tests/vscode/launch.mjs tests/vscode/screenshots.ts",
     "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/",
-    "vscode:prepublish": "pnpm build"
+    "vscode:prepublish": "pnpm build",
+    "test:mcp": "pnpm build && node tests/vscode/launch.mjs tests/vscode/mcp.ts"
   },
   "dependencies": {
     "@latkit/diagram": "0.9.0",
@@ -68,9 +70,11 @@
     "@latkit/monitor": "0.14.0",
     "@latkit/network": "0.19.0",
     "@latkit/video": "0.6.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/mocha": "10.0.10",
     "@types/node": "^24.19.0",
     "@types/pngjs": "6.0.5",
@@ -569,20 +573,36 @@
       },
       {
         "command": "gridkitStudio.reviewAIProposal",
-        "title": "Review AI Proposal",
+        "title": "Preview AI Changes or Simulation…",
         "category": "GridKit Studio"
       },
       {
         "command": "gridkitStudio.approveAIProposal",
-        "title": "Approve AI Proposal",
+        "title": "Apply Changes",
         "category": "GridKit Studio",
         "icon": "$(check)"
       },
       {
         "command": "gridkitStudio.discardAIProposal",
-        "title": "Discard AI Proposal",
+        "title": "Discard",
         "category": "GridKit Studio",
         "icon": "$(close)"
+      },
+      {
+        "command": "gridkitStudio.runAIProposal",
+        "title": "Run Simulation",
+        "category": "GridKit Studio",
+        "icon": "$(play)"
+      },
+      {
+        "command": "gridkitStudio.connectAI",
+        "title": "Connect AI Client…",
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.disconnectAI",
+        "title": "Disconnect AI Clients",
+        "category": "GridKit Studio"
       }
     ],
     "menus": {
@@ -644,13 +664,18 @@
         },
         {
           "command": "gridkitStudio.approveAIProposal",
-          "when": "resourceScheme == gridkit-proposal",
+          "when": "resourceScheme == gridkit-proposal && resourceFilename == edit.json",
           "group": "navigation@1"
         },
         {
           "command": "gridkitStudio.discardAIProposal",
           "when": "resourceScheme == gridkit-proposal",
           "group": "navigation@2"
+        },
+        {
+          "command": "gridkitStudio.runAIProposal",
+          "when": "resourceScheme == gridkit-proposal && resourceFilename == run.json",
+          "group": "navigation@1"
         }
       ],
       "explorer/context": [
@@ -1154,11 +1179,15 @@
         },
         {
           "command": "gridkitStudio.approveAIProposal",
-          "when": "resourceScheme == gridkit-proposal"
+          "when": "resourceScheme == gridkit-proposal && resourceFilename == edit.json"
         },
         {
           "command": "gridkitStudio.discardAIProposal",
           "when": "resourceScheme == gridkit-proposal"
+        },
+        {
+          "command": "gridkitStudio.runAIProposal",
+          "when": "resourceScheme == gridkit-proposal && resourceFilename == run.json"
         }
       ]
     },
@@ -2758,7 +2787,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             },
             "select": {
@@ -2768,19 +2796,19 @@
                 "minLength": 1
               },
               "minItems": 1,
-              "maxItems": 40,
               "uniqueItems": true,
               "description": "With from, restrict returned field definitions to these names."
             }
           },
           "required": [],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_query_rows",
         "displayName": "Query case rows",
-        "modelDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Maximum 100 rows, 40 fields and 32 KiB, also respecting the host token budget. Use analyze_run for sampled outputs. Read only.",
+        "modelDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Results fit the chat host's token budget where it sets one; follow nextOffset for the rest. Use analyze_run for sampled outputs. Read only.",
         "userDescription": "Reads field values of a case's elements, with filters, sorting and paging.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_query_rows",
@@ -2808,7 +2836,6 @@
                 "minLength": 1
               },
               "minItems": 1,
-              "maxItems": 40,
               "uniqueItems": true
             },
             "ids": {
@@ -2819,7 +2846,6 @@
                 "description": "Stable Type/key identity, e.g. Bus/1."
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             },
             "where": {
@@ -2860,7 +2886,6 @@
                 "additionalProperties": false
               },
               "minItems": 1,
-              "maxItems": 20,
               "uniqueItems": true
             },
             "orderBy": {
@@ -2887,7 +2912,6 @@
                 "additionalProperties": false
               },
               "minItems": 1,
-              "maxItems": 8,
               "uniqueItems": true
             },
             "offset": {
@@ -2898,7 +2922,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             }
           },
@@ -2909,7 +2932,8 @@
             "select"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_read_diagnostics",
@@ -2934,7 +2958,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             }
           },
@@ -2942,7 +2965,8 @@
             "uri"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_summarize_run",
@@ -2964,12 +2988,13 @@
             "uri"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_analyze_run",
         "displayName": "Analyze recorded signals",
-        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run's captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
+        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run's captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Read only.",
         "userDescription": "Finds each element's minimum and maximum of a recorded signal, and when they happened.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_analyze_run",
@@ -3009,7 +3034,6 @@
                 "description": "Stable Type/key identity, e.g. Bus/1."
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             },
             "window": {
@@ -3033,7 +3057,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             }
           },
@@ -3044,12 +3067,13 @@
             "field"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_compare_runs",
         "displayName": "Compare run extrema",
-        "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots with the same limits as analyze_run; does not change the UI.",
+        "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots as analyze_run does and does not change the UI.",
         "userDescription": "Compares a recorded signal's minimums and maximums between two runs.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_compare_runs",
@@ -3124,7 +3148,6 @@
                 "description": "Stable Type/key identity, e.g. Bus/1."
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             },
             "window": {
@@ -3139,7 +3162,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             }
           },
@@ -3150,12 +3172,13 @@
             "field"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_rank_contingencies",
         "displayName": "Rank contingency results",
-        "modelDescription": "Rank a completed study's contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
+        "modelDescription": "Rank a completed study's contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices. Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results.",
         "userDescription": "Ranks the contingencies of a finished contingency analysis by a recorded signal's worst value.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_rank_contingencies",
@@ -3190,7 +3213,6 @@
                 "description": "Stable Type/key identity, e.g. Bus/1."
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             },
             "window": {
@@ -3214,7 +3236,6 @@
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100,
               "default": 20
             },
             "contingencies": {
@@ -3224,7 +3245,6 @@
                 "minimum": 0
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             }
           },
@@ -3235,7 +3255,8 @@
             "field"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_show_element",
@@ -3284,12 +3305,13 @@
             "id"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_propose_edits",
-        "displayName": "Propose reviewed field edits",
-        "modelDescription": "Validate 1 to 100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit Studio: Review AI Proposal, then approve or discard it from the preview title bar. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
+        "displayName": "Preview case changes",
+        "modelDescription": "Validate field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Opens the preview in VS Code automatically. The user chooses Apply Changes or Run Simulation in its title bar, or Discard. Use gridkit_action_status with the returned action ID to check the outcome; pending does not mean applied or started. A proposal lasts until it is applied or discarded, or its case changes; approval uses one native undoable transaction.",
         "userDescription": "Prepares field edits for you to review in a diff. Nothing changes until you approve them.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_propose_edits",
@@ -3343,7 +3365,6 @@
                 "additionalProperties": false
               },
               "minItems": 1,
-              "maxItems": 100,
               "uniqueItems": true
             }
           },
@@ -3353,12 +3374,13 @@
             "changes"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
       },
       {
         "name": "gridkit_propose_run",
-        "displayName": "Propose a reviewed simulation",
-        "modelDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit Studio: Review AI Proposal, then approve or discard it from the preview title bar. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
+        "displayName": "Preview simulation",
+        "modelDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Opens the preview in VS Code automatically. The user chooses Apply Changes or Run Simulation in its title bar, or Discard. Use gridkit_action_status with the returned action ID to check the outcome; pending does not mean applied or started. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
         "userDescription": "Checks a simulation and prepares it for you to review. Nothing runs until you approve it.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_propose_run",
@@ -3395,7 +3417,6 @@
                       "minLength": 1
                     },
                     "minItems": 1,
-                    "maxItems": 40,
                     "uniqueItems": true
                   },
                   "rows": {
@@ -3413,7 +3434,6 @@
                           "description": "Stable Type/key identity, e.g. Bus/1."
                         },
                         "minItems": 1,
-                        "maxItems": 100,
                         "uniqueItems": true
                       }
                     },
@@ -3431,7 +3451,6 @@
                 "additionalProperties": false
               },
               "minItems": 1,
-              "maxItems": 40,
               "uniqueItems": true
             }
           },
@@ -3440,7 +3459,30 @@
             "version"
           ],
           "additionalProperties": false
-        }
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_action_status",
+        "displayName": "Check GridKit action status",
+        "toolReferenceName": "gridkit_action_status",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Check whether changes were applied or a simulation was started.",
+        "modelDescription": "Read the status of a captured edit or simulation action by its returned action ID. Pending means the user has not acted; applied means edits committed; started means the task launched, not that the simulation completed. Use summarize_run for run outcomes. Stale, discarded, failed and unknown are not successes. Does not approve or retry anything.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
       }
     ],
     "walkthroughs": [
@@ -3519,6 +3561,12 @@
         "command": "gridkitStudio.editField",
         "key": "f2",
         "when": "gridkitStudio.hasSelection && gridkitStudio.editable && (activeCustomEditorId == gridkitStudio.diagram || activeCustomEditorId == gridkitStudio.network) && !inputFocus"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "gridkitStudio.mcp",
+        "label": "GridKit Studio"
       }
     ]
   }

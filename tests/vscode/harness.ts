@@ -8,6 +8,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import type { MCP } from '../../src/extension/mcp.js'
 import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/tasks.js'
 import { available } from '../../src/gridkit/index.js'
@@ -21,10 +22,11 @@ export const VIEWPORT = { width: 1600, height: 1000 }
 /** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
 export const VM = { type: 'Bus', field: 'Vm' } as const
 
-/** Wait until `get` answers something truthy, and return it. */
+/** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
+ *  once the wait fails, what it found instead. */
 export async function until<T>(
   get: () => Promise<T> | T,
-  label: string,
+  label: string | (() => Promise<string> | string),
   timeout = TIMEOUT,
 ): Promise<NonNullable<T>> {
   const start = Date.now()
@@ -33,7 +35,7 @@ export async function until<T>(
     if (value) return value as NonNullable<T>
     await pause(100)
   }
-  throw new Error('Timed out: ' + label)
+  throw new Error('Timed out: ' + (typeof label === 'string' ? label : await label()))
 }
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
@@ -81,8 +83,10 @@ export const theme = (name: string | undefined) =>
 export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
 
 /** GridKit Studio as installed in this VS Code. */
-export function extension(): vscode.Extension<{ studio: Sessions }> {
-  const found = vscode.extensions.getExtension<{ studio: Sessions }>('lukelowery.gridkit-studio')
+export function extension(): vscode.Extension<{ studio: Sessions; mcp: MCP }> {
+  const found = vscode.extensions.getExtension<{ studio: Sessions; mcp: MCP }>(
+    'lukelowery.gridkit-studio',
+  )
   assert.ok(found, 'GridKit Studio must be installed and enabled')
   return found
 }
@@ -121,7 +125,7 @@ export class TestHost {
   #results?: Promise<RunInfo>
 
   private constructor(
-    readonly extension: vscode.Extension<{ studio: Sessions }>,
+    readonly extension: vscode.Extension<{ studio: Sessions; mcp: MCP }>,
     readonly browser: Browser,
     /** The VS Code window. */
     readonly page: Page,

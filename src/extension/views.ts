@@ -5,7 +5,7 @@ import { type DataBatch, type Domain, type FieldSelection, staticFields } from '
 import * as vscode from 'vscode'
 
 import { recordedWhole } from '../shared/bindings.js'
-import { message } from '../shared/format.js'
+import { defect, detail, message } from '../shared/format.js'
 import {
   type FromView,
   type RunInfo,
@@ -23,10 +23,9 @@ import { type Held, holdFor } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
 import { VideoFile } from './video.js'
 
-/** The most run samples a view holds whole; past it the view holds a window of them. */
+/** The run samples a view holds whole; past it the view holds the times around what it shows,
+ *  and asks for more as it moves. */
 const WHOLE_RUN_BYTES = 48 << 20
-/** The most a video export holds: every frame it draws, over the times it covers. */
-const EXPORT_BYTES = 1 << 30
 /** Results decode to float64. */
 const SAMPLE_BYTES = 8
 /** The views that draw the case, and so are streamed its rows and samples. */
@@ -76,7 +75,6 @@ interface Demand {
   sampled: FieldSelection[]
   run?: RunInfo
   held?: Held
-  maxBytes?: number
 }
 
 function html(
@@ -183,8 +181,9 @@ class View {
       panel.onDidDispose(() => this.dispose()),
     )
   }
-  send(message: ToView) {
-    return this.panel.webview.postMessage(message)
+  send(message: ToView): Thenable<boolean> {
+    // A replaced view's late messages would reach the page that took its place.
+    return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(message)
   }
   /** Send the view a snapshot of the clock. */
   tick() {
@@ -278,7 +277,12 @@ class View {
         if (!this.busy) this.#video = undefined
         return
       case 'error':
-        this.studio.error(String(message.message))
+        this.studio.report(
+          Object.assign(new Error(String(message.message)), {
+            detail: message.detail,
+            ...(message.defect === true && { defect: true }),
+          }),
+        )
         return
       case 'command':
         if (COMMANDS.has(message.command)) {
@@ -295,10 +299,6 @@ class View {
   }
   /** Reply to the view's request `id` unless it was cancelled. */
   async answer(id: number, method: keyof ViewRequests, input: unknown) {
-    if (this.#requests.size >= 16) {
-      await this.send({ kind: 'reply', id, error: 'Too many pending requests.' })
-      return
-    }
     const request = new AbortController()
     this.#requests.set(id, request)
     try {
@@ -310,6 +310,8 @@ class View {
           kind: 'reply',
           id,
           error: message(error),
+          detail: detail(error),
+          ...(defect(error) && { defect: true }),
         })
     } finally {
       this.#requests.delete(id)
@@ -370,13 +372,7 @@ class View {
     }
     if (method === 'query') {
       const query = input as ViewRequests['query']['input']
-      if (
-        query?.kind !== 'rows' ||
-        !Number.isSafeInteger(query.limit) ||
-        query.limit! < 0 ||
-        query.limit! > 100
-      )
-        throw new Error('Invalid row query')
+      if (query?.kind !== 'rows') throw new Error('Invalid row query')
       // A query `at` a time reads the shown run.
       const run = query.at === undefined ? undefined : studio.all.get(uri)?.run?.id
       return studio.client.call(
@@ -425,6 +421,7 @@ class View {
       this.#summary = state.summary
       this.#settings = state.settings
       await this.send({ kind: 'state', state: sent })
+      if (this.#disposed) return
     }
     if (!DRAWN.has(this.kind) || !state.summary || !session) return
     if (state.stale && this.kind !== 'monitor' && this.kind !== 'export') return
@@ -516,7 +513,6 @@ class View {
       sampled,
       run,
       ...(held && { held }),
-      ...(video && { maxBytes: EXPORT_BYTES }),
     }
   }
   /** Whether this view draws `view`, as itself or in a video export. */
@@ -600,7 +596,6 @@ class View {
             fromPage: append ? this.#pages : 0,
             ...(held && { window: [held.from, held.to ?? Infinity] as const }),
           }),
-          ...(demand.maxBytes && { maxBytes: demand.maxBytes }),
         },
         controller.signal,
         consume,
@@ -613,13 +608,12 @@ class View {
       this.#frames = run?.frames ?? 0
       this.#held = held
     } catch (error) {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || this.#disposed) return
       // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
       if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
       this.#failed = key
       this.#failure = message(error)
-      studio.error(error)
-      await this.send({ kind: 'action', command: 'error', value: this.#failure })
+      studio.report(error)
     }
   }
   /** Whether its page is on screen and still loading: replacing it now breaks VS Code's loader. */

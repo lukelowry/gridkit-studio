@@ -252,8 +252,6 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
   for (let index = 1; index < edits.length; index++)
     if (edits[index]!.offset < edits[index - 1]!.offset + edits[index - 1]!.length)
       throw failure('invalid-input', 'Overlapping record changes must be submitted separately.')
-  if (edits.reduce((bytes, edit) => bytes + edit.text.length, 0) > 4 << 20)
-    throw failure('resource-limit', 'A transaction may insert at most 4 MiB of text.')
   return edits
 }
 const presentations = new WeakMap<Case, Record<string, Positions>>()

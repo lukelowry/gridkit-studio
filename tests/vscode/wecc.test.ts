@@ -197,7 +197,7 @@ suite('WECC240 run', function () {
     )
     assert.ok(recordedWhole(run.outputs, buses.length, VA), 'a binding draws every bus')
     assert.ok(Math.abs(run.domain[1] - 1) < 1e-9, `the run ends at ${run.domain[1]}`)
-    assert.equal(await network.locator('.canvas-host__fault:not([hidden])').count(), 0)
+    assert.equal(await network.locator('.canvas-host__notice:not([hidden])').count(), 0)
     // Run shows the Monitor; the network is read at full height, the same for every frame.
     await vscode.commands.executeCommand('workbench.action.closePanel')
     shown.set('tilt 0', await at(0))

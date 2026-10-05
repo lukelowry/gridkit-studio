@@ -1,7 +1,6 @@
 /** The validation shared by simulation previews and execution. No processes or files are created. */
 import { type Arguments, failure, type FieldSelection, type Parameters } from '@latkit/model'
 
-import { BATCH_BYTES } from '../results/limits.js'
 import type { Case } from './case.js'
 import { diagnose } from './edits.js'
 import { commandOf, parametersOf, selections } from './parameters.js'
@@ -43,8 +42,6 @@ export function preflight(
   if (!outputs.length)
     throw failure('invalid-input', 'Choose at least one monitored signal to run.')
   const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
-  if (columns * 8 > BATCH_BYTES)
-    throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
   const faults = faultRecords(kase, command.faults)
   return { values, command, outputs, faults, columns }
 }

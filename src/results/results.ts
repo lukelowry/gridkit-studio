@@ -16,7 +16,6 @@ import type { Case, Field } from '../gridkit/index.js'
 import type { RunInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
 import { columnName, type Layout, readResults, samplesOf } from './decode.js'
-import { MESSAGE_BYTES } from './limits.js'
 
 /** Copies of a publication's batches, whose arrays the decoder reuses: each view, not its buffer. */
 function ownedSamples(publication: Publication): SampleBatch[] {
@@ -175,16 +174,11 @@ export class Results {
               pending = pending.subarray(prefix)
               break
             }
-            if (metadataLength > MESSAGE_BYTES) throw new Error('Arrow metadata exceeds 32 MiB.')
             if (pending.length < prefix + metadataLength) break
             const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
             const length = prefix + metadataLength + message.bodyLength
-            if (
-              !Number.isSafeInteger(message.bodyLength) ||
-              message.bodyLength < 0 ||
-              length > MESSAGE_BYTES
-            )
-              throw new Error('Arrow batch exceeds 32 MiB.')
+            if (!Number.isSafeInteger(message.bodyLength) || message.bodyLength < 0)
+              throw new Error('An Arrow message has an invalid body length.')
             if (pending.length < length) break
             if (message.header.kind === 'schema') {
               if (this.#header.length) throw new Error('Repeated Arrow schema.')
@@ -233,7 +227,6 @@ export class Results {
             pending = Buffer.alloc(0)
           }
         }
-        if (pending.length > MESSAGE_BYTES) throw new Error('Result record exceeds 32 MiB.')
         if (finished) {
           if (pending.length) throw new Error('Results ended inside an Arrow message.')
           if (!this.#header.length) throw new Error('Results contain no header.')
@@ -250,19 +243,14 @@ export class Results {
     return appendData(this.kase.data, await this.#page(p, signal))
   }
 
-  /** The case's data with every page that overlaps `window` appended, within the cache's budget. */
+  /** The case's data with every page that overlaps `window` appended. */
   async data(window: Domain | undefined, signal: AbortSignal): Promise<Data> {
     let data = this.kase.data
-    let bytes = 0
     for (let p = 0; p < this.pages.length; p++) {
       const page = this.pages[p]!
       if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
       signal.throwIfAborted()
-      const batches = await this.#page(p, signal)
-      bytes += blockByteLength(batches)
-      if (bytes > this.cache.limit)
-        throw new Error('Query exceeds the sample memory budget; narrow its window.')
-      data = appendData(data, batches)
+      data = appendData(data, await this.#page(p, signal))
     }
     return data
   }

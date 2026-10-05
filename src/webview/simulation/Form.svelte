@@ -2,7 +2,6 @@
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
 
-  import { message } from '../../shared/format.js'
   import Switch from '../ui/Switch.svelte'
   import Field from './Field.svelte'
   import { type Choice, labelOf, rowOf } from './rows.js'
@@ -61,11 +60,8 @@
       </p>
     {:then choices}
       {@render field(name, parameter, choices)}
-    {:catch reason}
+    {:catch}
       {@render field(name, parameter, [])}
-      <p class="c-note c-note--error" role="alert">
-        The {labelOf(name, parameter).toLowerCase()} choices could not be loaded. {message(reason)}
-      </p>
     {/await}
   {:else}
     {@render field(name, parameter, [])}

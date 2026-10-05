@@ -5,30 +5,13 @@ import { read, sampleAt, selectRows } from '@latkit/model'
 import type { Analysis, AnalysisOptions, Comparison, ElementStats } from '../shared/analysis.js'
 import type { Results } from './results.js'
 
-export class AnalysisLimitError extends Error {}
-/** One request's limits, shared by comparisons and multi-contingency scans. */
-export class ScanBudget {
-  samples = 0
-  bytes = 0
-  async take(samples: number, bytes: number, signal: AbortSignal) {
-    signal.throwIfAborted()
-    this.samples += samples
-    this.bytes += bytes
-    if (this.samples > 20_000_000 || this.bytes > 256 << 20)
-      throw new AnalysisLimitError(
-        'Analysis exceeds its work budget. Select fewer elements, contingencies, or a narrower time window.',
-      )
-    await yieldTurn(undefined, { signal })
-  }
-}
-
 export function snapshot(run: Results) {
   return { info: structuredClone(run.info), pages: run.pages.length }
 }
 
+/** How many ranked rows a result returns: `value`, else the 20 worst. */
 export function analysisLimit(value = 20) {
-  if (!Number.isInteger(value) || value < 1 || value > 100)
-    throw new Error('Limit must be between 1 and 100.')
+  if (!Number.isInteger(value) || value < 1) throw new Error('Limit must be a positive integer.')
   return value
 }
 
@@ -46,8 +29,6 @@ export function analysisSelection(
   if (!recorded) throw new Error(`${from}.${field} was not recorded by this run.`)
   const table = run.kase.table(from)
   const axis = ids ? selectRows(run.kase.data.tables[from]!, { kind: 'ids', ids }) : recorded.axis
-  if ((axis.kind === 'indices' ? axis.values.length : axis.count) > 100_000)
-    throw new Error('Select at most 100,000 elements per analysis.')
   const selected = !ids
     ? recorded.rows
     : axis.kind === 'indices'
@@ -79,7 +60,6 @@ export async function analyze(
   run: Results,
   options: AnalysisOptions,
   signal: AbortSignal,
-  budget = new ScanBudget(),
   captured = snapshot(run),
 ): Promise<Analysis> {
   signal.throwIfAborted()
@@ -95,7 +75,8 @@ export async function analyze(
   for (let p = 0; p < captured.pages; p++) {
     const page = run.pages[p]!
     if (page.domain[1] < window[0] || page.domain[0] > window[1]) continue
-    await budget.take(selected.length * page.count, page.end - page.start, signal)
+    // A long scan lets the worker answer other requests between pages.
+    await yieldTurn(undefined, { signal })
     const data = await run.pageData(p, signal)
     for await (const block of read(
       data,

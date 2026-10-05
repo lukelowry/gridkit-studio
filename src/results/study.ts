@@ -1,27 +1,13 @@
-import { stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { contingencyFile } from '../gridkit/simulation.js'
 import type { AnalysisOptions } from '../shared/analysis.js'
 import type { Requests, RunInfo } from '../shared/messages.js'
-import {
-  analysisLimit,
-  AnalysisLimitError,
-  analysisSelection,
-  analyze,
-  compareStats,
-  ScanBudget,
-} from './analysis.js'
+import { analysisLimit, analysisSelection, analyze, compareStats } from './analysis.js'
 import { Results } from './results.js'
 
 /** Read a study sibling without changing the displayed result. Only a UI switch transfers ownership. */
-export async function sibling(
-  current: Results,
-  shown: number,
-  signal: AbortSignal,
-  own = false,
-  budget?: ScanBudget,
-) {
+export async function sibling(current: Results, shown: number, signal: AbortSignal, own = false) {
   const study = current.info.contingency
   if (!study || !Number.isInteger(shown) || shown < 0 || shown >= study.buses.length)
     throw new Error('The run has no such contingency.')
@@ -36,7 +22,7 @@ export async function sibling(
     domain: [0, 0],
     contingency: { ...study, shown },
   }
-  if (budget) await budget.take(0, (await stat(info.path)).size, signal)
+  signal.throwIfAborted()
   const result = new Results(
     info,
     current.kase,
@@ -69,13 +55,11 @@ export async function rank(
   const indices = input.contingencies ?? Array.from({ length: study.buses.length }, (_, n) => n)
   if (
     !indices.length ||
-    indices.length > 100 ||
     new Set(indices).size !== indices.length ||
     indices.some((n) => !Number.isInteger(n) || n < 0 || n >= study.buses.length)
   )
-    throw new Error('Choose 1 to 100 distinct contingency indices from this study.')
+    throw new Error('Choose distinct contingency indices from this study.')
   const rows: Requests['rank']['output']['rows'] = []
-  const budget = new ScanBudget()
   const options = { ...input, window: input.window ?? current.info.domain }
   for (const contingency of indices) {
     signal.throwIfAborted()
@@ -87,10 +71,8 @@ export async function rank(
     let run: Results | undefined
     try {
       run =
-        contingency === study.shown
-          ? current
-          : await sibling(current, contingency, signal, false, budget)
-      const result = await analyze(run, options, signal, budget)
+        contingency === study.shown ? current : await sibling(current, contingency, signal, false)
+      const result = await analyze(run, options, signal)
       rows.push({
         ...row,
         state: result.rows.some((r) => r.valid) ? 'measured' : 'unavailable',
@@ -99,7 +81,6 @@ export async function rank(
       })
     } catch (error) {
       signal.throwIfAborted()
-      if (error instanceof AnalysisLimitError) throw error
       rows.push({
         ...row,
         state: 'unavailable',

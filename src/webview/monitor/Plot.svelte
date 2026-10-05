@@ -6,7 +6,6 @@
   import { onMount } from 'svelte'
 
   import { rowsOf } from '../../shared/cells.js'
-  import { message } from '../../shared/format.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
   import { elementType, fieldName, typeName } from '../../shared/schema.js'
@@ -86,7 +85,6 @@
   )
 
   let monitor = $state.raw<Monitor | null>(null)
-  let fault = $state<string | null>(null)
   /** The options last sent to the plot, so an update sends only what changed. */
   let drawn: Record<string, unknown> = {}
 
@@ -106,10 +104,9 @@
     made.set(style)
     drawn = { ...style, source, traces }
     const offs = [
-      made.on('error', (error) => (fault = message(error))),
+      made.on('error', (error) => bridge.report(error)),
       made.on('frame', () => {
         canvas.dataset.rendered = 'true'
-        fault = null
       }),
       made.on('select', (items) => {
         bridge.send({
@@ -304,7 +301,7 @@
     onfocusout={() => (inspecting = false)}
   >
     {#if recorded && source && view.run?.frames}
-      <CanvasHost {mount} {fault} label={`${name}. Right-click a trace for actions.`} />
+      <CanvasHost {mount} label={`${name}. Right-click a trace for actions.`} />
     {:else}
       <div class="c-empty lane__empty">
         <p class="c-empty__text">

@@ -116,20 +116,18 @@ export function registerSignals(studio: Sessions) {
   })
 
   let revision = ''
-  /** Redraw when the active case, its revision, its recording, or its error changes. */
+  /** Redraw when the active case, its revision, or its recording changes. */
   const refresh = () => {
     const now = shown()
-    const error = studio.active ? studio.state(studio.active).error : undefined
-    const next = JSON.stringify([now?.uri, now?.summary.version, now?.outputs, error])
+    const next = JSON.stringify([now?.uri, now?.summary.version, now?.outputs])
     if (next === revision) return
     revision = next
     const count = now?.outputs.reduce((n, { select }) => n + select.length, 0) ?? 0
     view.description = now ? `${count} selected` : undefined
-    view.message = !now
-      ? error
-      : recordable(now.summary).length
-        ? undefined
-        : 'This case has no values a run can record.'
+    view.message =
+      now && !recordable(now.summary).length
+        ? 'This case has no values a run can record.'
+        : undefined
     changed.fire()
   }
   refresh()

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import { Case, catalog, selections } from '../gridkit/index.js'
 import type { RunInfo } from '../shared/messages.js'
-import { analyze, compare, ScanBudget, snapshot } from './analysis.js'
+import { analyze, compare, snapshot } from './analysis.js'
 import { Readers } from './readers.js'
 import { ResultCache, Results } from './results.js'
 import { rank, sibling } from './study.js'
@@ -80,13 +80,7 @@ describe('recorded result analysis', () => {
       captured.pages = 1
       captured.info.frames = 64
       captured.info.domain = [0, 0.63]
-      const early = await analyze(
-        run,
-        { from: 'Bus', field: 'Vm' },
-        signal,
-        new ScanBudget(),
-        captured,
-      )
+      const early = await analyze(run, { from: 'Bus', field: 'Vm' }, signal, captured)
       expect(early.rows[0]).toMatchObject({ valid: 64, min: { value: 1 } })
       expect(cache.bytes).toBeLessThanOrEqual(2048)
       expect(compare(result, result, 1)).toMatchObject({
@@ -105,11 +99,6 @@ describe('recorded result analysis', () => {
       controller.abort(new Error('cancelled'))
       await expect(analyze(run, { from: 'Bus', field: 'Vm' }, controller.signal)).rejects.toThrow(
         /cancelled/,
-      )
-      const budget = new ScanBudget()
-      budget.samples = 20_000_000
-      await expect(analyze(run, { from: 'Bus', field: 'Vm' }, signal, budget)).rejects.toThrow(
-        /work budget/,
       )
     } finally {
       await rm(directory, { recursive: true, force: true })
@@ -204,9 +193,6 @@ describe('recorded result analysis', () => {
       )
       await borrowed.dispose(directory)
       expect(await readFile(path, 'utf8')).toContain('0.8')
-      const budget = new ScanBudget()
-      budget.bytes = 256 << 20
-      await expect(sibling(current, 1, signal, false, budget)).rejects.toThrow(/work budget/)
       await expect(rank(current, { from: 'Bus', field: 'Va' }, signal)).rejects.toThrow(
         /not recorded/,
       )

@@ -109,23 +109,45 @@ export class Sessions {
   readonly disposables: vscode.Disposable[] = []
   readonly contexts = new Map<string, unknown>()
   active?: string
+  /** The errors already logged, so one reported twice, as a stopped worker's is, shows once. */
+  readonly #logged = new WeakSet<object>()
   /** Log `reason` as an error, unless a case's diagnostic already shows it. */
   error(reason: unknown) {
     if ((reason as { diagnosed?: boolean } | undefined)?.diagnosed) return
+    if (reason instanceof Object) {
+      if (this.#logged.has(reason)) return
+      this.#logged.add(reason)
+    }
     const text = detail(reason)
     this.output.error(text)
     if (this.errors.push(text) > 100) this.errors.shift()
   }
-  /** Tell the user why what they asked for failed. This is the one place Studio shows a
-   *  notification: what happens on its own shows in the views it concerns. A defect points to the
-   *  log; a cancellation says nothing. */
+  /** The errors already reported, and the notifications on show, by their text. */
+  readonly #reported = new WeakSet<object>()
+  readonly #showing = new Set<string>()
+  /** Tell the user why something failed. This is the one place Studio shows an error: views show
+   *  state, never errors. A defect points to the log, a cancellation says nothing, and an error
+   *  already on show is not shown again. */
   report(reason: unknown) {
     if (cancelled(reason)) return
+    if (reason instanceof Object) {
+      if (this.#reported.has(reason)) return
+      this.#reported.add(reason)
+    }
     this.error(reason)
-    if (!defect(reason)) return void vscode.window.showErrorMessage(message(reason))
-    void vscode.window.showErrorMessage(message(reason), 'Show Log').then((choice) => {
-      if (choice) this.output.show()
-    })
+    const text = message(reason)
+    if (this.#showing.has(text)) return
+    this.#showing.add(text)
+    const shown = defect(reason)
+      ? vscode.window.showErrorMessage(text, 'Show Log')
+      : vscode.window.showErrorMessage(text)
+    void shown.then(
+      (choice) => {
+        this.#showing.delete(text)
+        if (choice) this.output.show()
+      },
+      () => this.#showing.delete(text),
+    )
   }
   /** Register command `id`, reporting why it fails. */
   command(id: string, run: (...args: unknown[]) => unknown): vscode.Disposable {
@@ -145,7 +167,7 @@ export class Sessions {
       // A stopped worker takes every run's results with it: a run it was making fails, and the
       // others leave the views, which would otherwise ask for results no longer there.
       this.client.failure.event((error) => {
-        this.error(error)
+        this.report(error)
         for (const session of this.all.values()) {
           const lost = session.run
           this.show(session, undefined)
@@ -169,10 +191,15 @@ export class Sessions {
           else this.output.appendLine(event.message)
           return
         }
-        const session = this.all.get(event.info.revision.uri)
+        const { info } = event
+        const session = this.all.get(info.revision.uri)
         if (!session) return
-        this.show(session, event.info)
+        const before = session.run
+        this.show(session, info)
         this.changed.fire(session.uri)
+        // A run that fails says why once, where every error is said.
+        if (info.state === 'failed' && !(before?.id === info.id && before.state === 'failed'))
+          this.report(new Error(info.message ?? 'The simulation failed.'))
       }),
       // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
       vscode.workspace.onDidRenameFiles(({ files }) => {
@@ -198,6 +225,7 @@ export class Sessions {
           this.activate(input.uri.toString())
       }),
     )
+    void this.prune()
   }
   updateContexts() {
     const session = this.active ? this.all.get(this.active) : undefined
@@ -262,6 +290,20 @@ export class Sessions {
       recording: session.outputs,
     }
     return this.context.workspaceState.update('case:' + session.uri, saved)
+  }
+  /** Drop the saved state of cases that no longer exist, as one deleted while VS Code was closed.
+   *  A case that cannot be reached now, on a remote or network drive, keeps its state. */
+  async prune() {
+    const { workspaceState } = this.context
+    for (const key of workspaceState.keys()) {
+      if (!key.startsWith('case:')) continue
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.parse(key.slice('case:'.length)))
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound')
+          await workspaceState.update(key, undefined)
+      }
+    }
   }
   /** Move the saved state of the cases at or under `from` to `to`, or drop it with no `to`. */
   #move(from: string, to?: string) {

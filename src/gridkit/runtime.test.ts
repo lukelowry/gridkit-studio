@@ -1,10 +1,10 @@
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { containerArgs, runtimeOf } from './runtime.js'
+import { abandoned, containerArgs, runtimeOf } from './runtime.js'
 
 const exe = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
 
@@ -105,10 +105,24 @@ describe('a container run', () => {
       gid: 100,
     })
 
+  it('leaves the containers of windows still open, and finds those of windows that closed', () => {
+    expect(
+      abandoned([
+        `gridkit-studio-${process.pid}-0badf00d`,
+        `gridkit-studio-${process.ppid}-12345678\r`,
+        'gridkit-studio-2147483646-abcdef01',
+        'someone-else',
+        '',
+      ]),
+    ).toEqual(['gridkit-studio-2147483646-abcdef01'])
+  })
+
   it('runs DynamicSimulation on the run folder, never pulling, with no network', () => {
     const args = run('win32', false)
     expect(args.slice(0, 2)).toEqual(['run', '--rm'])
-    expect(args.join(' ')).toContain('--pull never --name gridkit-studio-1 --network none')
+    expect(args.join(' ')).toContain(
+      `--pull never --name gridkit-studio-1 --label gridkit-studio.machine=${hostname()} --network none`,
+    )
     expect(args.join(' ')).toContain('--volume /runs/run-1:/simulation --workdir /simulation')
     expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'input.json'])
     expect(

@@ -9,25 +9,29 @@ import { registerTasks } from './tasks.js'
 import { registerTrees } from './trees.js'
 import { registerViews } from './views.js'
 let studio: Sessions | undefined
+let ai: ReturnType<typeof registerAI> | undefined
 export function activate(context: ExtensionContext) {
   const started = performance.now()
   studio = new Sessions(context)
   const tasks = registerTasks(studio)
+  ai = registerAI(studio, tasks)
   context.subscriptions.push(
+    ai,
     tasks.provider,
     ...registerViews(studio),
     ...registerCommands(studio, tasks),
     ...registerTrees(studio),
     ...registerSignals(studio),
     ...registerNavigation(studio),
-    ...registerAI(studio, tasks),
   )
   studio.output.info(
     `Activated in ${(performance.now() - started).toFixed(1)} ms; data worker starts on demand.`,
   )
-  return { studio }
+  return { studio, mcp: ai.mcp }
 }
 export async function deactivate() {
+  await ai?.dispose()
+  ai = undefined
   await studio?.dispose()
   studio = undefined
 }

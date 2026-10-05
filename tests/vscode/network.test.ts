@@ -72,7 +72,7 @@ suite('Network', () => {
     // Frame after frame while the clock plays, with no message from the extension.
     await until(async () => (await frames(network)) > still + 10, 'the network paints the playhead')
     transport.pause()
-    assert.equal(await network.locator('.canvas-host__fault:not([hidden])').count(), 0)
+    assert.equal(await network.locator('.canvas-host__notice:not([hidden])').count(), 0)
     await bench.capture('network-mapped-signal')
   })
 

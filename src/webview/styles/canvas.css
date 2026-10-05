@@ -1,4 +1,5 @@
-/* A renderer's canvas filling its host, with a fault alert, a start fallback, and a toolbar. */
+/* A renderer's canvas filling its host, with a notice of what it shows, a start fallback, and a
+   toolbar. */
 .canvas-host {
   position: relative;
   inline-size: 100%;
@@ -17,9 +18,8 @@
   inset: 0;
 }
 
-/* A problem the renderer recovered from, over the canvas and its controls: the border carries the
-   tone and the text stays in the primary color. */
-.canvas-host__fault {
+/* What the view shows when it is not the source being typed, over the canvas and its controls. */
+.canvas-host__notice {
   position: absolute;
   z-index: 2;
   inset-block-start: var(--spacing-md);
@@ -27,17 +27,11 @@
   max-inline-size: 44rem;
   margin: 0 auto;
   padding: var(--spacing-sm) var(--spacing-md);
-  border: 1px solid var(--color-error-text);
+  border: 1px solid var(--color-warning-text);
   border-radius: var(--radius-md);
-  background: var(--color-error-bg);
+  background: var(--color-bg);
   color: var(--color-text-1);
   font-size: var(--text-sm);
-}
-
-/* The source is mid-edit, so the last valid revision stays on show. */
-.canvas-host__fault--warn {
-  border-color: var(--color-warning-text);
-  background: var(--color-bg);
 }
 
 /* The view's controls, over its top right. */

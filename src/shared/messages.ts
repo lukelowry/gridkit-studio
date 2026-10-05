@@ -201,7 +201,7 @@ export interface Requests {
   /** Where the diagram's blocks are arranged. */
   presentation: { input: Revision; output: Record<string, Positions> }
   query: {
-    input: Revision & { query: Query; run?: string; maxBytes?: number }
+    input: Revision & { query: Query; run?: string }
     output: QueryBlock[]
   }
   batches: {
@@ -212,8 +212,6 @@ export interface Requests {
       includeStatic?: boolean
       /** The first run page to send; the view holds those before it. */
       fromPage?: number
-      /** The most bytes the stream may carry. */
-      maxBytes?: number
     }
     /** How many of the run's pages the stream covered. */
     output: { pages: number }
@@ -343,7 +341,15 @@ export type ToView =
   | Begin
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
   | { kind: 'end'; stream: number }
-  | { kind: 'reply'; id: number; value?: unknown; error?: string }
+  /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack. */
+  | {
+      kind: 'reply'
+      id: number
+      value?: unknown
+      error?: string
+      defect?: boolean
+      detail?: string
+    }
   | { kind: 'action'; command: string; value?: unknown }
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
@@ -385,5 +391,5 @@ export type FromView =
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
   | { kind: 'tableState'; table: TableState }
   | { kind: 'busy'; busy: boolean }
-  /** A defect in the view, for Studio's log. */
-  | { kind: 'error'; message: string }
+  /** Why something in the view failed, which the extension tells the user. */
+  | { kind: 'error'; message: string; detail?: string; defect?: boolean }

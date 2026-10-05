@@ -17,7 +17,18 @@ const json = (result: vscode.LanguageModelToolResult) =>
   JSON.parse((result.content[0] as vscode.LanguageModelTextPart).value)
 
 describe('AI response budgets', () => {
-  it('keeps useful rows, counts, continuation and failure evidence under both budgets', async () => {
+  it('does not change a result shared with other clients', async () => {
+    const rows = Object.freeze(
+      Array.from({ length: 100 }, (_, id) => ({ id, name: 'x'.repeat(1000) })),
+    )
+    const source = Object.freeze({ rows, offset: 0, total: 100, nextOffset: null })
+    await toolResult(source, token)
+    expect(source.rows).toBe(rows)
+    expect(source.rows).toHaveLength(100)
+    expect(source.nextOffset).toBeNull()
+    expect(source).not.toHaveProperty('truncated')
+  })
+  it('keeps useful rows, counts, continuation and failure evidence under the host budget', async () => {
     const result = await toolResult(
       {
         rows: Array.from({ length: 100 }, (_, n) => ({ id: 'Bus/' + n, value: 'x'.repeat(500) })),
@@ -38,14 +49,24 @@ describe('AI response budgets', () => {
     expect(found.truncated).toBe(true)
     expect(JSON.stringify(found).length).toBeLessThanOrEqual(1500)
   })
+  it('returns a result whole where the host sets no budget', async () => {
+    const whole = await toolResult(
+      { rows: [{ name: 'x'.repeat(1 << 20) }], offset: 0, total: 1 },
+      token,
+    )
+    expect(json(whole).rows[0].name).toHaveLength(1 << 20)
+    expect(json(whole)).not.toHaveProperty('truncated')
+  })
   it('does not silently remove semantic metadata or produce a nonadvancing cursor', async () => {
+    const budget = { tokenBudget: 1000, countTokens: async (text: string) => text.length }
     const huge = await toolResult(
       { rows: [{ name: 'x'.repeat(40_000) }], offset: 0, total: 1 },
       token,
+      budget,
     )
     expect(json(huge)).toMatchObject({ rows: [], truncated: true })
     expect(json(huge).nextOffset).toBeUndefined()
-    await expect(toolResult({ failed: ['x'.repeat(40_000)] }, token)).rejects.toThrow(
+    await expect(toolResult({ failed: ['x'.repeat(40_000)] }, token, budget)).rejects.toThrow(
       /metadata exceeds/,
     )
     await expect(

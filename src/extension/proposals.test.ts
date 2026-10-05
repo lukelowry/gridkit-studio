@@ -37,8 +37,12 @@ function fixture() {
     stale: false,
   }
   const transact = vi.fn(async () => {})
-  const run = vi.fn(async () => {})
+  const session: { run?: { id: string } } = {}
+  const run = vi.fn(async () => {
+    session.run = { id: crypto.randomUUID() }
+  })
   const studio = {
+    all: new Map([[revision.uri, session]]),
     command: () => ({ dispose() {} }),
     documents: {
       entries: new Map([[revision.uri, entry]]),
@@ -55,10 +59,45 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks())
 
 describe('reviewed AI proposals', () => {
+  it('reports a failed edit without allowing it to be replayed', async () => {
+    const { revision, proposals, transact } = fixture()
+    const action = proposals.edit(
+      revision,
+      [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }],
+      [{ offset: 9, length: 3, text: 'new' }],
+    )
+    transact.mockRejectedValueOnce(new Error('Document changed while applying.'))
+    await expect(proposals.approve(action.action)).rejects.toThrow(/Document changed/)
+    expect(proposals.status(action.action)).toMatchObject({
+      status: 'failed',
+      message: 'Document changed while applying.',
+    })
+    await expect(proposals.approve(action.action)).rejects.toThrow(/applied or discarded/)
+    expect(transact).toHaveBeenCalledTimes(1)
+    proposals.dispose()
+  })
+  it('does not report a cancelled launch as a started simulation', async () => {
+    const { revision, proposals, run } = fixture()
+    run.mockImplementationOnce(async () => {})
+    const action = proposals.run(
+      {
+        ...revision,
+        values: {},
+        outputs: [],
+        gridkit: { path: '', image: '', cli: '' },
+        cacheBytes: 0,
+      },
+      {},
+    )
+    await expect(proposals.approve(action.action)).rejects.toThrow(/before a new run started/)
+    expect(proposals.status(action.action).status).toBe('failed')
+    proposals.dispose()
+  })
   it('previews without writing or asking, captures values, and applies an approval once', async () => {
     const { revision, proposals, transact } = fixture()
     const changes: Mutation[] = [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }]
     const proposed = proposals.edit(revision, changes, [{ offset: 9, length: 3, text: 'new' }])
+    expect(proposals.status(proposed.action).status).toBe('pending')
     expect(proposals.get(proposed.proposal).after).toBe('{"name":"new"}')
     changes[0] = { kind: 'set', id: 'Bus/1', field: 'name', value: 'changed after preview' }
     await proposals.review(proposed.proposal)
@@ -77,13 +116,14 @@ describe('reviewed AI proposals', () => {
       revision.uri,
       1,
       [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }],
-      'Apply AI proposal',
+      'Apply AI changes',
     )
-    await expect(proposals.approve(proposed.proposal)).rejects.toThrow(/consumed/)
+    await expect(proposals.approve(proposed.proposal)).rejects.toThrow(/applied or discarded/)
     expect(transact).toHaveBeenCalledTimes(1)
+    expect(proposals.status(proposed.action).status).toBe('applied')
     proposals.dispose()
   })
-  it('refuses changed, discarded or expired proposals and never silently retargets an approved run', async () => {
+  it('refuses changed or discarded proposals and never silently retargets an approved run', async () => {
     const { revision, proposals, entry, run } = fixture()
     const request: RunRequest = {
       ...revision,
@@ -95,6 +135,7 @@ describe('reviewed AI proposals', () => {
     const first = proposals.run(request, { scenarios: 1 })
     request.values.tmax = 99
     await proposals.approve(first.proposal)
+    expect(proposals.status(first.action).status).toBe('started')
     expect(run).toHaveBeenCalledWith(
       revision.uri,
       expect.objectContaining({
@@ -105,14 +146,18 @@ describe('reviewed AI proposals', () => {
     const stale = proposals.run(request, {})
     entry.document.version = 2
     await expect(proposals.approve(stale.proposal)).rejects.toThrow(/case changed/)
+    expect(proposals.status(stale.action).status).toBe('stale')
     expect(run).toHaveBeenCalledTimes(1)
     entry.document.version = 1
     const discarded = proposals.run(request, {})
     await proposals.discard(discarded.proposal)
-    await expect(proposals.approve(discarded.proposal)).rejects.toThrow(/consumed/)
-    const expired = proposals.run(request, {})
-    vi.spyOn(Date, 'now').mockReturnValue(expired.expires + 1)
-    expect(() => proposals.get(expired.proposal)).toThrow(/expired/)
+    expect(proposals.status(discarded.action).status).toBe('discarded')
+    await expect(proposals.approve(discarded.proposal)).rejects.toThrow(/applied or discarded/)
+    // A proposal waits as long as the user takes to look at it.
+    const later = proposals.run(request, {})
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 24 * 60 * 60_000)
+    expect(proposals.get(later.proposal).kind).toBe('run')
+    expect(proposals.status(later.action).status).toBe('pending')
     proposals.dispose()
   })
 })

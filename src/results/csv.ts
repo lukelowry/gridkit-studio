@@ -15,8 +15,6 @@ type CsvMessage =
       readonly width: number
     }
 
-const HEADER_CHARS = 16 << 20
-const CELL_CHARS = 1024
 const BATCH_ROWS = 64
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
@@ -44,16 +42,12 @@ export async function* csvMessages(
         if (code === 10 && !quoted) break
       }
       if (!known) header += text.slice(0, start)
-      if (header.length > HEADER_CHARS)
-        throw failure('resource-limit', 'The CSV header exceeds 16,777,216 characters.')
       if (start === text.length) continue
       const fields =
         known ??
         headerOf(header).map((name, i) => ({ name, type: 'float64' as const, nullable: i !== 0 }))
       header = ''
-      if (fields.length * 8 > BATCH_BYTES)
-        throw failure('resource-limit', 'One CSV frame exceeds 8 MiB of numbers.')
-      capacity = Math.min(BATCH_ROWS, Math.floor(BATCH_BYTES / (8 * fields.length)))
+      capacity = Math.max(1, Math.min(BATCH_ROWS, Math.floor(BATCH_BYTES / (8 * fields.length))))
       width = fields.length
       values = new Float64Array(fields.length * capacity)
       yield { kind: 'schema', fields }
@@ -67,8 +61,6 @@ export async function* csvMessages(
       const end = comma < 0 ? newline : newline < 0 ? comma : Math.min(comma, newline)
       if (end < 0) {
         pending += text.slice(start)
-        if (pending.length > CELL_CHARS)
-          throw failure('io', 'A CSV number exceeds 1024 characters.')
         break
       }
       const token = pending + text.slice(start, end)
@@ -78,7 +70,7 @@ export async function* csvMessages(
       if (last) newline = text.indexOf('\n', start)
       else comma = text.indexOf(',', start)
       if (last && column === 0 && token.trim() === '') continue
-      if (token.length > CELL_CHARS || column >= width || (last && column !== width - 1))
+      if (column >= width || (last && column !== width - 1))
         throw failure('io', `CSV frame ${received + rows + 1} does not match its header.`)
       const value = numberOf(token, received + rows + 1, column + 1)
       if (column === 0 && !Number.isFinite(value))

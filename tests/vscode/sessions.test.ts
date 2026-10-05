@@ -43,6 +43,17 @@ suite('Sessions', () => {
     assert.deepEqual(plotsFor({ outputs: [] } as unknown as RunInfo, [vm]), [])
   })
 
+  test('forgets cases deleted while it was closed, and keeps those that exist', async () => {
+    const session = studio.current()
+    await studio.persist(session)
+    const gone = 'case:' + vscode.Uri.joinPath(folder(), `gone-${randomUUID()}.case.json`)
+    await studio.context.workspaceState.update(gone, { values: {} })
+    await studio.prune()
+    const keys = studio.context.workspaceState.keys()
+    assert.ok(!keys.includes(gone), 'A deleted case keeps no saved state')
+    assert.ok(keys.includes('case:' + session.uri), 'An existing case keeps its saved state')
+  })
+
   for (const outputs of [[], [{ from: 'Bus', select: ['Vm'] }]])
     test(`restores ${outputs.length ? 'chosen' : 'empty'} recordings from workspace storage`, async () => {
       const session = studio.current()

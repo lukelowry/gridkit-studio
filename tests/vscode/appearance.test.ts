@@ -39,7 +39,7 @@ suite('Appearance', () => {
 
   test('offers the case to language models through its tools', async () => {
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
-    assert.equal(tools.length, 10)
+    assert.equal(tools.length, 11)
     const rows = await vscode.lm.invokeTool('gridkit_query_rows', {
       input: {
         uri: bench.document.uri.toString(),

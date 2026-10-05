@@ -32,7 +32,7 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       await bench.page.mouse.move(0, 0)
       await pause(600)
       assert.equal(
-        await network.locator('.canvas-host__fault:not([hidden])').count(),
+        await network.locator('.canvas-host__notice:not([hidden])').count(),
         0,
         'Network must have no render error',
       )

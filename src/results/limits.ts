@@ -1,3 +1,2 @@
-/** Byte budgets: one batch of decoded frames, and one native result message. */
+/** How many bytes of decoded frames one batch aims for; a wider frame is a batch of its own. */
 export const BATCH_BYTES = 8 << 20
-export const MESSAGE_BYTES = 32 << 20

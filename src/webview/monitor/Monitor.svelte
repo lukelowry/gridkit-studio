@@ -3,7 +3,6 @@
   import type { Data, Domain } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import { message } from '../../shared/format.js'
   import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../shared/messages.js'
   import { fieldName, typeName } from '../../shared/schema.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
@@ -33,7 +32,6 @@
   let theme = $state.raw({ palette: palette(), font: font() })
   /** Bumped on GPU loss or retry, so every plot remounts. */
   let epoch = $state(0)
-  let fault = $state<string | null>(null)
   /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
   let visible = $state(true)
   let hidden = $state(document.hidden)
@@ -49,7 +47,7 @@
   const gpu = () =>
     owner.get(() => {
       if (performance.now() - recovered < RECOVER_MS) {
-        fault = 'WebGPU device lost.'
+        bridge.report('WebGPU device lost.')
         return
       }
       recovered = performance.now()
@@ -129,19 +127,17 @@
           if (incoming.command === 'shown') visible = incoming.value === true
           else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
-            fault = null
             recovered = -Infinity
             epoch++
-          } else if (incoming.command === 'error') fault = String(incoming.value)
+          }
         }
       }),
       receive(
         (data, begin) => {
           source = data
           held = begin.held
-          fault = null
         },
-        (reason) => (fault = message(reason)),
+        (reason) => bridge.report(reason),
       ),
       watchTheme(() => (theme = { palette: palette(), font: font() })),
     ]
@@ -209,16 +205,8 @@
       </div>
     {/if}
   </div>
-  {#if run?.message}
-    <p class="c-note c-note--error" role="alert">{run.message}</p>
-  {/if}
-  {#if fault ?? view.error ?? warning}
-    <p
-      class={['c-note', fault || view.error ? 'c-note--error' : 'c-note--warn']}
-      role={fault || view.error ? 'alert' : 'status'}
-    >
-      {fault ?? view.error ?? warning}
-    </p>
+  {#if warning}
+    <p class="c-note c-note--warn" role="status">{warning}</p>
   {/if}
   {#if plots.length === 0 || !run}
     <div class="c-empty monitor__empty">

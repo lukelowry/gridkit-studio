@@ -80,15 +80,17 @@ suite('Case source', () => {
     await bench.document.save()
   })
 
-  test('shows an initial parse error and recovers when the source is repaired', async () => {
+  test('points an unreadable case to Problems, and recovers when the source is repaired', async () => {
     const uri = vscode.Uri.joinPath(bench.uri, '..', 'invalid.case.json')
     await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode('{'))
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await bench.view('network')
-    await visible(network, '.canvas-host__fault[role="alert"]:not([hidden])')
+    await visible(network, '.canvas-host__notice[role="status"]:not([hidden])')
+    assert.match(await network.locator('.canvas-host__notice').innerText(), /Problems/)
     assert.equal(await network.locator('.canvas-host__fallback').isVisible(), false)
     assert.ok(bench.studio.state(uri.toString()).error)
+    assert.ok(vscode.languages.getDiagnostics(uri).length > 0, 'Problems lists why')
     const document = await vscode.workspace.openTextDocument(uri)
     const edit = new vscode.WorkspaceEdit()
     edit.replace(uri, new vscode.Range(0, 0, document.lineCount, 0), bench.text)

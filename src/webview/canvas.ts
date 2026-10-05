@@ -7,7 +7,6 @@ import type { Diagram, Positions } from '@latkit/diagram'
 import type { Data } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
-import { defect, detail, message } from '../shared/format.js'
 import type { Begin, Element, ViewState } from '../shared/messages.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
@@ -20,8 +19,6 @@ import { icon, type IconName } from './ui/glyphs.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
-/** How long the view says why an edit did not happen. */
-const REFUSAL_MS = 5000
 
 const PROJECTIONS: readonly { value: Projection; label: string; icon: IconName }[] = [
   { value: 'flat', label: 'Flat', icon: 'projection-flat' },
@@ -39,12 +36,12 @@ function boot() {
   const hint =
     (kind === 'network' ? 'Network' : 'Diagram') + ' view. Right-click an element for actions.'
   document.getElementById('app')!.innerHTML =
-    '<main class="canvas-host" aria-busy="true"><div class="canvas-host__fault" hidden></div><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
+    '<main class="canvas-host" aria-busy="true"><div class="canvas-host__notice" role="status" hidden></div><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
   const host = document.querySelector<HTMLElement>('.canvas-host')!
   const canvas = host.querySelector('canvas')!
   const fallback = host.querySelector<HTMLElement>('.canvas-host__fallback')!
   const fallbackText = fallback.firstElementChild!
-  const notice = host.querySelector<HTMLElement>('.canvas-host__fault')!
+  const notice = host.querySelector<HTMLElement>('.canvas-host__notice')!
   canvas.setAttribute('aria-label', hint)
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
 
@@ -79,11 +76,6 @@ function boot() {
   let selectionKey = ''
   let own = ''
   let preferredProjection: Projection | undefined
-  /** A renderer error, shown over the canvas until the next frame. */
-  let fault: string | null = null
-  /** Why the user's last edit did not happen, shown for a few seconds. */
-  let refusal: string | null = null
-  let refusing: ReturnType<typeof setTimeout> | undefined
   /** The camera to restore after the GPU is lost, and when the GPU was last replaced. */
   let restore: unknown
   let recovered = -Infinity
@@ -91,48 +83,27 @@ function boot() {
   let sync = () => {}
 
   const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
-  /** Show the newest problem, else why an edit did not happen, else that the shown case is not the
-   *  source being typed. */
+  /** Say what the view shows when it is not the source being typed: the last valid revision, or,
+   *  before any, nothing until the case's problems are fixed. Errors themselves are said once, by
+   *  the extension. */
   const say = () => {
-    const stale = !!state.stale && !!state.summary
-    const problem = fault ?? state.error
-    notice.hidden = !problem && !refusal && !stale
-    notice.classList.toggle('canvas-host__fault--warn', !problem)
-    notice.setAttribute('role', problem ? 'alert' : 'status')
-    notice.textContent =
-      problem ??
-      refusal ??
-      'Source is updating or contains errors. Showing the last valid revision; editing is paused.'
-    if (!state.summary && state.error) {
+    const unread = !state.summary && !!state.error
+    notice.hidden = !unread && !(state.stale && state.summary)
+    notice.textContent = unread
+      ? 'The case draws once the problems listed in Problems are fixed.'
+      : 'Showing the last valid revision until the source is fixed. Editing waits for it.'
+    if (unread) {
       fallback.hidden = true
       host.setAttribute('aria-busy', 'false')
-    } else if (!canvas.dataset.rendered && !state.error) {
+    } else if (!canvas.dataset.rendered) {
       fallback.hidden = false
     }
   }
-  /** Show why the view cannot draw, and log it unless the extension, which sent it, already has. */
-  const error = (reason: unknown, log = true) => {
-    const text = message(reason)
-    if (canvas.dataset.rendered) fault = text
-    else {
-      fallback.hidden = false
-      fallbackText.textContent = `The ${kind} could not be drawn. ${text}`
-      fallback.setAttribute('role', 'alert')
-    }
+  /** The view cannot draw: it stops waiting, and the extension says why. */
+  const error = (reason: unknown) => {
+    if (!canvas.dataset.rendered) fallback.hidden = true
     host.setAttribute('aria-busy', 'false')
-    say()
-    if (log) bridge.send({ kind: 'error', message: detail(reason) })
-  }
-  /** Say over the view why the user's edit did not happen. */
-  const refuse = (reason: unknown) => {
-    refusal = message(reason)
-    if (defect(reason)) bridge.send({ kind: 'error', message: detail(reason) })
-    clearTimeout(refusing)
-    refusing = setTimeout(() => {
-      refusal = null
-      say()
-    }, REFUSAL_MS)
-    say()
+    bridge.report(reason)
   }
   const drop = () => {
     view?.destroy()
@@ -212,9 +183,7 @@ function boot() {
         borders = value
         paint()
       })
-      .catch((reason) => {
-        bridge.send({ kind: 'error', message: 'Map boundaries: ' + detail(reason) })
-      })
+      .catch((reason) => bridge.report(reason))
   }
   /** Send the view only what changed, so it keeps what it has read, scaled, laid out, and
    *  uploaded. */
@@ -306,7 +275,7 @@ function boot() {
   function connect(mounted: Network | Diagram) {
     // Both renderers emit these events; the union's `on` overloads are not callable.
     const events = mounted as Network
-    events.on('error', (reason) => error(reason))
+    events.on('error', (reason) => bridge.report(reason))
     events.on('frame', () => {
       if (!canvas.dataset.rendered) {
         mark('canvas:frame')
@@ -318,10 +287,6 @@ function boot() {
         // The case is on screen: add its labels, and the borders paint asks for.
         labelled = true
         if (kind === 'network') paint()
-      }
-      if (fault !== null) {
-        fault = null
-        say()
       }
     })
     events.on('camera', (camera) => {
@@ -388,7 +353,15 @@ function boot() {
         }
         if (!view) {
           const first = diagramConfig()
-          view = diagramModule.mountDiagram(gpu, canvas, first, () => state, select, open, refuse)
+          view = diagramModule.mountDiagram(
+            gpu,
+            canvas,
+            first,
+            () => state,
+            select,
+            open,
+            bridge.report,
+          )
           drawn = first
           connect(view)
           // A large diagram takes a while to lay out.
@@ -442,7 +415,6 @@ function boot() {
       selection()
       paint()
     } else if (message.kind === 'action') {
-      if (message.command === 'error') return error(message.value, false)
       if (message.command === 'shown') {
         shown = message.value === true
         view?.set({ paused: !shown || document.hidden, ...(shown && { at: clock.now() }) })
@@ -483,7 +455,6 @@ function boot() {
   window.addEventListener('pagehide', () => {
     closed = true
     clearTimeout(saving)
-    clearTimeout(refusing)
     unwatch()
     clock.stop()
     view?.destroy()

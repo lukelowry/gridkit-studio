@@ -10,7 +10,7 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { frames, type TestHost, testHost, until, visible, VM } from './harness.js'
+import { frames, notifications, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 /** Pixels painted in a color, not the grays of axes, text and background. */
 function colored(png: PNG): number {
@@ -86,9 +86,13 @@ suite('Run', function () {
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
     await monitor.locator('canvas').focus()
+    const reading = () => monitor.locator('.lane [role="status"]').innerText()
     await until(
-      async () => /1\.0485/.test(await monitor.locator('.lane [role="status"]').innerText()),
-      'the plotted trace reads a native voltage',
+      async () => /1\.0485/.test(await reading()),
+      async () => {
+        const { status, follow } = bench.session.transport.state
+        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''}`
+      },
     )
     assert.ok(followed, 'The playhead follows a run as it arrives')
     const plot = PNG.sync.read(await monitor.locator('canvas').screenshot())
@@ -125,7 +129,7 @@ suite('Run', function () {
     bench.session.transport.seek(end / 2)
     await until(async () => (await frames(network)) > rested, 'a seek repaints the network')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
-    assert.equal(await network.locator('.canvas-host__fault:not([hidden])').count(), 0)
+    assert.equal(await network.locator('.canvas-host__notice:not([hidden])').count(), 0)
     await bench.capture('run-vscode')
   })
 
@@ -261,7 +265,7 @@ suite('Run', function () {
     )
   })
 
-  test('shows a native failure in Monitor and successfully retries after correction', async () => {
+  test('says once why a native run failed, keeps it out of the views, and retries after correction', async () => {
     const good = bench.document.getText()
     await bench.replace(good.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'))
     await bench.settled()
@@ -273,11 +277,18 @@ suite('Run', function () {
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'failed',
       'native initialization fails',
     )
+    // The one place an error is said: a notification, and the log behind it.
+    const shown = await until(async () => {
+      const found = await notifications()
+      return found.length ? found : undefined
+    }, 'the native error reported')
+    assert.equal(shown.length, 1, shown.join(' | '))
+    assert.match(shown[0]!, /Ispdlim/)
+    assert.equal(bench.studio.errors.splice(0).length, 1)
     monitor = await bench.view('monitor')
-    await until(
-      async () => /Ispdlim/.test(await monitor.locator('[role="alert"]').first().innerText()),
-      'native error shown in Monitor',
-    )
+    simulation = await bench.view('simulation')
+    for (const view of [monitor, simulation])
+      assert.equal(await view.locator('.c-note--error, [role="alert"]').count(), 0)
     await bench.replace(good)
     await bench.settled()
     await simulation.locator('[data-testid="study-run"]').click()

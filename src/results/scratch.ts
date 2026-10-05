@@ -6,20 +6,11 @@ import { randomUUID } from 'node:crypto'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import { alive } from '../gridkit/runtime.js'
+
 /** A new worker's folder under `root`. */
 export function scratchFolder(root: string): string {
   return join(root, `${process.pid}-${randomUUID().slice(0, 8)}`)
-}
-
-/** Whether process `pid` is running. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // It runs, as another user's.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 /** Delete everything under `root` but `own` and the folders of other extension hosts still

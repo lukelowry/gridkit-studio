@@ -5,7 +5,6 @@ import { parentPort, workerData } from 'node:worker_threads'
 import {
   type Arguments,
   blockBuffers,
-  blockByteLength,
   type DataBatch,
   type Parameters,
   type QueryBlock,
@@ -32,7 +31,7 @@ import {
   sourceRange,
   transaction,
 } from './gridkit/index.js'
-import { analysisLimit, analyze, compare, ScanBudget, snapshot } from './results/analysis.js'
+import { analysisLimit, analyze, compare, snapshot } from './results/analysis.js'
 import { importedFields, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
 import { rank, sibling } from './results/study.js'
@@ -87,7 +86,6 @@ async function discard(run: Results) {
     if (run.ownedDirectory) owners.delete(run.ownedDirectory)
   }
 }
-let analyzing = false
 const cache = new ResultCache()
 const scratch = workerData.scratch as string
 const cacheLimit = (value: number) => {
@@ -126,12 +124,11 @@ async function withTarget<T>(
   target: RunTarget,
   signal: AbortSignal,
   read: (result: Results) => Promise<T>,
-  budget: ScanBudget,
 ) {
   const current = findRun(target.run, target.uri, true)
   if (target.contingency === undefined || target.contingency === current.info.contingency?.shown)
     return read(current)
-  const result = await sibling(current, target.contingency, signal, false, budget)
+  const result = await sibling(current, target.contingency, signal, false)
   try {
     return await read(result)
   } finally {
@@ -281,52 +278,35 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         runtime: runtime.kind,
       }
     }
-    case 'analyze': {
-      const budget = new ScanBudget()
-      return withTarget(
-        request.input,
-        signal,
-        async (run) => {
-          const result = await analyze(run, request.input, signal, budget)
-          result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
-          return result
-        },
-        budget,
-      )
-    }
+    case 'analyze':
+      return withTarget(request.input, signal, async (run) => {
+        const result = await analyze(run, request.input, signal)
+        result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
+        return result
+      })
     case 'compare': {
       const input = request.input
-      const budget = new ScanBudget()
-      return withTarget(
-        input.before,
-        signal,
-        (before) =>
-          withTarget(
-            input.after,
-            signal,
-            async (after) => {
-              const left = snapshot(before)
-              const right = snapshot(after)
-              const window = input.window ?? [
-                Math.max(left.info.domain[0], right.info.domain[0]),
-                Math.min(left.info.domain[1], right.info.domain[1]),
-              ]
-              if (
-                window[0] > window[1] ||
-                window[0] < Math.max(left.info.domain[0], right.info.domain[0]) ||
-                window[1] > Math.min(left.info.domain[1], right.info.domain[1])
-              )
-                throw new Error('Comparison needs an interval covered by both runs.')
-              const options = { ...input, window: window as readonly [number, number] }
-              return compare(
-                await analyze(before, options, signal, budget, left),
-                await analyze(after, options, signal, budget, right),
-                analysisLimit(input.limit),
-              )
-            },
-            budget,
-          ),
-        budget,
+      return withTarget(input.before, signal, (before) =>
+        withTarget(input.after, signal, async (after) => {
+          const left = snapshot(before)
+          const right = snapshot(after)
+          const window = input.window ?? [
+            Math.max(left.info.domain[0], right.info.domain[0]),
+            Math.min(left.info.domain[1], right.info.domain[1]),
+          ]
+          if (
+            window[0] > window[1] ||
+            window[0] < Math.max(left.info.domain[0], right.info.domain[0]) ||
+            window[1] > Math.min(left.info.domain[1], right.info.domain[1])
+          )
+            throw new Error('Comparison needs an interval covered by both runs.')
+          const options = { ...input, window: window as readonly [number, number] }
+          return compare(
+            await analyze(before, options, signal, left),
+            await analyze(after, options, signal, right),
+            analysisLimit(input.limit),
+          )
+        }),
       )
     }
     case 'rank':
@@ -377,11 +357,6 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
       const kase = run?.kase ?? get(request.input).kase
       const query = request.input.query
-      if (
-        query.kind === 'rows' &&
-        (query.limit === undefined || query.limit > 100 || query.limit < 0)
-      )
-        throw new Error('Queries are limited to 100 rows.')
       const data = run
         ? await run.data(
             query.kind === 'rows' && query.at !== undefined ? [query.at, query.at] : undefined,
@@ -389,20 +364,12 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           )
         : kase.data
       const blocks: QueryBlock[] = []
-      const maxBytes = request.input.maxBytes ?? 64 << 20
-      if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 << 20)
-        throw new Error('Query byte budget must be between 1 byte and 64 MiB.')
-      let bytes = 0
       for await (const block of read(data, query, {
         signal,
         maxBlockBytes: BLOCK_BYTES,
         buffers: 'owned',
-      })) {
-        bytes += blockByteLength(block)
-        if (bytes > maxBytes)
-          throw new Error('Query exceeds its byte budget. Request fewer rows or fields.')
+      }))
         blocks.push(block)
-      }
       return blocks
     }
     case 'batches': {
@@ -415,23 +382,13 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           select: f.select.filter((name) => !kase.schema.types[f.from]!.fields[name]!.sampled),
         }))
         .filter((f) => f.select.length > 0)
-      const maxBytes = request.input.maxBytes ?? 64 << 20
-      let sentBytes = 0
-      const bounded = async (batch: DataBatch) => {
-        sentBytes += blockByteLength(batch)
-        if (sentBytes > maxBytes)
-          throw new Error(
-            `Visible data exceeds ${maxBytes >> 20} MiB. Narrow the time window or select fewer signals.`,
-          )
-        await emit(request.id, [batch], signal)
-      }
       if (request.input.includeStatic !== false)
         for await (const batch of selectBatches(kase.data, statics, {
           signal,
           maxBlockBytes: BLOCK_BYTES,
           buffers: 'owned',
         }))
-          await bounded(batch)
+          await emit(request.id, [batch], signal)
       // Pages are immutable once published: a view that holds the first of them asks for the rest.
       let pages = request.input.fromPage ?? 0
       if (run) {
@@ -448,7 +405,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             maxBlockBytes: BLOCK_BYTES,
             buffers: 'owned',
           }))
-            if (batch.kind === 'samples') await bounded(batch)
+            if (batch.kind === 'samples') await emit(request.id, [batch], signal)
         }
       }
       return { pages }
@@ -600,8 +557,6 @@ async function handle(request: Request, signal: AbortSignal) {
   const input = request.input
   const analysis =
     request.method === 'analyze' || request.method === 'compare' || request.method === 'rank'
-  if (analysis && analyzing)
-    throw new Error('An analysis is already running. Retry after it finishes or cancel it.')
   const targets =
     request.method === 'compare'
       ? [
@@ -611,13 +566,11 @@ async function handle(request: Request, signal: AbortSignal) {
       : request.method !== 'contingency' && 'run' in input && typeof input.run === 'string'
         ? [findRun(input.run, 'uri' in input ? input.uri : undefined, analysis)]
         : []
-  if (analysis) analyzing = true
   try {
     return await readers.use(targets.map(ownerOf), signal, (s) => dispatch(request, s))
   } finally {
     for (const target of targets)
       if (!histories.get(target.info.revision.uri)?.includes(target)) target.release()
-    if (analysis) analyzing = false
   }
 }
 port.on('message', (request: ToWorker) => {

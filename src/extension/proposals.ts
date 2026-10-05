@@ -10,7 +10,15 @@ type Content = Revision & {
   before: string
   after: string
 } & ({ kind: 'edit'; mutations: readonly Mutation[] } | { kind: 'run'; request: RunRequest })
-type Proposal = Content & { id: string; expires: number }
+type Proposal = Content & { id: string }
+type Status = 'pending' | 'applying' | 'applied' | 'started' | 'discarded' | 'stale' | 'failed'
+type Receipt = Revision & {
+  action: string
+  kind: Content['kind']
+  status: Status
+  message?: string
+  run?: string
+}
 
 /** The scheme of a proposal's preview, `gridkit-proposal://<id>/after.json`. */
 const SCHEME = 'gridkit-proposal'
@@ -30,9 +38,11 @@ function activeResource(): vscode.Uri | undefined {
       : undefined
 }
 
-/** Short-lived previews. Approval consumes the captured proposal exactly once. */
+/** Previews that last until they are approved or discarded, or their case changes. Approval
+ *  consumes the captured proposal exactly once. */
 export class Proposals implements vscode.Disposable {
   readonly #items = new Map<string, Proposal>()
+  readonly #receipts = new Map<string, Receipt>()
   readonly #disposables: vscode.Disposable[]
   constructor(
     readonly studio: Sessions,
@@ -41,7 +51,7 @@ export class Proposals implements vscode.Disposable {
     /** The proposal a title-bar button or the palette means: the one on show. */
     const target = (value?: unknown) => {
       const id = shown(value instanceof vscode.Uri ? value : activeResource())
-      if (!id) throw new Error('Open an AI proposal to review it first.')
+      if (!id) throw new Error('Open the changes or simulation preview first.')
       return id
     }
     this.#disposables = [
@@ -56,6 +66,7 @@ export class Proposals implements vscode.Disposable {
         this.review(typeof id === 'string' ? id : undefined),
       ),
       studio.command('gridkitStudio.approveAIProposal', (value) => this.approve(target(value))),
+      studio.command('gridkitStudio.runAIProposal', (value) => this.approve(target(value))),
       studio.command('gridkitStudio.discardAIProposal', (value) => this.discard(target(value))),
     ]
   }
@@ -63,52 +74,61 @@ export class Proposals implements vscode.Disposable {
     for (const [id, item] of this.#items) {
       const entry = this.studio.documents.entries.get(item.uri)
       if (
-        item.expires < Date.now() ||
         !entry ||
         entry.document.isClosed ||
         entry.document.version !== item.version ||
         entry.stale
       )
-        this.#items.delete(id)
+        this.#finish(id, 'stale')
     }
+  }
+  #finish(id: string, status: Status, message?: string) {
+    this.#items.delete(id)
+    const receipt = this.#receipts.get(id)
+    if (receipt) Object.assign(receipt, { status, message })
+  }
+  status(id: string): Record<string, unknown> {
+    this.prune()
+    const receipt = this.#receipts.get(id)
+    return receipt
+      ? { ...receipt }
+      : {
+          action: id,
+          status: 'unknown',
+          message: 'This action is unknown. Inspect the case and runs before trying again.',
+        }
   }
   get(id: string) {
     this.prune()
     const proposal = this.#items.get(id)
     if (!proposal)
       throw new Error(
-        'This proposal expired, was consumed, or its case changed. Create a new proposal.',
+        'This proposal was applied or discarded, or its case changed. Create a new proposal.',
       )
     return proposal
   }
   #add(proposal: Content) {
     this.prune()
-    const bytes = Buffer.byteLength(proposal.before) + Buffer.byteLength(proposal.after)
-    if (bytes > 4 << 20)
-      throw new Error('The review exceeds 4 MiB. Use native editing for this case.')
-    while (
-      this.#items.size >= 4 ||
-      [...this.#items.values()].reduce(
-        (n, item) => n + Buffer.byteLength(item.before) + Buffer.byteLength(item.after),
-        bytes,
-      ) >
-        8 << 20
-    )
-      this.#items.delete(this.#items.keys().next().value!)
-    const item = structuredClone({
-      ...proposal,
-      id: crypto.randomUUID(),
-      expires: Date.now() + 10 * 60_000,
-    })
+    const item = structuredClone({ ...proposal, id: crypto.randomUUID() })
     this.#items.set(item.id, item)
+    this.#receipts.set(item.id, {
+      action: item.id,
+      kind: item.kind,
+      uri: item.uri,
+      version: item.version,
+      status: 'pending',
+    })
     return {
       proposal: item.id,
+      action: item.id,
+      status: 'pending',
       kind: item.kind,
       revision: { uri: item.uri, version: item.version },
-      expires: item.expires,
       reviewCommand: 'gridkitStudio.reviewAIProposal',
       instruction:
-        'Use GridKit Studio: Review AI Proposal in the Command Palette to open the preview, then approve or discard it from its title bar. Nothing has been applied or started.',
+        item.kind === 'edit'
+          ? 'The diff opens in VS Code. Choose Apply changes or Discard in its title bar. Nothing has been applied. Use action_status to check the outcome.'
+          : 'The simulation preview opens in VS Code. Choose Run simulation or Discard in its title bar. Nothing has started. Use action_status to check the outcome.',
     }
   }
   edit(revision: Revision, mutations: readonly Mutation[], edits: readonly SourceEdit[]) {
@@ -116,10 +136,6 @@ export class Proposals implements vscode.Disposable {
     const document = this.studio.documents.entries.get(revision.uri)!.document
     if (!isWritable(document)) throw new Error('This document is read-only.')
     const before = document.getText()
-    if (Buffer.byteLength(before) > 2 << 20)
-      throw new Error(
-        'AI edit previews support cases up to 2 MiB. Use native editing for this case.',
-      )
     let after = before
     for (const edit of [...edits].sort((a, b) => b.offset - a.offset))
       after = after.slice(0, edit.offset) + edit.text + after.slice(edit.offset + edit.length)
@@ -157,15 +173,17 @@ export class Proposals implements vscode.Disposable {
             id: item.id,
           })),
           {
-            title: 'Review AI Proposal',
-            placeHolder: this.#items.size ? 'Choose a proposal to review' : 'No current proposals',
+            title: 'Preview AI changes or simulation',
+            placeHolder: this.#items.size
+              ? 'Choose changes or a simulation to preview'
+              : 'No pending changes or simulations',
           },
         )
       )?.id
     if (!id) return
     const proposal = this.get(id)
-    const after = vscode.Uri.parse(`${SCHEME}://${id}/after.json`)
-    const title = `${proposal.title} (AI proposal for revision ${proposal.version})`
+    const after = vscode.Uri.parse(`${SCHEME}://${id}/${proposal.kind}.json`)
+    const title = `${proposal.title} (revision ${proposal.version})`
     if (proposal.kind === 'edit')
       await vscode.commands.executeCommand(
         'vscode.diff',
@@ -182,20 +200,38 @@ export class Proposals implements vscode.Disposable {
   /** Apply proposal `id`'s edits, or start its run, once. */
   async approve(id: string) {
     const proposal = this.get(id)
+    if ([...this.#receipts.values()].some((receipt) => receipt.status === 'applying'))
+      throw new Error('Another AI action is being applied. Wait for it to finish.')
     this.studio.documents.require(proposal)
-    this.#items.delete(id)
-    await this.#close(id)
-    if (proposal.kind === 'edit')
-      await this.studio.documents.transact(
-        proposal.uri,
-        proposal.version,
-        proposal.mutations,
-        'Apply AI proposal',
-      )
-    else await this.tasks.run(proposal.uri, proposal.request)
+    this.#finish(id, 'applying')
+    try {
+      await this.#close(id)
+      if (proposal.kind === 'edit') {
+        await this.studio.documents.transact(
+          proposal.uri,
+          proposal.version,
+          proposal.mutations,
+          'Apply AI changes',
+        )
+        this.#finish(id, 'applied')
+      } else {
+        const before = this.studio.all?.get(proposal.uri)?.run?.id
+        await this.tasks.run(proposal.uri, proposal.request)
+        const run = this.studio.all?.get(proposal.uri)?.run
+        if (!run || run.id === before)
+          throw new Error('The simulation task ended before a new run started.')
+        this.#finish(id, 'started')
+        const receipt = this.#receipts.get(id)
+        if (receipt) receipt.run = run.id
+      }
+    } catch (error) {
+      this.#finish(id, 'failed', error instanceof Error ? error.message : String(error))
+      throw error
+    }
   }
   async discard(id: string) {
-    this.#items.delete(id)
+    this.get(id)
+    this.#finish(id, 'discarded')
     await this.#close(id)
   }
   /** Close the editors that preview proposal `id`. */
@@ -212,6 +248,7 @@ export class Proposals implements vscode.Disposable {
   }
   dispose() {
     this.#items.clear()
+    this.#receipts.clear()
     for (const disposable of this.#disposables) disposable.dispose()
   }
 }

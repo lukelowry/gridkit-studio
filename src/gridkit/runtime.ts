@@ -4,6 +4,7 @@ import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, stat, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
@@ -12,6 +13,59 @@ import { message } from '../shared/format.js'
 import type { GridKit, Program, RuntimeProcess } from '../shared/messages.js'
 /** Where a container sees the run's folder. */
 const MOUNT = '/simulation'
+/** The label that names the machine a run's container was started from. */
+const MACHINE = 'gridkit-studio.machine=' + hostname()
+
+/** Whether process `pid` is running. */
+export function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // It runs, as another user's.
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** A run's container name: the extension host that started it, then a part of its own. */
+const containerName = () => `gridkit-studio-${process.pid}-${randomUUID().slice(0, 8)}`
+
+/** Of the container `names`, those whose extension host has exited. */
+export function abandoned(names: readonly string[]): string[] {
+  return names.filter((name) => {
+    const pid = Number(/^gridkit-studio-(\d+)-/.exec(name.trim())?.[1])
+    return pid > 0 && !alive(pid)
+  })
+}
+
+const swept = new Map<string, Promise<void>>()
+/** Remove the containers this machine's closed windows left running: a window that closes mid-run
+ *  may not live to remove its own. Once per container CLI. */
+function sweepContainers(cli: string): Promise<void> {
+  let sweep = swept.get(cli)
+  if (!sweep)
+    swept.set(
+      cli,
+      (sweep = new Promise((resolve) =>
+        execFile(
+          cli,
+          ['ps', '--all', '--filter', 'label=' + MACHINE, '--format', '{{.Names}}'],
+          { windowsHide: true, timeout: 10_000 },
+          (error, stdout) => {
+            const left = error ? [] : abandoned(stdout.split(/\r?\n/))
+            if (!left.length) return resolve()
+            execFile(
+              cli,
+              ['rm', '--force', ...left.map((name) => name.trim())],
+              { windowsHide: true, timeout: 30_000 },
+              () => resolve(),
+            )
+          },
+        ),
+      )),
+    )
+  return sweep
+}
 
 /** How a run starts a GridKit program: installed here, or in a container of `image`. */
 export type Runtime =
@@ -148,7 +202,8 @@ export async function available(
 }
 
 /** The container CLI's arguments that run `program` in `image` on the run in `directory`: a
- *  container named `name`, removed when it ends, with no network, from the local image only. */
+ *  container named `name` and labelled with this machine, removed when it ends, with no network,
+ *  from the local image only. */
 export function containerArgs(
   program: Program,
   image: string,
@@ -169,6 +224,8 @@ export function containerArgs(
     'never',
     '--name',
     name,
+    '--label',
+    MACHINE,
     '--network',
     'none',
     // SELinux hosts let the container write the folder only once it is labeled for it.
@@ -215,9 +272,9 @@ export async function launch(
   const runtime = await available(gridkit, program)
   signal.throwIfAborted()
   const container =
-    runtime.kind === 'container'
-      ? { cli: runtime.cli, name: 'gridkit-studio-' + randomUUID() }
-      : undefined
+    runtime.kind === 'container' ? { cli: runtime.cli, name: containerName() } : undefined
+  // Not awaited: a slow engine never delays the run, and this host's runs are never removed.
+  if (container) void sweepContainers(container.cli)
   const [command, args] =
     runtime.kind === 'installed'
       ? [runtime.program, ['input.json']]

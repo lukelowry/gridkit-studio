@@ -82,8 +82,6 @@ export async function readResults(
   let lastTime = -Infinity
   let yielded = performance.now()
   const frameBytes = 8 * (1 + outputs.reduce((n, field) => n + field.rows.length, 0))
-  if (frameBytes > BATCH_BYTES)
-    throw failure('resource-limit', 'One selected frame exceeds the batch budget.')
   const perBatch = Math.max(1, Math.floor(BATCH_BYTES / frameBytes))
   const staging = new Staging(outputs.map((field) => field.rows.length))
   try {

@@ -21,7 +21,12 @@ const common = {
 }
 const builds = [
   {
-    entryPoints: { extension: 'src/extension/index.ts', worker: 'src/worker.ts' },
+    entryPoints: {
+      extension: 'src/extension/index.ts',
+      worker: 'src/worker.ts',
+      mcp: 'src/mcp.ts',
+      'mcp-server': 'src/extension/mcp-server.ts',
+    },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },
     platform: 'node',
@@ -50,7 +55,14 @@ const builds = [
 for (const options of builds) {
   const config = { ...common, ...options }
   if (watch) await (await context(config)).watch()
-  else await build(config)
+  else {
+    const result = await build({ ...config, metafile: true })
+    for (const name of ['dist/extension.cjs', 'dist/mcp.cjs']) {
+      const inputs = Object.keys(result.metafile.outputs[name]?.inputs ?? {})
+      if (inputs.some((path) => path.includes('@modelcontextprotocol')))
+        throw new Error('MCP SDK must remain in the lazy server bundle: ' + name)
+    }
+  }
 }
 
 await copyFile('assets/borders.bin', 'dist/webview/borders.bin')

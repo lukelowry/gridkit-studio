@@ -129,4 +129,25 @@ suite('Case', () => {
       /changed/,
     )
   })
+
+  test('follows the active case, and only its rows reach the panel', async () => {
+    const { uri } = await bench.openCase('cases/TwoArea.case.json')
+    // Back to the first case while the panel may still be loading the second.
+    await vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri)
+    await vscode.commands.executeCommand('gridkitStudio.openCasePanel', bench.uri)
+    // Each case the panel takes up loads a page of its own, so the page is found again each look.
+    const rows = String(bench.source.buses.length + 2)
+    await until(async () => {
+      view = await bench.view('case')
+      return (
+        (await view
+          .locator('table')
+          .getAttribute('aria-rowcount')
+          .catch(() => null)) === rows
+      )
+    }, "the panel shows the first case's buses alone")
+    await bench.capture('case-switched')
+    // The next suite starts from the first case alone, its panels on it.
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+  })
 })

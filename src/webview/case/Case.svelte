@@ -7,7 +7,6 @@
   import { channelsOf, shortNames } from '../../shared/bindings.js'
   import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import { message } from '../../shared/format.js'
   import type { ViewState } from '../../shared/messages.js'
   import { elementType, isReference, typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
@@ -33,7 +32,6 @@
   let order = $state<{ field: string; direction: 'ascending' | 'descending' } | undefined>()
   let offset = $state(0)
   let total = $state(0)
-  let error = $state('')
   let loading = $state(false)
   let rows = $state<ReturnType<typeof rowsOf>>([])
   let editing = $state<{ id: string; field: string; text: string; version: number } | undefined>()
@@ -123,7 +121,6 @@
     const request = (controller = new AbortController())
     const current = ++generation
     loading = true
-    error = ''
     try {
       // The filter matches a row's name, else its identity.
       const named = allFields.includes('name') ? 'name' : identity
@@ -149,7 +146,7 @@
       rows = rowsOf(blocks, references)
       total = blocks[0]?.total ?? rows.length
     } catch (reason) {
-      if (generation === current && !request.signal.aborted) error = message(reason)
+      if (generation === current && !request.signal.aborted) bridge.report(reason)
     } finally {
       if (generation === current) loading = false
     }
@@ -233,7 +230,7 @@
         label: 'Edit ' + leaf(edit.field),
       })
     } catch (reason) {
-      error = message(reason)
+      bridge.report(reason)
     }
   }
   async function reveal(id: string) {
@@ -258,7 +255,7 @@
         if (scroll) scroll.scrollTop = row.row * height
       }
     } catch (reason) {
-      error = message(reason)
+      bridge.report(reason)
     }
   }
   onMount(() => {
@@ -307,14 +304,15 @@
 </script>
 
 <main class="case">
-  {#if view.error}
-    <p class="c-note c-note--error" role="alert">{view.error}</p>
+  {#if !view.summary && view.error}
+    <p class="c-note c-note--warn" role="status">
+      The case shows once the problems listed in Problems are fixed.
+    </p>
   {:else if view.stale && view.summary}
     <p class="c-note c-note--warn" role="status">
-      Source is updating or invalid. Showing the last valid revision; editing is paused.
+      Showing the last valid revision until the source is fixed. Editing waits for it.
     </p>
   {/if}
-  {#if error}<p class="c-note c-note--error" role="alert">{error}</p>{/if}
   {#if view.summary}
     <div class="case__bar">
       <div class="case__type">

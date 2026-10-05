@@ -2,8 +2,6 @@
 
 import { failure } from '@latkit/model'
 
-import { MESSAGE_BYTES } from './limits.js'
-
 export interface ArrowField {
   readonly name: string
   readonly nullable: boolean
@@ -203,8 +201,6 @@ class Unread {
       const prefix = first === CONTINUATION ? 8 : 4
       if (this.#length < prefix) return null
       const size = prefix === 8 ? this.#uint32(4) : first
-      if (size > MESSAGE_BYTES)
-        throw failure('resource-limit', 'Arrow metadata exceeds the message budget.')
       if (size === 0) {
         this.#drop(prefix)
         return 'end'
@@ -214,12 +210,8 @@ class Unread {
       const metadata = this.#metadata.subarray(0, size)
       this.#copy(prefix, metadata)
       const { header, bodyLength } = parseMessage(metadata)
-      if (
-        !Number.isSafeInteger(bodyLength) ||
-        bodyLength < 0 ||
-        prefix + size + bodyLength > MESSAGE_BYTES
-      )
-        throw failure('resource-limit', 'Arrow message exceeds the message budget.')
+      if (!Number.isSafeInteger(bodyLength) || bodyLength < 0)
+        throw failure('io', 'An Arrow message has an invalid body length.')
       this.#pending = { header, start: prefix + size, body: bodyLength }
     }
     const { header, start, body } = this.#pending

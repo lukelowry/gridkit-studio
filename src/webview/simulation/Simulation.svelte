@@ -95,16 +95,20 @@
   })
 
   /** Choices for the elements of `type`, labeled by short id, and name where it differs. Choices
-   *  that failed to load are asked for again the next time the form shows them. */
+   *  that failed to load are reported, and asked for again the next time the form shows them. */
   function elements(type: string): Promise<readonly Choice[]> {
-    const choices = (read[type] ??= bridge.request('elements', { type }).then((found) =>
+    const cached = read[type]
+    if (cached) return cached
+    const choices = bridge.request('elements', { type }).then((found) =>
       found.map(({ id, name }) => {
         const short = id.slice(type.length + 1)
         return { value: id, label: name !== '' && name !== short ? `${short} - ${name}` : short }
       }),
-    ))
-    choices.catch(() => {
+    )
+    read[type] = choices
+    choices.catch((reason) => {
       if (read[type] === choices) delete read[type]
+      bridge.report(reason)
     })
     return choices
   }
@@ -144,11 +148,13 @@
 
 <div class="study c-settings" data-testid="study-panel">
   {#if !summary}
-    {#if view.error}
-      <p class="c-note c-note--error" role="alert">{view.error}</p>
-    {:else}
-      <div class="c-empty"><p class="c-empty__text">Loading case…</p></div>
-    {/if}
+    <div class="c-empty">
+      <p class="c-empty__text">
+        {view.error
+          ? 'The case can run once the problems listed in Problems are fixed.'
+          : 'Loading case…'}
+      </p>
+    </div>
   {:else}
     <div class="study__draft">
       <div class="study__bar">
@@ -169,7 +175,7 @@
             type="button"
             class="c-btn c-btn--sm"
             title={view.stale
-              ? 'Resolve case errors to run'
+              ? 'Run waits for a valid revision of the case'
               : invalid
                 ? 'Fix the form to run'
                 : selectedCount === 0
@@ -202,11 +208,7 @@
         {/if}
       </div>
       {#if view.stale}
-        <p class="c-note c-note--warn" role="status">
-          {view.error ?? 'Source is updating. Wait for the current revision before running.'}
-        </p>
-      {:else if run?.state === 'failed' && run.message}
-        <p class="c-note c-note--error" role="alert">{run.message}</p>
+        <p class="c-note c-note--warn" role="status">Run waits for a valid revision of the case.</p>
       {/if}
       {#if study && run?.state === 'complete'}
         <Select

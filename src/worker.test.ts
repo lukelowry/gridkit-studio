@@ -121,7 +121,7 @@ describe('real worker protocol', () => {
       await stop()
     }
   })
-  it('sends a view that holds a run only the pages it lacks, within the bytes it allows', async () => {
+  it('sends a view that holds a run only the pages it lacks', async () => {
     const rig = await start()
     const { scratch, batches, call, stop } = rig
     rig.acknowledge = true
@@ -175,10 +175,6 @@ describe('real worker protocol', () => {
       await call('batches', { ...stream, window: [0.1, 0.2] }).done
       expect(frames()).toBeGreaterThan(0)
       expect(frames()).toBeLessThan(200)
-
-      await expect(call('batches', { ...stream, maxBytes: 64 }).done).rejects.toThrow(
-        /Visible data exceeds/,
-      )
 
       const analysis = { uri: revision.uri, run: run.id, from: 'Bus', field: 'Vm' }
       const measured = await call('analyze', analysis).done

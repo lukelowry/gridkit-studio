@@ -80,7 +80,8 @@ export function plotsOf({ run, plots = [] }: ViewState): Plot[] {
 
 /** What keeps the export from starting, in words; null when it can. */
 export function blockedReason(settings: VideoSettings, state: ViewState): string | null {
-  if (!state.summary && state.error) return state.error
+  if (!state.summary && state.error)
+    return 'The case can export once the problems listed in Problems are fixed.'
   const range = state.run?.domain
   if (!state.summary || !range || !(range[1] > range[0]))
     return 'Run a simulation to export its recorded history.'

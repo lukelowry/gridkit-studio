@@ -1,5 +1,5 @@
-/** The Simulation view without running GridKit: its fields, a fault's bus, and the signals
- *  the next run records. */
+/** The Simulation view without running GridKit: its fields, a fault's bus, the signals the next
+ *  run records, and a run that cannot start. */
 
 import assert from 'node:assert/strict'
 
@@ -7,7 +7,7 @@ import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until, visible } from './harness.js'
+import { notifications, type TestHost, testHost, until, visible } from './harness.js'
 
 suite('Simulation', () => {
   let bench: TestHost
@@ -82,5 +82,23 @@ suite('Simulation', () => {
       async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
       'Run ready',
     )
+  })
+
+  test('says once why a run from the Tasks menu could not start, as Run does', async () => {
+    await bench.replace(bench.text.replace('{', '{,'))
+    await until(() => bench.studio.state(bench.key).stale, 'the case invalid')
+    const [task] = (await vscode.tasks.fetchTasks({ type: 'gridkit' })).filter(
+      (task) => task.definition.case === bench.key,
+    )
+    assert.ok(task, 'The case offers its run as a task')
+    await vscode.tasks.executeTask(task)
+    const shown = await until(async () => {
+      const found = await notifications()
+      return found.length ? found : undefined
+    }, 'why the run could not start')
+    assert.equal(shown.length, 1, shown.join('\n'))
+    await until(() => !bench.session.launching, 'Starting… ends')
+    await bench.replace(bench.text)
+    await bench.settled()
   })
 })

@@ -30,19 +30,28 @@ docker pull ghcr.io/lukelowry/gridkit:latest
 
 ## Features
 
-- Network and diagram editors
+- Network editor
 - Case panel for editing fields and mapping them onto the network
-- Dynamic simulation and contingency analysis
-- Monitor for plotting and playing back signals
-- Video export to MP4 or WebM
 
 ![ACTIVSg25k during a fault with voltage magnitude shown as color and height](docs/media/activsg25k.png)
 
 _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
+- Diagram editor for control blocks and how they're wired
+
+![An IEEE39 generator with its exciter and stabilizer in the diagram](docs/media/diagram.png)
+
+_An IEEE39 generator with its exciter and stabilizer in the diagram_
+
+- Dynamic simulation and contingency analysis
+- Monitor for plotting and playing back signals
+
 ![IEEE39 during a fault with voltage magnitude on the network and in the Monitor](docs/media/monitor.png)
 
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
+
+- Video export to MP4 or WebM
+- Chat tools so agents can read your cases and results, and propose edits or simulations for you to approve
 
 ## Author
 

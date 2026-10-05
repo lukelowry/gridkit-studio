@@ -2,7 +2,7 @@
 
 import type { FieldSelection } from '@latkit/model'
 
-/** Every channel, in Mappings panel order; `option` is the renderer style option it sets. */
+/** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
   vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radiusPx' },
@@ -53,6 +53,15 @@ export function recordedWhole(
 /** The channels a type drawn as `placement` offers. */
 export function channelsFor(placement: 'vertex' | 'edge' | null): readonly Channel[] {
   return ALL.filter((channel) => CHANNELS[channel].placement === placement)
+}
+
+/** The value range `field` is mapped over; none measures its values. */
+export function domainOf(
+  bindings: Bindings,
+  field: FieldRef,
+): readonly [number, number] | undefined {
+  return ALL.map((channel) => bindings[channel]).find((binding) => sameField(binding, field))
+    ?.domain
 }
 
 /** The channels bound to `field`. */

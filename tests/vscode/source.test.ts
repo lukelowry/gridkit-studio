@@ -21,7 +21,7 @@ suite('Case source', () => {
 
   test('leaves the last valid case on show, marked, while it is invalid', async () => {
     const { document, text } = bench
-    const table = await bench.show('table')
+    const table = await bench.show('case')
     const invalid = new vscode.WorkspaceEdit()
     invalid.insert(bench.uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)
@@ -55,7 +55,7 @@ suite('Case source', () => {
     await bench.studio.documents.edit(
       bench.key,
       (await bench.current()).version,
-      { id: 'Bus/' + bus!.number, field: 'kv' },
+      { id: 'Bus/' + bus!.number, field: 'params.kv' },
       bus!.params.kv + 1,
     )
     await bench.settled()

@@ -12,6 +12,7 @@ import type {
 } from '@latkit/model'
 import { failure, selectRows, validateSelection } from '@latkit/model'
 
+import { type Program, PROGRAMS } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { Catalog, OptionSpec } from './definition.js'
 
@@ -27,8 +28,11 @@ export interface Fault {
 }
 
 export interface SimulationCommand {
+  readonly program: Program
   readonly options: readonly { readonly option: OptionSpec; readonly value: number | string }[]
-  readonly fault: Fault | null
+  /** The faults the run adds: none or one for a simulation, one on every bus for an analysis,
+   *  which faults each in turn. */
+  readonly faults: readonly Fault[]
   /** The times the run covers: from 0 to its end time. */
   readonly domain: Domain
 }
@@ -44,9 +48,15 @@ export interface Field {
 }
 
 export function parametersOf(catalog: Catalog): CommandParameters {
-  const parameters: Record<string, Parameter> = Object.fromEntries(
-    catalog.options.map((option) => [option.id, parameterOf(option)]),
-  )
+  const parameters: Record<string, Parameter> = {
+    program: {
+      label: 'Study',
+      type: 'choice',
+      choices: Object.keys(PROGRAMS),
+      default: 'DynamicSimulation',
+    },
+    ...Object.fromEntries(catalog.options.map((option) => [option.id, parameterOf(option)])),
+  }
   if (catalog.shapes.has(FAULT))
     Object.assign(parameters, {
       fault: { label: 'Fault', type: 'boolean', default: false },
@@ -90,7 +100,7 @@ function parameterOf(option: OptionSpec): Parameter {
 }
 
 /** The run `values` describe. They have passed their parameters' types, choices and inclusive
- *  bounds; this checks exclusive bounds and the fault. */
+ *  bounds; this checks exclusive bounds and the faults. */
 export function commandOf(kase: Case, values: Arguments<CommandParameters>): SimulationCommand {
   const problems: Problem[] = []
   const problem = (name: string, message: string) =>
@@ -108,31 +118,42 @@ export function commandOf(kase: Case, values: Arguments<CommandParameters>): Sim
     if (upper?.inclusive === false && value >= upper.value)
       problem(option.id, `${option.label} must be below ${upper.value}.`)
   }
-  let fault: Fault | null = null
-  if (values.fault === true) {
+  const program = (values.program ?? 'DynamicSimulation') as Program
+  const faulted = program === 'ContingencyAnalysis' || values.fault === true
+  const on = (bus: number): Fault => ({
+    bus,
+    start: values.fault_start as number,
+    duration: values.fault_duration as number,
+    resistance: values.fault_R as number,
+    reactance: values.fault_X as number,
+  })
+  if (
+    faulted &&
+    (values.fault_start as number) + (values.fault_duration as number) > (values.tmax as number)
+  )
+    problem('fault_duration', 'The fault must clear by the end time.')
+  let faults: Fault[] = []
+  if (program === 'ContingencyAnalysis') {
+    const buses = kase.table(kase.catalog.bus)
+    faults = Array.from(buses.records, (_, row) => on(kase.native(buses, row) as number))
+    if (!faults.length) problem('program', 'Contingency analysis needs a bus to fault.')
+  } else if (values.fault === true) {
     const found = typeof values.fault_bus === 'string' ? kase.locate(values.fault_bus) : null
     if (found?.table.shape.type !== kase.catalog.bus)
       problem('fault_bus', 'The fault must reference a bus in this case.')
-    if (
-      (values.fault_start as number) + (values.fault_duration as number) >
-      (values.tmax as number)
-    )
-      problem('fault_duration', 'The fault must clear by the end time.')
-    if (found)
-      fault = {
-        bus: kase.native(found.table, found.row) as number,
-        start: values.fault_start as number,
-        duration: values.fault_duration as number,
-        resistance: values.fault_R as number,
-        reactance: values.fault_X as number,
-      }
+    else faults = [on(kase.native(found.table, found.row) as number)]
   }
   if (problems.length) throw failure('invalid-input', problems[0]!.message, { issues: problems })
   const options = kase.catalog.options.flatMap((option) => {
     const value = values[option.id]
     return value === undefined ? [] : [{ option, value: value as number | string }]
   })
-  const events = fault === null ? [] : [fault.start, fault.start + fault.duration]
+  const events = faulted
+    ? [
+        values.fault_start as number,
+        (values.fault_start as number) + (values.fault_duration as number),
+      ]
+    : []
   const frames = framesOf(values.dt_monitor as number, values.tmax as number, events)
   if (!Number.isSafeInteger(frames) || frames < 0)
     throw failure(
@@ -140,8 +161,9 @@ export function commandOf(kase: Case, values: Arguments<CommandParameters>): Sim
       'The requested interval produces an unrepresentable frame count.',
     )
   return {
+    program,
     options,
-    fault,
+    faults,
     domain: [0, values.tmax as number],
   }
 }
@@ -191,7 +213,7 @@ function sorted(axis: RowAxis): Uint32Array {
   return rows
 }
 
-/** Frames DynamicSimulation writes: one at the start and after each event, then one per interval of
+/** Frames GridKit writes for each run: one at the start and after each event, then one per interval of
  *  each span, or its end alone at interval 0. A time within rounding of a span's end is that end. */
 function framesOf(interval: number, end: number, events: readonly number[]): number {
   let count = 1 + events.length

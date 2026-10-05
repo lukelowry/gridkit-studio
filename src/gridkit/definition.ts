@@ -1,4 +1,5 @@
-/** The catalog as a Schema, with each table's plan for the parser. */
+/** The catalog as a Schema, with each table's plan for the parser. A field is named by its path in
+ *  the record, `params.kv` or `init.Vr`; a sampled output by GridKit's name for it, `Vm`. */
 
 import type { Bounds, DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
 import { failure } from '@latkit/model'
@@ -25,6 +26,16 @@ interface ClassSpec {
   readonly init: readonly { readonly id: string; readonly unit?: string }[]
   readonly ports: readonly PortSpec[]
   readonly outputs: readonly { readonly id: string; readonly unit?: string }[]
+  /** What GridKit's cases keep under `extension`. A type's two geographic numbers place it on a
+   *  map, longitude then latitude; a geographic route bends an edge. */
+  readonly extension?: readonly ExtensionSpec[]
+}
+
+interface ExtensionSpec {
+  readonly id: string
+  readonly type?: 'real' | 'flag' | 'route'
+  readonly unit?: string
+  readonly geographic?: boolean
 }
 
 interface ParamSpec {
@@ -54,13 +65,15 @@ export interface OptionSpec {
 
 export type ArrayName = 'buses' | 'signals' | 'devices'
 
-/** Where a field's value is in its record. */
+/** Where a field's value is in its record. A key the catalog does not know is `found` at its
+ *  path; an object or array there is kept as its JSON text. */
 type FieldSource =
   | {
-      readonly kind: 'identity' | 'record' | 'parameter' | 'initial' | 'header' | 'port' | 'output'
+      readonly kind:
+        'identity' | 'record' | 'parameter' | 'initial' | 'extension' | 'header' | 'port' | 'output'
       readonly name: string
     }
-  | { readonly kind: 'position' | 'route' }
+  | { readonly kind: 'found'; readonly path: readonly string[]; readonly json: boolean }
 
 export interface FieldPlan {
   readonly required?: boolean
@@ -133,20 +146,39 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
   for (const port of spec.ports)
     if (parameters.has(port.name))
       throw failure('invalid-input', `${spec.name}.${port.name} is both a parameter and a port.`)
-  const typeOf = (param: ParamSpec): DataType =>
-    param.type === 'flag' ? 'boolean' : param.type === 'integer' ? 'int32' : 'float64'
-  const field = (name: string, type: DataType, source: FieldSource, unit?: string): FieldPlan => ({
+  const typeOf = (spec: ParamSpec | ExtensionSpec): DataType =>
+    spec.type === 'flag'
+      ? 'boolean'
+      : spec.type === 'integer'
+        ? 'int32'
+        : spec.type === 'route'
+          ? ROUTE
+          : 'float64'
+  const field = (
+    name: string,
+    type: DataType,
+    source: FieldSource,
+    unit?: string,
+    geographic?: boolean,
+  ): FieldPlan => ({
     name,
     source,
-    definition: { type, nullable: true, ...(unit !== undefined && { unit }) },
+    definition: {
+      type,
+      nullable: true,
+      ...(unit !== undefined && { unit }),
+      ...(geographic && { geographic }),
+    },
   })
+  // An output shares the namespace of the record's keys; one that takes a key's name is named by
+  // where it is listed, `mon.id`.
+  const keys = new Set(['number', 'id', 'name', 'class'])
   return compile(
     {
       type: spec.name,
       kind,
       array: kind === 'bus' ? 'buses' : 'devices',
-      identity:
-        kind === 'bus' ? { name: 'number', type: 'uint32' } : { name: 'name', type: 'text' },
+      identity: kind === 'bus' ? { name: 'number', type: 'uint32' } : { name: 'id', type: 'text' },
     },
     {
       label: spec.label,
@@ -155,38 +187,30 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
     [
       ...(kind === 'bus' ? [field('name', 'text', { kind: 'record', name: 'name' })] : []),
       ...spec.params.map((param) =>
-        field(param.id, typeOf(param), { kind: 'parameter', name: param.id }, param.unit),
+        field(
+          `params.${param.id}`,
+          typeOf(param),
+          { kind: 'parameter', name: param.id },
+          param.unit,
+        ),
       ),
       ...spec.init.map((init) =>
         field(`init.${init.id}`, 'float64', { kind: 'initial', name: init.id }, init.unit),
       ),
-      ...(kind === 'bus'
-        ? [
-            {
-              name: 'position',
-              source: { kind: 'position' as const },
-              definition: {
-                type: POINT,
-                nullable: true,
-                geographic: true,
-                description: '[longitude, latitude]',
-              },
-            },
-          ]
-        : []),
-      ...(spec.name === 'Branch'
-        ? [
-            {
-              name: 'route',
-              source: { kind: 'route' as const },
-              definition: { type: ROUTE, nullable: true, geographic: true },
-            },
-          ]
-        : []),
+      ...(spec.extension ?? []).map((extension) =>
+        field(
+          `extension.${extension.id}`,
+          typeOf(extension),
+          { kind: 'extension', name: extension.id },
+          extension.unit,
+          extension.geographic,
+        ),
+      ),
       ...spec.outputs.map((output): FieldPlan => ({
-        name: output.id,
+        name: keys.has(output.id) ? `mon.${output.id}` : output.id,
         source: { kind: 'output', name: output.id },
         definition: {
+          label: output.id,
           type: 'float64',
           sampled: true,
           nullable: true,
@@ -194,7 +218,7 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
         },
       })),
       ...spec.ports.map((port): PortPlan => ({
-        name: port.kind === 'signal' ? `ports.${port.name}` : port.name,
+        name: `ports.${port.name}`,
         source: { kind: 'port', name: port.name },
         required: port.required === true,
         definition: {
@@ -237,17 +261,37 @@ function caseShape(): Shape {
     },
     { label: CASE },
     [
-      ...['name', 'description', 'comments'].map((name): FieldPlan => ({
-        name,
-        source: { kind: 'header', name: `case_${name}` },
+      ...['case_name', 'case_description', 'case_comments'].map((name): FieldPlan => ({
+        name: `header.${name}`,
+        source: { kind: 'header', name },
         definition: { type: 'text', nullable: true },
       })),
       ...['freq_base', 'va_base'].map((name): FieldPlan => ({
-        name,
+        name: `params.${name}`,
         source: { kind: 'parameter', name },
         definition: { type: 'float64', nullable: true },
       })),
     ],
+  )
+}
+
+/** The shape of a device class the catalog does not know: its records keep their `id`, and every
+ *  member they have is found as it is. */
+export function unknownShape(type: string): Shape {
+  return compile(
+    { type, kind: 'device', array: 'devices', identity: { name: 'id', type: 'text' } },
+    { label: type, description: 'Not in the catalog' },
+    [],
+  )
+}
+
+/** `shape` with `found` fields after its own. */
+export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
+  const { fields: _, ...definition } = shape.definition
+  return compile(
+    shape,
+    definition,
+    [...shape.plan.values()].filter(({ source }) => source.kind !== 'identity').concat(found),
   )
 }
 

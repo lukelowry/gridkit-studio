@@ -88,10 +88,10 @@ export function nativePath(field: FieldPlan): string[] {
       return ['init', source.name]
     case 'port':
       return ['ports', source.name]
-    case 'position':
-      return ['extension']
-    case 'route':
-      return ['extension', 'polyline']
+    case 'extension':
+      return ['extension', source.name]
+    case 'found':
+      return [...source.path]
     case 'output':
       return ['mon']
   }
@@ -121,8 +121,10 @@ export function sourceRange(kase: Case, id: string, field?: string): SourceRange
     : { offset: record.offset, length: 1 }
 }
 
+/** Whether a field's value is edited in place: not an identity or output, nor a found object. */
 export function editable(plan: FieldPlan): boolean {
-  return !['identity', 'output'].includes(plan.source.kind)
+  const { source } = plan
+  return !['identity', 'output'].includes(source.kind) && !(source.kind === 'found' && source.json)
 }
 
 /** The edit setting `field` of row `id` to `input`; against `recordText`, at offset 0, if given. */
@@ -159,14 +161,7 @@ export function editField(
       if (!target || target.table.shape.type !== type.to)
         throw failure('invalid-input', `Choose an existing ${type.to} reference.`)
       value = kase.native(target.table, target.row)
-    } else if (plan.source.kind === 'position') {
-      if (
-        !Array.isArray(value) ||
-        value.length !== 2 ||
-        !value.every((n) => typeof n === 'number' && Number.isFinite(n))
-      )
-        throw failure('invalid-input', 'A position is [longitude, latitude].')
-    } else if (plan.source.kind === 'route') {
+    } else if (type.kind === 'list') {
       if (
         !Array.isArray(value) ||
         !value.every(
@@ -180,36 +175,48 @@ export function editField(
     }
   } else if (!definition.nullable || plan.required)
     throw failure('invalid-input', 'This field cannot be null.')
-  const paths =
-    plan.source.kind === 'position'
-      ? [
-          { path: ['extension', 'longitude'], value: Array.isArray(value) ? value[0] : null },
-          { path: ['extension', 'latitude'], value: Array.isArray(value) ? value[1] : null },
-        ]
-      : [{ path: nativePath(plan), value }]
+  const path = nativePath(plan)
+  const real = type === 'float64' && typeof value === 'number'
   // An existing value's token alone is replaced; anything else is inserted through jsonc-parser.
-  if (paths.length === 1) {
-    const node = findNodeAtLocation(parseTree(record.text)!, paths[0]!.path)
-    if (node) {
-      const text =
-        type === 'float64' && typeof value === 'number' ? realText(value) : JSON.stringify(value)
-      return [{ offset: record.offset + node.offset, length: node.length, text }]
-    }
+  const node = findNodeAtLocation(parseTree(record.text)!, path)
+  if (node) {
+    const text = real ? realText(value as number) : JSON.stringify(value)
+    return [{ offset: record.offset + node.offset, length: node.length, text }]
   }
-  let next = record.text
-  for (const item of paths) {
-    next = withValue(next, item.path, item.value)
-    if (typeof item.value === 'number' && (type === 'float64' || plan.source.kind === 'position')) {
-      const node = findNodeAtLocation(parseTree(next)!, item.path)!
-      next = apply(next, [{ offset: node.offset, length: node.length, text: realText(item.value) }])
-    }
+  let next = withValue(record.text, path, value)
+  if (real) {
+    const inserted = findNodeAtLocation(parseTree(next)!, path)!
+    next = apply(next, [
+      { offset: inserted.offset, length: inserted.length, text: realText(value as number) },
+    ])
   }
   return [minimal(record.text, next, record.offset)]
 }
 
-/** Each value present but invalid or required but missing, and any signal with two drivers. */
+/** Each value present but invalid or required but missing, any signal with two drivers, and, as
+ *  warnings, each class and field the catalog does not know. */
 export function diagnose(kase: Case): Issue[] {
   const issues: Issue[] = []
+  for (const table of kase.tables.values())
+    if (!kase.catalog.shapes.has(table.shape.type) && table.records.length) {
+      const id = kase.id(table, 0)
+      issues.push({
+        ...sourceRange(kase, id),
+        id,
+        severity: 'warning',
+        message: `${table.shape.type} is not a class GridKit Studio knows; its records are kept as written.`,
+      })
+    }
+  for (const { type, field, row } of kase.found) {
+    const id = kase.id(kase.table(type), row)
+    issues.push({
+      ...sourceRange(kase, id, field),
+      id,
+      field,
+      severity: 'warning',
+      message: `${field} is not a ${type} field GridKit Studio knows; it is kept as written.`,
+    })
+  }
   for (const table of kase.tables.values()) {
     for (let row = 0; row < table.records.length && issues.length < 100; row++) {
       let record: ReturnType<typeof recordOf> | undefined
@@ -227,10 +234,7 @@ export function diagnose(kase: Case): Issue[] {
           tree = parseTree(record.text)
         }
         const node = tree && findNodeAtLocation(tree, nativePath(plan))
-        if (
-          (node && node.value !== null && plan.source.kind !== 'position') ||
-          (plan.required && (!node || node.value === null))
-        ) {
+        if ((node && node.value !== null) || (plan.required && (!node || node.value === null))) {
           const type = plan.definition.type
           issues.push({
             ...sourceRange(kase, id, plan.name),

@@ -61,7 +61,7 @@ suite('Monitor', () => {
   })
 
   test('keeps its plots while another panel takes its place', async () => {
-    await visible(await bench.show('table'), 'tbody .cell')
+    await visible(await bench.show('case'), 'tbody .cell')
     monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
   })

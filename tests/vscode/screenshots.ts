@@ -43,6 +43,9 @@ async function shoot(bench: TestHost, name: string, network: Frame): Promise<voi
 
 export async function run() {
   const bench = await testHost()
+  // No hover highlight under wherever the pointer was left.
+  const settings = vscode.workspace.getConfiguration('gridkitStudio')
+  await settings.update('network.hover', 'off', vscode.ConfigurationTarget.Global)
   try {
     if (!(await bench.gridkit())) throw new Error('GridKit does not run here.')
     await mkdir(IMAGES, { recursive: true })
@@ -69,7 +72,6 @@ export async function run() {
     await idle(network)
     await network.locator('canvas').hover()
     await bench.page.mouse.wheel(0, 120)
-    await bench.page.mouse.move(0, WINDOW.height / 2)
     await shoot(bench, 'network', network)
 
     // IEEE39 during a fault at bus 16: every bus voltage in the Monitor, and on the network.
@@ -94,6 +96,7 @@ export async function run() {
     await shoot(bench, 'monitor', ieee)
     console.log('Screenshots written to ' + IMAGES)
   } finally {
+    await settings.update('network.hover', undefined, vscode.ConfigurationTarget.Global)
     await bench.browser.close()
   }
 }

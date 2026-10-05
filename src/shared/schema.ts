@@ -26,12 +26,10 @@ export interface Drawn {
   readonly geographic: boolean
 }
 
-/** A type's first field of 2D or 3D points: one per row, or a route of them. */
+/** Where a type sits on a map: its first two geographic numbers, longitude then latitude. */
 interface Position {
-  readonly field: string
-  readonly kind: 'point' | 'route'
-  /** Whether the points are longitude and latitude. */
-  readonly geographic: boolean
+  readonly x: string
+  readonly y: string
 }
 
 /** The type an element id names: `Bus` of `Bus/7`. */
@@ -79,35 +77,44 @@ function referencesOf(schema: Schema, type: string): Reference[] {
 }
 
 export function positionOf(schema: Schema, type: string): Position | null {
-  for (const [field, definition] of Object.entries(fieldsOf(schema, type))) {
-    const data = definition.type
-    const point = typeof data === 'object' && data.kind === 'list' ? data.items : data
-    if (typeof point === 'object' && point.kind === 'vector' && point.size >= 2)
-      return {
-        field,
-        kind: point === data ? 'point' : 'route',
-        geographic: definition.geographic === true,
-      }
-  }
-  return null
+  const [x, y] = Object.entries(fieldsOf(schema, type)).flatMap(([field, definition]) =>
+    definition.geographic && typeof definition.type === 'string' && !definition.sampled
+      ? [field]
+      : [],
+  )
+  return x !== undefined && y !== undefined ? { x, y } : null
 }
 
-/** Vertices are types with a point field; edges are other types with exactly two references to
- *  vertex types, bent along their route if they have one. */
+/** A type's geographic route: a list of points along which its edges bend. */
+function routeOf(schema: Schema, type: string): string | undefined {
+  return Object.entries(fieldsOf(schema, type)).find(
+    ([, { type: data, geographic }]) =>
+      geographic && typeof data === 'object' && data.kind === 'list',
+  )?.[0]
+}
+
+/** Edges are types with exactly two undirected references to one type, bent along their route if
+ *  they have one; vertices are the types they join, and any other type a map places. */
 export function networkOf(schema: Schema): Drawn {
-  const vertices = Object.keys(schema.types).filter(
-    (type) => positionOf(schema, type)?.kind === 'point',
+  const types = Object.keys(schema.types)
+  const joins = types.flatMap((type) => {
+    const ends = referencesOf(schema, type).filter(({ direction }) => direction === undefined)
+    return ends.length === 2 && ends[0]!.to === ends[1]!.to
+      ? [{ type, to: ends[0]!.to, ends: [ends[0]!.field, ends[1]!.field] as const }]
+      : []
+  })
+  const vertices = types.filter(
+    (type) =>
+      joins.some(({ to }) => to === type) ||
+      (positionOf(schema, type) !== null && !joins.some((join) => join.type === type)),
   )
-  const edges = Object.keys(schema.types).flatMap((type): Edge[] => {
-    if (vertices.includes(type)) return []
-    const ends = referencesOf(schema, type).filter(({ to }) => vertices.includes(to))
-    if (ends.length !== 2) return []
-    const route = positionOf(schema, type)
-    const bends = route?.kind === 'route' ? route.field : undefined
-    return [{ type, ends: [ends[0]!.field, ends[1]!.field], ...(bends !== undefined && { bends }) }]
+  const edges = joins.flatMap(({ type, to, ends }): Edge[] => {
+    if (!vertices.includes(to) || vertices.includes(type)) return []
+    const bends = routeOf(schema, type)
+    return [{ type, ends, ...(bends !== undefined && { bends }) }]
   })
   const geographic =
-    vertices.length > 0 && vertices.every((type) => positionOf(schema, type)!.geographic)
+    vertices.length > 0 && vertices.every((type) => positionOf(schema, type) !== null)
   return { vertices, edges, geographic }
 }
 

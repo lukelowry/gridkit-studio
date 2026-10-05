@@ -1,4 +1,4 @@
-/** The DynamicSimulation view without running GridKit: its fields, a fault's bus, and the signals
+/** The Simulation view without running GridKit: its fields, a fault's bus, and the signals
  *  the next run records. */
 
 import assert from 'node:assert/strict'
@@ -9,7 +9,7 @@ import * as vscode from 'vscode'
 
 import { type TestHost, testHost, until, visible } from './harness.js'
 
-suite('DynamicSimulation', () => {
+suite('Simulation', () => {
   let bench: TestHost
   let simulation: Frame
   const recorded = () =>

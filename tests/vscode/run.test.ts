@@ -168,6 +168,43 @@ suite('Run', function () {
     await visible(monitor, 'canvas[data-rendered=true]')
   })
 
+  test('analyzes a fault on every bus, and shows each contingency in place', async () => {
+    simulation = await bench.show('simulation')
+    await simulation.locator('[data-testid="study-program"]').click()
+    await simulation.locator('[role="option"][data-value="ContingencyAnalysis"]').click()
+    await until(() => bench.session.values.program === 'ContingencyAnalysis', 'analysis chosen')
+    // Every bus is faulted, so the form asks for no bus and shows no fault switch.
+    assert.equal(await simulation.locator('[data-testid="field-fault"]').count(), 0)
+    await simulation.locator('[data-testid="field-tmax"]').fill('0.5')
+    await simulation.locator('[data-testid="field-fault_start"]').fill('0.1')
+    await until(() => bench.session.values.fault_start === 0.1, 'fault timing captured')
+    const previous = bench.session.run!.id
+    await simulation.locator('[data-testid="study-run"]').click()
+    await until(
+      () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
+      'the analysis ends',
+      300_000,
+    )
+    const study = bench.session.run!.contingency!
+    assert.equal(study.buses.length, bench.source.buses.length)
+    assert.deepEqual([study.done, study.shown, study.failed], [study.buses.length, 0, []])
+    const before = { run: bench.session.run!.id, previous: bench.session.previous?.id }
+    await simulation.locator('[data-testid="study-contingency"]').click()
+    await simulation.locator('[role="option"][data-value="1"]').click()
+    await until(() => bench.session.run?.contingency?.shown === 1, 'the second contingency shows')
+    // It takes the study's place: the run before the study stays the previous one.
+    assert.notEqual(bench.session.run!.id, before.run)
+    assert.equal(bench.session.previous?.id, before.previous)
+    monitor = await bench.view('monitor')
+    await visible(monitor, 'canvas[data-rendered=true]')
+    assert.equal(await monitor.locator('.c-note--error').count(), 0)
+    await simulation.locator('[data-testid="study-program"]').click()
+    await simulation.locator('[role="option"][data-value="DynamicSimulation"]').click()
+    await until(() => bench.session.values.program === 'DynamicSimulation', 'simulation chosen')
+    await simulation.locator('[data-testid="field-tmax"]').fill('2')
+    await until(() => bench.session.values.tmax === 2, 'end time restored')
+  })
+
   test('runs TwoArea with its native Ispdlim values and plots the result', async () => {
     await bench.replace(
       await readFile(join(process.env.GRIDKIT_TEST_ROOT!, 'cases/TwoArea.case.json'), 'utf8'),

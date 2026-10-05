@@ -4,12 +4,16 @@ import { cancellable } from './client.js'
 import type { Sessions } from './sessions.js'
 const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
 export function registerNavigation(studio: Sessions) {
+  // A case that does not parse answers nothing: its diagnostic already says why.
+  const parsed = (document: vscode.TextDocument) =>
+    studio.documents.ensure(document).catch(() => undefined)
   const inspect = async (
     document: vscode.TextDocument,
     position: vscode.Position,
     token?: vscode.CancellationToken,
   ) => {
-    const summary = await studio.documents.ensure(document)
+    const summary = await parsed(document)
+    if (!summary) return undefined
     return cancellable(token, (signal) =>
       studio.client.call(
         'context',
@@ -47,7 +51,7 @@ export function registerNavigation(studio: Sessions) {
     vscode.languages.registerHoverProvider(selector, {
       async provideHover(document, position, token) {
         const context = await inspect(document, position, token)
-        if (!context.element?.field || !context.range) return
+        if (!context?.element?.field || !context.range) return
         const summary = studio.state(document.uri.toString()).summary!
         const field = summary.schema.types[context.type!]!.fields[context.element.field]!
         return new vscode.Hover(
@@ -64,7 +68,7 @@ export function registerNavigation(studio: Sessions) {
     vscode.languages.registerDefinitionProvider(selector, {
       async provideDefinition(document, position, token) {
         const context = await inspect(document, position, token)
-        if (!context.reference) return
+        if (!context?.reference) return
         const range = await studio.client.call('locate', {
           uri: document.uri.toString(),
           version: document.version,
@@ -81,7 +85,7 @@ export function registerNavigation(studio: Sessions) {
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(document, token) {
-        await studio.documents.ensure(document)
+        if (!(await parsed(document))) return undefined
         const symbols = await cancellable(token, (signal) =>
           studio.client.call(
             'symbols',
@@ -111,7 +115,7 @@ export function registerNavigation(studio: Sessions) {
       if (!/\.case\.json$/i.test(event.textEditor.document.fileName)) return
       void inspect(event.textEditor.document, event.selections[0]!.active)
         .then((context) => {
-          if (context.element)
+          if (context?.element)
             studio.select(event.textEditor.document.uri.toString(), context.element)
         })
         .catch(() => {})

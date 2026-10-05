@@ -304,10 +304,13 @@ function copyRows(
   }
 }
 
-/** The native column of a row's output: `<class>_<identity>_<output>`, a bus by its name. */
-export function columnName(kase: Case, table: Table, row: number, output: string): string {
+/** The native column of a row's output `field`: `<class>_<identity>_<output>`, a bus by its name,
+ *  the output by GridKit's name for it. */
+export function columnName(kase: Case, table: Table, row: number, field: string): string {
   const identity =
     table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
+  const source = table.shape.plan.get(field)?.source
+  const output = source?.kind === 'output' ? source.name : field
   return `${table.shape.type}_${identity}_${output}`
 }
 

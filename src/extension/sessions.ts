@@ -32,8 +32,6 @@ export interface Session {
   uri: string
   diagramEditing: boolean
   bindings: Bindings
-  /** The field the Mappings editor is open for. */
-  editing?: FieldRef
   selection?: Element
   run?: RunInfo
   previous?: RunInfo
@@ -102,9 +100,19 @@ export class Sessions {
     view?: string
   }>()
   readonly output = vscode.window.createOutputChannel('GridKit Studio', { log: true })
+  /** The errors logged since the last look, so a test fails on one a user would see only in the
+   *  log. */
+  readonly errors: string[] = []
   readonly disposables: vscode.Disposable[] = []
   readonly contexts = new Map<string, unknown>()
   active?: string
+  /** Log `reason` as an error, unless a case's diagnostic already shows it. */
+  error(reason: unknown) {
+    if ((reason as { diagnosed?: boolean } | undefined)?.diagnosed) return
+    const text = String(reason)
+    this.output.error(text)
+    if (this.errors.push(text) > 100) this.errors.shift()
+  }
   constructor(readonly context: vscode.ExtensionContext) {
     this.client = new Client(context)
     this.documents = new Documents(this.client)
@@ -148,7 +156,7 @@ export class Sessions {
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (editor && /\.case\.json$/i.test(editor.document.fileName))
-          void this.open(editor.document).catch((error) => this.output.error(String(error)))
+          void this.open(editor.document).catch((error) => this.error(error))
       }),
       vscode.window.tabGroups.onDidChangeTabs(() => {
         const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
@@ -168,8 +176,7 @@ export class Sessions {
       running: session?.run?.state === 'running',
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
-      tableFiltered: !!session?.table.filter,
-      tableReady: !!entry?.summary,
+      caseReady: !!entry?.summary,
     }
     for (const [key, value] of Object.entries(values))
       if (this.contexts.get(key) !== value) {
@@ -234,7 +241,6 @@ export class Sessions {
       diagramEditing: session?.diagramEditing,
       settings: session?.settings,
       bindings: session?.bindings,
-      editing: session?.editing,
       summary: entry?.summary,
       stale: entry?.stale,
       error: entry?.error,
@@ -254,11 +260,12 @@ export class Sessions {
     this.changed.fire(uri)
   }
   /** Put `run` on the session's clock: a new run resets the span, more frames of the same run
-   *  extend it, and none clears it. */
+   *  extend it, and none clears it. Another contingency of the shown study keeps the time. */
   show(session: Session, run: RunInfo | undefined) {
     const { transport } = session
     const shown = session.run
-    if (shown && run && shown.id !== run.id) session.previous = shown
+    const study = !!run?.contingency && shown?.contingency?.study === run.contingency.study
+    if (shown && run && shown.id !== run.id && !study) session.previous = shown
     session.run = run
     if (!run) {
       session.previous = undefined
@@ -273,8 +280,10 @@ export class Sessions {
     }
     // A run's span starts with its first frames.
     if (shown?.id !== run.id || (shown.frames === 0 && run.frames > 0)) {
+      const at = transport.currentT()
       session.window = undefined
       transport.setSpan(run.domain, { live })
+      if (study) transport.seek(at)
       return
     }
     transport.extend(run.domain[1])

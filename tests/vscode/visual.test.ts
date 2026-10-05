@@ -1,4 +1,4 @@
-/** Pixel baselines of the Network and DynamicSimulation views. They register only on Linux with
+/** Pixel baselines of the Network and Simulation views. They register only on Linux with
  *  SwiftShader, where the GPU and fonts are the same on every run. */
 
 import assert from 'node:assert/strict'
@@ -105,7 +105,7 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       }
     })
 
-    test('DynamicSimulation fits a narrow view', async () => {
+    test('Simulation fits a narrow view', async () => {
       await theme('Default Dark Modern')
       await bench.page.setViewportSize({ width: 1000, height: 720 })
       await vscode.commands.executeCommand('gridkitStudio.simulation.focus')

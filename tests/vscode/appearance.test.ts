@@ -41,7 +41,7 @@ suite('Appearance', () => {
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
     assert.equal(tools.length, 4)
     const rows = await vscode.lm.invokeTool('gridkit_query_rows', {
-      input: { from: 'Bus', select: ['name', 'kv'], limit: 2 },
+      input: { from: 'Bus', select: ['name', 'params.kv'], limit: 2 },
       toolInvocationToken: undefined,
     })
     assert.ok(rows.content.length)

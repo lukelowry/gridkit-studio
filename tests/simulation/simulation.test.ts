@@ -2,8 +2,8 @@
  *  one on PATH, else Studio's default image or GRIDKIT_IMAGE runs in Docker or Podman. */
 
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { type Arguments, type FieldSelection, type Parameters, read } from '@latkit/model'
@@ -14,6 +14,7 @@ import {
   available,
   Case,
   catalog,
+  contingencyFile,
   diagnose,
   type Runtime,
   Simulation,
@@ -221,6 +222,44 @@ describe('DynamicSimulation', () => {
     expect(rows.filter((row) => Math.abs(row[0]! - 0.1) < 1e-12)).toHaveLength(2)
     expect(rows.every((row) => row.every(Number.isFinite))).toBe(true)
     expect(Math.min(...rows.map((row) => row[1]!))).toBeLessThan(0.8)
+  })
+
+  it('analyzes a fault on every bus in turn, one result file each, and shows the first', async ({
+    signal,
+  }) => {
+    const { info, done } = await run(
+      'contingencies',
+      {
+        program: 'ContingencyAnalysis',
+        tmax: 0.2,
+        dt_monitor: 0.01,
+        fault_start: 0.05,
+        fault_duration: 0.05,
+        fault_R: 0,
+        fault_X: 0.01,
+      },
+      signal,
+    )
+    await done
+    const study = info.contingency!
+    expect(study.buses).toEqual(Array.from({ length: 39 }, (_, i) => i + 1))
+    expect(study).toMatchObject({ offset: 0, failed: [], done: 39, shown: 0 })
+    const folder = dirname(info.path)
+    expect((await readdir(folder)).filter((name) => /^results_\d+\.csv$/.test(name))).toHaveLength(
+      39,
+    )
+    expect(info.frames).toBe(23)
+    const lowest = async (file: string, column: number) =>
+      Math.min(
+        ...(await readFile(join(folder, file), 'utf8'))
+          .trim()
+          .split('\n')
+          .slice(1)
+          .map((row) => Number(row.split(',')[column])),
+      )
+    // Each contingency faults its own bus: bus 1 sags in the first, bus 2 in the second.
+    expect(await lowest(contingencyFile(0), 1)).toBeLessThan(0.8)
+    expect(await lowest(contingencyFile(0), 2)).toBeGreaterThan(await lowest(contingencyFile(1), 2))
   })
 
   it('rejects a results format before starting a process: runs write CSV only', async ({

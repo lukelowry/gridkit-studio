@@ -62,13 +62,12 @@
 }
 
 /* Each view sits on the surface of the VS Code part that holds it. */
-body[data-kind='table'],
+body[data-kind='case'],
 body[data-kind='monitor'] {
   --color-bg: var(--vscode-panel-background, var(--vscode-editor-background));
 }
 
 body[data-kind='simulation'],
-body[data-kind='bindings'],
 body[data-kind='export'] {
   --color-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }

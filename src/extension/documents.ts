@@ -153,7 +153,8 @@ export class Documents {
             ])
             this.changed.fire(uri)
           }
-          throw error
+          // The diagnostic shows why; whoever awaited this need not say it again.
+          throw Object.assign(error, { diagnosed: true })
         },
       )
       .finally(() => {

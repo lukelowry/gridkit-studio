@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { bound, channelsFor, channelsOf, fullNames, recordedWhole, shortNames } from './bindings.js'
 
 const vm = { type: 'Bus', field: 'Vm' }
-const kv = { type: 'Bus', field: 'kv' }
+const kv = { type: 'Bus', field: 'params.kv' }
 const vertex = channelsFor('vertex')
 
 describe('bindings', () => {

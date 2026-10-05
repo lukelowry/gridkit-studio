@@ -1,13 +1,30 @@
+<!-- The Case panel: one type's elements as rows, its fields as columns under the record key they
+  sit in. A column's menu maps it onto the network. -->
 <script lang="ts">
   import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
-  import { display, referenceNames, rowsOf } from '../../shared/cells.js'
+  import { channelsOf, shortNames } from '../../shared/bindings.js'
+  import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
   import type { ViewState } from '../../shared/messages.js'
-  import { elementType, isReference } from '../../shared/schema.js'
+  import { elementType, isReference, typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
+  import Select from '../ui/Select.svelte'
+
+  /** The heading each record key's columns sit under. */
+  const GROUPS: Readonly<Record<string, string>> = {
+    params: 'Parameters',
+    init: 'Initial',
+    ports: 'Ports',
+    extension: 'Extension',
+  }
+  /** How many columns a type shows until the user picks them. */
+  const COLUMNS = 12
+  /** Row height in px for virtual scrolling: the --spacing-row-h token. */
+  const height = 28
+
   let view = $state<ViewState>({})
   let type = $state(bridge.state({ type: 'Bus' }).type)
   let fields = $state<string[]>([])
@@ -25,17 +42,30 @@
   const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
     view.summary?.schema.types[type]?.fields ?? {},
   )
-  /** The type's static fields; sampled ones belong to the Monitor. */
+  /** The field each row is known by, shown as the row's own header. */
+  const identity = $derived(view.summary?.identities[type])
+  /** The type's static fields besides its identity; sampled ones belong to the Monitor. */
   const allFields = $derived(
-    Object.keys(definitions).filter((field) => !definitions[field]?.sampled),
+    Object.keys(definitions).filter((field) => !definitions[field]?.sampled && field !== identity),
   )
   const types = $derived(
-    Object.entries(view.summary?.counts ?? {}).filter(([, count]) => count > 0),
+    Object.entries(view.summary?.counts ?? {})
+      .filter(([, count]) => count > 0)
+      .map(([value, count]) => ({
+        value,
+        label: `${typeName(view.summary!.schema, value)} · ${count.toLocaleString()}`,
+        group: view.summary!.schema.types[value]?.description ?? '',
+      })),
   )
-  /** How many columns a type shows until the user picks them. */
-  const COLUMNS = 12
-  /** Row height in px for virtual scrolling: the --spacing-row-h token. */
-  const height = 28
+  /** The channels each mapped column drives. */
+  const mapped = $derived(
+    new Map(
+      fields.flatMap((field) => {
+        const channels = channelsOf(view.bindings ?? {}, { type, field })
+        return channels.length ? [[field, shortNames(channels)] as const] : []
+      }),
+    ),
+  )
   const context = (id: string | null, field?: string) =>
     view.summary
       ? JSON.stringify(
@@ -44,7 +74,7 @@
             {
               uri: view.summary.uri,
               version: view.summary.version,
-              origin: 'table',
+              origin: 'case',
               type,
               field,
               ...(id ? { element: { id, ...(field ? { field } : {}) } } : {}),
@@ -94,6 +124,8 @@
     loading = true
     error = ''
     try {
+      // The filter matches a row's name, else its identity.
+      const named = allFields.includes('name') ? 'name' : identity
       const query: RowsQuery = {
         kind: 'rows',
         from: type,
@@ -103,16 +135,8 @@
         count: true,
         ids: true,
         ...(order ? { orderBy: [order] } : {}),
-        ...(filter
-          ? {
-              where: [
-                {
-                  field: allFields.includes('name') ? 'name' : allFields[0]!,
-                  operator: 'contains',
-                  value: filter,
-                },
-              ],
-            }
+        ...(filter && named
+          ? { where: [{ field: named, operator: 'contains', value: filter }] }
           : {}),
       }
       const blocks = await bridge.request('query', $state.snapshot(query), request.signal)
@@ -205,7 +229,7 @@
       await bridge.request('transact', {
         version: edit.version,
         mutations: [{ kind: 'set', id: edit.id, field: edit.field, value }],
-        label: 'Edit ' + edit.field,
+        label: 'Edit ' + leaf(edit.field),
       })
     } catch (reason) {
       error = String(reason)
@@ -258,7 +282,7 @@
               ? saved.type
               : view.summary.counts[type]
                 ? type
-                : (types[0]?.[0] ?? 'Bus'),
+                : (types[0]?.value ?? 'Bus'),
           )
           if (saved?.fields) fields = saved.fields.filter((field) => allFields.includes(field))
           filter = saved?.filter ?? ''
@@ -270,10 +294,6 @@
             (field): field is string => typeof field === 'string' && allFields.includes(field),
           )
         if (message.command === 'resetColumns') fields = allFields.slice(0, COLUMNS)
-        if (message.command === 'clearTableFilter') filter = ''
-        if (message.command === 'filterTable') filter = String(message.value ?? '')
-        if (message.command === 'selectClass' && view.summary?.schema.types[String(message.value)])
-          changeType(String(message.value))
         persist()
       }
     })
@@ -285,7 +305,7 @@
   })
 </script>
 
-<main class="table">
+<main class="case">
   {#if view.error}
     <p class="c-note c-note--error" role="alert">{view.error}</p>
   {:else if view.stale && view.summary}
@@ -294,32 +314,67 @@
     </p>
   {/if}
   {#if error}<p class="c-note c-note--error" role="alert">{error}</p>{/if}
+  {#if view.summary}
+    <div class="case__bar">
+      <div class="case__type">
+        <Select
+          label="Type"
+          hideLabel
+          compact
+          options={types}
+          data-testid="case-type"
+          bind:value={() => type, (next) => next && next !== type && changeType(next)}
+        />
+      </div>
+      <input
+        class="c-input case__filter"
+        type="search"
+        placeholder={'Filter ' + typeName(view.summary.schema, type)}
+        aria-label="Filter elements"
+        data-testid="case-filter"
+        bind:value={
+          () => filter,
+          (next) => {
+            filter = next
+            offset = 0
+            persist()
+          }
+        }
+      />
+    </div>
+  {/if}
   <div
-    class="table-scroll"
+    class="case__scroll"
     bind:this={scroll}
     onscroll={() => {
       const next = Math.max(0, Math.floor(scroll.scrollTop / height) - 10)
       if (Math.abs(next - offset) >= 10) offset = next
     }}
   >
-    <table aria-label={type + ' fields'} aria-rowcount={total + 1}>
+    <table aria-label={type + ' fields'} aria-rowcount={total + 2}>
       <thead>
+        <tr class="case__bands">
+          <th rowspan="2" scope="col" class="case__identity">{identity ?? ''}</th>
+          {#each bands(fields) as { group, span }, i (i)}
+            <th colspan={span} scope="colgroup">{GROUPS[group] ?? group}</th>
+          {/each}
+        </tr>
         <tr>
-          <th scope="col">Element</th>
-          {#each fields as field (field)}<th
+          {#each fields as field (field)}
+            <th
               scope="col"
               aria-sort={order?.field === field ? order.direction : 'none'}
+              data-vscode-context={context(null, field)}
             >
-              <button onclick={() => sort(field)}>
-                {field}{definitions[field]?.unit
-                  ? ' [' + definitions[field]!.unit + ']'
-                  : ''}{order?.field === field
-                  ? order.direction === 'ascending'
-                    ? ' (ascending)'
-                    : ' (descending)'
-                  : ''}
+              <button onclick={() => sort(field)} title={field}>
+                {leaf(field)}{#if definitions[field]?.unit}<span class="case__unit">
+                    {definitions[field]!.unit}
+                  </span>{/if}{#if mapped.has(field)}<span class="case__mapped">
+                    {mapped.get(field)}
+                  </span>{/if}
               </button>
-            </th>{/each}
+            </th>
+          {/each}
         </tr>
       </thead>
       <tbody>
@@ -333,11 +388,13 @@
         {#each rows as row, rowIndex (row.id)}
           <tr
             class:selected={view.selection?.id === row.id}
-            aria-rowindex={offset + rowIndex + 2}
+            aria-rowindex={offset + rowIndex + 3}
             data-vscode-context={context(row.id)}
           >
             <th scope="row">
-              <button onclick={() => select(row.id)} title={row.id ?? ''}>{row.id}</button>
+              <button onclick={() => select(row.id)} title={row.id ?? ''}>
+                {row.id ? native(row.id) : ''}
+              </button>
             </th>
             {#each fields as field, columnIndex (field)}
               <td
@@ -347,16 +404,14 @@
                 {#if editing?.id === row.id && editing.field === field}
                   <input
                     use:focus
-                    aria-label={'Edit ' + field}
+                    aria-label={'Edit ' + leaf(field)}
                     bind:value={editing.text}
                     onkeydown={(event) => {
                       if (event.key === 'Enter') void commit()
                       if (event.key === 'Escape') editing = undefined
                     }}
                     onblur={() => void commit()}
-                    placeholder={typeof definitions[field]?.type === 'object'
-                      ? 'Type/native-ID'
-                      : ''}
+                    placeholder={isReference(definitions[field]) ? 'Type/ID' : ''}
                   />
                 {:else}
                   <button
@@ -375,9 +430,9 @@
                         edit(row.id, field, row.values[field])
                       } else void move(event, offset + rowIndex, columnIndex)
                     }}
-                    title={'Double-click or press F2 to edit ' + field}
+                    title={'Double-click or press F2 to edit ' + leaf(field)}
                   >
-                    {display(row.values[field])}
+                    {display(row.values[field], { native: true })}
                   </button>
                 {/if}
               </td>
@@ -399,7 +454,7 @@
       </div>
     {/if}
   </div>
-  <div class="table__status" aria-live="polite">
+  <div class="case__status" aria-live="polite">
     {total.toLocaleString()} elements · revision {view.summary?.version ?? '…'}{loading
       ? ' · Loading rows…'
       : ''}
@@ -407,12 +462,28 @@
 </main>
 
 <style>
-  .table {
+  .case {
     display: flex;
     flex-direction: column;
     block-size: 100%;
   }
-  .table-scroll {
+  .case__bar {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-2xs) var(--spacing-sm);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .case__type {
+    flex: 0 1 16rem;
+    min-inline-size: 6rem;
+  }
+  .case__filter {
+    flex: 0 1 14rem;
+    min-inline-size: 6rem;
+  }
+  .case__scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
@@ -442,6 +513,32 @@
   thead th {
     color: var(--color-text-2);
     font-weight: 600;
+  }
+  .case__bands th:not(.case__identity) {
+    height: auto;
+    padding-block: var(--spacing-2xs) 0;
+    border-bottom: 0;
+    font-size: var(--text-xs);
+    font-weight: normal;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .case__bands th:not(:empty):not(.case__identity) {
+    border-inline-start: 1px solid var(--color-border);
+  }
+  .case__identity {
+    vertical-align: bottom;
+  }
+  .case__unit,
+  .case__mapped {
+    margin-inline-start: var(--spacing-xs);
+    font-weight: normal;
+  }
+  .case__unit {
+    color: var(--color-text-2);
+  }
+  .case__mapped {
+    color: var(--color-primary-text);
   }
   th button,
   .cell {
@@ -490,7 +587,7 @@
     outline-offset: calc(-1 * var(--focus-width));
     background: var(--vscode-list-focusBackground, var(--color-row-hover));
   }
-  .table__status {
+  .case__status {
     flex: none;
     padding: var(--spacing-2xs) var(--spacing-md);
     border-top: 1px solid var(--color-border);

@@ -67,11 +67,33 @@ export function rowsOf(
   })
 }
 
-/** A cell as text: a reference by its target's id, a missing value as a dash. */
-export function display(value: unknown): string {
+/** An element's id without its type: `7` of `Bus/7`. */
+export const native = (id: string): string => id.slice(id.indexOf('/') + 1)
+
+/** A field's name within its record key: `Vr` of `init.Vr`. */
+export const leaf = (field: string): string => field.slice(field.indexOf('.') + 1)
+
+/** Adjacent fields under one record key, as header bands: `init.Vr`, `init.Vi` share `init`; a
+ *  field of the record itself has none. */
+export function bands(fields: readonly string[]): { group: string; span: number }[] {
+  const out: { group: string; span: number }[] = []
+  for (const field of fields) {
+    const group = field.includes('.') ? field.slice(0, field.indexOf('.')) : ''
+    const last = out.at(-1)
+    if (last?.group === group) last.span++
+    else out.push({ group, span: 1 })
+  }
+  return out
+}
+
+/** A cell as text: a reference by its target's id, or its native id alone where the column
+ *  already says the type; a missing value as a dash. */
+export function display(value: unknown, { native: short = false } = {}): string {
   if (value && typeof value === 'object' && 'index' in value && 'row' in value)
     return 'id' in value && typeof value.id === 'string'
-      ? value.id
+      ? short
+        ? native(value.id)
+        : value.id
       : (value.index as { type: string }).type + ' (connected)'
   return value === null || value === undefined
     ? '—'

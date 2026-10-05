@@ -309,9 +309,14 @@ export class Results {
     }
   }
 
-  /** Drops the run's cached pages, and deletes its folder if it owns one under `scratchRoot`. */
-  async dispose(scratchRoot: string) {
+  /** Drops the run's cached pages. */
+  release() {
     this.cache.drop(this.info.id + ':')
+  }
+
+  /** Releases the run, and deletes its folder if it owns one under `scratchRoot`. */
+  async dispose(scratchRoot: string) {
+    this.release()
     if (this.ownedDirectory) {
       const target = resolve(this.ownedDirectory)
       const root = resolve(scratchRoot) + sep

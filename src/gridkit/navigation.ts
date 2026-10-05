@@ -82,18 +82,9 @@ export function completionsAt(
   const group = path.slice(row === undefined ? 0 : 2, -1)
   const fields = [...shape.plan.values()]
     .filter((plan) => !plan.definition.sampled)
-    .flatMap((plan) => {
-      const paths =
-        plan.source.kind === 'position'
-          ? [
-              ['extension', 'longitude'],
-              ['extension', 'latitude'],
-            ]
-          : [nativePath(plan)]
-      return paths
-        .filter((path) => JSON.stringify(path.slice(0, -1)) === JSON.stringify(group))
-        .map((path) => completion(path.at(-1)!, plan))
-    })
+    .map((plan) => [nativePath(plan), plan] as const)
+    .filter(([path]) => JSON.stringify(path.slice(0, -1)) === JSON.stringify(group))
+    .map(([path, plan]) => completion(path.at(-1)!, plan))
   return [...new Map(fields.map((field) => [field.name, field])).values()]
 }
 

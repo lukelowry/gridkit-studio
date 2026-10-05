@@ -215,7 +215,7 @@
         {!view.summary
           ? 'Loading case…'
           : !run
-            ? 'Run DynamicSimulation or import results to plot recorded signals.'
+            ? 'Run a simulation or import results to plot recorded signals.'
             : 'Choose a signal to plot it.'}
       </p>
       {#if view.summary}

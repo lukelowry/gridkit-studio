@@ -7,9 +7,9 @@ import { type FieldRef, recordedWhole } from '../../shared/bindings.js'
 import type { ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { nameFieldOf, networkOf, positionOf } from '../../shared/schema.js'
-import { channelsOf, type Sampled } from '../bindings/styles.js'
 import { font, palette } from '../theme.js'
 import { BORDERS } from './borders.js'
+import { channelsOf, type Sampled } from './channels.js'
 import { networkOptions } from './options.js'
 
 /** Province lines relative to coasts and countries, which draw as every path. */
@@ -55,10 +55,7 @@ export function networkConfig(
         }
       : null
   }
-  const position = (type: string) => {
-    const field = positionOf(source.schema, type)!.field
-    return places[type] ?? { x: field, y: { field, component: 1 } }
-  }
+  const position = (type: string) => places[type] ?? positionOf(source.schema, type)!
   const [r, g, b, a] = options.pathColor!
   return {
     ...options,

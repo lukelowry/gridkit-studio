@@ -300,8 +300,10 @@ Apache License
 
 ## GridKit case data
 
-The files in `cases/` are unmodified copies of
-[GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics).
+The files in `cases/` are copies of
+[GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics)
+with their BusFault devices removed (`scripts/cases.mjs`); GridKit Studio adds the faults a run
+asks for.
 GridKit provides the dynamics models; the networks originate from:
 
 - ACTIVSg2000, ACTIVSg10k, IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 
 import {
@@ -19,6 +19,7 @@ import {
   Case,
   catalog,
   completionsAt,
+  contingencyFile,
   diagnose,
   editable,
   parametersOf,
@@ -217,7 +218,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       if (parses.get(uri) !== version) throw new Error('Superseded document revision.')
       const summary: Summary = {
         editable: Object.fromEntries(
-          [...catalog.shapes].map(([type, shape]) => [
+          [...kase.tables].map(([type, { shape }]) => [
             type,
             [...shape.plan.values()].filter(editable).map((plan) => plan.name),
           ]),
@@ -227,6 +228,9 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
         name: kase.name,
         fingerprint: kase.version,
         schema: kase.schema,
+        identities: Object.fromEntries(
+          [...kase.tables].map(([type, { shape }]) => [type, shape.identity.name]),
+        ),
         counts: Object.fromEntries(
           [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
         ),
@@ -357,6 +361,37 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       return sourceRange(get(request.input).kase, request.input.id, request.input.field)
     case 'run':
       return runCase(request.input)
+    case 'contingency': {
+      const current = findRun(request.input.run)
+      const study = current.info.contingency
+      const { shown } = request.input
+      if (!study || !Number.isInteger(shown) || shown < 0 || shown >= study.buses.length)
+        throw new Error('The run has no such contingency.')
+      if (study.failed.includes(shown))
+        throw new Error('That contingency failed; it has no results.')
+      const info: RunInfo = {
+        ...current.info,
+        id: crypto.randomUUID(),
+        path: join(dirname(current.info.path), contingencyFile(study.offset + shown)),
+        frames: 0,
+        domain: [0, 0],
+        contingency: { ...study, shown },
+      }
+      const next = new Results(info, current.kase, current.fields, cache, current.ownedDirectory)
+      await next.ingest(
+        signal,
+        () => true,
+        async () => {},
+      )
+      // The contingency takes its study's place among the runs, and the study's folder with it.
+      for (const runs of histories.values()) {
+        const at = runs.indexOf(current)
+        if (at >= 0) runs[at] = next
+      }
+      current.release()
+      send({ kind: 'run', info })
+      return info
+    }
     case 'stop': {
       const run = running.get(request.input.uri)
       run?.controller.abort(new Error('Simulation cancelled.'))

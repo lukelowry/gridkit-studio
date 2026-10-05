@@ -1,4 +1,4 @@
-/** The files a run hands DynamicSimulation: its case file and input.json. */
+/** The files a run hands GridKit: its case file and input.json. */
 
 import type { Case } from './case.js'
 import { rowCount } from './columns.js'
@@ -8,8 +8,9 @@ type Monitors = ReadonlyMap<string, ReadonlyMap<number, readonly string[]>>
 
 const UTF8 = new TextEncoder()
 
-/** The case file in parts: the case's bytes, its monitor lists replaced and the fault appended. */
-export function caseFile(kase: Case, monitors: Monitors, fault: string | null): Uint8Array[] {
+/** The case file in parts: the case's bytes, its monitor lists replaced and `faults`, device
+ *  records, appended. */
+export function caseFile(kase: Case, monitors: Monitors, faults: string | null): Uint8Array[] {
   const lists = new Map<string, Map<number, string>>()
   for (const [type, rows] of monitors) {
     const table = kase.table(type)
@@ -38,7 +39,7 @@ export function caseFile(kase: Case, monitors: Monitors, fault: string | null): 
       }
     }
   }
-  if (fault !== null) {
+  if (faults !== null) {
     const devices = kase.arrays.devices
     const last = (devices?.starts.length ?? 0) - 1
     const at =
@@ -46,7 +47,7 @@ export function caseFile(kase: Case, monitors: Monitors, fault: string | null): 
     edits.push({
       at,
       end: at,
-      text: devices === undefined ? `, "devices": [${fault}]` : last < 0 ? fault : `, ${fault}`,
+      text: devices === undefined ? `, "devices": [${faults}]` : last < 0 ? faults : `, ${faults}`,
     })
   }
   edits.sort((a, b) => a.at - b.at)
@@ -85,18 +86,30 @@ export function monitorsOf(kase: Case, outputs: readonly Field[]): Monitors {
   return monitors
 }
 
-/** The fault's device record: initially off, with an ID no other fault has. */
-export function faultRecord(kase: Case, fault: Fault): string {
-  const faults = kase.tables.get(FAULT)
-  let id = 'fault'
-  for (let n = 2; faults !== undefined && kase.rowOf(faults, id) >= 0; n++) id = `fault_${n}`
-  return (
-    `{"class": ${JSON.stringify(FAULT)}, "id": ${JSON.stringify(id)}, "ports": {"bus": ${fault.bus}}, ` +
-    `"params": {"state0": false, "R": ${realText(fault.resistance)}, "X": ${realText(fault.reactance)}}}`
+/** `faults` as device records, initially off, and their IDs, which no fault of the case has:
+ *  `fault` alone, else `fault_<bus>`. GridKit names a contingency that failed by its ID. */
+export function faultRecords(
+  kase: Case,
+  faults: readonly Fault[],
+): { readonly text: string | null; readonly ids: readonly string[] } {
+  const table = kase.tables.get(FAULT)
+  const taken = (id: string) => table !== undefined && kase.rowOf(table, id) >= 0
+  const ids = faults.map((fault) => {
+    const base = faults.length === 1 ? 'fault' : `fault_${fault.bus}`
+    let id = base
+    for (let n = 2; taken(id); n++) id = `${base}_${n}`
+    return id
+  })
+  const records = faults.map(
+    (fault, i) =>
+      `{"class": ${JSON.stringify(FAULT)}, "id": ${JSON.stringify(ids[i])}, "ports": {"bus": ${fault.bus}}, ` +
+      `"params": {"state0": false, "R": ${realText(fault.resistance)}, "X": ${realText(fault.reactance)}}}`,
   )
+  return { text: records.length ? records.join(', ') : null, ids }
 }
 
-/** The appended fault's ordinal among the case's faults, by which events name it: the last. */
+/** How many faults the case has of its own: the first fault it adds has this ordinal, by which
+ *  events name it, and ContingencyAnalysis faults the case's own first. */
 export function faultOrdinal(kase: Case): number {
   const faults = kase.tables.get(FAULT)
   return faults === undefined ? 0 : rowCount(faults.starts)
@@ -113,9 +126,10 @@ export function inputOf(command: SimulationCommand, caseFile: string, ordinal: n
           : realText(value as number)
     return `${JSON.stringify(option.id)}: ${text}`
   })
-  const { fault } = command
+  // A study shares one timing; ContingencyAnalysis names each of its faults in turn itself.
+  const fault = command.faults[0]
   const events =
-    fault === null
+    fault === undefined
       ? []
       : [
           `{"time": ${realText(fault.start)}, "type": "fault_on", "element_id": ${ordinal}}`,

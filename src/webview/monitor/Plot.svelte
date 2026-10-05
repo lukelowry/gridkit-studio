@@ -308,7 +308,7 @@
             ? 'Waiting for samples…'
             : view.run
               ? `This run did not record ${name}.`
-              : `Run DynamicSimulation to plot ${name}.`}
+              : `Run a simulation to plot ${name}.`}
         </p>
       </div>
     {/if}

@@ -1,6 +1,7 @@
 /** Network view benchmarks inside VS Code: each scenario's time over RUNS, and its exact work per
  *  run, which gate.mjs holds to work.json. Each case also checks that its canvas fills the editor,
- *  and each geographic case that borders draw. */
+ *  and each geographic case that borders draw. Where GridKit runs, each case also times a second
+ *  of simulation from Run to the last frame. */
 
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -9,7 +10,7 @@ import { join } from 'node:path'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { fills, idle, testHost } from '../vscode/harness.js'
+import { fills, idle, testHost, until } from '../vscode/harness.js'
 
 /** Cases by bus count; the gate checks time per bus across them. */
 const CASES = [
@@ -39,6 +40,7 @@ export async function run() {
   const settings = vscode.workspace.getConfiguration('gridkitStudio')
   const global = vscode.ConfigurationTarget.Global
   for (const [key, value] of Object.entries(STILL)) await settings.update(key, value, global)
+  const gridkit = await bench.gridkit()
   const timings: Record<string, number[]> = {}
   const work: Record<string, Record<string, number>> = {}
   const stages: Record<string, unknown> = {}
@@ -115,6 +117,23 @@ export async function run() {
           without.segments,
           { timeout: 60_000 },
         )
+      }
+
+      // One run: GridKit's time dominates, and varies little.
+      if (gridkit) {
+        const session = bench.studio.all.get(uri.toString())!
+        const previous = session.run?.id
+        bench.studio.record(uri.toString(), [{ from: 'Bus', select: ['Vm'] }])
+        session.values = { tmax: 1, dt_monitor: 0.01 }
+        const start = performance.now()
+        await vscode.commands.executeCommand('gridkitStudio.run', uri)
+        await until(
+          () => session.run?.id !== previous && session.run?.state !== 'running',
+          'the run ends',
+          600_000,
+        )
+        assert.equal(session.run?.state, 'complete', session.run?.message)
+        timings[group + ' > simulate 1 s'] = [performance.now() - start]
       }
     }
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')

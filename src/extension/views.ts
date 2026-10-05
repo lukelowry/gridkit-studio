@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { type DataBatch, type Domain, type FieldSelection, staticFields } from '@latkit/model'
 import * as vscode from 'vscode'
@@ -38,10 +39,11 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'run',
   'stop',
   'chooseSignals',
+  'showContingency',
 ])
 /** The state each non-drawing view shows; it is sent state only when this changes. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
-  table: ({ version, stale, error, writable, selection, bindings, table }) => [
+  case: ({ version, stale, error, writable, selection, bindings, table }) => [
     version,
     stale,
     error,
@@ -56,9 +58,8 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     error,
     values,
     outputs,
-    run && [run.id, run.state, run.frames, run.domain, run.span, run.message],
+    run && [run.id, run.state, run.frames, run.domain, run.span, run.message, run.contingency],
   ],
-  bindings: ({ uri, stale, error, bindings, editing }) => [uri, stale, error, bindings, editing],
 }
 
 /** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
@@ -123,6 +124,8 @@ class View {
   #file = 0
   /** Whether the view is mid-task and must not be replaced. */
   busy = false
+  #settle: () => void = () => {}
+  readonly #loaded = new Promise<void>((resolve) => (this.#settle = resolve))
   readonly disposables: vscode.Disposable[] = []
   constructor(
     readonly studio: Sessions,
@@ -141,7 +144,7 @@ class View {
       kind === 'network' || kind === 'diagram' ? 'canvas' : kind,
       kind,
     )
-    const report = (error: unknown) => studio.output.error(String(error))
+    const report = (error: unknown) => studio.error(error)
     this.disposables.push(
       panel.webview.onDidReceiveMessage((message: FromView) => {
         void this.receive(message).catch(report)
@@ -208,6 +211,7 @@ class View {
       case 'ready':
         this.cancel()
         this.#ready = true
+        this.#settle()
         this.#shown = ''
         this.#base = this.#summary = this.#settings = this.#held = this.#need = undefined
         this.#samples = this.#failed = ''
@@ -248,15 +252,6 @@ class View {
           await this.studio.step(session, message.value === -1 ? -1 : 1)
         return
       }
-      case 'bind':
-        if (!session) return
-        session.editing = undefined
-        this.studio.bind(this.uri, message.field, message.channels, message.domain)
-        return
-      case 'editing':
-        // Kept so the panel reopens as it was left; no update, as the sender already knows.
-        if (session) session.editing = message.field ?? undefined
-        return
       case 'values':
         if (session && message.uri === this.uri && message.values) {
           session.values = message.values
@@ -280,7 +275,7 @@ class View {
         void vscode.window.showWarningMessage(String(message.message))
         return
       case 'error':
-        this.studio.output.error(message.message)
+        this.studio.error(message.message)
         return
       case 'command':
         if (COMMANDS.has(message.command)) {
@@ -460,7 +455,8 @@ class View {
           (name) =>
             bindings.some((binding) => binding.type === field.from && binding.field === name) ||
             name === nameFieldOf(schema, field.from) ||
-            name === positionOf(schema, field.from)?.field ||
+            [positionOf(schema, field.from)?.x, positionOf(schema, field.from)?.y].includes(name) ||
+            network.edges.some((edge) => edge.type === field.from && edge.bends === name) ||
             isReference(schema.types[field.from]!.fields[name]),
         ),
       }))
@@ -617,11 +613,20 @@ class View {
       if (controller.signal.aborted) return
       this.#failed = key
       this.#failure = message(error)
-      studio.output.error(this.#failure)
+      studio.error(this.#failure)
       await this.send({ kind: 'action', command: 'error', value: this.#failure })
     }
   }
+  /** Whether its page is on screen and still loading: replacing it now breaks VS Code's loader. */
+  get loading(): boolean {
+    return !this.#ready && this.panel.visible
+  }
+  /** Settles once its page has loaded, it is disposed, or a few seconds pass. */
+  get loaded(): Promise<void> {
+    return Promise.race([this.#loaded, delay(5000)])
+  }
   dispose() {
+    this.#settle()
     this.#disposed = true
     this.cancel(true)
     for (const file of this.#files.values()) void file.abort().catch(() => {})
@@ -631,10 +636,9 @@ class View {
 }
 /** Each panel's placeholder while no case is open. */
 const EMPTY: Record<Exclude<ViewKind, 'network' | 'diagram'>, string> = {
-  table: 'Open a GridKit case to inspect its fields.',
+  case: 'Open a GridKit case to inspect its fields.',
   monitor: 'Open a GridKit case to inspect its recorded signals.',
   simulation: 'Open a GridKit case to configure and run a simulation.',
-  bindings: 'Open a GridKit case to map its fields to the network.',
   export: 'Open a GridKit case to export a video of it.',
 }
 export function registerViews(studio: Sessions) {
@@ -648,7 +652,7 @@ export function registerViews(studio: Sessions) {
             // A canvas keeps its webview while hidden, so showing it again is free.
             new View(studio, panel, document.uri.toString(), kind, 'idle')
             // Not awaited, so the webview loads while the worker parses.
-            void studio.open(document).catch((error) => studio.output.error(String(error)))
+            void studio.open(document).catch((error) => studio.error(error))
           },
         },
         {
@@ -657,7 +661,7 @@ export function registerViews(studio: Sessions) {
         },
       ),
     )
-  for (const kind of ['table', 'monitor', 'simulation', 'bindings', 'export'] as const) {
+  for (const kind of ['case', 'monitor', 'simulation', 'export'] as const) {
     // An export keeps working while its panel is collapsed. Each run's terminal hides the
     // Monitor, so it is kept idle rather than destroyed.
     const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'
@@ -667,6 +671,7 @@ export function registerViews(studio: Sessions) {
         {
           resolveWebviewView(panel) {
             let content: View | undefined
+            let waiting = false
             const update = () => {
               const uri = studio.active
               const name = (uri: string) =>
@@ -676,6 +681,17 @@ export function registerViews(studio: Sessions) {
                 (uri === content.uri || (content.busy && studio.all.has(content.uri)))
               ) {
                 panel.description = name(content.uri)
+                return
+              }
+              // Another case waits for this one's page to load before taking its place.
+              if (content?.loading) {
+                if (!waiting) {
+                  waiting = true
+                  void content.loaded.then(() => {
+                    waiting = false
+                    update()
+                  })
+                }
                 return
               }
               content?.dispose()

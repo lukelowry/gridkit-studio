@@ -1,13 +1,20 @@
 import type { RowsBlock, RowsQuery, Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { channelsFor, channelsOf, NUMERIC } from '../shared/bindings.js'
-import { display, rowsOf } from '../shared/cells.js'
+import {
+  CHANNELS,
+  channelsFor,
+  channelsOf,
+  domainOf,
+  type FieldRef,
+  NUMERIC,
+} from '../shared/bindings.js'
+import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { message } from '../shared/format.js'
 import type { Element, Plot, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
-import { elementType, networkOf, placementOf } from '../shared/schema.js'
+import { elementType, networkOf, placementOf, typeName } from '../shared/schema.js'
 import type { LoopMode } from '../shared/transport.js'
 import { reviewChanges } from './git.js'
 import type { Session, Sessions } from './sessions.js'
@@ -25,6 +32,14 @@ interface Context {
 }
 /** The case a webview's command is about. */
 type Supplied = { uri?: string }
+/** `low, high` as a mapping range: two finite numbers, low first. */
+function rangeOf(text: string): [number, number] | undefined {
+  const [low, high, ...rest] = text.split(',').map((value) => Number(value.trim()))
+  return !rest.length && Number.isFinite(low) && Number.isFinite(high) && low! < high!
+    ? [low!, high!]
+    : undefined
+}
+
 export function registerCommands(studio: Sessions) {
   const tasks = registerTasks(studio)
   const registrations: vscode.Disposable[] = [tasks.provider]
@@ -77,7 +92,7 @@ export function registerCommands(studio: Sessions) {
         try {
           return await run(value, supplied)
         } catch (error) {
-          studio.output.error(String(error))
+          studio.error(error)
           void vscode.window.showErrorMessage(message(error))
         }
       }),
@@ -269,8 +284,8 @@ export function registerCommands(studio: Sessions) {
   command('reveal', (context) => open(context, 'network'))
   command('openDiagram', (context) => open(context, 'diagram'))
   command('revealDiagram', (context) => open(context, 'diagram'))
-  command('openTable', (context) => focus(context.session, 'table', context.element))
-  command('showInTable', (context) => focus(context.session, 'table', context.element))
+  command('openCasePanel', (context) => focus(context.session, 'case', context.element))
+  command('showInCase', (context) => focus(context.session, 'case', context.element))
   command('openMonitor', (context) => focus(context.session, 'monitor', context.element))
   command('chooseSignals', ({ session }) => focus(session, 'signals'))
   register('showSource', (value, supplied) =>
@@ -346,6 +361,10 @@ export function registerCommands(studio: Sessions) {
   register('stop', (value, supplied) =>
     studio.client.call('stop', { uri: targetOf(value, supplied).uri }),
   )
+  command('showContingency', async ({ session }, value) => {
+    if (session.run?.contingency && typeof value === 'number')
+      await studio.client.call('contingency', { run: session.run.id, shown: value })
+  })
   command('clearRun', async ({ session }) => {
     await studio.client.call('clear', { uri: session.uri })
     studio.show(session, undefined)
@@ -486,56 +505,37 @@ export function registerCommands(studio: Sessions) {
     )
     if (selected) studio.select(context.session.uri, selected.element)
   })
-  command('selectClass', async (context) => {
-    const type = await vscode.window.showQuickPick(
-      Object.keys(context.summary.counts).filter((type) => context.summary.counts[type]),
-      { title: 'Element type' },
-    )
-    if (type) {
-      context.session.table.type = type
-      context.session.table.fields = undefined
-      action(context, 'selectClass', type, 'table')
-      changed(context.session)
-    }
-  })
   command('chooseColumns', async (context) => {
+    const { schema, identities } = context.summary
     const type =
       context.session.table.type ?? context.type ?? Object.keys(context.summary.counts)[0]!
-    const fields = Object.keys(context.summary.schema.types[type]!.fields).filter(
-      (field) => !context.summary.schema.types[type]!.fields[field]!.sampled,
+    const definitions = schema.types[type]!.fields
+    const fields = Object.keys(definitions).filter(
+      (field) => !definitions[field]!.sampled && field !== identities[type],
     )
     const selected = await vscode.window.showQuickPick(
       fields.map((field) => ({
-        label: field,
+        label: leaf(field),
+        description: [
+          field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
+          definitions[field]!.unit,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        field,
         picked: (context.session.table.fields ?? fields.slice(0, 12)).includes(field),
       })),
-      { title: type + ' columns', canPickMany: true },
+      { title: typeName(schema, type) + ' columns', canPickMany: true },
     )
     if (selected) {
-      context.session.table.fields = selected.map((item) => item.label)
-      action(context, 'columns', context.session.table.fields, 'table')
+      context.session.table.fields = selected.map((item) => item.field)
+      action(context, 'columns', context.session.table.fields, 'case')
       changed(context.session)
     }
   })
   command('resetColumns', (context) => {
     context.session.table.fields = undefined
-    action(context, 'resetColumns', undefined, 'table')
-    changed(context.session)
-  })
-  command('filterTable', async (context) => {
-    const value = await vscode.window.showInputBox({
-      title: 'Filter names',
-      value: context.session.table.filter ?? '',
-    })
-    if (value !== undefined) {
-      context.session.table.filter = value
-      action(context, 'filterTable', value, 'table')
-      changed(context.session)
-    }
-  })
-  command('clearTableFilter', (context) => {
-    context.session.table.filter = ''
-    action(context, 'clearTableFilter', undefined, 'table')
+    action(context, 'resetColumns', undefined, 'case')
     changed(context.session)
   })
   for (const [id, side] of [
@@ -569,26 +569,47 @@ export function registerCommands(studio: Sessions) {
     })
     if (value) action(context, 'projection', value, 'network')
   })
-  // Mapping commands open the Mappings panel's editor on the field in context.
+  /** The numeric field in context, which a network channel can show. */
+  const mappable = ({ summary, type, field }: Context): FieldRef => {
+    const definition = type && field ? summary.schema.types[type]?.fields[field] : undefined
+    if (!type || !field || !NUMERIC.has(definition?.type))
+      throw new Error('Choose a numeric field to map.')
+    return { type, field }
+  }
   command('bind', async (context) => {
-    const { schema } = context.summary
-    const definition = context.type ? schema.types[context.type]?.fields[context.field ?? ''] : null
-    const field =
-      context.type && context.field && NUMERIC.has(definition?.type)
-        ? { type: context.type, field: context.field }
-        : undefined
-    if (field && !channelsFor(placementOf(networkOf(schema), field.type)).length)
-      throw new Error('This type has no network display channels.')
-    context.session.editing = field
-    await focus(context.session, 'bindings')
+    const field = mappable(context)
+    const { bindings } = context.session
+    const current = channelsOf(bindings, field)
+    const picked = await vscode.window.showQuickPick(
+      channelsFor(placementOf(networkOf(context.summary.schema), field.type)).map((channel) => ({
+        label: CHANNELS[channel].label,
+        channel,
+        picked: current.includes(channel),
+      })),
+      { title: 'Map ' + leaf(field.field), canPickMany: true },
+    )
+    if (picked)
+      studio.bind(
+        context.session.uri,
+        field,
+        picked.map(({ channel }) => channel),
+        domainOf(bindings, field),
+      )
   })
-  command('unbind', async (context) => {
-    const field =
-      context.type && context.field ? { type: context.type, field: context.field } : undefined
-    if (field && channelsOf(context.session.bindings, field).length)
-      studio.bind(context.session.uri, field, [])
-    else await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
+  command('mapRange', async (context) => {
+    const field = mappable(context)
+    const { bindings } = context.session
+    const text = await vscode.window.showInputBox({
+      title: 'Mapping range of ' + leaf(field.field),
+      prompt: 'Low and high values; empty measures the values shown',
+      value: domainOf(bindings, field)?.join(', ') ?? '',
+      validateInput: (value) =>
+        !value.trim() || rangeOf(value) ? null : 'Two numbers, low then high',
+    })
+    if (text !== undefined)
+      studio.bind(context.session.uri, field, channelsOf(bindings, field), rangeOf(text))
   })
+  command('unbind', (context) => studio.bind(context.session.uri, mappable(context), []))
   command('signalRange', async (context) => {
     const { plots } = context.session
     const plot =

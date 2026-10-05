@@ -1,5 +1,6 @@
 /** A case's JSON bytes: members and records found in one pass over strings and brackets, then
- *  records parsed straight into columns. Unknown fields are skipped; invalid values become null. */
+ *  records parsed straight into columns. A member the catalog does not know, or a device class, is
+ *  found and kept for its own column or table; invalid values become null. */
 
 import type { DataType, Problem } from '@latkit/model'
 import { failure } from '@latkit/model'
@@ -13,9 +14,10 @@ import {
   type ListBuilder,
   NumericBuilder,
   type TextBuilder,
+  utf8,
   type VectorBuilder,
 } from './columns.js'
-import type { ArrayName, Catalog, Shape } from './definition.js'
+import { type ArrayName, type Catalog, type Shape, unknownShape } from './definition.js'
 
 const QUOTE = 0x22
 const BACKSLASH = 0x5c
@@ -210,9 +212,20 @@ interface ParsedTable {
   readonly ports: readonly (readonly Chunk[])[]
 }
 
+/** A member the catalog does not know: the record it is in, its path there, and its value. */
+export interface Found {
+  readonly code: number
+  /** The record's index in its range. */
+  readonly record: number
+  readonly path: readonly string[]
+  readonly value: number
+  readonly end: number
+}
+
 export interface Parsed {
   /** By table code; null where the range has no record of the table. */
   readonly tables: readonly (ParsedTable | null)[]
+  readonly found: readonly Found[]
   /** Each record's table code; NONE where it has none. */
   readonly codes: Uint16Array<ArrayBuffer>
   /** Each record's `mon` value, as its start and end in the file; 0, 0 where it has none. */
@@ -271,20 +284,21 @@ const RECORD_KEYS: Record<ArrayName, Keys> = {
   signals: new Keys(['signal_id', 'name']),
   devices: new Keys(['class', 'id', 'ports', 'params', 'init', 'mon', 'extension']),
 }
-const PLACE = new Keys(['longitude', 'latitude', 'polyline'])
+/** What Studio keeps under `extension` for itself, and never shows as a field. */
+const OWN = new Keys(['diagram'])
 
 /** One table's builders over a range, cut into chunks of at most CHUNK_ROWS rows. */
 class Rows {
   readonly types: readonly DataType[]
   readonly params: Keys
   readonly init: Keys
+  readonly extension: Keys
   readonly portKeys: Keys
-  /** The field each param and each init key fills. */
+  /** The field each param, init and extension key fills. */
   readonly paramField: Int32Array
   readonly initField: Int32Array
+  readonly extensionField: Int32Array
   readonly named: number
-  readonly position: number
-  readonly route: number
   ids!: Builder
   fields!: Builder[]
   ports!: NumericBuilder[]
@@ -293,30 +307,24 @@ class Rows {
 
   constructor(readonly shape: Shape) {
     this.types = shape.fields.map((field) => field.definition.type)
-    const params: string[] = []
-    const initial: string[] = []
-    const paramField: number[] = []
-    const initField: number[] = []
+    const keys = { parameter: [] as string[], initial: [] as string[], extension: [] as string[] }
+    const fields = { parameter: [] as number[], initial: [] as number[], extension: [] as number[] }
     shape.fields.forEach(({ source }, index) => {
-      if (source.kind === 'parameter') {
-        params.push(source.name)
-        paramField.push(index)
-      }
-      if (source.kind === 'initial') {
-        initial.push(source.name)
-        initField.push(index)
+      if (source.kind === 'parameter' || source.kind === 'initial' || source.kind === 'extension') {
+        keys[source.kind].push(source.name)
+        fields[source.kind].push(index)
       }
     })
-    this.params = new Keys(params)
-    this.init = new Keys(initial)
+    this.params = new Keys(keys.parameter)
+    this.init = new Keys(keys.initial)
+    this.extension = new Keys(keys.extension)
     this.portKeys = new Keys(shape.ports.map((port) => port.source.name))
-    this.paramField = Int32Array.from(paramField)
-    this.initField = Int32Array.from(initField)
+    this.paramField = Int32Array.from(fields.parameter)
+    this.initField = Int32Array.from(fields.initial)
+    this.extensionField = Int32Array.from(fields.extension)
     this.named = shape.fields.findIndex(
       ({ source }) => source.kind === 'record' && source.name === 'name',
     )
-    this.position = shape.fields.findIndex(({ source }) => source.kind === 'position')
-    this.route = shape.fields.findIndex(({ source }) => source.kind === 'route')
     this.#chunks = { ids: [], fields: shape.fields.map(() => []), ports: shape.ports.map(() => []) }
     this.#fresh()
   }
@@ -349,15 +357,16 @@ class Rows {
 }
 
 export class Parser {
-  readonly #catalog: Catalog
   readonly #classes: Keys
   readonly #bus: Keys
+  /** Every table's shape by code: the catalog's, then each class it does not know, as found. */
+  readonly #shapes: Shape[]
+  readonly #unknown = new Map<string, number>()
   readonly #members = new Members()
   readonly #nested = new Members()
   /** The record being read: each field's and port's value as a start and end, -1 where absent. */
   #fields = new Int32Array(2 * 64)
   #ports = new Int32Array(2 * 64)
-  readonly #place = new Int32Array(4)
   #id = -1
   #idEnd = -1
   #mon = 0
@@ -366,19 +375,26 @@ export class Parser {
   #array: ArrayName = 'buses'
   #first = 0
   #tables: (Rows | null)[] = []
+  #found: Found[] = []
   #problems: Problem[] = []
 
   constructor(catalog: Catalog) {
-    this.#catalog = catalog
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
     this.#bus = new Keys([catalog.bus, 'BusInfinite'])
+    this.#shapes = [...catalog.codes]
+  }
+
+  /** Every table's shape by code, the classes found so far included. */
+  get shapes(): readonly Shape[] {
+    return this.#shapes
   }
 
   parse(bytes: Uint8Array, array: ArrayName, first: number, starts: Uint32Array): Parsed {
     this.#bytes = bytes
     this.#array = array
     this.#first = first
-    this.#tables = this.#catalog.codes.map(() => null)
+    this.#tables = []
+    this.#found = []
     this.#problems = []
     const codes = new Uint16Array(starts.length)
     const mons = new Uint32Array(2 * starts.length)
@@ -388,7 +404,8 @@ export class Parser {
       mons[2 * record + 1] = this.#monEnd
     }
     return {
-      tables: this.#tables.map((rows) => rows?.finish() ?? null),
+      tables: Array.from(this.#shapes, (_, code) => this.#tables[code]?.finish() ?? null),
+      found: this.#found,
       codes,
       mons,
       problems: this.#problems,
@@ -403,28 +420,33 @@ export class Parser {
     const code =
       this.#array === 'buses' ? 0 : this.#array === 'signals' ? 1 : this.#classOf(count, record)
     if (code === NONE) return NONE
-    const rows = (this.#tables[code] ??= new Rows(this.#catalog.codes[code]!))
+    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!))
     this.#stage(rows)
     const keys = RECORD_KEYS[this.#array]
     const names = RECORD[this.#array]
     for (let m = 0; m < count; m++) {
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
-      const key = names[keys.find(bytes, spans[4 * m]!, spans[4 * m + 1]!)]
+      const keyStart = spans[4 * m]!
+      const keyEnd = spans[4 * m + 1]!
+      const key = names[keys.find(bytes, keyStart, keyEnd)]
       if (key === 'identity') {
         this.#id = value
         this.#idEnd = end
       } else if (key === 'class') {
+        // A bus class GridKit may add is kept, as its own column, rather than refused.
         if (
           this.#array === 'buses' &&
           !(bytes[value] === QUOTE && this.#bus.find(bytes, value + 1, end - 1) >= 0)
         )
-          this.#problem(record, `A bus's class is not ${this.#catalog.bus}.`)
+          this.#find(code, record, ['class'], value, end)
       } else if (key === 'name') stage(this.#fields, rows.named, value, end)
       else if (key === 'mon') {
         this.#mon = value
         this.#monEnd = end
-      } else if (key !== undefined && bytes[value] === OPEN_OBJECT) this.#object(rows, key, value)
+      } else if (key !== undefined && bytes[value] === OPEN_OBJECT)
+        this.#object(rows, key, value, code, record)
+      else this.#find(code, record, [utf8(bytes, keyStart, keyEnd)], value, end)
     }
     this.#commit(rows, record)
     return code
@@ -438,20 +460,24 @@ export class Parser {
       if (RECORD_KEYS.devices.find(bytes, spans[4 * m]!, spans[4 * m + 1]!) !== 0) continue
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
-      const code = bytes[value] === QUOTE ? this.#classes.find(bytes, value + 1, end - 1) : -1
+      if (bytes[value] !== QUOTE) break
+      const code = this.#classes.find(bytes, value + 1, end - 1)
       if (code >= 2) return code
-      this.#problem(
-        record,
-        `The device class ${Buffer.from(bytes.subarray(value, end)).toString()} is not in the catalog.`,
-      )
-      return NONE
+      // A class the catalog does not know is a table of its own, its members found as they are.
+      const name = utf8(bytes, value + 1, end - 1)
+      let found = this.#unknown.get(name)
+      if (found === undefined) {
+        found = this.#shapes.push(unknownShape(name)) - 1
+        this.#unknown.set(name, found)
+      }
+      return found
     }
     this.#problem(record, 'A device has no class.')
     return NONE
   }
 
-  /** An object-valued member's members, each staged to its column. */
-  #object(rows: Rows, key: Key, open: number): void {
+  /** An object-valued member's members, each staged to its column, or found. */
+  #object(rows: Rows, key: Key, open: number, code: number, record: number): void {
     const bytes = this.#bytes
     const count = this.#nested.read(bytes, open)
     const spans = this.#nested.spans
@@ -460,28 +486,26 @@ export class Parser {
       const keyEnd = spans[4 * m + 1]!
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
-      if (key === 'params')
-        stage(
-          this.#fields,
-          rows.paramField[rows.params.find(bytes, keyStart, keyEnd)] ?? -1,
-          value,
-          end,
-        )
-      else if (key === 'init')
-        stage(
-          this.#fields,
-          rows.initField[rows.init.find(bytes, keyStart, keyEnd)] ?? -1,
-          value,
-          end,
-        )
-      else if (key === 'ports')
-        stage(this.#ports, rows.portKeys.find(bytes, keyStart, keyEnd), value, end)
+      let known = -1
+      if (key === 'params') known = rows.paramField[rows.params.find(bytes, keyStart, keyEnd)] ?? -1
+      else if (key === 'init') known = rows.initField[rows.init.find(bytes, keyStart, keyEnd)] ?? -1
       else if (key === 'extension') {
-        const place = PLACE.find(bytes, keyStart, keyEnd)
-        if (place === 2) stage(this.#fields, rows.route, value, end)
-        else if (rows.position >= 0) stage(this.#place, place, value, end)
+        if (OWN.find(bytes, keyStart, keyEnd) >= 0) continue
+        known = rows.extensionField[rows.extension.find(bytes, keyStart, keyEnd)] ?? -1
+      } else if (key === 'ports') {
+        const port = rows.portKeys.find(bytes, keyStart, keyEnd)
+        if (port >= 0) {
+          stage(this.#ports, port, value, end)
+          continue
+        }
       }
+      if (known >= 0) stage(this.#fields, known, value, end)
+      else this.#find(code, record, [key, utf8(bytes, keyStart, keyEnd)], value, end)
     }
+  }
+
+  #find(code: number, record: number, path: readonly string[], value: number, end: number): void {
+    this.#found.push({ code, record, path, value, end })
   }
 
   #stage(rows: Rows): void {
@@ -491,7 +515,6 @@ export class Parser {
     if (this.#ports.length < ports) this.#ports = new Int32Array(ports)
     this.#fields.fill(-1, 0, fields)
     this.#ports.fill(-1, 0, ports)
-    this.#place.fill(-1)
     this.#id = -1
   }
 
@@ -500,10 +523,6 @@ export class Parser {
     this.#identity(rows, record)
     for (let i = 0; i < rows.fields.length; i++) {
       const target = rows.fields[i]!
-      if (i === rows.position) {
-        this.#position(target as VectorBuilder)
-        continue
-      }
       const value = this.#fields[2 * i]!
       if (value < 0 || !this.#into(target, rows.types[i]!, value, this.#fields[2 * i + 1]!))
         target.push(null)
@@ -533,15 +552,6 @@ export class Parser {
       return (rows.ids as NumericBuilder).pushNumber(number)
     this.#problem(record, `A ${rows.shape.type} record's ${name} is not a whole number.`)
     rows.ids.push(null)
-  }
-
-  /** A bus's longitude and latitude as its position. */
-  #position(target: VectorBuilder): void {
-    const place = this.#place
-    const longitude = place[0]! < 0 ? NaN : parseNumber(this.#bytes, place[0]!, place[1]!)
-    const latitude = place[2]! < 0 ? NaN : parseNumber(this.#bytes, place[2]!, place[3]!)
-    if (Number.isFinite(longitude) && Number.isFinite(latitude)) target.push([longitude, latitude])
-    else target.pushNull()
   }
 
   /** The value at [value, end) into `target`, if it has the field's type. */

@@ -2,7 +2,7 @@
   "network 10000 buses > borders": {
     "queries": 0,
     "uploads": 55,
-    "uploadedBytes": 4531445,
+    "uploadedBytes": 4515733,
     "allocations": 14,
     "submissions": 1,
     "evictions": 0,
@@ -14,7 +14,7 @@
   "network 10000 buses > camera move": {
     "queries": 0,
     "uploads": 3,
-    "uploadedBytes": 55370,
+    "uploadedBytes": 40208,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -26,7 +26,7 @@
   "network 10000 buses > labels": {
     "queries": 0,
     "uploads": 2,
-    "uploadedBytes": 51590,
+    "uploadedBytes": 45306,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -37,8 +37,8 @@
   },
   "network 10000 buses > restyle": {
     "queries": 2,
-    "uploads": 47,
-    "uploadedBytes": 232226,
+    "uploads": 61,
+    "uploadedBytes": 172328,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -50,8 +50,8 @@
   "network 2000 buses > borders": {
     "queries": 0,
     "uploads": 55,
-    "uploadedBytes": 4360101,
-    "allocations": 14,
+    "uploadedBytes": 4309669,
+    "allocations": 13,
     "submissions": 1,
     "evictions": 0,
     "drawCalls": 4,
@@ -62,7 +62,7 @@
   "network 2000 buses > camera move": {
     "queries": 0,
     "uploads": 3,
-    "uploadedBytes": 39792,
+    "uploadedBytes": 24826,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -74,7 +74,7 @@
   "network 2000 buses > labels": {
     "queries": 0,
     "uploads": 2,
-    "uploadedBytes": 46726,
+    "uploadedBytes": 26554,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -85,8 +85,8 @@
   },
   "network 2000 buses > restyle": {
     "queries": 2,
-    "uploads": 14,
-    "uploadedBytes": 90114,
+    "uploads": 17,
+    "uploadedBytes": 52527,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -98,7 +98,7 @@
   "network 243 buses > borders": {
     "queries": 0,
     "uploads": 55,
-    "uploadedBytes": 4260709,
+    "uploadedBytes": 4259925,
     "allocations": 13,
     "submissions": 1,
     "evictions": 0,
@@ -110,7 +110,7 @@
   "network 243 buses > camera move": {
     "queries": 0,
     "uploads": 3,
-    "uploadedBytes": 27600,
+    "uploadedBytes": 24128,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -122,7 +122,7 @@
   "network 243 buses > labels": {
     "queries": 0,
     "uploads": 2,
-    "uploadedBytes": 25286,
+    "uploadedBytes": 24973,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,
@@ -133,8 +133,8 @@
   },
   "network 243 buses > restyle": {
     "queries": 2,
-    "uploads": 8,
-    "uploadedBytes": 75155,
+    "uploads": 9,
+    "uploadedBytes": 53853,
     "allocations": 0,
     "submissions": 1,
     "evictions": 0,

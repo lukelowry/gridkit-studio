@@ -8,7 +8,7 @@ import type { Case } from './case.js'
 
 const cache = new WeakMap<Case, Record<string, Positions>>()
 
-/** A deterministic layout, unless some vertex of the network has a position of its own. */
+/** A deterministic layout, unless some vertex of the network has a place on a map of its own. */
 export async function placement(
   kase: Case,
   signal: AbortSignal,
@@ -20,10 +20,11 @@ export async function placement(
   let count = 0
   for (const type of drawn.vertices) {
     const table = kase.table(type)
-    const field = positionOf(kase.schema, type)!.field
-    for (let row = 0; row < table.records.length; row++) {
-      const value = kase.cell(table, field, row)
-      if (Array.isArray(value) && value.every(Number.isFinite)) {
+    const position = positionOf(kase.schema, type)
+    for (let row = 0; position && row < table.records.length; row++) {
+      const x = kase.cell(table, position.x, row)
+      const y = kase.cell(table, position.y, row)
+      if (Number.isFinite(x) && Number.isFinite(y)) {
         cache.set(kase, {})
         return {}
       }

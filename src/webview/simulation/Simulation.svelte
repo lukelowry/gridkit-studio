@@ -1,12 +1,14 @@
-<!-- The run form; the signals a run records are chosen in the native Monitored Signals view. -->
+<!-- The run form: a DynamicSimulation, or a ContingencyAnalysis that faults every bus in turn.
+  The signals a run records are chosen in the native Monitored Signals view. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import type { ViewState } from '../../shared/messages.js'
+  import { type Program, PROGRAMS, type ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
+  import Select from '../ui/Select.svelte'
   import Form from './Form.svelte'
   import { type Choice, labelOf } from './rows.js'
   import { problemOf, valueOf } from './values.js'
@@ -23,11 +25,26 @@
   const summary = $derived(view.summary)
   const run = $derived(view.run)
   const running = $derived(run?.state === 'running')
-  /** Fault parameters show only while the fault is on. */
+  const study = $derived(run?.contingency)
+  const program = $derived((values.program ?? 'DynamicSimulation') as Program)
+  /** A simulation's fault parameters show while its fault is on; an analysis faults every bus,
+   *  so it shows the fault's timing and impedance alone. */
   const parameters = $derived(
-    Object.entries(summary?.parameters ?? {}).filter(
-      ([name]) => !name.startsWith('fault_') || values.fault === true,
+    Object.entries(summary?.parameters ?? {}).filter(([name]) =>
+      name === 'program'
+        ? false
+        : program === 'ContingencyAnalysis'
+          ? name !== 'fault' && name !== 'fault_bus'
+          : !name.startsWith('fault_') || values.fault === true,
     ),
+  )
+  /** The contingencies with results, to show one at a time. */
+  const contingencies = $derived(
+    study
+      ? study.buses.flatMap((bus, n) =>
+          study.failed.includes(n) ? [] : [{ value: n, label: 'Bus ' + bus }],
+        )
+      : [],
   )
   const value = (name: string, parameter: Parameter): InputValue | undefined =>
     Object.hasOwn(values, name)
@@ -45,11 +62,13 @@
     return found
   })
   const invalid = $derived(Object.keys(problems).length > 0)
-  /** Run progress in percent; null until the run's span is known. */
+  /** Run progress in percent: contingencies finished, or time covered; null until known. */
   const percent = $derived(
-    run?.span && run.span[1] > run.span[0]
-      ? Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))
-      : null,
+    study
+      ? Math.round((100 * study.done) / study.buses.length)
+      : run?.span && run.span[1] > run.span[0]
+        ? Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))
+        : null,
   )
   /** How many fields the next run records. */
   const selectedCount = $derived(
@@ -58,6 +77,8 @@
   /** The newest run's status for the bar; empty before any run. */
   const standing = $derived.by(() => {
     if (!run) return ''
+    if (study && run.state === 'running')
+      return `${study.done.toLocaleString()} of ${study.buses.length.toLocaleString()} contingencies`
     const frames = `${run.frames.toLocaleString()} samples`
     switch (run.state) {
       case 'running':
@@ -147,7 +168,7 @@
                 : selectedCount === 0
                   ? 'Choose at least one monitored signal to run'
                   : 'Run'}
-            aria-label="Run DynamicSimulation"
+            aria-label={'Run ' + PROGRAMS[program].toLowerCase()}
             disabled={invalid || view.stale || selectedCount === 0}
             data-testid="study-run"
             onclick={() => bridge.command('run')}
@@ -180,6 +201,25 @@
       {:else if run?.state === 'failed' && run.message}
         <p class="c-note c-note--error" role="alert">{run.message}</p>
       {/if}
+      {#if study && run?.state === 'complete'}
+        <Select
+          label="Contingency"
+          options={contingencies}
+          data-testid="study-contingency"
+          bind:value={
+            () => study.shown,
+            (shown) => {
+              if (shown !== null && shown !== study.shown) bridge.command('showContingency', shown)
+            }
+          }
+        />
+        {#if study.failed.length}
+          <p class="c-note c-note--warn" role="status">
+            {study.failed.length === 1 ? 'One contingency' : study.failed.length + ' contingencies'}
+            failed: bus {study.failed.map((n) => study.buses[n]).join(', ')}.
+          </p>
+        {/if}
+      {/if}
       {#if selectedCount === 0}
         <div class="c-note study__signals" role="status">
           <span>Choose the signals to record before running.</span>
@@ -193,6 +233,13 @@
           </button>
         </div>
       {/if}
+      <Select
+        label="Study"
+        options={Object.entries(PROGRAMS).map(([value, label]) => ({ value, label }))}
+        disabled={running}
+        data-testid="study-program"
+        bind:value={() => program, (chosen) => chosen && give('program', chosen)}
+      />
       <Form
         {parameters}
         {text}

@@ -1,21 +1,19 @@
-/** Runs DynamicSimulation where GridKit is installed or in a container, and stops all it started. */
+/** Runs GridKit's programs where GridKit is installed or in a container, and stops all it started. */
 
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, stat, writeFile } from 'node:fs/promises'
-import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/format.js'
-import type { GridKit, RuntimeProcess } from '../shared/messages.js'
-
-const PROGRAM = 'DynamicSimulation'
+import type { GridKit, Program, RuntimeProcess } from '../shared/messages.js'
 /** Where a container sees the run's folder. */
 const MOUNT = '/simulation'
 
-/** How a run starts DynamicSimulation: the program installed here, or a container of `image`. */
+/** How a run starts a GridKit program: installed here, or in a container of `image`. */
 export type Runtime =
   | { readonly kind: 'installed'; readonly program: string }
   | {
@@ -86,22 +84,27 @@ async function containerCli(cli: string): Promise<string> {
   )
 }
 
-/** Where `gridkit` runs DynamicSimulation: the install its path names; else the one on PATH, as a
- *  dev container or remote host with GridKit has it; else a container of its image. */
-export async function runtimeOf({ path, image, cli }: GridKit): Promise<Runtime> {
+/** Where `gridkit` runs `program`: the install its path names, or beside the program it names;
+ *  else the one on PATH, as a dev container or remote host with GridKit has it; else a container
+ *  of its image. */
+export async function runtimeOf(
+  { path, image, cli }: GridKit,
+  program: Program = 'DynamicSimulation',
+): Promise<Runtime> {
+  const name = executable(program)
   if (path) {
-    for (const program of [
-      join(path, 'bin', executable(PROGRAM)),
-      join(path, executable(PROGRAM)),
-      path,
+    for (const found of [
+      join(path, 'bin', name),
+      join(path, name),
+      ...((await runs(path)) ? [join(dirname(path), name)] : []),
     ])
-      if (await runs(program)) return { kind: 'installed', program }
+      if (await runs(found)) return { kind: 'installed', program: found }
     throw new Error(
-      `GridKit's DynamicSimulation was not found under ${path}. Check GridKit Studio: GridKit Path.`,
+      `GridKit's ${program} was not found under ${path}. Check GridKit Studio: GridKit Path.`,
     )
   }
-  const program = await onPath(PROGRAM)
-  if (program) return { kind: 'installed', program }
+  const found = await onPath(program)
+  if (found) return { kind: 'installed', program: found }
   if (image) {
     const found = await containerCli(cli)
     return { kind: 'container', cli: found, podman: await isPodman(found), image }
@@ -134,16 +137,20 @@ async function requireImage(cli: string, podman: boolean, image: string): Promis
   )
 }
 
-/** Where `gridkit` runs DynamicSimulation now: an install, or a container whose image is here. */
-export async function available(gridkit: GridKit): Promise<Runtime> {
-  const runtime = await runtimeOf(gridkit)
+/** Where `gridkit` runs `program` now: an install, or a container whose image is here. */
+export async function available(
+  gridkit: GridKit,
+  program: Program = 'DynamicSimulation',
+): Promise<Runtime> {
+  const runtime = await runtimeOf(gridkit, program)
   if (runtime.kind === 'container') await requireImage(runtime.cli, runtime.podman, runtime.image)
   return runtime
 }
 
-/** The container CLI's arguments that run DynamicSimulation in `image` on the run in `directory`:
- *  a container named `name`, removed when it ends, with no network, from the local image only. */
+/** The container CLI's arguments that run `program` in `image` on the run in `directory`: a
+ *  container named `name`, removed when it ends, with no network, from the local image only. */
 export function containerArgs(
+  program: Program,
   image: string,
   directory: string,
   name: string,
@@ -181,7 +188,7 @@ export function containerArgs(
     '--env',
     'OPENBLAS_NUM_THREADS=1',
     image,
-    PROGRAM,
+    program,
     'input.json',
   ]
 }
@@ -194,28 +201,30 @@ function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> 
   })
 }
 
-/** Runs DynamicSimulation on the `input.json` staged in `directory`, as `gridkit` says. `log` hears
- *  each line it prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. */
+/** Runs `program` on the `input.json` staged in `directory`, as `gridkit` says. `log` hears each
+ *  line it prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. A
+ *  ContingencyAnalysis contingency that fails is not the run's failure: `failed` names it. */
 export async function launch(
   gridkit: GridKit,
+  program: Program,
   directory: string,
   signal: AbortSignal,
   log: (text: string) => void,
   lifecycle: (process?: RuntimeProcess) => void = () => {},
 ) {
-  const runtime = await available(gridkit)
+  const runtime = await available(gridkit, program)
   signal.throwIfAborted()
   const container =
     runtime.kind === 'container'
       ? { cli: runtime.cli, name: 'gridkit-studio-' + randomUUID() }
       : undefined
-  const [program, args] =
+  const [command, args] =
     runtime.kind === 'installed'
       ? [runtime.program, ['input.json']]
       : [
           runtime.cli,
           // A relative source would name a volume, not the folder.
-          containerArgs(runtime.image, resolve(directory), container!.name, {
+          containerArgs(program, runtime.image, resolve(directory), container!.name, {
             platform: process.platform,
             podman: runtime.podman,
             uid: process.getuid?.(),
@@ -224,7 +233,7 @@ export async function launch(
         ]
   if (runtime.kind === 'container')
     log(`Running GridKit from ${runtime.image} with ${runtime.podman ? 'Podman' : 'Docker'}.`)
-  const child = spawn(program, args, {
+  const child = spawn(command, args, {
     cwd: directory,
     windowsHide: true,
     detached: process.platform !== 'win32',
@@ -237,13 +246,15 @@ export async function launch(
   })
   const owned: RuntimeProcess = {
     pid: child.pid ?? 0,
-    executable: program,
+    executable: command,
     ...(container && { container }),
   }
   if (child.pid) lifecycle(owned)
   let ended = false
   const tail: string[] = []
   let nativeError: string | undefined
+  /** The faults whose contingencies failed, by ID. */
+  const failed = new Set<string>()
   let cleanup: Promise<void> | undefined
   const stop = () => (cleanup ??= stopProcess(child, owned))
   const onAbort = () => {
@@ -256,7 +267,11 @@ export async function launch(
       const text = stripVTControlCharacters(line).slice(0, 8192)
       tail.push(text)
       if (tail.length > 64) tail.shift()
-      if (/\[ERROR\]/i.test(text)) nativeError ??= text
+      const study = /Study failed for fault: (\S+)/.exec(text)
+      if (study) failed.add(study[1]!)
+      // A contingency's solver errors are its own, not the run's.
+      else if (/\[ERROR\]/i.test(text) && (program === 'DynamicSimulation' || /failed:/.test(text)))
+        nativeError ??= text
       log(text)
     })
   const done = new Promise<void>((resolve, reject) => {
@@ -267,8 +282,9 @@ export async function launch(
       const said = container ? tail.findLast((line) => line.trim()) : undefined
       if (signal.aborted) reject(signal.reason)
       else if (nativeError) reject(new Error(nativeError))
-      else if (code !== 0)
-        reject(new Error(`DynamicSimulation exited with code ${code}.${said ? ' ' + said : ''}`))
+      // ContingencyAnalysis exits 1 when a contingency failed; the study still finished.
+      else if (code !== 0 && !(program === 'ContingencyAnalysis' && failed.size))
+        reject(new Error(`${program} exited with code ${code}.${said ? ' ' + said : ''}`))
       else resolve()
     })
   }).finally(async () => {
@@ -282,7 +298,7 @@ export async function launch(
     }
   })
   void done.catch(() => {})
-  return { done, stop, ended: () => ended }
+  return { done, stop, ended: () => ended, failed: (): ReadonlySet<string> => failed }
 }
 
 /** Stops the process `owned` names and every process it started, and removes its container. The

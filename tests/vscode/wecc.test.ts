@@ -70,6 +70,8 @@ suite('WECC240 run', function () {
   let branches: (readonly [string, string])[]
   /** The network as drawn, by projection and time. */
   const shown = new Map<string, Shown>()
+  /** What the checks measured, kept in the run's report rather than printed. */
+  const measured: Record<string, string> = {}
   const global = vscode.ConfigurationTarget.Global
   const settings = () => vscode.workspace.getConfiguration('gridkitStudio')
   const session = () => bench.studio.all.get(uri.toString())!
@@ -158,6 +160,7 @@ suite('WECC240 run', function () {
     ;({ uri, network } = await bench.openCase('cases/WECC240.case.json'))
   })
   suiteTeardown(async () => {
+    bench.report.wecc = measured
     for (const key of Object.keys(STYLE)) await settings().update(key, undefined, global)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
   })
@@ -227,9 +230,8 @@ suite('WECC240 run', function () {
         fit.reduce((s, f) => s + (f.va - mx) * (f.t - my), 0) /
         fit.reduce((s, f) => s + (f.va - mx) ** 2, 0)
       const residual = Math.max(...fit.map((f) => Math.abs(my + slope * (f.va - mx) - f.t)))
-      console.log(
-        `${view}: ${n} bus colors, worst ${worst.off.toFixed(1)} off, residual ${residual.toFixed(4)}`,
-      )
+      measured[view + ' colors'] =
+        `${n} buses, worst ${worst.off.toFixed(1)} off, residual ${residual.toFixed(4)}`
       assert.ok(slope > 0, `colors follow angle in ${view}`)
       assert.ok(residual < 0.03, `colors stray ${residual.toFixed(3)} from the angle in ${view}`)
     }
@@ -274,7 +276,7 @@ suite('WECC240 run', function () {
         )
         checked++
       }
-      console.log(`${view}: ${checked} branches one color, the average of their ends`)
+      measured[view + ' branches'] = `${checked} one color, the average of their ends`
       assert.ok(checked >= 5, `${checked} branches checked in ${view}`)
       total += checked
     }
@@ -294,9 +296,7 @@ suite('WECC240 run', function () {
     const largest = Math.max(...moved.map(({ rise }) => Math.abs(rise)))
     assert.ok(largest > 1e-3, 'the fault moves the angles')
     const large = moved.filter(({ rise }) => Math.abs(rise) > largest / 4)
-    console.log(
-      `heights: ${large.length} buses moved by at least a quarter of ${largest.toFixed(4)} rad`,
-    )
+    measured.heights = `${large.length} buses moved by at least a quarter of ${largest.toFixed(4)} rad`
     for (const { id, rise, up } of large)
       assert.ok(
         up * rise > 0 && Math.abs(up) >= 1,

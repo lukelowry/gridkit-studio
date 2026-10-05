@@ -20,9 +20,10 @@ const profile = join(scratch, 'profile')
 await mkdir(extensions)
 const executable =
   process.env.VSCODE_EXECUTABLE_PATH ??
-  (await downloadAndUnzipVSCode(
-    process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
-  ))
+  (await downloadAndUnzipVSCode({
+    version: process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
+    reporter: { report() {}, error: (error) => console.error(error) },
+  }))
 // VS Code's CLI script, run by its own executable. test-electron's CLI path is a .cmd on Windows,
 // which only a shell can run.
 const app = join('resources', 'app', 'out', 'cli.js')
@@ -72,7 +73,8 @@ try {
       '--user-data-dir',
       profile,
     ],
-    { ELECTRON_RUN_AS_NODE: '1' },
+    // VS Code's own CLI warns of its url.parse() on every install.
+    { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--no-deprecation' },
   )
   const installed = (await readdir(extensions)).find((name) =>
     name.startsWith(manifest.publisher + '.' + manifest.name + '-'),

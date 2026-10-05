@@ -15,7 +15,10 @@ describe('document transactions', () => {
     expect(placed.Bus?.y.values.length).toBe(1)
     const positioned = await parse(
       applyChanges(text, [
-        transaction(kase, [{ kind: 'set', id: 'Bus/7', field: 'position', value: [-90, 40] }]),
+        transaction(kase, [
+          { kind: 'set', id: 'Bus/7', field: 'extension.longitude', value: -90 },
+          { kind: 'set', id: 'Bus/7', field: 'extension.latitude', value: 40 },
+        ]),
       ]),
     )
     expect(await placement(positioned, new AbortController().signal)).toEqual({})
@@ -24,7 +27,8 @@ describe('document transactions', () => {
     const kase = await parse()
     const edits = transaction(kase, [
       { kind: 'set', id: 'Bus/7', field: 'name', value: '東京 😀' },
-      { kind: 'set', id: 'Bus/7', field: 'position', value: [-90, 40] },
+      { kind: 'set', id: 'Bus/7', field: 'extension.longitude', value: -90 },
+      { kind: 'set', id: 'Bus/7', field: 'extension.latitude', value: 40 },
     ])
     const next = applyChanges(text, [edits])
     expect(next).toContain('"kv":230.000')

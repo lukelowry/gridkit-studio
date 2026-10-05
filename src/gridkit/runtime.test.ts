@@ -40,6 +40,17 @@ describe('where GridKit runs', () => {
     })
   })
 
+  it('finds each program beside the one GridKit Path names', async () => {
+    const simulation = await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
+    const analysis = await program(join(root, 'opt', 'bin'), 'ContingencyAnalysis')
+    const gridkit = { path: simulation, image: '', cli: '' }
+    expect(await runtimeOf(gridkit, 'ContingencyAnalysis')).toEqual({
+      kind: 'installed',
+      program: analysis,
+    })
+    expect(await runtimeOf(gridkit)).toEqual({ kind: 'installed', program: simulation })
+  })
+
   it('refuses a path with no GridKit rather than falling back to the image', async () => {
     await program(join(root, 'path'), 'docker')
     await expect(
@@ -87,7 +98,7 @@ describe('where GridKit runs', () => {
 
 describe('a container run', () => {
   const run = (platform: NodeJS.Platform, podman: boolean) =>
-    containerArgs('gridkit:latest', '/runs/run-1', 'gridkit-studio-1', {
+    containerArgs('DynamicSimulation', 'gridkit:latest', '/runs/run-1', 'gridkit-studio-1', {
       platform,
       podman,
       uid: 1000,
@@ -100,6 +111,12 @@ describe('a container run', () => {
     expect(args.join(' ')).toContain('--pull never --name gridkit-studio-1 --network none')
     expect(args.join(' ')).toContain('--volume /runs/run-1:/simulation --workdir /simulation')
     expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'input.json'])
+    expect(
+      containerArgs('ContingencyAnalysis', 'gridkit:latest', '/runs', 'n', {
+        platform: 'win32',
+        podman: false,
+      }).slice(-2),
+    ).toEqual(['ContingencyAnalysis', 'input.json'])
     expect(args).not.toContain('--user')
   })
 

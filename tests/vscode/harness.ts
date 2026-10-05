@@ -100,10 +100,9 @@ async function attach(): Promise<{ browser: Browser; page: Page }> {
 
 /** The command that shows each panel view; the extension's own commands take the case. */
 const PANELS = {
-  table: 'gridkitStudio.openTable',
+  case: 'gridkitStudio.openCasePanel',
   monitor: 'gridkitStudio.openMonitor',
   export: 'gridkitStudio.exportVideo',
-  bindings: 'gridkitStudio.bindings.focus',
   simulation: 'gridkitStudio.simulation.focus',
 } as const
 
@@ -268,6 +267,15 @@ export class TestHost {
       .waitFor({ state: 'visible' })
   }
 
+  /** Choose `item` from the native menu on show, as the user does: point at it, then click. */
+  async choose(item: string): Promise<void> {
+    const entry = this.page.getByRole('menuitem', { name: new RegExp('^' + item) })
+    await entry.waitFor({ state: 'visible' })
+    await entry.hover()
+    await entry.click()
+    await entry.waitFor({ state: 'detached' })
+  }
+
   /** Save a picture of the whole VS Code window. */
   async capture(name: string): Promise<void> {
     await vscode.commands.executeCommand('notifications.clearAll')
@@ -370,7 +378,6 @@ export class TestHost {
     session.outputs = defaultOutputs(await this.current())
     session.plots = []
     session.bindings = {}
-    session.editing = undefined
     session.diagramEditing = false
     session.cameras = {}
     session.table = {}

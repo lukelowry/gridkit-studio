@@ -38,6 +38,18 @@
         "id": "Va",
         "unit": "rad"
       }
+    ],
+    "extension": [
+      {
+        "id": "longitude",
+        "unit": "°",
+        "geographic": true
+      },
+      {
+        "id": "latitude",
+        "unit": "°",
+        "geographic": true
+      }
     ]
   },
   "classes": [
@@ -138,6 +150,21 @@
         },
         {
           "id": "q2"
+        }
+      ],
+      "extension": [
+        {
+          "id": "xfmr",
+          "type": "flag"
+        },
+        {
+          "id": "capacitor",
+          "type": "flag"
+        },
+        {
+          "id": "polyline",
+          "type": "route",
+          "geographic": true
         }
       ]
     },
@@ -1414,7 +1441,7 @@
         {
           "id": "Ispdlim",
           "type": "real",
-          "default": 0.0
+          "default": 0
         }
       ],
       "init": [],
@@ -2486,7 +2513,7 @@
         }
       },
       "optional": true,
-      "default": 1e-5
+      "default": 0.00001
     },
     {
       "id": "max_steps",

@@ -83,7 +83,7 @@ export function blockedReason(settings: VideoSettings, state: ViewState): string
   if (!state.summary && state.error) return state.error
   const range = state.run?.domain
   if (!state.summary || !range || !(range[1] > range[0]))
-    return 'Run DynamicSimulation to export its recorded history.'
+    return 'Run a simulation to export its recorded history.'
   if (settings.views.length === 0) return 'Choose at least one view.'
   if (settings.views.includes('monitor') && plotsOf(state).length === 0)
     return 'Choose a signal in Monitor.'

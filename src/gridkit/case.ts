@@ -15,6 +15,7 @@ import type {
   RowBatch,
   Schema,
   TextColumn,
+  TypeDefinition,
   Value,
   Version,
 } from '@latkit/model'
@@ -34,9 +35,19 @@ import {
   utf8,
   valueAt,
 } from './columns.js'
-import { type ArrayName, CASE, CASE_ROW, type Catalog, type Shape, SIGNAL } from './definition.js'
+import {
+  type ArrayName,
+  CASE,
+  CASE_ROW,
+  type Catalog,
+  type FieldPlan,
+  type Shape,
+  SIGNAL,
+  withFound,
+} from './definition.js'
 import {
   ARRAYS,
+  type Found,
   type Layout,
   type Member,
   Members,
@@ -57,6 +68,13 @@ export interface Table {
   readonly fields: ReadonlyMap<string, Column>
   /** Each row's record in its array. */
   readonly records: Uint32Array
+}
+
+/** A field the catalog does not know, and the first row that has it. */
+export interface FoundField {
+  readonly type: string
+  readonly field: string
+  readonly row: number
 }
 
 /** An array's records, and each one's `mon` value as a start and end; 0, 0 where it has none. */
@@ -104,7 +122,9 @@ export class Case {
           keys.add(name)
         },
         onError: (error, offset, length) => {
-          throw Object.assign(failure('invalid-input', printParseErrorCode(error)), {
+          // `PropertyNameExpected` reads as `Invalid JSON: property name expected`.
+          const problem = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
+          throw Object.assign(failure('invalid-input', 'Invalid JSON: ' + problem.toLowerCase()), {
             offset,
             length,
           })
@@ -115,13 +135,13 @@ export class Case {
     const file = UTF8.encode(text)
     const layout = scan(file)
     const ranges = rangesOf(layout)
-    const parsed = await parseAll(file, ranges, catalog, signal)
+    const { parsed, shapes } = await parseAll(file, ranges, catalog, signal)
     const version = createHash('sha256')
       .update(catalog.text)
       .update(file)
       .digest('hex')
       .slice(0, 32)
-    const kase = joined(parsed, ranges, file, layout, catalog, version, name)
+    const kase = joined(parsed, shapes, ranges, file, layout, catalog, version, name)
     // Build the identity indexes here, so duplicate IDs fail the parse.
     for (const table of kase.tables.values()) {
       if (table.shape.identity.type === 'text') textIds(table.ids)
@@ -133,6 +153,8 @@ export class Case {
     readonly name: string,
     readonly version: Version,
     readonly catalog: Catalog,
+    /** The catalog's types, with the classes and fields this case has that it does not know. */
+    readonly schema: Schema,
     readonly tables: ReadonlyMap<string, Table>,
     /** The file as read; a simulation's case file is written from it. */
     readonly file: Uint8Array,
@@ -141,16 +163,14 @@ export class Case {
     readonly close: number,
     /** The case's own `monitors` member, which a simulation's case file replaces. */
     readonly monitors: Member | undefined,
+    /** Every field the catalog does not know, where it is first. */
+    readonly found: readonly FoundField[],
   ) {}
 
   /** Every static field and row ID, as a host reads them. Built on first read, once the parse's
    *  buffers are free, to keep peak memory down. */
   get data(): Data {
-    return (this.#data ??= dataOf(this.catalog.schema, this.tables))
-  }
-
-  get schema(): Schema {
-    return this.catalog.schema
+    return (this.#data ??= dataOf(this.schema, this.tables))
   }
 
   table(type: string): Table {
@@ -243,13 +263,14 @@ function rangesOf(layout: Layout): Range[] {
   return ranges
 }
 
-/** Parses range by range, yielding between ranges so `signal` can cancel. */
+/** Parses range by range, yielding between ranges so `signal` can cancel; returns every table's
+ *  shape by code, the classes found included. */
 async function parseAll(
   bytes: Uint8Array,
   ranges: readonly Range[],
   catalog: Catalog,
   signal?: AbortSignal,
-): Promise<Parsed[]> {
+): Promise<{ parsed: Parsed[]; shapes: readonly Shape[] }> {
   const parser = new Parser(catalog)
   const parsed: Parsed[] = []
   for (const range of ranges) {
@@ -260,12 +281,13 @@ async function parseAll(
   const problems = parsed.flatMap((range) => range.problems)
   if (problems.length)
     throw failure('invalid-input', problems[0]!.message, { issues: problems.slice(0, 100) })
-  return parsed
+  return { parsed, shapes: parser.shapes }
 }
 
 /** The parsed ranges as one case: chunks joined in file order, ports resolved, records placed. */
 function joined(
   parsed: readonly Parsed[],
+  shapes: readonly Shape[],
   ranges: readonly Range[],
   file: Uint8Array,
   layout: Layout,
@@ -273,17 +295,19 @@ function joined(
   version: Version,
   fallback: string,
 ): Case {
-  const chunks = catalog.codes.map((shape) => ({
+  const chunks = shapes.map((shape) => ({
     ids: [] as Chunk[],
     fields: shape.fields.map((): Chunk[] => []),
     ports: shape.ports.map((): Chunk[] => []),
   }))
-  const records = catalog.codes.map((): number[] => [])
+  const records = shapes.map((): number[] => [])
+  const found: (Found & { readonly first: number })[] = []
   const mons = new Map<ArrayName, Uint32Array[]>()
   ranges.forEach((range, r) => {
     const { tables, codes, mons: spans } = parsed[r]!
     for (let i = 0; i < codes.length; i++)
       if (codes[i] !== NONE) records[codes[i]!]!.push(range.first + i)
+    for (const member of parsed[r]!.found) found.push({ ...member, first: range.first })
     tables.forEach((table, code) => {
       if (table === null) return
       const into = chunks[code]!
@@ -295,7 +319,7 @@ function joined(
   })
   const tables = new Map<string, Table>()
   const index = (type: string): Index => ({ source: version, type, version })
-  catalog.codes.forEach((shape, code) => {
+  shapes.forEach((shape, code) => {
     const { ids, fields } = chunks[code]!
     const starts = startsOf(ids)
     const column = (type: DataType, list: readonly Chunk[]): Column => ({
@@ -315,7 +339,7 @@ function joined(
     })
   })
   // Ports become references once every table they can name is in place.
-  catalog.codes.forEach((shape, code) => {
+  shapes.forEach((shape, code) => {
     const table = tables.get(shape.type)!
     shape.ports.forEach((port, i) => {
       const target = tables.get(port.definition.type.to)!
@@ -325,27 +349,104 @@ function joined(
       )
     })
   })
+  const fields = foundColumns(file, found, records, shapes, tables)
   const header = caseTable(file, layout, catalog.shapes.get(CASE)!, version)
   tables.set(CASE, header)
+  const types: Record<string, TypeDefinition> = Object.create(null)
+  for (const [type, table] of tables) types[type] = table.shape.definition
   const arrays: Partial<Record<ArrayName, RecordArray>> = {}
   for (const array of ARRAYS) {
     const spans = layout.arrays[array]
     if (spans !== undefined) arrays[array] = { ...spans, mons: concatenated(mons.get(array) ?? []) }
   }
-  const name = valueAt(header.fields.get('name')!.chunks[0]!, 0)
+  const name = valueAt(header.fields.get('header.case_name')!.chunks[0]!, 0)
   return new Case(
     typeof name === 'string' && name !== '' ? name : fallback,
     version,
     catalog,
+    { ...catalog.schema, types },
     tables,
     file,
     arrays,
     layout.close,
     layout.members.find((member) => member.name === 'monitors'),
+    fields,
   )
 }
 
-/** The Case table's one row: the header's and system parameters' members it knows. */
+/** Each member the catalog does not know as a column of its table, typed by its values: numbers,
+ *  booleans or strings as they are, anything else as its JSON text. Tables that have one take a
+ *  shape with it; returns where each is first. */
+function foundColumns(
+  file: Uint8Array,
+  found: readonly (Found & { readonly first: number })[],
+  records: readonly (readonly number[])[],
+  shapes: readonly Shape[],
+  tables: Map<string, Table>,
+): FoundField[] {
+  const byCode = new Map<number, Map<string, (Found & { readonly first: number })[]>>()
+  for (const member of found) {
+    let fields = byCode.get(member.code)
+    if (!fields) byCode.set(member.code, (fields = new Map()))
+    const name = member.path.join('.')
+    fields.set(name, [...(fields.get(name) ?? []), member])
+  }
+  const firsts: FoundField[] = []
+  for (const [code, fields] of byCode) {
+    const shape = shapes[code]!
+    const table = tables.get(shape.type)!
+    const rows = new Map(records[code]!.map((record, row) => [record, row]))
+    const plans: FieldPlan[] = []
+    const columns = new Map(table.fields)
+    for (const [name, members] of fields) {
+      const values = new Map<number, unknown>()
+      for (const member of members)
+        values.set(
+          rows.get(member.first + member.record)!,
+          JSON.parse(utf8(file, member.value, member.end)),
+        )
+      const kinds = new Set([...values.values()].map((value) => typeof value))
+      const scalar = kinds.size === 1 && ['number', 'boolean', 'string'].includes([...kinds][0]!)
+      const type: DataType = !scalar
+        ? 'text'
+        : kinds.has('number')
+          ? 'float64'
+          : kinds.has('boolean')
+            ? 'boolean'
+            : 'text'
+      const cell = (row: number) => {
+        const value = values.get(row)
+        return value === undefined || value === null ? null : scalar ? value : JSON.stringify(value)
+      }
+      columns.set(name, {
+        type,
+        starts: table.starts,
+        chunks: Array.from({ length: table.starts.length - 1 }, (_, i) =>
+          chunkOf(
+            type,
+            Array.from({ length: table.starts[i + 1]! - table.starts[i]! }, (_, at) =>
+              cell(table.starts[i]! + at),
+            ) as Value[],
+          ),
+        ),
+      })
+      plans.push({
+        name,
+        source: { kind: 'found', path: members[0]!.path, json: !scalar },
+        definition: {
+          type,
+          nullable: true,
+          description: "Not in GridKit Studio's catalog; kept as written.",
+        },
+      })
+      firsts.push({ type: shape.type, field: name, row: Math.min(...values.keys()) })
+    }
+    tables.set(shape.type, { ...table, shape: withFound(table.shape, plans), fields: columns })
+  }
+  return firsts
+}
+
+/** The Case table's one row: the header's and system parameters' members. */
 function caseTable(file: Uint8Array, layout: Layout, shape: Shape, version: Version): Table {
   const values = new Map<string, Value>()
   const members = new Members()

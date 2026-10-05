@@ -1,4 +1,4 @@
-/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
+﻿/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
  *  `--watch` rebuilds on change, unminified. */
 
 import { copyFile, mkdir, rm } from 'node:fs/promises'
@@ -16,7 +16,7 @@ await mkdir(output, { recursive: true })
 const common = {
   bundle: true,
   sourcemap: true,
-  logLevel: 'info',
+  logLevel: 'warning',
   minify: !watch,
 }
 const builds = [
@@ -33,10 +33,9 @@ const builds = [
   {
     entryPoints: {
       canvas: 'src/webview/canvas.ts',
-      table: 'src/webview/table.ts',
+      case: 'src/webview/case.ts',
       simulation: 'src/webview/simulation.ts',
       monitor: 'src/webview/monitor.ts',
-      bindings: 'src/webview/bindings.ts',
       export: 'src/webview/export.ts',
     },
     outdir: 'dist/webview',

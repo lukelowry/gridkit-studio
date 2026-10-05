@@ -2,7 +2,8 @@
  * The benchmark regression gate for views.ts.
  *
  *   node tests/benchmarks/gate.mjs base.json head.json   check head's work against work.json
- *   node tests/benchmarks/gate.mjs --update head.json    record head's work as work.json
+ *   node tests/benchmarks/gate.mjs --update head.json    record head's work as work.json, and its
+ *                                                        timings in the README
  *
  * It fails only when exact work per run grows. Timings vary between runs, even on one machine, so
  * it reports, without failing, scenarios slower than the base and time per bus that grows faster
@@ -24,7 +25,52 @@ if (process.argv[2] === '--update') {
   const sorted = Object.fromEntries(Object.entries(work).sort(([a], [b]) => a.localeCompare(b)))
   writeFileSync(committed, JSON.stringify(sorted, null, 2) + '\n')
   console.log('Recorded work for ' + Object.keys(work).length + ' scenarios.')
+  readme(read(process.argv[3]).timings)
   process.exit(0)
+}
+
+/** The README's performance table, between its markers: each case's median per scenario. */
+function readme(timings) {
+  const CASES = { 39: 'IEEE39', 243: 'WECC240', 2000: 'ACTIVSg2000', 10000: 'ACTIVSg10k' }
+  const SCENARIOS = ['first frame', 'restyle', 'camera move', 'labels', 'simulate 1 s']
+  const ms = (name) => {
+    const samples = timings[name]
+    return samples ? Math.round(median(samples)).toLocaleString('en-US') + ' ms' : '—'
+  }
+  const rows = Object.entries(CASES).map(([buses, name]) => [
+    name,
+    Number(buses).toLocaleString('en-US'),
+    ...SCENARIOS.map((scenario) => ms(`network ${buses} buses > ${scenario}`)),
+  ])
+  const head = ['Case', 'Buses', 'First frame', 'Restyle', 'Camera move', 'Labels', 'Simulate 1 s']
+  const widths = head.map((title, i) => Math.max(title.length, ...rows.map((row) => row[i].length)))
+  const line = (cells) =>
+    '| ' +
+    cells
+      .map((cell, i) => (i < 1 ? cell.padEnd(widths[i]) : cell.padStart(widths[i])))
+      .join(' | ') +
+    ' |'
+  const rule =
+    '| ' +
+    widths
+      .map((width, i) => (i < 1 ? '-'.repeat(width) : '-'.repeat(width - 1) + ':'))
+      .join(' | ') +
+    ' |'
+  const table = [line(head), rule, ...rows.map(line)].join('\n')
+  const path = new URL('../../README.md', import.meta.url)
+  const text = readFileSync(path, 'utf8')
+  const [start, end] = ['<!-- bench -->', '<!-- /bench -->']
+  if (!text.includes(start) || !text.includes(end))
+    throw new Error('The README has no benchmark markers.')
+  writeFileSync(
+    path,
+    text.slice(0, text.indexOf(start) + start.length) +
+      '\n' +
+      table +
+      '\n' +
+      text.slice(text.indexOf(end)),
+  )
+  console.log('Wrote the README benchmark table.')
 }
 
 const [basePath, headPath] = process.argv.slice(2)

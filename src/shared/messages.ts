@@ -14,7 +14,7 @@ import type {
   Value,
 } from '@latkit/model'
 
-import type { Bindings, Channel, FieldRef } from './bindings.js'
+import type { Bindings } from './bindings.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
 import type { ClockState, LoopMode } from './transport.js'
@@ -60,6 +60,8 @@ export interface Summary extends Revision {
   /** Identifies the case content; a run carries the one it ran on. */
   fingerprint: string
   schema: Schema
+  /** The field each type's elements are known by: a bus's `number`, a device's `id`. */
+  identities: Record<string, string>
   counts: Record<string, number>
   parameters: Parameters
   issues: Issue[]
@@ -80,11 +82,18 @@ export type Mutation =
   | { kind: 'move'; id: string; position: readonly [number, number] | null }
   | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
 
+/** GridKit's programs a run can start, by the names the Simulation view gives them. */
+export const PROGRAMS = {
+  DynamicSimulation: 'Dynamic simulation',
+  ContingencyAnalysis: 'Contingency analysis',
+} as const
+export type Program = keyof typeof PROGRAMS
+
 /** Where GridKit runs: installed here, else in a container of an image. */
 export interface GridKit {
-  /** Its install folder, or the program itself; empty finds DynamicSimulation on PATH. */
+  /** Its install folder, or one of its programs; empty finds GridKit on PATH. */
   readonly path: string
-  /** An image with DynamicSimulation on its PATH, used when GridKit is not installed here; the
+  /** An image with GridKit's programs on its PATH, used when GridKit is not installed here; the
    *  user pulls it, never Studio. Empty for none. */
   readonly image: string
   /** The container CLI: docker, podman, or a path to either; empty finds docker, else podman. */
@@ -114,6 +123,17 @@ export interface RunInfo {
   message?: string
   started: number
   outputs: readonly FieldSelection[]
+  /** A ContingencyAnalysis study: the bus each contingency faults, those that failed, how many
+   *  have finished, and the one shown. Each contingency shown is a run of its own; GridKit numbers
+   *  their files from `offset`, after the case's own faults. */
+  contingency?: {
+    study: string
+    offset: number
+    buses: readonly number[]
+    failed: readonly number[]
+    done: number
+    shown: number
+  }
 }
 
 export interface RunRequest extends Revision {
@@ -159,6 +179,8 @@ export interface Requests {
   /** The next sample time from `at` in `direction`; the run's first or last time when none. */
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
   run: { input: RunRequest; output: RunInfo }
+  /** Shows contingency `shown` of the study `run` belongs to, in its place. */
+  contingency: { input: { run: string; shown: number }; output: RunInfo }
   stop: { input: { uri: string }; output: null }
   /** Drops the case's runs. */
   clear: { input: { uri: string }; output: null }
@@ -193,8 +215,7 @@ export type FromWorker =
   | { kind: 'run'; info: RunInfo }
   | { kind: 'log'; uri: string; message: string }
 
-export type ViewKind =
-  'network' | 'diagram' | 'table' | 'monitor' | 'simulation' | 'bindings' | 'export'
+export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'simulation' | 'export'
 
 /** A view a video export can draw. */
 export type VideoView = 'network' | 'diagram' | 'monitor'
@@ -224,8 +245,6 @@ export interface ViewState {
   diagramEditing?: boolean
   navigate?: boolean
   bindings?: Bindings
-  /** The field the Mappings editor is open for. */
-  editing?: FieldRef
   summary?: Summary
   stale?: boolean
   /** Why the source fails to parse; `summary` may hold the last valid revision. */
@@ -309,8 +328,6 @@ export type FromView =
   | { kind: 'window'; bounds: Domain }
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
-  | { kind: 'bind'; field: FieldRef; channels: readonly Channel[]; domain?: Domain }
-  | { kind: 'editing'; field: FieldRef | null }
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
   | { kind: 'tableState'; table: TableState }
   | { kind: 'busy'; busy: boolean }

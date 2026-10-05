@@ -4,6 +4,7 @@ import { arrange, type Diagram, type Positions } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
+import { message } from '../../shared/format.js'
 import type { Mutation, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
@@ -29,15 +30,12 @@ function moves(diagram: Diagram, positions: Readonly<Record<string, Positions>>)
   return changes
 }
 
-/** Commit `diagram`'s edits to the case; returns the arrangement of all its blocks. */
+/** Commits `diagram`'s edits to the case; returns a function that arranges every block and commits
+ *  the result. */
 export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, signal: AbortSignal) {
   let busy = false
   const refused = (error: unknown) => {
-    if (!signal.aborted)
-      bridge.send({
-        kind: 'notify',
-        message: error instanceof Error ? error.message : String(error),
-      })
+    if (!signal.aborted) bridge.send({ kind: 'notify', message: message(error) })
   }
   async function commit(changes: Mutation[], label: string, expected = state().summary?.version) {
     signal.throwIfAborted()
@@ -81,7 +79,7 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, sign
   diagram.on('move', (proposal) => {
     const expected = state().summary?.version
     void (async () => {
-      // The first move of a diagram laid out for the reader saves where every block stood.
+      // The first move in an auto-laid-out diagram also saves where every other block stands.
       const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.x != null)
       const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config, { signal }))
       const changes = new Map(all.map((change) => ['id' in change ? change.id : '', change]))

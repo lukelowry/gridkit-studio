@@ -1,5 +1,5 @@
 <!-- @component
-  Bindable switch row with a visible state label. Extra attributes target the button.
+  Bindable switch row with an On/Off readout. Extra attributes go to the button.
 -->
 <script lang="ts">
   import type { HTMLButtonAttributes } from 'svelte/elements'
@@ -7,10 +7,9 @@
   let {
     label,
     checked = $bindable(false),
-    class: className,
     ...rest
-  }: Omit<HTMLButtonAttributes, 'children'> & {
-    /** The setting's name, on the left and as the accessible name. */
+  }: Omit<HTMLButtonAttributes, 'children' | 'class'> & {
+    /** The setting's name, shown left and used as the accessible name. */
     readonly label: string
     checked?: boolean
   } = $props()
@@ -20,7 +19,7 @@
   {...rest}
   type="button"
   role="switch"
-  class={['c-row', 'switch', className]}
+  class="c-row switch"
   aria-checked={checked}
   onclick={() => (checked = !checked)}
 >
@@ -44,7 +43,7 @@
 
   /* Off reads in the caption color. */
   .switch[aria-checked='false'] .c-row__value {
-    color: var(--color-text-3);
+    color: var(--color-text-2);
   }
 
   .switch__track {
@@ -53,7 +52,7 @@
     inline-size: 1.75rem;
     block-size: 1rem;
     padding: 2px;
-    border: 1px solid var(--color-text-3);
+    border: 1px solid var(--color-text-2);
     border-radius: var(--radius-pill);
     background: var(--color-surface-2);
   }

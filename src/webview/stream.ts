@@ -1,5 +1,4 @@
-/** Assemble the case a view draws from the streams the extension sends: rows that replace it, and
- *  samples that replace or continue the ones it holds. Each batch is acknowledged as it is taken. */
+/** Assembles the case from the extension's streams, acknowledging each batch on receipt. */
 
 import {
   appendData,
@@ -14,20 +13,19 @@ import {
 import type { Begin } from '../shared/messages.js'
 import { bridge } from './bridge.js'
 
-/** Call `held` each time a stream ends, with the case and the run samples it holds and with the
- *  case alone, whose identity changes only when its rows do; and `failed` when a stream cannot be
- *  assembled. Returns the stop. */
+/** Calls `held` as each stream ends with the case and its samples, and the rows alone, whose
+ *  identity changes only when they do; `failed` when a stream cannot be assembled. */
 export function receive(
   held: (data: Data, begin: Begin, rows: Data) => void,
   failed: (reason: unknown) => void,
 ): () => void {
   let begin: Begin | undefined
-  /** The rows alone, which samples that replace the held ones start again from. */
+  /** The rows alone, which replacing samples start from. */
   let base: Data | undefined
   let data: Data | undefined
   let batches: DataBatch[] = []
-  /** One schema while its content holds: each stream carries a copy, and the renderers keep what
-   *  they drew only for the same schema. */
+  /** Reused while its content is unchanged: each stream carries a copy, and the renderers keep
+   *  their cached work only for the same schema object. */
   let schema: { readonly value: Schema; readonly text: string } | undefined
   return bridge.on((message) => {
     if (message.kind === 'begin') {

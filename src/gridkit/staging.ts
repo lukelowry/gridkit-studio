@@ -1,9 +1,14 @@
-// Adapted from gridkit-server d0824fc; native monitor ordering and real-number serialization.
+/** The files a run hands DynamicSimulation: its case file and input.json. */
+
 import type { Case } from './case.js'
+import { rowCount } from './columns.js'
 import { FAULT, type Fault, type Field, type SimulationCommand } from './parameters.js'
+
 type Monitors = ReadonlyMap<string, ReadonlyMap<number, readonly string[]>>
+
 const UTF8 = new TextEncoder()
-/** Replace monitor lists and append the fault, preserving all other case bytes. */
+
+/** The case file in parts: the case's bytes, its monitor lists replaced and the fault appended. */
 export function caseFile(kase: Case, monitors: Monitors, fault: string | null): Uint8Array[] {
   const lists = new Map<string, Map<number, string>>()
   for (const [type, rows] of monitors) {
@@ -13,8 +18,8 @@ export function caseFile(kase: Case, monitors: Monitors, fault: string | null): 
     for (const [row, outputs] of rows) records.set(table.records[row]!, JSON.stringify(outputs))
   }
   const edits: { readonly at: number; readonly end: number; readonly text: string }[] = []
-  // GridKit reads sinks from the system model, not input.json. Replace inherited destinations
-  // so a simulation can only write its own result file in its staging directory.
+  // GridKit reads sinks from the case, not input.json. Replacing the case's own keeps a run writing
+  // only its result file, in its own folder.
   const sink = JSON.stringify([{ file_name: 'results.csv', format: 'csv' }])
   edits.push(
     kase.monitors
@@ -80,7 +85,7 @@ export function monitorsOf(kase: Case, outputs: readonly Field[]): Monitors {
   return monitors
 }
 
-/** Fault initially off, with a case-unique ID. */
+/** The fault's device record: initially off, with an ID no other fault has. */
 export function faultRecord(kase: Case, fault: Fault): string {
   const faults = kase.tables.get(FAULT)
   let id = 'fault'
@@ -91,12 +96,13 @@ export function faultRecord(kase: Case, fault: Fault): string {
   )
 }
 
-/** Native fault ordinal: existing faults precede the appended one. */
+/** The appended fault's ordinal among the case's faults, by which events name it: the last. */
 export function faultOrdinal(kase: Case): number {
   const faults = kase.tables.get(FAULT)
-  return faults === undefined ? 0 : faults.starts[faults.starts.length - 1]!
+  return faults === undefined ? 0 : rowCount(faults.starts)
 }
 
+/** input.json: the run's options and fault events, and the case file it reads. */
 export function inputOf(command: SimulationCommand, caseFile: string, ordinal: number): string {
   const members = command.options.map(({ option, value }) => {
     const text =

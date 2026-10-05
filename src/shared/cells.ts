@@ -1,3 +1,5 @@
+/** Decoding and displaying the cells of query results. */
+
 import {
   bitAt,
   type Column,
@@ -7,11 +9,21 @@ import {
   type RowsQuery,
   textAt,
 } from '@latkit/model'
-export function cell(
-  column: Column,
-  row: number,
-  references?: ReadonlyMap<string, string>,
-): unknown {
+
+/** The most rows one rows query may return. */
+const PAGE = 100
+
+interface Row {
+  id: string | null
+  row: number
+  values: Record<string, unknown>
+}
+
+const referenceKey = (index: Index, row: number): string => JSON.stringify([index, row])
+
+/** The value at `row`, null when missing; a reference carries its target's id when `references`
+ *  names it. */
+function cell(column: Column, row: number, references?: ReadonlyMap<string, string>): unknown {
   if (column.validity && !bitAt(column.validity, column.offset + row)) return null
   switch (column.kind) {
     case 'numeric':
@@ -22,7 +34,7 @@ export function cell(
       return textAt(column, row)
     case 'reference': {
       const n = column.values[column.offset + row]!
-      return { index: column.index, row: n, id: references?.get(JSON.stringify([column.index, n])) }
+      return { index: column.index, row: n, id: references?.get(referenceKey(column.index, n)) }
     }
     case 'vector':
       return Array.from({ length: column.size }, (_, n) =>
@@ -35,7 +47,11 @@ export function cell(
     }
   }
 }
-export function rowsOf(blocks: readonly RowsBlock[], references?: ReadonlyMap<string, string>) {
+
+export function rowsOf(
+  blocks: readonly RowsBlock[],
+  references?: ReadonlyMap<string, string>,
+): Row[] {
   return blocks.flatMap((block) => {
     const length = block.rows.kind === 'range' ? block.rows.count : block.rows.values.length
     return Array.from({ length }, (_, row) => ({
@@ -50,6 +66,8 @@ export function rowsOf(blocks: readonly RowsBlock[], references?: ReadonlyMap<st
     }))
   })
 }
+
+/** A cell as text: a reference by its target's id, a missing value as a dash. */
 export function display(value: unknown): string {
   if (value && typeof value === 'object' && 'index' in value && 'row' in value)
     return 'id' in value && typeof value.id === 'string'
@@ -62,11 +80,12 @@ export function display(value: unknown): string {
       : String(value)
 }
 
-/** Resolve only visible references through their Latkit row space; never display physical row numbers. */
+/** The ids of the rows the reference columns of `blocks` point at, for `rowsOf`; physical row
+ *  numbers are never shown. */
 export async function referenceNames(
   blocks: readonly RowsBlock[],
   query: (query: RowsQuery) => Promise<RowsBlock[]>,
-) {
+): Promise<Map<string, string>> {
   const groups = new Map<string, { index: Index; rows: Set<number> }>()
   for (const block of blocks)
     for (const column of Object.values(block.columns)) {
@@ -85,17 +104,16 @@ export async function referenceNames(
   const names = new Map<string, string>()
   for (const { index, rows } of groups.values()) {
     const values = Uint32Array.from(rows)
-    for (let start = 0; start < values.length; start += 100) {
+    for (let start = 0; start < values.length; start += PAGE) {
       const found = await query({
         kind: 'rows',
         from: index.type,
         select: [],
         ids: true,
-        limit: 100,
-        rows: { kind: 'indices', index, values: values.slice(start, start + 100) },
+        limit: PAGE,
+        rows: { kind: 'indices', index, values: values.slice(start, start + PAGE) },
       })
-      for (const row of rowsOf(found))
-        if (row.id) names.set(JSON.stringify([index, row.row]), row.id)
+      for (const row of rowsOf(found)) if (row.id) names.set(referenceKey(index, row.row), row.id)
     }
   }
   return names

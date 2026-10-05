@@ -1,10 +1,10 @@
-/** Immutable Natural Earth boundaries in longitude/latitude. Public-domain source; regenerate with pnpm borders. */
+/** Natural Earth (public domain) coasts and borders in longitude and latitude. */
 
 import { createData, type Data, type RowBatch, type Schema, textColumn } from '@latkit/model'
 
 /** The kinds of border, by the type the network draws each as. */
 export const BORDERS = ['Coast', 'Country', 'Province'] as const
-export type Border = (typeof BORDERS)[number]
+type Border = (typeof BORDERS)[number]
 
 /** One kind's lines: where each starts among its points, which run longitude, latitude. */
 interface Lines {
@@ -12,12 +12,12 @@ interface Lines {
   readonly points: Float32Array
 }
 
+/** The build copies the file beside the webview's scripts. */
 const FILE = new URL(
   './borders.bin',
   document.querySelector<HTMLScriptElement>('script[type=module]')!.src,
 )
 const VERSION = 'natural-earth-5.1.2'
-/** Each kind of border: its lines, each a list of longitude, latitude points. */
 const KIND = {
   fields: {
     points: {
@@ -29,8 +29,7 @@ const KIND = {
 const SCHEMA: Schema = { types: Object.fromEntries(BORDERS.map((type) => [type, KIND])) }
 let loading: Promise<Data> | null = null
 
-/** The borders, fetched with the page's assets the first time they are asked for; a failed fetch is
- *  tried again the next time. */
+/** The borders, fetched on first call; a failed fetch is retried on the next. */
 export function loadBorders(): Promise<Data> {
   loading ??= fetch(FILE)
     .then(async (response) => {
@@ -44,8 +43,9 @@ export function loadBorders(): Promise<Data> {
   return loading
 }
 
-/** The borders `bytes` hold, as `pnpm borders` writes them. */
-export function bordersOf(bytes: ArrayBuffer): Data {
+/** Parses the file: a u32 header length, a JSON header of layers, every layer's line starts (u32),
+ *  then every layer's points (f32 pairs). */
+function bordersOf(bytes: ArrayBuffer): Data {
   const length = new DataView(bytes).getUint32(0, true)
   const { layers } = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 4, length))) as {
     readonly layers: readonly {

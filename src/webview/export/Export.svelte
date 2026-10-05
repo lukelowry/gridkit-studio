@@ -1,10 +1,10 @@
-<!-- Configure and export video using separate renderers so VS Code stays usable. -->
 <script lang="ts">
   import type { Positions } from '@latkit/diagram'
   import type { Data } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
+  import { message } from '../../shared/format.js'
   import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
@@ -22,6 +22,8 @@
     viewsOf,
   } from './video.js'
 
+  const ENDS = [0, 1] as const
+
   let view = $state.raw<ViewState>({})
   let settings = $state.raw<VideoSettings>(DEFAULTS)
   let progress = $state.raw<VideoProgress | null>(null)
@@ -29,16 +31,16 @@
   let error = $state<string | null>(null)
   /** Where the last video was written. */
   let saved = $state('')
-  /** The run the times were taken from, and whether the reader has set them since. */
+  /** The run the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  /** The case the extension streamed for the export under way, and where its elements stand. */
+  /** The streamed case, and where its elements stand. */
   let rows: Data | undefined
   let samples: Data | undefined
   let placement: Record<string, Positions> = {}
   let presentation: Record<string, Positions> = {}
   let stop: AbortController | undefined
-  /** Whether the reader gave the export under way up. */
+  /** Whether the user cancelled the running export. */
   let cancelled = false
   const owner = new CanvasGpu()
   const id = $props.id()
@@ -61,7 +63,7 @@
     })
   }
 
-  /** Set one end of the times exported. */
+  /** Set one end of the time range. */
   function bound(end: 0 | 1, value: number): void {
     touched = true
     change({
@@ -74,7 +76,7 @@
     if (range) change({ timeRange: [range[0], range[1]] })
   }
 
-  /** Export the video to a file the reader picks, written as the video is made. */
+  /** Export to a file the user picks, written as frames are encoded. */
   async function start(): Promise<void> {
     if (busy || blocked !== null || !view.summary) return
     const chosen = settings
@@ -106,8 +108,12 @@
         0,
       )
       if (!rows || !samples) throw new Error('The case could not be read.')
-      const gpu = await owner.get(() => control.abort(new Error('WebGPU device lost.')))
+      const gpu = await owner.get()
       signal.throwIfAborted()
+      // Each export follows the device it draws on, which an earlier export may have created.
+      const lost = () => control.abort(new Error('WebGPU device lost.'))
+      if (gpu.signal.aborted) lost()
+      gpu.signal.addEventListener('abort', lost, { once: true, signal })
       const handle = file
       const output = new WritableStream<VideoWrite>({
         write: ({ position, bytes }) =>
@@ -126,9 +132,8 @@
       status = 'done'
     } catch (reason) {
       status = cancelled ? 'cancelled' : 'failed'
-      // An export stopped for a reason fails with that reason, not with the abort it caused.
-      const cause = signal.aborted && signal.reason instanceof Error ? signal.reason : reason
-      error = cause instanceof Error ? cause.message : String(cause)
+      // Report why the export was aborted, not the abort error it caused.
+      error = message(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
       if (file !== null)
         await bridge.request('videoClose', { file, abort: true }, undefined, 0).catch(() => {})
@@ -143,7 +148,7 @@
         view = merged(view, message.state)
         appearance(view.settings)
         const run = view.run
-        // The times start as the run's, and stay so until the reader sets them.
+        // The time range follows the run until the user edits it.
         if (run && run.domain[1] > run.domain[0] && (run.id !== seeded || !touched) && !busy) {
           if (run.id !== seeded) touched = false
           seeded = run.id
@@ -214,32 +219,21 @@
       <p class="c-note">Views appear in selection order, with their current framing.</p>
     </Section>
     <Section label="Time">
-      <div class="c-row c-setting-row">
-        <label class="c-row__label" for={id + '-start'}>Start (s)</label>
-        <input
-          id={id + '-start'}
-          class="c-input"
-          type="number"
-          step="any"
-          min={range?.[0]}
-          max={range?.[1]}
-          value={settings.timeRange[0]}
-          oninput={(event) => bound(0, event.currentTarget.valueAsNumber)}
-        />
-      </div>
-      <div class="c-row c-setting-row">
-        <label class="c-row__label" for={id + '-end'}>End (s)</label>
-        <input
-          id={id + '-end'}
-          class="c-input"
-          type="number"
-          step="any"
-          min={range?.[0]}
-          max={range?.[1]}
-          value={settings.timeRange[1]}
-          oninput={(event) => bound(1, event.currentTarget.valueAsNumber)}
-        />
-      </div>
+      {#each ENDS as end (end)}
+        <div class="c-row c-setting-row">
+          <label class="c-row__label" for="{id}-{end}">{end ? 'End' : 'Start'} (s)</label>
+          <input
+            id="{id}-{end}"
+            class="c-input"
+            type="number"
+            step="any"
+            min={range?.[0]}
+            max={range?.[1]}
+            value={settings.timeRange[end]}
+            oninput={(event) => bound(end, event.currentTarget.valueAsNumber)}
+          />
+        </div>
+      {/each}
       <button
         type="button"
         class="c-btn c-btn--sm export__range"

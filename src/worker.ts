@@ -15,16 +15,24 @@ import {
 } from '@latkit/model'
 
 import catalogJson from '../catalog.json'
-import { Case } from './gridkit/case.js'
-import { catalogOf } from './gridkit/definition.js'
-import { diagnose, editable, editField, sourceRange } from './gridkit/edits.js'
-import { completionsAt, sourceContext } from './gridkit/navigation.js'
-import { parametersOf, selections } from './gridkit/parameters.js'
-import { placement } from './gridkit/placement.js'
-import { Simulation } from './gridkit/simulation.js'
-import { applyChanges, presentation, transaction } from './gridkit/transactions.js'
-import { ResultCache, Results } from './results/results.js'
-import { importedFields } from './results/selection.js'
+import {
+  applyChanges,
+  Case,
+  catalogOf,
+  completionsAt,
+  diagnose,
+  editable,
+  parametersOf,
+  placement,
+  presentation,
+  selections,
+  Simulation,
+  sourceContext,
+  sourceRange,
+  transaction,
+} from './gridkit/index.js'
+import { importedFields, ResultCache, Results } from './results/index.js'
+import { message } from './shared/format.js'
 import type {
   FromWorker,
   Request,
@@ -37,6 +45,7 @@ import type {
 import { nameFieldOf } from './shared/schema.js'
 
 const port = parentPort!
+const BLOCK_BYTES = 256 << 10
 const catalog = catalogOf(JSON.stringify(catalogJson))
 const cases = new Map<string, { kase: Case; summary: Summary }>()
 const parses = new Map<string, number>()
@@ -57,6 +66,7 @@ const send = (message: FromWorker, buffers: readonly ArrayBufferLike[] = []) =>
     message,
     buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer),
   )
+/** The case parsed at `revision`; throws unless it is the latest parse. */
 const get = (revision: Revision) => {
   const entry = cases.get(revision.uri)
   if (
@@ -74,6 +84,7 @@ const findRun = (id: string) => {
   }
   throw new Error('The run is no longer open.')
 }
+/** Sends `batches` for request `id`; resolves once the view acknowledges them. */
 async function emit(id: number, batches: readonly DataBatch[], signal: AbortSignal) {
   signal.throwIfAborted()
   await new Promise<void>((resolve, reject) => {
@@ -98,6 +109,7 @@ async function emit(id: number, batches: readonly DataBatch[], signal: AbortSign
     send({ kind: 'batch', id, batches }, blockBuffers(batches))
   })
 }
+/** Keeps `run` as the case's newest, disposing all but its two newest runs. */
 async function retain(uri: string, run: Results) {
   const runs = histories.get(uri) ?? []
   runs.unshift(run)
@@ -135,53 +147,52 @@ function runCase(input: RunRequest) {
     let logCount = 0
     let dropped = 0
     let retained = false
-    {
-      try {
-        send({ kind: 'run', info })
-        await simulation.run(input.values as Arguments<Parameters>, {
-          signal: controller.signal,
-          outputs: input.outputs,
-          maxBlockBytes: 256 << 10,
-          publish: async () => {
-            if (!retained && simulation.results) {
-              await retain(input.uri, simulation.results)
-              retained = true
-            }
-          },
-          progress: () => {
-            if (performance.now() - lastProgress > 100) {
-              send({ kind: 'run', info })
-              lastProgress = performance.now()
-            }
-          },
-          log: (entry) => {
-            if (Date.now() - logWindow > 1000) {
-              if (dropped)
-                send({
-                  kind: 'log',
-                  uri: input.uri,
-                  message: `${dropped} solver log lines omitted.`,
-                })
-              dropped = 0
-              logWindow = Date.now()
-              logCount = 0
-            }
-            if (++logCount <= 100) send({ kind: 'log', uri: input.uri, message: entry.message })
-            else dropped++
-          },
-        })
-        info.state = 'complete'
-      } catch (error) {
-        info.state = controller.signal.aborted ? 'cancelled' : 'failed'
-        info.message = error instanceof Error ? error.message : String(error)
-      } finally {
-        if (!retained && simulation.results) await retain(input.uri, simulation.results)
-        if (!simulation.results)
-          await new Results(info, kase, [], cache, directory).dispose(scratch)
-        send({ kind: 'run', info })
-      }
-      return info
+    try {
+      send({ kind: 'run', info })
+      await simulation.run(input.values as Arguments<Parameters>, {
+        signal: controller.signal,
+        outputs: input.outputs,
+        maxBlockBytes: BLOCK_BYTES,
+        publish: async () => {
+          if (!retained && simulation.results) {
+            await retain(input.uri, simulation.results)
+            retained = true
+          }
+        },
+        progress: () => {
+          if (performance.now() - lastProgress > 100) {
+            send({ kind: 'run', info })
+            lastProgress = performance.now()
+          }
+        },
+        // At most 100 lines a second; the rest are counted, and the count sent.
+        log: (entry) => {
+          if (Date.now() - logWindow > 1000) {
+            if (dropped)
+              send({
+                kind: 'log',
+                uri: input.uri,
+                message: `${dropped} solver log lines omitted.`,
+              })
+            dropped = 0
+            logWindow = Date.now()
+            logCount = 0
+          }
+          if (++logCount <= 100) send({ kind: 'log', uri: input.uri, message: entry.message })
+          else dropped++
+        },
+      })
+      info.state = 'complete'
+    } catch (error) {
+      info.state = controller.signal.aborted ? 'cancelled' : 'failed'
+      info.message = message(error)
+    } finally {
+      if (!retained && simulation.results) await retain(input.uri, simulation.results)
+      // Without results, nothing else deletes the run's folder.
+      if (!simulation.results) await new Results(info, kase, [], cache, directory).dispose(scratch)
+      send({ kind: 'run', info })
     }
+    return info
   })().finally(() => running.delete(input.uri))
   running.set(input.uri, { controller, done })
   return done
@@ -245,7 +256,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       const blocks: QueryBlock[] = []
       for await (const block of read(data, query, {
         signal,
-        maxBlockBytes: 256 << 10,
+        maxBlockBytes: BLOCK_BYTES,
         buffers: 'owned',
       }))
         blocks.push(block)
@@ -274,7 +285,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       if (request.input.includeStatic !== false)
         for await (const batch of selectBatches(kase.data, statics, {
           signal,
-          maxBlockBytes: 256 << 10,
+          maxBlockBytes: BLOCK_BYTES,
           buffers: 'owned',
         }))
           await bounded(batch)
@@ -291,7 +302,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
           const data = await run.pageData(pages, signal)
           for await (const batch of selectBatches(data, sampled, {
             signal,
-            maxBlockBytes: 256 << 10,
+            maxBlockBytes: BLOCK_BYTES,
             buffers: 'owned',
           }))
             if (batch.kind === 'samples') await bounded(batch)
@@ -331,27 +342,14 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
     case 'step': {
       const run = findRun(request.input.run)
       const { at, direction } = request.input
-      const pages = direction > 0 ? run.pages : [...run.pages].reverse()
-      for (const page of pages) {
-        if (direction > 0 ? page.domain[1] <= at : page.domain[0] >= at) continue
-        const batches = await run.decode(page.start, page.end, page.first, signal)
-        const times = batches
-          .filter(
-            (batch) =>
-              batch.index.type === batches[0]?.index.type &&
-              Object.keys(batch.columns)[0] === Object.keys(batches[0]?.columns ?? {})[0],
-          )
-          .flatMap((batch) => Array.from(batch.coordinates))
-        if (!times) continue
-        const next =
-          direction > 0
-            ? times.find((time) => time > at)
-            : Array.from(times)
-                .reverse()
-                .find((time) => time < at)
+      const forward = direction > 0
+      for (const page of forward ? run.pages : [...run.pages].reverse()) {
+        if (forward ? page.domain[1] <= at : page.domain[0] >= at) continue
+        const times = await run.times(page, signal)
+        const next = forward ? times.find((time) => time > at) : times.findLast((time) => time < at)
         if (next !== undefined) return next
       }
-      return direction > 0 ? run.info.domain[1] : run.info.domain[0]
+      return forward ? run.info.domain[1] : run.info.domain[0]
     }
     case 'transact':
       return transaction(get(request.input).kase, request.input.mutations)
@@ -359,13 +357,6 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       return presentation(get(request.input).kase)
     case 'locate':
       return sourceRange(get(request.input).kase, request.input.id, request.input.field)
-    case 'edit':
-      return editField(
-        get(request.input).kase,
-        request.input.id,
-        request.input.field,
-        request.input.value,
-      )
     case 'run':
       return runCase(request.input)
     case 'stop': {
@@ -374,8 +365,6 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       await run?.done
       return null
     }
-    case 'runs':
-      return (histories.get(request.input.uri) ?? []).map((run) => run.info)
     case 'clear':
     case 'release': {
       const uri = request.input.uri
@@ -394,12 +383,8 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
     case 'import': {
       const { kase } = get(request.input)
       cache.limit = cacheLimit(request.input.cacheBytes)
-      const outputs = await importedFields(
-        kase,
-        request.input.path,
-        request.input.path.endsWith('.csv') ? 'csv' : 'arrow',
-        signal,
-      )
+      const format = request.input.path.endsWith('.csv') ? 'csv' : 'arrow'
+      const outputs = await importedFields(kase, request.input.path, format, signal)
       const info: RunInfo = {
         id: crypto.randomUUID(),
         revision: request.input,
@@ -407,7 +392,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
         name: basename(request.input.path),
         state: 'running',
         path: request.input.path,
-        format: request.input.path.endsWith('.csv') ? 'csv' : 'arrow',
+        format,
         frames: 0,
         domain: [0, 0],
         started: Date.now(),
@@ -444,27 +429,26 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       }
   }
 }
-port.on('message', (message: ToWorker) => {
-  if (message.kind === 'ack') return acknowledgements.get(message.id)?.()
-  if (message.kind === 'cancel') return operations.get(message.id)?.abort(new Error('Cancelled'))
-  if (message.kind !== 'request') return
+port.on('message', (request: ToWorker) => {
+  if (request.kind === 'ack') return acknowledgements.get(request.id)?.()
+  if (request.kind === 'cancel') return operations.get(request.id)?.abort(new Error('Cancelled'))
   const controller = new AbortController()
-  operations.set(message.id, controller)
-  void handle(message, controller.signal)
+  operations.set(request.id, controller)
+  void handle(request, controller.signal)
     .then(
       (value) =>
         send(
-          { kind: 'result', id: message.id, value },
-          message.method === 'query' ? blockBuffers(value) : [],
+          { kind: 'result', id: request.id, value },
+          request.method === 'query' ? blockBuffers(value) : [],
         ),
       (error) =>
         send({
           kind: 'error',
-          id: message.id,
-          message: error instanceof Error ? error.message : String(error),
+          id: request.id,
+          message: message(error),
           offset: error?.offset,
           length: error?.length,
         }),
     )
-    .finally(() => operations.delete(message.id))
+    .finally(() => operations.delete(request.id))
 })

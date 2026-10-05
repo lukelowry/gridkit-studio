@@ -1,6 +1,6 @@
-/** View benchmarks inside VS Code, after latkit's: each scenario's time over RUNS, and its exact work
- *  per run, which tests/benchmarks/gate.mjs holds to tests/benchmarks/work.json. Each case's first
- *  open also checks that the canvas fills its editor, and geographic cases that borders draw. */
+/** Network view benchmarks inside VS Code: each scenario's time over RUNS, and its exact work per
+ *  run, which gate.mjs holds to work.json. Each case also checks that its canvas fills the editor,
+ *  and each geographic case that borders draw. */
 
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { pause, testHost } from '../vscode/harness.js'
+import { fills, idle, testHost } from '../vscode/harness.js'
 
 /** Cases by bus count; the gate checks time per bus across them. */
 const CASES = [
@@ -47,23 +47,12 @@ export async function run() {
       const group = `network ${buses} buses`
       let network!: Frame
       let uri!: vscode.Uri
-      const stats = () => network.evaluate<Stats>('gridkitStats()')
       /** The next frame after `frames`, as soon as it draws. */
       const painted = (frames: number) =>
         network.waitForFunction('(frames) => gridkitStats().frames > frames', frames, {
           polling: 'raf',
           timeout: 60_000,
         })
-      /** The counters once the view stops drawing. */
-      async function settled(): Promise<Stats> {
-        let last = await stats()
-        for (;;) {
-          await pause(250)
-          const now = await stats()
-          if (now.frames === last.frames) return now
-          last = now
-        }
-      }
 
       const firsts: number[] = []
       const shown: number[] = []
@@ -78,34 +67,25 @@ export async function run() {
           ),
         )
       }
-      // Until the view settles, and what the reader sees first: the page's own first frame.
+      // Until the view settles, and until the page's own first frame: what the user sees first.
       timings[group + ' > first frame'] = firsts
       timings[group + ' > first frame (page)'] = shown
-      const page = await network.evaluate<{
-        fills: boolean
-        marks: Record<string, number>
-      }>(`(() => {
-        const rect = document.querySelector('canvas').getBoundingClientRect()
-        return {
-          fills: [rect.x, rect.y, rect.width - innerWidth, rect.height - innerHeight]
-            .every((v) => Math.abs(v) < 1) && getComputedStyle(document.body).padding === '0px',
-          marks: Object.fromEntries(performance.getEntriesByType('mark').map((e) => [e.name, e.startTime])),
-        }
-      })()`)
-      assert.ok(page.fills, path + ': the canvas fills its editor')
-      stages[group] = page.marks
+      assert.ok(await fills(network), path + ': the canvas fills its editor')
+      stages[group] = await network.evaluate(
+        'Object.fromEntries(performance.getEntriesByType("mark").map((e) => [e.name, e.startTime]))',
+      )
 
       async function measure(scenario: string, act: (i: number) => unknown) {
         const samples: number[] = []
-        const first = await settled()
+        const first = await idle<Stats>(network)
         for (let i = 0; i < RUNS; i++) {
-          const { frames } = await settled()
+          const { frames } = await idle<Stats>(network)
           const start = performance.now()
           await act(i)
           await painted(frames)
           samples.push(performance.now() - start)
         }
-        const last = await settled()
+        const last = await idle<Stats>(network)
         timings[`${group} > ${scenario}`] = samples
         work[`${group} > ${scenario}`] = Object.fromEntries([
           ...WORK.map((key) => [key, Math.round((last[key] - first[key]) / RUNS)]),
@@ -125,10 +105,10 @@ export async function run() {
       )
       await settings.update('network.vertices.labels', undefined, global)
 
-      // Borders are drawn only on Earth, after the first frame.
+      // Borders draw only on Earth, after the first frame.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {
         await measure('borders', (i) => settings.update('network.borders', i % 2 === 1, global))
-        const without = await settled()
+        const without = await idle<Stats>(network)
         await settings.update('network.borders', undefined, global)
         await network.waitForFunction(
           '(segments) => gridkitStats().segments > segments',

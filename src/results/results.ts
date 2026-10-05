@@ -12,13 +12,13 @@ import {
   type SampleBatch,
 } from '@latkit/model'
 
-import type { Case } from '../gridkit/case.js'
-import type { Field } from '../gridkit/parameters.js'
+import type { Case, Field } from '../gridkit/index.js'
 import type { RunInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
-import { type Layout, readResults, samplesOf } from './decode.js'
+import { columnName, type Layout, readResults, samplesOf } from './decode.js'
+import { MESSAGE_BYTES } from './limits.js'
 
-/** Decoder arrays are borrowed and reused. Copy only exposed views, never their backing allocations. */
+/** Copies of a publication's batches, whose arrays the decoder reuses: each view, not its buffer. */
 function ownedSamples(publication: Publication): SampleBatch[] {
   const coordinates = new Map<Float64Array, Float64Array>()
   return publication.map((batch) => {
@@ -49,6 +49,20 @@ function ownedSamples(publication: Publication): SampleBatch[] {
     }
   })
 }
+
+/** The frame times of a page's batches: the coordinates of those of its first output. */
+function timesOf(batches: readonly SampleBatch[]): number[] {
+  const [first] = batches
+  if (!first) return []
+  const name = Object.keys(first.columns)[0]
+  return batches
+    .filter(
+      (batch) => batch.index.type === first.index.type && Object.keys(batch.columns)[0] === name,
+    )
+    .flatMap((batch) => Array.from(batch.coordinates))
+}
+
+/** Frames `first` on, `count` of them, between bytes `start` and `end` of the results file. */
 interface Page {
   start: number
   end: number
@@ -56,47 +70,51 @@ interface Page {
   count: number
   domain: Domain
 }
+
+/** Decoded pages by key; past `limit` bytes, the least recently used are dropped. */
 export class ResultCache {
-  readonly entries = new Map<string, { batches: readonly SampleBatch[]; bytes: number }>()
+  readonly #entries = new Map<string, { batches: readonly SampleBatch[]; bytes: number }>()
   bytes = 0
   constructor(public limit = 256 << 20) {}
   get(key: string) {
-    const found = this.entries.get(key)
+    const found = this.#entries.get(key)
     if (found) {
-      this.entries.delete(key)
-      this.entries.set(key, found)
+      this.#entries.delete(key)
+      this.#entries.set(key, found)
     }
     return found?.batches
   }
+  /** Copies of `publication`'s batches, whose arrays the caller may reuse once this returns; kept
+   *  unless they alone exceed the limit. */
   put(key: string, publication: Publication) {
-    // Take ownership before publication resolves; callers may immediately reuse their arrays.
     const batches = ownedSamples(publication)
     const bytes = blockByteLength(batches)
     if (bytes > this.limit) return batches
-    const old = this.entries.get(key)
+    const old = this.#entries.get(key)
     if (old) this.bytes -= old.bytes
-    this.entries.delete(key)
-    this.entries.set(key, { batches, bytes })
+    this.#entries.delete(key)
+    this.#entries.set(key, { batches, bytes })
     this.bytes += bytes
     while (this.bytes > this.limit) {
-      const [key, entry] = this.entries.entries().next().value!
-      this.entries.delete(key)
+      const [key, entry] = this.#entries.entries().next().value!
+      this.#entries.delete(key)
       this.bytes -= entry.bytes
     }
     return batches
   }
   drop(prefix: string) {
-    for (const [key, entry] of this.entries)
+    for (const [key, entry] of this.#entries)
       if (key.startsWith(prefix)) {
-        this.entries.delete(key)
+        this.#entries.delete(key)
         this.bytes -= entry.bytes
       }
   }
 }
-/** Sparse native-file offsets, with raw output as durable backing. No second archive format. */
+
+/** A run's results: page offsets into its native file, decoded on demand. */
 export class Results {
   readonly pages: Page[] = []
-  header = new Uint8Array()
+  #header = new Uint8Array()
   /** How every page of this run reads, from its header. */
   readonly #layout: Layout = {}
   #at = 0
@@ -108,80 +126,13 @@ export class Results {
     readonly cache: ResultCache,
     readonly ownedDirectory?: string,
   ) {}
-  /** The frames between `start` and `end` of the file, the first of them frame `first`; `held` is
-   *  those bytes when the caller has them already. */
-  async decode(
-    start: number,
-    end: number,
-    first: number,
-    signal: AbortSignal,
-    held?: Uint8Array,
-  ): Promise<SampleBatch[]> {
-    const bytes = held ?? (await this.#read(start, end))
-    const batches: SampleBatch[] = []
-    await readResults(
-      Readable.from([this.header, bytes]),
-      this.fields,
-      this.kase,
-      {
-        signal,
-        publish: (frames) => {
-          batches.push(
-            ...ownedSamples(
-              samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
-            ),
-          )
-        },
-      },
-      this.info.format,
-      64,
-      this.#layout,
-    )
-    return batches
+
+  async times(page: Page, signal: AbortSignal): Promise<number[]> {
+    return timesOf(await this.#decode(page.start, page.end, page.first, signal))
   }
-  async #read(start: number, end: number): Promise<Uint8Array> {
-    const file = await open(this.info.path, 'r')
-    try {
-      const bytes = new Uint8Array(end - start)
-      let read = 0
-      while (read < bytes.length) {
-        const { bytesRead } = await file.read(bytes, read, bytes.length - read, start + read)
-        if (!bytesRead) throw new Error('Result file changed while being read.')
-        read += bytesRead
-      }
-      return bytes
-    } finally {
-      await file.close()
-    }
-  }
-  async append(
-    start: number,
-    end: number,
-    signal: AbortSignal,
-    publish: (batches: Publication) => Promise<void>,
-    held?: Uint8Array,
-  ) {
-    const batches = await this.decode(start, end, this.info.frames, signal, held)
-    const coordinates = batches
-      .filter(
-        (b) =>
-          b.index.type === batches[0]?.index.type &&
-          Object.keys(b.columns)[0] === Object.keys(batches[0]?.columns ?? {})[0],
-      )
-      .flatMap((b) => Array.from(b.coordinates))
-    if (!coordinates.length) return
-    const low = coordinates[0]!
-    const high = coordinates.at(-1)!
-    if (low < this.#last) throw new Error('Result times must be nondecreasing.')
-    this.#last = high
-    const count = coordinates.length
-    const page = { start, end, first: this.info.frames, count, domain: [low, high] as Domain }
-    const owned = this.cache.put(this.info.id + ':' + this.pages.length, batches)
-    this.pages.push(page)
-    this.info.frames += count
-    this.info.domain = [this.pages[0]!.domain[0], high]
-    await publish(owned)
-  }
+
+  /** Follows the results file as the run writes it, cutting it into pages and publishing each.
+   *  Returns once `ended` and the file has nothing more. */
   async ingest(
     signal: AbortSignal,
     ended: () => boolean,
@@ -203,8 +154,8 @@ export class Results {
       let csvRows = 0
       let scan = 0
       let quoted = false
-      // A wide run's frame is megabytes: read in pieces of that order, so a frame is not regathered
-      // from many small reads.
+      // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
+      // gathered from many small reads.
       const chunk = Buffer.alloc(4 << 20)
       while (true) {
         signal.throwIfAborted()
@@ -224,25 +175,35 @@ export class Results {
               pending = pending.subarray(prefix)
               break
             }
-            if (metadataLength > 32 << 20) throw new Error('Arrow metadata exceeds 32 MiB.')
+            if (metadataLength > MESSAGE_BYTES) throw new Error('Arrow metadata exceeds 32 MiB.')
             if (pending.length < prefix + metadataLength) break
             const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
             const length = prefix + metadataLength + message.bodyLength
-            if (length > 32 << 20 || message.bodyLength < 0)
+            if (
+              !Number.isSafeInteger(message.bodyLength) ||
+              message.bodyLength < 0 ||
+              length > MESSAGE_BYTES
+            )
               throw new Error('Arrow batch exceeds 32 MiB.')
             if (pending.length < length) break
             if (message.header.kind === 'schema') {
-              if (this.header.length) throw new Error('Repeated Arrow schema.')
-              this.header = pending.subarray(0, length).slice()
+              if (this.#header.length) throw new Error('Repeated Arrow schema.')
+              this.#header = pending.subarray(0, length).slice()
             } else if (message.header.kind === 'batch')
-              await this.append(start, start + length, signal, publish, pending.subarray(0, length))
+              await this.#append(
+                start,
+                start + length,
+                signal,
+                publish,
+                pending.subarray(0, length),
+              )
             start += length
             pending = pending.subarray(length)
           }
         } else {
           while (scan < pending.length) {
             // Only the header quotes; past it, a frame ends at its newline.
-            if (this.header.length) {
+            if (this.#header.length) {
               const newline = pending.indexOf(10, scan)
               if (newline < 0) {
                 scan = pending.length
@@ -254,13 +215,13 @@ export class Results {
               if (byte === 34) quoted = !quoted
               if (byte !== 10 || quoted) continue
             }
-            if (!this.header.length) {
-              this.header = pending.subarray(0, scan).slice()
+            if (!this.#header.length) {
+              this.#header = pending.subarray(0, scan).slice()
               start += scan
               pending = pending.subarray(scan)
               scan = 0
             } else if (++csvRows >= 64 || scan >= 4 << 20) {
-              await this.append(start, start + scan, signal, publish, pending.subarray(0, scan))
+              await this.#append(start, start + scan, signal, publish, pending.subarray(0, scan))
               start += scan
               pending = pending.subarray(scan)
               scan = 0
@@ -268,14 +229,14 @@ export class Results {
             }
           }
           if (finished && pending.length) {
-            await this.append(start, start + pending.length, signal, publish, pending)
+            await this.#append(start, start + pending.length, signal, publish, pending)
             pending = Buffer.alloc(0)
           }
         }
-        if (pending.length > 32 << 20) throw new Error('Result record exceeds 32 MiB.')
+        if (pending.length > MESSAGE_BYTES) throw new Error('Result record exceeds 32 MiB.')
         if (finished) {
           if (pending.length) throw new Error('Results ended inside an Arrow message.')
-          if (!this.header.length) throw new Error('Results contain no header.')
+          if (!this.#header.length) throw new Error('Results contain no header.')
           break
         }
         if (!bytesRead) await setTimeout(40, undefined, { signal })
@@ -284,14 +245,12 @@ export class Results {
       await file.close()
     }
   }
+
   async pageData(p: number, signal: AbortSignal): Promise<Data> {
-    const page = this.pages[p]!
-    const key = this.info.id + ':' + p
-    const batches =
-      this.cache.get(key) ??
-      this.cache.put(key, await this.decode(page.start, page.end, page.first, signal))
-    return appendData(this.kase.data, batches)
+    return appendData(this.kase.data, await this.#page(p, signal))
   }
+
+  /** The case's data with every page that overlaps `window` appended, within the cache's budget. */
   async data(window: Domain | undefined, signal: AbortSignal): Promise<Data> {
     let data = this.kase.data
     let bytes = 0
@@ -299,10 +258,7 @@ export class Results {
       const page = this.pages[p]!
       if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
       signal.throwIfAborted()
-      const key = this.info.id + ':' + p
-      const batches =
-        this.cache.get(key) ??
-        this.cache.put(key, await this.decode(page.start, page.end, page.first, signal))
+      const batches = await this.#page(p, signal)
       bytes += blockByteLength(batches)
       if (bytes > this.cache.limit)
         throw new Error('Query exceeds the sample memory budget; narrow its window.')
@@ -310,6 +266,7 @@ export class Results {
     }
     return data
   }
+
   async exportCsv(path: string, signal: AbortSignal) {
     if (resolve(path) === resolve(this.info.path))
       throw new Error('Choose a different file from the open run.')
@@ -319,17 +276,15 @@ export class Results {
     try {
       const names = [
         'time',
-        ...this.fields.flatMap((field) =>
-          Array.from(field.rows, (row) => {
-            const table = this.kase.table(field.index.type)
-            return `${table.shape.type}_${table.shape.kind === 'bus' ? this.kase.cell(table, 'name', row) : this.kase.native(table, row)}_${field.name}`
-          }),
-        ),
+        ...this.fields.flatMap((field) => {
+          const table = this.kase.table(field.index.type)
+          return Array.from(field.rows, (row) => columnName(this.kase, table, row, field.name))
+        }),
       ]
       await file.write(names.map((n) => '"' + n.replaceAll('"', '""') + '"').join(',') + '\n')
       for (const page of this.pages) {
-        const batches = await this.decode(page.start, page.end, page.first, signal)
-        // Decoder publications contain one batch per field for each common frame tile.
+        const batches = await this.#decode(page.start, page.end, page.first, signal)
+        // Each tile of frames holds one batch per field.
         for (let at = 0; at < batches.length; at += this.fields.length) {
           const tile = batches.slice(at, at + this.fields.length)
           const first = tile[0]!
@@ -353,6 +308,8 @@ export class Results {
       await file.close()
     }
   }
+
+  /** Drops the run's cached pages, and deletes its folder if it owns one under `scratchRoot`. */
   async dispose(scratchRoot: string) {
     this.cache.drop(this.info.id + ':')
     if (this.ownedDirectory) {
@@ -361,5 +318,90 @@ export class Results {
       if (!target.startsWith(root)) throw new Error('Run cleanup escaped the scratch directory.')
       await rm(target, { recursive: true, force: true, maxRetries: 3 })
     }
+  }
+
+  /** The frames between `start` and `end` of the file, the first of them frame `first`; `held` is
+   *  those bytes when the caller has them already. */
+  async #decode(
+    start: number,
+    end: number,
+    first: number,
+    signal: AbortSignal,
+    held?: Uint8Array,
+  ): Promise<SampleBatch[]> {
+    const bytes = held ?? (await this.#read(start, end))
+    const batches: SampleBatch[] = []
+    await readResults(
+      Readable.from([this.#header, bytes]),
+      this.fields,
+      this.kase,
+      {
+        signal,
+        publish: (frames) => {
+          batches.push(
+            ...ownedSamples(
+              samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
+            ),
+          )
+        },
+      },
+      this.info.format,
+      this.#layout,
+    )
+    return batches
+  }
+
+  async #read(start: number, end: number): Promise<Uint8Array> {
+    const file = await open(this.info.path, 'r')
+    try {
+      const bytes = new Uint8Array(end - start)
+      let read = 0
+      while (read < bytes.length) {
+        const { bytesRead } = await file.read(bytes, read, bytes.length - read, start + read)
+        if (!bytesRead) throw new Error('Result file changed while being read.')
+        read += bytesRead
+      }
+      return bytes
+    } finally {
+      await file.close()
+    }
+  }
+
+  /** Decodes the page between `start` and `end`, caches it, and publishes it. */
+  async #append(
+    start: number,
+    end: number,
+    signal: AbortSignal,
+    publish: (batches: Publication) => Promise<void>,
+    held?: Uint8Array,
+  ) {
+    const batches = await this.#decode(start, end, this.info.frames, signal, held)
+    const coordinates = timesOf(batches)
+    if (!coordinates.length) return
+    const low = coordinates[0]!
+    const high = coordinates.at(-1)!
+    if (low < this.#last) throw new Error('Result times must be nondecreasing.')
+    this.#last = high
+    const count = coordinates.length
+    const page = { start, end, first: this.info.frames, count, domain: [low, high] as Domain }
+    const owned = this.cache.put(this.#key(this.pages.length), batches)
+    this.pages.push(page)
+    this.info.frames += count
+    this.info.domain = [this.pages[0]!.domain[0], high]
+    await publish(owned)
+  }
+
+  /** Page `p`'s batches, from the cache, or decoded again into it. */
+  async #page(p: number, signal: AbortSignal): Promise<readonly SampleBatch[]> {
+    const page = this.pages[p]!
+    const key = this.#key(p)
+    return (
+      this.cache.get(key) ??
+      this.cache.put(key, await this.#decode(page.start, page.end, page.first, signal))
+    )
+  }
+
+  #key(p: number): string {
+    return this.info.id + ':' + p
   }
 }

@@ -1,3 +1,5 @@
+/** Mappings: staging and applying a field's channels, unbinding, and bindings made elsewhere. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'

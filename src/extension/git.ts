@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 
-// Minimal boundary of the built-in Git extension's versioned public API.
+/** The parts of the built-in Git extension's public API used here. */
 interface GitApi {
   getRepository(uri: vscode.Uri): { rootUri: vscode.Uri } | null
   getRepositoryRoot(uri: vscode.Uri): Promise<vscode.Uri | null>
@@ -26,7 +26,7 @@ export async function reviewChanges(uri: vscode.Uri) {
   } catch {
     throw new Error('This case has no committed version yet. Use Source Control to add it.')
   }
-  // The right side is the existing TextDocument, including unsaved diagram edits.
+  // The right side is the open document, so unsaved edits show.
   await vscode.commands.executeCommand(
     'vscode.diff',
     base,

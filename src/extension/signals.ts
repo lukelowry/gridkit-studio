@@ -1,5 +1,4 @@
-/** Monitored Signals: what the runs to come record, as a native tree of each type's values a run
- *  can record, checked where it records them. */
+/** Monitored Signals: a checkbox tree of what future runs record. */
 
 import type { FieldSelection } from '@latkit/model'
 import * as vscode from 'vscode'
@@ -8,7 +7,7 @@ import type { Summary } from '../shared/messages.js'
 import { fieldName, typeName } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
 
-/** A type a run can record, or one of its values when it names a field. */
+/** A recordable type, or one of its fields when `field` is set. */
 class Signal extends vscode.TreeItem {
   constructor(
     readonly type: string,
@@ -20,7 +19,7 @@ class Signal extends vscode.TreeItem {
   }
 }
 
-/** The types of `summary` a run can record: those with elements, each with its sampled fields. */
+/** The types in `summary` with elements and sampled fields, each with those fields. */
 function recordable(summary: Summary): { type: string; fields: string[] }[] {
   return Object.entries(summary.schema.types).flatMap(([type, { fields }]) => {
     const sampled = Object.keys(fields).filter((field) => fields[field]!.sampled === true)
@@ -46,7 +45,7 @@ const checked = (on: boolean) =>
 
 export function registerSignals(studio: Sessions) {
   const changed = new vscode.EventEmitter<void>()
-  /** The case on show, its last valid revision, and what its runs to come record. */
+  /** The active case, its last parsed summary, and what its future runs record. */
   const shown = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
@@ -116,8 +115,8 @@ export function registerSignals(studio: Sessions) {
     studio.record(now.uri, outputs)
   })
 
-  /** Show what the case on show records, when it or its recording changed. */
   let revision = ''
+  /** Redraw when the active case, its revision, its recording, or its error changes. */
   const refresh = () => {
     const now = shown()
     const error = studio.active ? studio.state(studio.active).error : undefined

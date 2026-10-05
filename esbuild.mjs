@@ -1,19 +1,23 @@
+/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
+ *  `--watch` rebuilds on change, unminified. */
+
 import { copyFile, mkdir, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { build, context } from 'esbuild'
 import svelte from 'esbuild-svelte'
+
 const root = dirname(fileURLToPath(import.meta.url))
 const output = resolve(root, 'dist')
-if (dirname(output) !== root) throw new Error('Build output escaped the repository.')
+const watch = process.argv.includes('--watch')
 await rm(output, { recursive: true, force: true })
 await mkdir(output, { recursive: true })
 const common = {
   bundle: true,
   sourcemap: true,
   logLevel: 'info',
-  minify: !process.argv.includes('--watch'),
+  minify: !watch,
 }
 const builds = [
   {
@@ -46,7 +50,7 @@ const builds = [
 ]
 for (const options of builds) {
   const config = { ...common, ...options }
-  if (process.argv.includes('--watch')) await (await context(config)).watch()
+  if (watch) await (await context(config)).watch()
   else await build(config)
 }
 

@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # GridKit is installed in the dev container, so what runs it is tested there.
+      # GridKit is installed only in the dev container, so the tests that run it run there.
       - uses: devcontainers/ci@v0.3
         with:
           push: never

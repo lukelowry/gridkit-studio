@@ -19,7 +19,6 @@ import { isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { font, palette } from '../theme.js'
 
-/** What the reader chose. */
 export interface VideoSettings {
   readonly views: readonly VideoView[]
   readonly layout: 'column' | 'row'
@@ -45,9 +44,9 @@ export const DEFAULTS: VideoSettings = {
   quality: 'high',
 }
 
-/** The case as the export draws it: the views' state, the case and its run's samples over the
- *  times exported, where its elements stand, and how its views were framed. */
-export interface VideoInputs {
+/** What the export draws: the view state, the case and its run's samples, where its elements
+ *  stand, and each view's camera. */
+interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
   readonly samples: Data
@@ -107,9 +106,8 @@ export function blockedReason(settings: VideoSettings, state: ViewState): string
   return null
 }
 
-/** Export the video to `output` as it is made. The views draw on renderers of their own, in their
- *  current framing and selection order, so VS Code stays usable; the run is colored by all of
- *  it. The caller closes or aborts `output`. */
+/** Encodes the views to `output` on renderers of their own, so VS Code stays usable; colors span
+ *  the whole run. The caller closes or aborts `output`. */
 export async function exportVideo(
   gpu: Gpu,
   settings: VideoSettings,
@@ -122,7 +120,7 @@ export async function exportVideo(
   const colors = palette()
   const face = font()
   const still = { input: 'none', motion: 'reduce' } as const
-  /** Each view's renderers, in the order the reader chose the views. */
+  /** Each view's renderers, in selection order. */
   const cells: View[][] = []
   const made: View[] = []
   const keep = <V extends View>(view: V): V => {
@@ -196,7 +194,7 @@ export async function exportVideo(
         )
       }
     }
-    // The views share the frame along the arrangement; a view of several plots stacks them in its share.
+    // Views split the frame along the arrangement; several plots stack within their view's share.
     const regions = cells.flatMap((views, at) => {
       const share = 1 / cells.length
       const [x, y, width, height] =

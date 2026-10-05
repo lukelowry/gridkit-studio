@@ -7,12 +7,11 @@ import { blockBuffers, read, type SampleBatch, selectBatches, staticFields } fro
 import { describe, expect, it } from 'vitest'
 
 import catalogJson from '../../catalog.json'
-import { Case } from '../gridkit/case.js'
-import { catalogOf } from '../gridkit/definition.js'
-import { selections } from '../gridkit/parameters.js'
+import { Case, catalogOf, selections } from '../gridkit/index.js'
 import type { RunInfo } from '../shared/messages.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultCache, Results } from './results.js'
+
 describe('native results and ownership', () => {
   it('takes ownership of reused decoder buffers before resolving', () => {
     const cache = new ResultCache(10000)
@@ -75,7 +74,6 @@ describe('native results and ownership', () => {
           },
         },
         'csv',
-        64,
         layout,
       )
       return values

@@ -1,24 +1,23 @@
-/*
-  The global component classes, which screens compose by name: buttons (c-btn and its size
-  and primary variants, c-icon-btn), the empty state, the text field, the form field (c-field), the
-  checkbox (c-check), notes, and the instrument row (c-row) that Switch and Row
-  share. Keyboard focus rings come from tokens.css.
-*/
+/* Global component classes, composed by name; focus rings come from tokens.css. */
 
-/* Buttons. A pressed or expanded button takes the selection tint; hover lifts the text. */
-.c-btn {
+/* Buttons. Hover lifts the text; a pressed or expanded button takes the selection tint. */
+.c-btn,
+.c-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--spacing-xs);
-  min-height: var(--control-h);
-  padding: var(--spacing-xs) var(--spacing-md);
   border-radius: var(--radius-lg);
   color: var(--color-text-2);
+  cursor: pointer;
+}
+
+.c-btn {
+  gap: var(--spacing-xs);
+  min-height: var(--spacing-row-h);
+  padding: var(--spacing-xs) var(--spacing-md);
   font-size: var(--text-sm);
   font-weight: 500;
   white-space: nowrap;
-  cursor: pointer;
   transition:
     color var(--motion-mid) var(--motion-hover),
     background-color var(--motion-mid) var(--motion-hover),
@@ -31,22 +30,44 @@
   block-size: 14px;
 }
 
-.c-btn:hover:not(:disabled) {
+/* A square button holding one glyph. */
+.c-icon-btn {
+  flex-shrink: 0;
+  min-width: var(--spacing-row-h);
+  min-height: var(--spacing-row-h);
+  line-height: 1;
+  transition:
+    color var(--motion-mid) var(--motion-hover),
+    background-color var(--motion-mid) var(--motion-hover);
+}
+
+.c-icon-btn svg {
+  flex-shrink: 0;
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+.c-btn:hover:not(:disabled),
+.c-icon-btn:hover:not(:disabled),
+button.c-row:hover:not(:disabled) {
   background: var(--color-row-hover);
   color: var(--color-text-1);
 }
 
-.c-btn:is([aria-expanded='true'], [aria-pressed='true']) {
-  background: var(--color-selected);
-  color: var(--color-primary-text);
-}
-
-.c-btn:disabled {
+.c-btn:disabled,
+.c-icon-btn:disabled,
+button.c-row:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
-/* The small button sits tighter around its label. */
+/* After the hover rule, which the icon button's selector ties on specificity. */
+.c-btn:is([aria-expanded='true'], [aria-pressed='true']),
+.c-icon-btn:is([aria-expanded='true'], [aria-pressed='true']):not(:disabled) {
+  background: var(--color-selected);
+  color: var(--color-primary-text);
+}
+
 .c-btn--sm {
   padding: var(--spacing-2xs) var(--spacing-sm);
 }
@@ -61,47 +82,7 @@
   color: var(--color-on-primary);
 }
 
-/* A square button holding one glyph. Inside a group of them, the pressed one marks the active
-   option through its ARIA state alone. */
-.c-icon-btn {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  min-width: var(--control-h);
-  min-height: var(--control-h);
-  border-radius: var(--radius-lg);
-  color: var(--color-text-2);
-  line-height: 1;
-  cursor: pointer;
-  transition:
-    color var(--motion-mid) var(--motion-hover),
-    background-color var(--motion-mid) var(--motion-hover);
-}
-
-.c-icon-btn svg {
-  flex-shrink: 0;
-  inline-size: 16px;
-  block-size: 16px;
-}
-
-.c-icon-btn:hover:not(:disabled) {
-  background: var(--color-row-hover);
-  color: var(--color-text-1);
-}
-
-/* After the hover rule, which it must outrank at equal specificity. */
-.c-icon-btn:is([aria-pressed='true'], [aria-expanded='true']):not(:disabled) {
-  background: var(--color-selected);
-  color: var(--color-primary-text);
-}
-
-.c-icon-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-/* An empty state: centered caption copy with room around it. */
+/* An empty state: centered caption copy. */
 .c-empty {
   display: flex;
   flex-direction: column;
@@ -109,7 +90,7 @@
   justify-content: center;
   gap: var(--spacing-md);
   padding: var(--spacing-xl) var(--spacing-lg);
-  color: var(--color-text-3);
+  color: var(--color-text-2);
   font-size: var(--text-sm);
   line-height: 1.5;
   text-align: center;
@@ -119,8 +100,10 @@
   max-width: 280px;
 }
 
-/* A search or filter field one row tall: mono type in a recessed well. */
-.c-input {
+/* Recessed boxes one row tall: c-input is a mono text field; c-field wraps a bare input and answers
+   hover and focus for it. */
+.c-input,
+.c-field {
   inline-size: 100%;
   min-block-size: var(--spacing-row-h);
   padding-inline: var(--spacing-sm);
@@ -128,11 +111,15 @@
   border-radius: var(--radius-md);
   background: var(--color-input);
   color: var(--vscode-input-foreground, var(--color-text-1));
+}
+
+.c-input {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
 }
 
-.c-input::placeholder {
+.c-input::placeholder,
+.c-field > input::placeholder {
   color: var(--color-text-2);
 }
 
@@ -140,26 +127,17 @@
   outline-offset: -1px;
 }
 
-/* A form field: a recessed box one row tall holding an input. The
-   box, not the input, answers hover and draws the focus ring; the input inside is bare. */
 .c-field {
   display: flex;
   align-items: center;
   gap: var(--spacing-xs);
-  inline-size: 100%;
-  min-block-size: var(--spacing-row-h);
-  padding-inline: var(--spacing-sm);
-  border: 1px solid var(--vscode-input-border, var(--color-border));
-  border-radius: var(--radius-md);
-  background: var(--color-input);
-  color: var(--vscode-input-foreground, var(--color-text-1));
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   transition: border-color var(--motion-fast) var(--motion-hover);
 }
 
 .c-field:hover {
-  border-color: var(--color-text-3);
+  border-color: var(--color-text-2);
 }
 
 .c-field:has(:focus-visible) {
@@ -174,11 +152,7 @@
   outline: none;
 }
 
-.c-field > input::placeholder {
-  color: var(--color-text-2);
-}
-
-/* Arrow keys step a number; the box keeps its width for the digits. */
+/* No spin buttons; arrow keys still step the number. */
 .c-field > input[type='number'] {
   appearance: textfield;
 }
@@ -189,44 +163,16 @@
   appearance: none;
 }
 
-.c-field:has(:disabled) {
-  opacity: 0.45;
-}
-
-/* A checkbox, before its label when it has one (which takes the press too). */
-.c-check {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  color: var(--color-text-2);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.c-check > input {
-  flex: none;
-  inline-size: 14px;
-  block-size: 14px;
-  accent-color: var(--color-primary);
-  cursor: inherit;
-}
-
-.c-check:has(:disabled) {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-/* The asterisk after a required field's label; the markup hides it from assistive technology. */
+/* A required field's asterisk; the markup hides it from assistive technology. */
 .c-required {
   margin-inline-start: 0.15em;
-  color: var(--color-red);
+  color: var(--color-error-text);
 }
 
-/* Explanatory copy under a group of rows, indented to the row label; the tones carry errors and
-   warnings in the same place. */
+/* Copy under a group of rows, indented to the row label, in a neutral, error, or warning tone. */
 .c-note {
   margin: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
-  color: var(--color-text-3);
+  color: var(--color-text-2);
   font-size: var(--text-xs);
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -240,8 +186,8 @@
   color: var(--color-warning-text);
 }
 
-/* The instrument row: a label on the left and a control or readout on the right, on one grid. As a
-   button (a Switch) the whole row is the hit target, and its focus ring sits inside it. */
+/* The instrument row: a label left and a control or readout right. As a button, the whole row is
+   the hit target and its focus ring sits inside. */
 .c-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -284,18 +230,7 @@ button.c-row:focus-visible {
   outline-offset: -2px;
 }
 
-button.c-row:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-button.c-row:hover:not(:disabled) {
-  background: var(--color-row-hover);
-  color: var(--color-text-1);
-}
-
-/* A settings body. Its rows answer the panel's width: label and control share the row in halves,
-   and stack, the control stretched to the full width, once the panel is narrow. */
+/* A settings body: label and control split each row, and stack once the panel is narrow. */
 .c-settings {
   container: settings / inline-size;
   min-inline-size: 0;
@@ -313,7 +248,7 @@ button.c-row:hover:not(:disabled) {
   }
 }
 
-/* Out of sight but still read by assistive technology. */
+/* Hidden from sight, still read by assistive technology. */
 .c-sr-only {
   position: absolute !important;
   inline-size: 1px !important;

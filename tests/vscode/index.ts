@@ -1,4 +1,4 @@
-/** Runs VS Code suites under Mocha, inside VS Code that holds the extension. */
+/** The Mocha entry for the VS Code suites, run inside the VS Code that holds the extension. */
 
 import Mocha from 'mocha'
 
@@ -21,7 +21,7 @@ export async function run(): Promise<void> {
     },
     afterAll: finish,
   })
-  // A suite registers as its module loads, which is once Mocha listens for it.
+  // Suites register as their modules load, so Mocha's globals must exist first.
   mocha.suite.emit('pre-require', globalThis, 'VS Code', mocha)
   await import('./suites.js')
   let pending = 0
@@ -32,6 +32,7 @@ export async function run(): Promise<void> {
       .on('pending', () => pending++)
       .on('pass', () => passed++),
   )
+  // A required run allows no skips, so the GridKit suites cannot pass by skipping.
   if (process.env.GRIDKIT_TEST_REQUIRED === '1' && (pending || !passed))
     throw new Error(`Required VS Code suite: ${pending} skipped, ${passed} passed.`)
   if (failures) throw new Error(failures + (failures === 1 ? ' test' : ' tests') + ' failed.')

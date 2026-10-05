@@ -1,18 +1,16 @@
+/** Appearance: high contrast, a compact window, and the case offered to language models. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until, visible } from './harness.js'
+import { type TestHost, testHost, theme, until, VIEWPORT, visible } from './harness.js'
 
 suite('Appearance', () => {
   let bench: TestHost
   let simulation: Frame
-  const theme = (name: string | undefined) =>
-    vscode.workspace
-      .getConfiguration()
-      .update('workbench.colorTheme', name, vscode.ConfigurationTarget.Global)
   const highContrast = async () =>
     !!(await simulation.locator('body').getAttribute('class'))?.includes('vscode-high-contrast')
 
@@ -35,7 +33,7 @@ suite('Appearance', () => {
       await visible(simulation, '[data-testid="study-run"]')
       await bench.capture('compact-vscode')
     } finally {
-      await bench.page.setViewportSize({ width: 1600, height: 1000 })
+      await bench.page.setViewportSize(VIEWPORT)
     }
   })
 

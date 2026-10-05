@@ -1,4 +1,4 @@
-<!-- Run the simulation; what it records is chosen in the native Monitored Signals view. -->
+<!-- The run form; the signals a run records are chosen in the native Monitored Signals view. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
   import { onMount } from 'svelte'
@@ -12,18 +12,18 @@
   import { problemOf, valueOf } from './values.js'
 
   let view = $state.raw<ViewState>({})
-  /** What the reader entered, by parameter name; one left out takes its default. */
+  /** Entered values by parameter name; a missing one takes its default. */
   let values = $state.raw<Readonly<Record<string, InputValue>>>({})
-  /** Each entry's text as typed, by parameter name. */
+  /** Text as typed by parameter name, so formatting a value never rewrites an entry mid-edit. */
   let text = $state.raw<Readonly<Record<string, string>>>({})
-  /** Each type's elements as choices, read once for each revision of the case. */
+  /** Element choices by type, cached per case revision. */
   let read: Record<string, Promise<readonly Choice[]>> = {}
   let revision: number | undefined
 
   const summary = $derived(view.summary)
   const run = $derived(view.run)
   const running = $derived(run?.state === 'running')
-  /** The parameters the form shows: a fault's, only while there is one. */
+  /** Fault parameters show only while the fault is on. */
   const parameters = $derived(
     Object.entries(summary?.parameters ?? {}).filter(
       ([name]) => !name.startsWith('fault_') || values.fault === true,
@@ -35,7 +35,7 @@
       : 'default' in parameter
         ? parameter.default
         : undefined
-  /** What keeps each parameter from running, by name. */
+  /** Validation messages by parameter name. */
   const problems = $derived.by(() => {
     const found: Record<string, string> = {}
     for (const [name, parameter] of parameters) {
@@ -45,17 +45,17 @@
     return found
   })
   const invalid = $derived(Object.keys(problems).length > 0)
-  /** How far through its span the run under way is; null until its command says how long it is. */
+  /** Run progress in percent; null until the run's span is known. */
   const percent = $derived(
     run?.span && run.span[1] > run.span[0]
       ? Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))
       : null,
   )
-  /** How many values the next run records. */
+  /** How many fields the next run records. */
   const selectedCount = $derived(
     (view.outputs ?? []).reduce((n, output) => n + output.select.length, 0),
   )
-  /** Where the newest run stands, as the bar reads it; nothing before any. */
+  /** The newest run's status for the bar; empty before any run. */
   const standing = $derived.by(() => {
     if (!run) return ''
     const frames = `${run.frames.toLocaleString()} samples`
@@ -71,7 +71,7 @@
     }
   })
 
-  /** The elements of `type` as a dropdown offers them: each by its id, and its name where it has one. */
+  /** Choices for the elements of `type`, labeled by short id, and name where it differs. */
   function elements(type: string): Promise<readonly Choice[]> {
     return (read[type] ??= bridge.request('elements', { type }).then((found) =>
       found.map(({ id, name }) => {
@@ -97,7 +97,7 @@
     const stop = bridge.on((message) => {
       if (message.kind !== 'state') return
       const incoming = (message.state.values ?? {}) as Readonly<Record<string, InputValue>>
-      // Another case, or values set elsewhere (a fault from a bus's menu), replace what was typed.
+      // Another case, or values set elsewhere (a bus menu's fault), discard the typed text.
       if (view.uri !== message.state.uri || JSON.stringify(values) !== JSON.stringify(incoming)) {
         values = incoming
         text = {}
@@ -208,9 +208,7 @@
 </div>
 
 <style>
-  /* Number inputs share one width in mono digits (read by Field). */
   .study {
-    --field-input-w: 9ch;
     display: flex;
     flex-direction: column;
     block-size: 100%;
@@ -243,20 +241,20 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* A hairline that fills as frames arrive; without a known end it stays an empty track. */
+  /* Reserves the bar's height so the form does not shift when a run starts. */
   .study__progress-slot {
     block-size: 2px;
     flex-shrink: 0;
   }
 
+  /* A hairline that fills as frames arrive; an empty track until the span is known. */
   .study__progress {
     block-size: 2px;
     overflow: hidden;
     background: var(--color-surface-3);
   }
 
-  /* Scaled rather than resized, so a report of frames costs no layout; eased linearly, since an
-     easing curve would misstate the rate. */
+  /* Scaled, not resized, to avoid layout; linear, since easing would misstate the rate. */
   .study__progress-done {
     display: block;
     block-size: 100%;

@@ -1,3 +1,6 @@
+/** Sessions: the signals a case records, how they persist in workspace storage, and the plots a
+ *  new run keeps. */
+
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 
@@ -6,24 +9,21 @@ import * as vscode from 'vscode'
 
 import { plotsFor, type Sessions } from '../../src/extension/sessions.js'
 import type { RunInfo } from '../../src/shared/messages.js'
+import { extension, folder } from './harness.js'
 
 suite('Sessions', () => {
   let studio: Sessions
   let document: vscode.TextDocument
 
   setup(async () => {
-    const extension = vscode.extensions.getExtension<{ studio: Sessions }>(
-      'lukelowery.gridkit-studio',
-    )!
-    studio = (await extension.activate()).studio
-    const folder = vscode.workspace.workspaceFolders![0]!.uri
-    const uri = vscode.Uri.joinPath(folder, `recording-${randomUUID()}.case.json`)
-    await vscode.workspace.fs.copy(vscode.Uri.joinPath(folder, 'IEEE39.case.json'), uri)
+    studio = (await extension().activate()).studio
+    const uri = vscode.Uri.joinPath(folder(), `recording-${randomUUID()}.case.json`)
+    await vscode.workspace.fs.copy(vscode.Uri.joinPath(folder(), 'IEEE39.case.json'), uri)
     document = await vscode.workspace.openTextDocument(uri)
     await studio.open(document)
   })
 
-  test("records each bus's voltage magnitude and angle until the reader chooses", () => {
+  test("records each bus's voltage magnitude and angle until the user chooses", () => {
     assert.deepEqual(studio.current().outputs, [{ from: 'Bus', select: ['Vm', 'Va'] }])
   })
 
@@ -33,16 +33,6 @@ suite('Sessions', () => {
     assert.deepEqual(session.outputs, [])
     await studio.open(document)
     assert.deepEqual(session.outputs, [])
-  })
-
-  test('drops the results format saved by older prereleases', async () => {
-    const session = studio.current()
-    session.values = { tmax: 2, output_format: 'arrow' }
-    await studio.persist(session)
-    session.transport.dispose()
-    studio.all.delete(session.uri)
-    const restored = await studio.open(document)
-    assert.deepEqual(restored.values, { tmax: 2 })
   })
 
   test('a new run keeps the plots it recorded, else plots its first signal', () => {

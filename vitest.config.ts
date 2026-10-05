@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     projects: [
-      // Beside the code they test, and run everywhere.
+      // Unit tests beside the code they test; they run anywhere.
       {
         test: {
           name: 'unit',
@@ -11,7 +11,7 @@ export default defineConfig({
           clearMocks: true,
         },
       },
-      // GridKit's own DynamicSimulation, run where GridKit is installed.
+      // GridKit's own DynamicSimulation, run where GridKit is installed or as GRIDKIT_IMAGE.
       {
         test: {
           name: 'simulation',

@@ -17,12 +17,16 @@ import type {
   TableState,
   ViewState,
 } from '../shared/messages.js'
-import type { SettingsValues } from '../shared/preferences.js'
+import {
+  defaults,
+  definitions,
+  type SettingsValues,
+  validateSettings,
+} from '../shared/preferences.js'
 import { networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
 import { Client } from './client.js'
-import { Documents } from './documents.js'
-import { settingsFor } from './settings.js'
+import { Documents, isWritable } from './documents.js'
 
 export interface Session {
   uri: string
@@ -37,21 +41,36 @@ export interface Session {
   /** Undefined until the first parsed case supplies defaults; an empty array records nothing. */
   outputs?: FieldSelection[]
   values: Record<string, unknown>
-  /** The case's playhead: it changes here, and every view integrates it between changes. */
+  /** The case's playhead; views extrapolate it between changes. */
   transport: Transport
   settings: SettingsValues
-  /** The times the Monitor's reader chose to show; absent, the plots show the run. */
+  /** The Monitor's chosen time window; absent, plots show the whole run. */
   window?: readonly [number, number]
   cameras: Cameras
   table: TableState
 }
-/** What a case keeps in the workspace between sessions. `recording` is what its runs record; a
- *  selection saved under any other name is not read. */
+/** Per-case workspace state; `recording` persists `Session.outputs`. */
 type Saved = Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table'>> & {
   recording?: FieldSelection[]
 }
 
-/** What a case's runs record until the reader chooses: each bus's voltage magnitude and angle. */
+/** The display settings for `uri`; an invalid value keeps its default. */
+function settingsFor(uri: vscode.Uri): SettingsValues {
+  const configuration = vscode.workspace.getConfiguration('gridkitStudio', uri)
+  const result = { ...defaults }
+  for (const { id } of definitions) {
+    const value = configuration.get(id)
+    if (value === undefined) continue
+    try {
+      Object.assign(result, validateSettings({ [id]: value }))
+    } catch {
+      // The user may be mid-edit.
+    }
+  }
+  return result
+}
+
+/** What runs record until the user chooses: each bus's voltage magnitude and angle. */
 export function defaultOutputs({ schema, counts }: Summary): FieldSelection[] {
   return networkOf(schema).vertices.flatMap((type) => {
     const fields = schema.types[type]!.fields
@@ -74,7 +93,7 @@ export class Sessions {
   readonly documents: Documents
   readonly all = new Map<string, Session>()
   readonly changed = new vscode.EventEmitter<string>()
-  /** A case's clock changed, or its following playhead moved with the head. */
+  /** Fires when a case's clock changes or its following playhead moves with the head. */
   readonly clock = new vscode.EventEmitter<string>()
   readonly action = new vscode.EventEmitter<{
     uri: string
@@ -145,10 +164,7 @@ export class Sessions {
       hasCase: !!session,
       diagramEditing: !!session?.diagramEditing,
       ready: !!entry?.summary && !entry.stale,
-      editable:
-        !!entry &&
-        !entry.stale &&
-        vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) !== false,
+      editable: !!entry && !entry.stale && isWritable(entry.document),
       running: session?.run?.state === 'running',
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
@@ -165,14 +181,12 @@ export class Sessions {
     this.active = uri
     if (!this.all.has(uri)) {
       const saved = this.context.workspaceState.get<Saved>('case:' + uri, {})
-      // Earlier prereleases saved a results format; runs now write CSV only.
-      const { output_format: _, ...values } = saved.values ?? {}
       this.all.set(uri, {
         uri,
         bindings: saved.bindings ?? {},
         plots: saved.plots ?? [],
         outputs: saved.recording,
-        values,
+        values: saved.values ?? {},
         transport: new Transport(() => this.clock.fire(uri)),
         diagramEditing: false,
         settings: settingsFor(vscode.Uri.parse(uri)),
@@ -213,8 +227,7 @@ export class Sessions {
     return {
       uri,
       version: entry?.document.version,
-      writable:
-        !!entry && vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) !== false,
+      writable: !!entry && isWritable(entry.document),
       navigate: vscode.workspace
         .getConfiguration('gridkitStudio', vscode.Uri.parse(uri))
         .get('navigateOnSelection', false),
@@ -240,8 +253,8 @@ export class Sessions {
     session.selection = element
     this.changed.fire(uri)
   }
-  /** Show `run` on `session`'s clock: another run takes its span over, and the frames of the one on
-   *  show extend it; none stills the clock. */
+  /** Put `run` on the session's clock: a new run resets the span, more frames of the same run
+   *  extend it, and none clears it. */
   show(session: Session, run: RunInfo | undefined) {
     const { transport } = session
     const shown = session.run
@@ -258,7 +271,7 @@ export class Sessions {
       session.plots = plotsFor(run, session.plots)
       this.persist(session)
     }
-    // A run's span starts where its first frames do.
+    // A run's span starts with its first frames.
     if (shown?.id !== run.id || (shown.frames === 0 && run.frames > 0)) {
       session.window = undefined
       transport.setSpan(run.domain, { live })
@@ -268,7 +281,7 @@ export class Sessions {
     if (transport.noteHead(run.domain[1])) this.clock.fire(session.uri)
     transport.setLive(live)
   }
-  /** Step one frame of the run on show, and pause there. */
+  /** Step one frame through the shown run, then pause. */
   async step(session: Session, direction: 1 | -1) {
     if (!session.run) return
     const t = await this.client.call('step', {
@@ -279,14 +292,14 @@ export class Sessions {
     session.transport.pause()
     session.transport.seek(t)
   }
-  /** Choose what future runs record; plots of the current results are independent, and the next
-   *  run keeps those it records. */
+  /** Set what future runs record. Plots of the current run are unaffected; the next run keeps those
+   *  it records. */
   record(uri: string, outputs: readonly FieldSelection[]) {
     const session = this.all.get(uri)
     if (!session) return
     const recorded = outputs.filter(({ select }) => select.length > 0)
     session.outputs = recorded
-    // Without results, a plot only waits for a field the next run records.
+    // With no run, keep only the plots the next run will record.
     if (!session.run)
       session.plots = session.plots.filter((plot) =>
         recorded.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
@@ -294,7 +307,7 @@ export class Sessions {
     this.persist(session)
     this.changed.fire(uri)
   }
-  /** Make `field` drive exactly `channels`. A mapped signal is recorded by the runs to come. */
+  /** Make `field` drive exactly `channels`; a mapped sampled field joins future recordings. */
   bind(
     uri: string,
     field: FieldRef,

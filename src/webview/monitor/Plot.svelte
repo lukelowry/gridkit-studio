@@ -1,23 +1,24 @@
-<!-- One recorded signal of the run on show, appending frames as they arrive. Hover seeks while paused. -->
+<!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import { type Data, type Domain, itemId, rowAt, rowCount, selectRows } from '@latkit/model'
+  import { type Data, type Domain, itemId } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
   import { rowsOf } from '../../shared/cells.js'
+  import { message } from '../../shared/format.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
-  import { fieldName, typeName } from '../../shared/schema.js'
-  import type { ClockState } from '../../shared/transport.js'
+  import { elementType, fieldName, typeName } from '../../shared/schema.js'
+  import { clamp, type ClockState } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
-  import { nativeMenu } from '../menu.js'
+  import { itemOf, nativeMenu } from '../menu.js'
   import { MONITOR, patchOf } from '../patch.js'
   import type { Palette } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
-  import { axisLabel, PLOT_LIMITS, plotOptions, tracesOf } from './plot.js'
+  import { axisLabel, PLOT_LIMITS, plotOptions, sameWindow, tracesOf } from './plot.js'
 
   let {
     plot,
@@ -34,11 +35,11 @@
   }: {
     plot: Plot
     view: ViewState
-    /** The case with the run's frames so far: a new snapshot each time some arrive. */
+    /** The case with the run's frames so far; a new snapshot each time frames arrive. */
     source: Data | undefined
     /** The playhead. */
     t: number
-    /** The times every plot shows. */
+    /** The window every plot shows. */
     shown: Domain
     theme: { readonly palette: Palette; readonly font: string }
     clock: Clock
@@ -46,7 +47,7 @@
     /** The GPU the plots share. */
     gpu: () => Promise<Gpu>
     paused: boolean
-    /** The reader turned this plot to other times. */
+    /** The user panned or zoomed this plot to `bounds`. */
     onwindow: (bounds: Domain) => void
   } = $props()
 
@@ -67,7 +68,6 @@
     ) ?? false,
   )
   const settings = $derived(reader(view.settings))
-  /** The plot in the theme's colors and face. */
   const style = $derived(
     plotOptions(
       settings,
@@ -80,11 +80,10 @@
   const traces = $derived(
     tracesOf(settings, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
   )
-  const same = (a: Domain, b: Domain) => a[0] === b[0] && a[1] === b[1]
 
   let monitor = $state.raw<Monitor | null>(null)
   let fault = $state<string | null>(null)
-  /** What the plot was last told it draws, which the next config is told only the changes of. */
+  /** The options last sent to the plot, so an update sends only what changed. */
   let drawn: Record<string, unknown> = {}
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
@@ -103,7 +102,7 @@
     made.set(style)
     drawn = { ...style, source, traces }
     const offs = [
-      made.on('error', (error) => (fault = error instanceof Error ? error.message : String(error))),
+      made.on('error', (error) => (fault = message(error))),
       made.on('frame', () => {
         canvas.dataset.rendered = 'true'
         fault = null
@@ -125,19 +124,18 @@
           plot,
         ),
       ),
-      // A camera that left the times every plot shows was turned by the reader.
+      // A camera off the shared window was moved by the user.
       made.on('camera', (camera) => {
-        if (!same(camera.x, shown)) onwindow([camera.x[0], camera.x[1]])
+        if (!sameWindow(camera.x, shown)) onwindow([camera.x[0], camera.x[1]])
       }),
     ]
-    // Views coalesce invalidations into their own animation frame; the clock moves at once.
+    // Hover seeks the clock at once; views coalesce their redraws into their own frame.
     const seek = (event: PointerEvent): void => {
       if (event.buttons !== 0 || event.pointerType === 'touch') return
       const { status, follow, span } = clock.state
       if (status !== 'paused' || follow) return
       const found = made.coordinateAt([event.offsetX, event.offsetY])
-      if (found !== null && Number.isFinite(found))
-        clock.seek(Math.max(span[0], Math.min(span[1], found)))
+      if (found !== null && Number.isFinite(found)) clock.seek(clamp(found, span))
     }
     canvas.addEventListener('pointermove', seek)
     canvas.addEventListener('contextmenu', stop)
@@ -150,11 +148,11 @@
       if (monitor === made) monitor = null
     }
   }
-  /** The plot's own menu is VS Code's, opened with the trace under the pointer. */
+  /** Keeps the raw event from VS Code; the plot's own 'contextmenu' opens the menu for the picked
+   *  trace. */
   const stop = (event: Event) => event.stopPropagation()
 
-  // Frames arriving are appends the plot takes as they come; the field, settings, and theme are
-  // told only where they changed what it draws.
+  // New frames append; other options are sent only where they changed.
   $effect(() => {
     const next = { ...style, source, traces }
     if (!monitor || source === undefined) return
@@ -165,30 +163,25 @@
   $effect(() => {
     monitor?.set({ camera: { fit: settings.get('monitor.camera.fit') } })
   })
-  // The window follows the run, and the other plots.
   $effect(() => {
-    if (monitor && !same(monitor.camera.x, shown))
+    if (monitor && !sameWindow(monitor.camera.x, shown))
       monitor.set({ camera: { x: [shown[0], shown[1]] } }, { animate: false })
   })
-  // The selected element's trace stands out when it is of the plotted type.
+  // Highlight the selected element's trace when it is of the plotted type.
   $effect(() => {
     const selected = view.selection?.id
-    void source
+    void source // Each new snapshot needs the row found again.
     if (!monitor) return
-    const data = monitor.config.source
-    const table = selected?.startsWith(plot.from + '/') ? data.tables[plot.from] : undefined
     try {
-      const rows = table ? selectRows(table, { kind: 'ids', ids: [selected!] }) : undefined
-      monitor.select(
-        table && rows && rowCount(rows)
-          ? [{ source: data, index: table.index, row: rowAt(rows, 0) }]
-          : [],
-      )
+      const item =
+        selected && elementType(selected) === plot.from
+          ? itemOf(monitor.config.source, selected)
+          : undefined
+      monitor.select(item ? [item] : [])
     } catch {
       monitor.select([])
     }
   })
-  // The playhead, painted.
   $effect(() => {
     monitor?.set({ at: t })
   })
@@ -196,13 +189,13 @@
     monitor?.set({ paused })
   })
 
-  /** Whether the plot has focus, so the keyboard reads one trace at the playhead. */
+  /** Whether the plot has focus; while it does, a screen reader hears one trace at the playhead. */
   let inspecting = $state(false)
-  /** The trace read, by its place among the rows. */
+  /** The row offset of the trace read. */
   let trace = $state(0)
   let sample = $state.raw<{ label: string; value: number | null; t: number } | null>(null)
 
-  // Read the inspected trace at the playhead while the plot has focus and the clock holds still.
+  // Read the inspected trace at the playhead while focused and the clock is still.
   $effect(() => {
     if (!inspecting || !recorded || tick.status === 'playing' || tick.follow) return
     const at = t
@@ -246,7 +239,7 @@
     }
   })
 
-  /** What each key does on the plot; a key it does not name is left to the VS Code. */
+  /** The plot's keys; any other key is left to VS Code. */
   const keys: Readonly<Record<string, () => void>> = {
     PageUp: () => (trace = Math.max(0, trace - 1)),
     PageDown: () => (trace = trace + 1),
@@ -262,9 +255,9 @@
   }
 
   onMount(() =>
-    bridge.on((message) => {
-      if (message.kind !== 'action' || message.command !== 'signalRange') return
-      const { plot: target, range } = message.value as { plot?: Plot; range?: [number, number] }
+    bridge.on((incoming) => {
+      if (incoming.kind !== 'action' || incoming.command !== 'signalRange') return
+      const { plot: target, range } = incoming.value as { plot?: Plot; range?: [number, number] }
       if (
         target?.from === plot.from &&
         target.field === plot.field &&
@@ -273,7 +266,7 @@
         range.every(Number.isFinite) &&
         range[0] < range[1]
       )
-        // Setting the values turns fitting off.
+        // Setting y turns fitting off.
         monitor?.set({ camera: { y: range } })
     }),
   )
@@ -347,7 +340,7 @@
     background: var(--color-surface-1);
   }
 
-  /* The signal's name where a panel's title stands, and its one control. */
+  /* Styled as a panel header: the signal's name and its close button. */
   .lane__head {
     display: flex;
     flex-shrink: 0;

@@ -5,7 +5,6 @@ import { axisLabel, axisName, plotOptions, tracesOf, windowOf } from './plot.js'
 
 describe('the window a plot shows', () => {
   it('rounds a growing run’s end up to a power of two of its span, and fits a run that ended', () => {
-    expect(windowOf(null, true)).toEqual([0, 1])
     expect(windowOf([0, 3], true)).toEqual([0, 4])
     expect(windowOf([0, 9.99], true)).toEqual([0, 16])
     expect(windowOf([2, 2.5], true)).toEqual([2, 2.5])

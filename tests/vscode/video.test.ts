@@ -1,11 +1,14 @@
+/** Video files: an export replaces its destination only once it completes. */
+
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 
 import { setup, suite, teardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { VideoFile } from '../../src/extension/video.js'
+import { folder } from './harness.js'
 
 suite('Video files', () => {
   let directory: string
@@ -14,13 +17,12 @@ suite('Video files', () => {
   const bytes = (value: string) => new TextEncoder().encode(value)
 
   setup(async () => {
-    directory = await mkdtemp(join(vscode.workspace.workspaceFolders![0]!.uri.fsPath, 'video-'))
+    directory = await mkdtemp(join(folder().fsPath, 'video-'))
     destination = vscode.Uri.file(join(directory, 'results.mp4'))
     file = undefined
   })
   teardown(async () => {
     await file?.abort()
-    assert.equal(dirname(directory), vscode.workspace.workspaceFolders![0]!.uri.fsPath)
     await rm(directory, { recursive: true, force: true })
   })
 

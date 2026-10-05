@@ -1,4 +1,4 @@
-/** The GridKit layers, inside the dev container: CI, or `pnpm test:gridkit` from any host.
+/** Real-GridKit test steps inside the dev container, for CI or `pnpm test:gridkit`.
  *    --required   the release check (the default): quality, real solver, installed VSIX, trust
  *    --quick      the real solver, then the VS Code Run, WECC240 and visual suites
  *    --baselines  regenerate the pixel baselines, to inspect before committing */
@@ -32,6 +32,7 @@ if (
   (process.env.GRIDKIT_TEST_GREP || process.env.GRIDKIT_UPDATE_BASELINES)
 )
   throw new Error('The required suite cannot be filtered or update baselines.')
+// No step may skip GridKit, and every step draws with SwiftShader, as the baselines were drawn.
 const env = { ...process.env, GRIDKIT_TEST_REQUIRED: '1', GRIDKIT_TEST_SOFTWARE_GPU: '1' }
 for (const [extra, command, ...args] of steps)
   await new Promise((resolve, reject) => {

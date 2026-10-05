@@ -1,5 +1,5 @@
-/** What a host's run asks for: the simulation its values describe, and the outputs it records.
- *  Latkit has already validated scalar arguments, field names and remote row shapes. */
+/** A run's parameters, the command its values describe, and the outputs it records. */
+
 import type {
   Arguments,
   Domain,
@@ -16,19 +16,23 @@ import type { Case } from './case.js'
 import type { Catalog, OptionSpec } from './definition.js'
 
 export const FAULT = 'BusFault'
+
 export interface Fault {
+  /** The faulted bus's number. */
   readonly bus: number
   readonly start: number
   readonly duration: number
   readonly resistance: number
   readonly reactance: number
 }
+
 export interface SimulationCommand {
   readonly options: readonly { readonly option: OptionSpec; readonly value: number | string }[]
   readonly fault: Fault | null
   /** The times the run covers: from 0 to its end time. */
   readonly domain: Domain
 }
+
 /** One sampled output of a run. */
 export interface Field {
   readonly name: string
@@ -85,7 +89,8 @@ function parameterOf(option: OptionSpec): Parameter {
   }
 }
 
-/** The run `values` describe. They have already passed Latkit's defaults, types, choices and inclusive bounds. */
+/** The run `values` describe. They have passed their parameters' types, choices and inclusive
+ *  bounds; this checks exclusive bounds and the fault. */
 export function commandOf(kase: Case, values: Arguments<CommandParameters>): SimulationCommand {
   const problems: Problem[] = []
   const problem = (name: string, message: string) =>
@@ -141,7 +146,7 @@ export function commandOf(kase: Case, values: Arguments<CommandParameters>): Sim
   }
 }
 
-/** One run's output plan; there is no subscriber union. */
+/** The outputs `requested` selects; refuses a static field, and a row or output selected twice. */
 export function selections(kase: Case, requested: readonly FieldSelection[]): readonly Field[] {
   const fields: Field[] = []
   const seen = new Set<string>()
@@ -167,8 +172,7 @@ export function selections(kase: Case, requested: readonly FieldSelection[]): re
   return fields
 }
 
-/** One sampled output of a run; `rows` ascending and distinct. */
-export function outputOf(index: Index, name: string, rows: Uint32Array): Field {
+function outputOf(index: Index, name: string, rows: Uint32Array): Field {
   return {
     name,
     index,
@@ -179,7 +183,7 @@ export function outputOf(index: Index, name: string, rows: Uint32Array): Field {
   }
 }
 
-/** Owned and ascending: the caller may reuse its selection arrays once the run starts. */
+/** The rows `axis` names, ascending, in a copy: the caller may reuse its selection's arrays. */
 function sorted(axis: RowAxis): Uint32Array {
   if (axis.kind === 'indices') return axis.values.slice().sort()
   const rows = new Uint32Array(axis.count)
@@ -187,11 +191,8 @@ function sorted(axis: RowAxis): Uint32Array {
   return rows
 }
 
-/**
- * How many frames DynamicSimulation writes: one as it starts and one more as it starts again after each event,
- * then one per interval in each span between events (just the span's end when the interval is zero). A target
- * within rounding of a span's end counts as the end, as GridKit folds it.
- */
+/** Frames DynamicSimulation writes: one at the start and after each event, then one per interval of
+ *  each span, or its end alone at interval 0. A time within rounding of a span's end is that end. */
 function framesOf(interval: number, end: number, events: readonly number[]): number {
   let count = 1 + events.length
   let from = 0

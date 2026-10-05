@@ -1,4 +1,4 @@
-<!-- Stage a field's channel assignments until Apply. Cancel and Escape leave mappings unchanged. -->
+<!-- Stages a field's channel assignments until Apply; Cancel and Escape change nothing. -->
 <script lang="ts">
   import type { Schema } from '@latkit/model'
 
@@ -24,20 +24,19 @@
   }: {
     schema: Schema
     bindings: Bindings
-    /** The field whose mappings are edited. */
     field: FieldRef
-    /** The field's name. */
+    /** The field's display name. */
     label: string
-    /** The channels checked for it, applied only on Apply. */
+    /** The channels checked for the field, applied only on Apply. */
     checked: readonly Channel[]
     /** Leave the editor without applying. */
     close: () => void
-    /** The checked channels were applied. */
+    /** Called once Apply has sent `channels`. */
     save: (channels: readonly Channel[]) => void
   } = $props()
 
   const id = $props.id()
-  /** The channels the field could drive, each with whoever drives it now. */
+  /** The channels the field can drive, each with the field that drives it now. */
   const options = $derived(
     channelsFor(placementOf(networkOf(schema), field.type)).map((channel) => {
       const source = bindings[channel]
@@ -50,15 +49,15 @@
       }
     }),
   )
-  /** The values the reader set the field's channels to span; none for the measured ones. */
+  /** The range the user set for the field's channels; undefined when measured. */
   const rangeOf = () => Object.values(bindings).find((binding) => sameField(binding, field))?.domain
-  /** The range the editor opens on, and the two ends as the reader types them. */
+  /** Read once: the editor remounts for each field. */
   const opened = rangeOf()
   let low = $state(opened ? String(opened[0]) : '')
   let high = $state(opened ? String(opened[1]) : '')
   let failure = $state<string | null>(null)
 
-  /** The name of the field `ref` is. */
+  /** The display name of the field `ref` names. */
   function nameOf(ref: FieldRef): string {
     return schema.types[ref.type]?.fields[ref.field]?.label ?? ref.field
   }
@@ -208,8 +207,7 @@
     font-size: var(--text-xs);
   }
 
-  /* One channel: its checkbox and name on the left, who drives it (and what Apply changes) on the
-     right. The row tints while checked and rings while its checkbox has keyboard focus. */
+  /* A channel: checkbox and name, then its current field and what Apply would change. */
   .bindings__choice {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -266,7 +264,7 @@
     font-size: var(--text-xs);
   }
 
-  /* A status that Apply would change reads in the warning color. */
+  /* Warns of a change Apply would make. */
   .binding-editor__status--changing {
     color: var(--color-warning-text);
   }
@@ -281,7 +279,7 @@
     text-overflow: ellipsis;
   }
 
-  /* The values the channels span: both ends, or neither for the measured range. */
+  /* Both bounds, or neither to measure the range. */
   .binding-editor__range {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);

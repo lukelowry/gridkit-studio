@@ -1,6 +1,4 @@
-/** Format numbers and failures. Six significant digits hide float conversion noise. */
-
-/** `value` as the views show a number. */
+/** `value` for display; six significant digits hide float conversion noise. */
 export function formatNumber(value: number): string {
   if (!Number.isFinite(value)) return Number.isNaN(value) ? '—' : value > 0 ? '∞' : '-∞'
   if (value === 0) return '0'
@@ -9,7 +7,7 @@ export function formatNumber(value: number): string {
   return String(Number(value.toPrecision(6)))
 }
 
-/** What went wrong, as a sentence for the reader. */
+/** `error` as a sentence for the user. */
 export function message(error: unknown): string {
   if (error instanceof Error) return error.message || error.name
   return typeof error === 'string' ? error : 'Something went wrong.'

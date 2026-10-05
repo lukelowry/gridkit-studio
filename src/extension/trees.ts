@@ -2,7 +2,8 @@ import type { RowsBlock, RowsQuery } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { display, referenceNames, rowsOf } from '../shared/cells.js'
-import { menuContext, type Target } from '../shared/contexts.js'
+import type { Target } from '../shared/contexts.js'
+import { elementType } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
 
 /** A field of the selected element, as the Inspector lists it. */
@@ -10,19 +11,14 @@ export class Node extends vscode.TreeItem {
   target?: Target
 }
 
-/** The Inspector: the selected element's fields, each with the native actions of its kind. */
+/** The Inspector: the selected element's static fields. */
 export function registerTrees(studio: Sessions) {
   const changed = new vscode.EventEmitter<Node | undefined>()
   let revision = ''
   const refresh = studio.changed.event(() => {
     const state = studio.active ? studio.state(studio.active) : undefined
-    const next = [
-      studio.active,
-      state?.summary?.version,
-      state?.stale,
-      state?.selection?.id,
-      JSON.stringify(state?.bindings),
-    ].join(':')
+    const shown = [studio.active, state?.summary?.version, state?.stale, state?.selection?.id]
+    const next = shown.join(':')
     if (next !== revision) {
       revision = next
       changed.fire(undefined)
@@ -37,7 +33,7 @@ export function registerTrees(studio: Sessions) {
       const { summary, selection } = state
       if (!summary) return []
       if (!selection) return [new Node('Select an element in Network, Diagram, Case, or JSON.')]
-      const type = selection.id.slice(0, selection.id.indexOf('/'))
+      const type = elementType(selection.id)
       const definition = summary.schema.types[type]
       if (!definition || state.stale) return []
       const fields = Object.keys(definition.fields).filter(
@@ -80,11 +76,6 @@ export function registerTrees(studio: Sessions) {
           field,
           element: { id: selection.id, field },
         }
-        // The menus a row offers follow from what its field is.
-        item.contextValue = Object.entries(menuContext(summary, item.target, state.bindings))
-          .filter(([key, value]) => key.startsWith('gridkit') && value === true)
-          .map(([key]) => key)
-          .join(' ')
         item.id = [summary.uri, selection.id, field].join(':')
         return item
       })

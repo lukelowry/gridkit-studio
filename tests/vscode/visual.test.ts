@@ -1,4 +1,6 @@
-/** Pixel baselines use Linux + SwiftShader so GPU and font differences are controlled. */
+/** Pixel baselines of the Network and DynamicSimulation views. They register only on Linux with
+ *  SwiftShader, where the GPU and fonts are the same on every run. */
+
 import assert from 'node:assert/strict'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,16 +11,12 @@ import type { Frame, Locator } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { pause, type TestHost, testHost, until, visible } from './harness.js'
+import { pause, type TestHost, testHost, theme, until, VIEWPORT, visible } from './harness.js'
 
 if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1')
   suite('Visual baselines', () => {
     let bench: TestHost
     let network: Frame
-    const theme = (name: string | undefined) =>
-      vscode.workspace
-        .getConfiguration()
-        .update('workbench.colorTheme', name, vscode.ConfigurationTarget.Global)
     async function themed(name: string, css: string) {
       await theme(name)
       await until(
@@ -27,6 +25,8 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       )
     }
 
+    /** Compare `locator` with its baseline, or write the baseline when GRIDKIT_UPDATE_BASELINES
+     *  is set. The actual image, and any difference, land beside the screenshots. */
     async function compare(name: string, locator: Locator) {
       await vscode.commands.executeCommand('notifications.clearAll')
       await bench.page.mouse.move(0, 0)
@@ -79,16 +79,16 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
     })
     suiteTeardown(async () => {
       await theme(undefined)
-      await bench.page.setViewportSize({ width: 1600, height: 1000 })
+      await bench.page.setViewportSize(VIEWPORT)
     })
 
     for (const [name, value, css] of [
       ['dark', 'Default Dark Modern', 'vscode-dark'],
       ['light', 'Default Light Modern', 'vscode-light'],
       ['high-contrast', 'Default High Contrast', 'vscode-high-contrast'],
-    ])
+    ] as const)
       test(`network labels, geometry and selection in ${name}`, async () => {
-        await themed(value!, css!)
+        await themed(value, css)
         assert.equal(bench.session.settings['network.vertices.labels'], true)
         bench.studio.select(bench.key, { id: 'Bus/1' })
         await compare('network-' + name, network.locator('canvas'))
@@ -109,8 +109,7 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       await theme('Default Dark Modern')
       await bench.page.setViewportSize({ width: 1000, height: 720 })
       await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
-      // Other views of the sidebar may be open. Normalize it before comparing the panel's narrow
-      // layout, without changing the webview's styles or dimensions.
+      // Collapse the sidebar's other views, so the view's size is the same on every run.
       const expanded = bench.page
         .locator('.pane-header[aria-expanded="true"]')
         .filter({ hasText: /INSPECTOR|MAPPINGS|MONITORED SIGNALS|VIDEO EXPORT/i })
@@ -129,23 +128,17 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
     })
 
     test('geographic placement keeps labels and line styling', async () => {
-      await bench.page.setViewportSize({ width: 1600, height: 1000 })
+      await bench.page.setViewportSize(VIEWPORT)
       await vscode.commands.executeCommand('workbench.action.closeSidebar')
       const source = JSON.parse(bench.text)
       source.buses.forEach((bus: { extension?: unknown }, i: number) => {
         bus.extension = { longitude: -100 + (i % 8) * 2, latitude: 30 + Math.floor(i / 8) * 2 }
       })
-      const edit = new vscode.WorkspaceEdit()
-      edit.replace(
-        bench.uri,
-        new vscode.Range(0, 0, bench.document.lineCount, 0),
-        JSON.stringify(source),
-      )
-      await vscode.workspace.applyEdit(edit)
+      await bench.replace(JSON.stringify(source))
       await bench.settled()
       network = await bench.open('network')
       await until(
-        async () => await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled(),
+        () => network.getByRole('button', { name: 'Globe', exact: true }).isEnabled(),
         'geographic projection arrives',
       )
       await vscode.commands.executeCommand('gridkitStudio.fit', bench.uri)

@@ -1,3 +1,5 @@
+/** The case's JSON source: invalid edits, minimal Git diffs, native review, parse errors. */
+
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { dirname } from 'node:path'
@@ -29,7 +31,7 @@ suite('Case source', () => {
     await vscode.commands.executeCommand('gridkitStudio.stop', bench.uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
-    // Undone from the keyboard, as its reader would.
+    // Undone from the keyboard, as the user would.
     await bench.page.locator('.monaco-editor.focused').getByRole('textbox').press('ControlOrMeta+z')
     await until(() => document.getText() === text, 'the invalid edit undone')
     await bench.settled()
@@ -91,7 +93,7 @@ suite('Case source', () => {
     const edit = new vscode.WorkspaceEdit()
     edit.replace(uri, new vscode.Range(0, 0, document.lineCount, 0), bench.text)
     await vscode.workspace.applyEdit(edit)
-    await visible(network, 'canvas[data-rendered="true"]')
+    await visible(network, 'canvas[data-rendered=true]')
     await until(() => !bench.studio.state(uri.toString()).error, 'the parse error clears')
     await document.save()
     await bench.open('network')

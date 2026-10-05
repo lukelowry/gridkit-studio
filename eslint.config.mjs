@@ -4,7 +4,15 @@ import svelte from 'svelte-eslint-parser'
 
 export default [
   {
-    files: ['src/**/*.ts', 'src/**/*.svelte', 'tests/**/*.ts', 'tests/**/*.mjs', '*.mjs', '*.ts'],
+    files: [
+      'src/**/*.ts',
+      'src/**/*.svelte',
+      'tests/**/*.ts',
+      'tests/**/*.mjs',
+      'scripts/**/*.mjs',
+      '*.mjs',
+      '*.ts',
+    ],
     languageOptions: { parser: ts },
     plugins: { imports },
     rules: {

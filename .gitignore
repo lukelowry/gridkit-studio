@@ -1,12 +1,9 @@
 node_modules/
 dist/
 coverage/
+output/
 .vscode-test/
+.impeccable/
 *.vsix
 *.tsbuildinfo
-output/
 cases/**/*.mon.csv
-
-
-.impeccable/
-.gridkit-run-*/

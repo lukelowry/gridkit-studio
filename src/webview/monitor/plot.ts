@@ -1,4 +1,4 @@
-/** Build monitor traces and axes from the selected field, run, and theme. */
+/** Plot options shared by the Monitor view and video export. */
 
 import type { Axis, Domain } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
@@ -8,16 +8,19 @@ import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
 
-/** Bounded plot caches; the application owns the complete run separately. */
+/** Caps each plot's history cache; the complete run is held outside the plot. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 
-/** The plot's one trace, named once so that another field replaces it in place. */
+/** The single trace key, so another field replaces the trace in place. */
 const TRACE = 'plotted'
 
-/** The margin past the axes, top, right, bottom, left: `--spacing-sm` above, `--spacing-md` to the
- *  right for the last time label's overhang, and none below or to the left, where the axes' own
- *  labels are the margin. */
+/** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the
+ *  last time label's overhang; the axis labels pad the bottom and left. */
 const MARGIN_PX = [8, 12, 0, 0] as const
+
+/** Whether two windows are equal; two absent ones are. */
+export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolean =>
+  a?.[0] === b?.[0] && a?.[1] === b?.[1]
 
 /** The trace of `plotted`: a line for each row of its type, or for the one row it names. */
 export function tracesOf(
@@ -34,16 +37,14 @@ export function tracesOf(
   }
 }
 
-/** The coordinates a run's plot spans: what it recorded and, while it grows, an end rounded up to a
- *  power of two of its span. The window widens a few times a run, each time drawing the history
- *  again, and never on a guess at how far the run will go. */
-export function windowOf(range: Domain | null, growing: boolean): Domain {
-  if (range === null) return [0, 1]
+/** The window for a run's recorded `range`. While it grows, the end rounds up to a power of two of
+ *  the span, so the window, and the history redraw it costs, changes only a few times a run. */
+export function windowOf(range: Domain, growing: boolean): Domain {
   const span = range[1] - range[0]
   return growing && span > 0 ? [range[0], range[0] + 2 ** Math.ceil(Math.log2(span))] : range
 }
 
-/** Plot styling follows the settings and theme; null leaves an option to the renderer. */
+/** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. */
 export function plotOptions(
   s: SettingsReader,
   palette: Palette | null,
@@ -93,20 +94,20 @@ export function plotOptions(
     axisColor: color(s.get('monitor.axisColor'), palette?.border),
     gridColor: color(
       s.get('monitor.gridColor'),
-      palette ? [palette.text3[0], palette.text3[1], palette.text3[2], 0.15] : null,
+      palette ? [palette.text2[0], palette.text2[1], palette.text2[2], 0.15] : null,
     ),
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),
     selectedColor: color(s.get('monitor.selectedColor'), palette?.primaryText),
   }
 }
 
-/** The axis's name in sentence case, as the page shows names; the producer owns its meaning. */
+/** The axis name in sentence case; 'Coordinate' when unnamed. */
 export function axisName(axis: Axis | undefined): string {
   const name = axis?.name ?? 'Coordinate'
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
-/** The axis's name and unit, as the time axis is captioned. */
+/** The axis caption: its name, then its unit in parentheses. */
 export function axisLabel(axis: Axis | undefined): string {
   return axis?.unit ? `${axisName(axis)} (${axis.unit})` : axisName(axis)
 }

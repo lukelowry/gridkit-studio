@@ -1,3 +1,5 @@
+/** The Monitor: plotting in the bottom panel, the case's one clock, and its native menu. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'

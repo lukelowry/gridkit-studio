@@ -11,8 +11,12 @@ import {
 } from '@latkit/model'
 
 import { nameFieldOf } from '../../shared/schema.js'
+
+/** Per table, so each config reuses the same field and the patch leaves labels out. */
 const cache = new WeakMap<TableData, FieldInput>()
-/** Labels may fall back to stable identities without changing the domain schema or document. */
+
+/** The label field of `type`: its name field when every row has a name, else the names with ids
+ *  for the rows that lack one. */
 export function labelsOf(source: Data, type: string): FieldInput | null {
   const table = source.tables[type]
   if (!table) return null

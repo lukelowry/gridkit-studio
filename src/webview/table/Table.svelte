@@ -1,10 +1,11 @@
 <script lang="ts">
-  import type { RowsQuery, Value } from '@latkit/model'
+  import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
   import { display, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
   import type { ViewState } from '../../shared/messages.js'
+  import { elementType, isReference } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   let view = $state<ViewState>({})
@@ -21,14 +22,19 @@
   let scroll: HTMLDivElement
   let generation = 0
   let controller: AbortController | undefined
+  const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
+    view.summary?.schema.types[type]?.fields ?? {},
+  )
+  /** The type's static fields; sampled ones belong to the Monitor. */
   const allFields = $derived(
-    Object.keys(view.summary?.schema.types[type]?.fields ?? {}).filter(
-      (field) => !view.summary?.schema.types[type]?.fields[field]?.sampled,
-    ),
+    Object.keys(definitions).filter((field) => !definitions[field]?.sampled),
   )
   const types = $derived(
     Object.entries(view.summary?.counts ?? {}).filter(([, count]) => count > 0),
   )
+  /** How many columns a type shows until the user picks them. */
+  const COLUMNS = 12
+  /** Row height in px for virtual scrolling: the --spacing-row-h token. */
   const height = 28
   const context = (id: string | null, field?: string) =>
     view.summary
@@ -145,9 +151,7 @@
     offset = 0
     filter = ''
     order = undefined
-    fields = Object.keys(view.summary?.schema.types[type]?.fields ?? {})
-      .filter((field) => !view.summary?.schema.types[type]?.fields[field]?.sampled)
-      .slice(0, 12)
+    fields = allFields.slice(0, COLUMNS)
     persist()
     bridge.save({ type })
     if (scroll) scroll.scrollTop = 0
@@ -175,7 +179,7 @@
       text:
         spec?.type === 'text'
           ? String(value ?? '')
-          : typeof spec?.type === 'object' && spec.type.kind === 'reference'
+          : isReference(spec)
             ? value && typeof value === 'object' && 'id' in value
               ? String(value.id ?? '')
               : ''
@@ -193,18 +197,22 @@
     try {
       const spec = view.summary.schema.types[type]!.fields[edit.field]!
       const value: Value =
-        spec.type === 'text' || (typeof spec.type === 'object' && spec.type.kind === 'reference')
-          ? typeof spec.type === 'object' && edit.text === 'null'
+        spec.type === 'text' || isReference(spec)
+          ? isReference(spec) && edit.text === 'null'
             ? null
             : edit.text
           : JSON.parse(edit.text)
-      await bridge.request('edit', { id: edit.id, field: edit.field, value, version: edit.version })
+      await bridge.request('transact', {
+        version: edit.version,
+        mutations: [{ kind: 'set', id: edit.id, field: edit.field, value }],
+        label: 'Edit ' + edit.field,
+      })
     } catch (reason) {
       error = String(reason)
     }
   }
   async function reveal(id: string) {
-    const next = id.split('/')[0]!
+    const next = elementType(id)
     if (next !== type) changeType(next)
     else {
       filter = ''
@@ -261,7 +269,7 @@
           fields = message.value.filter(
             (field): field is string => typeof field === 'string' && allFields.includes(field),
           )
-        if (message.command === 'resetColumns') fields = allFields.slice(0, 12)
+        if (message.command === 'resetColumns') fields = allFields.slice(0, COLUMNS)
         if (message.command === 'clearTableFilter') filter = ''
         if (message.command === 'filterTable') filter = String(message.value ?? '')
         if (message.command === 'selectClass' && view.summary?.schema.types[String(message.value)])
@@ -303,8 +311,8 @@
               aria-sort={order?.field === field ? order.direction : 'none'}
             >
               <button onclick={() => sort(field)}>
-                {field}{view.summary?.schema.types[type]?.fields[field]?.unit
-                  ? ' [' + view.summary.schema.types[type]!.fields[field]!.unit + ']'
+                {field}{definitions[field]?.unit
+                  ? ' [' + definitions[field]!.unit + ']'
                   : ''}{order?.field === field
                   ? order.direction === 'ascending'
                     ? ' (ascending)'
@@ -346,8 +354,7 @@
                       if (event.key === 'Escape') editing = undefined
                     }}
                     onblur={() => void commit()}
-                    placeholder={typeof view.summary?.schema.types[type]?.fields[field]?.type ===
-                    'object'
+                    placeholder={typeof definitions[field]?.type === 'object'
                       ? 'Type/native-ID'
                       : ''}
                   />

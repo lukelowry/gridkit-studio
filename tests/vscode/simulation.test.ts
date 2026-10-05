@@ -1,3 +1,6 @@
+/** The DynamicSimulation view without running GridKit: its fields, a fault's bus, and the signals
+ *  the next run records. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
@@ -38,7 +41,7 @@ suite('DynamicSimulation', () => {
   })
 
   test('chooses which signals the next run records in its own native view', async () => {
-    // A case records its buses' voltage magnitude and angle until the reader chooses otherwise.
+    // A case records its buses' voltage magnitude and angle until the user chooses otherwise.
     assert.deepEqual(bench.session.outputs, [{ from: 'Bus', select: ['Vm', 'Va'] }])
     const signals = await bench.signals()
     const bus = signals.getByRole('treeitem', { name: /^Bus,/ }).getByRole('checkbox')
@@ -67,11 +70,11 @@ suite('DynamicSimulation', () => {
     await vscode.commands.executeCommand('gridkitStudio.clearSignals')
     await until(() => !bench.session.outputs?.length, 'nothing recorded')
     await until(
-      async () => await simulation.locator('[data-testid="study-run"]').isDisabled(),
+      () => simulation.locator('[data-testid="study-run"]').isDisabled(),
       'Run waits for a signal',
     )
     await simulation.locator('[data-testid="study-signals"]').click()
-    await bench.signals()
+    await bench.signals({ reveal: false })
     await vscode.commands.executeCommand('gridkitStudio.selectAllSignals')
     await until(recorded, 'every signal recorded')
     simulation = await bench.show('simulation')

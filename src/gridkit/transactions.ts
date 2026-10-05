@@ -1,33 +1,17 @@
 import type { Positions } from '@latkit/diagram'
 import { failure, type FieldValues } from '@latkit/model'
-import { findNodeAtLocation, modify, parseTree } from 'jsonc-parser'
+import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
-import { diagramOf } from '../shared/schema.js'
+import { diagramOf, elementType } from '../shared/schema.js'
 import type { Case } from './case.js'
-import { editField, nativePath, recordOf, textOffset } from './edits.js'
+import type { ArrayName } from './definition.js'
+import { apply, editField, minimal, nativePath, recordOf, textOffset, withValue } from './edits.js'
 
 const decoder = new TextDecoder()
-export const MAX_MUTATIONS = 10000
-function apply(text: string, edits: readonly SourceEdit[]) {
-  for (const edit of [...edits].sort((a, b) => b.offset - a.offset))
-    text = text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length)
-  return text
-}
-function minimal(before: string, after: string, offset: number): SourceEdit | undefined {
-  let start = 0
-  let end = before.length
-  let stop = after.length
-  while (start < end && start < stop && before[start] === after[start]) start++
-  while (end > start && stop > start && before[end - 1] === after[stop - 1]) {
-    end--
-    stop--
-  }
-  return start === end && start === stop
-    ? undefined
-    : { offset: offset + start, length: end - start, text: after.slice(start, stop) }
-}
-/** Worker-side transactions are addressed by stable domain IDs. Only touched records are materialized. */
+const MAX_MUTATIONS = 10000
+
+/** The source edits that make `mutations`, by row ID; only the records they touch are read. */
 export function transaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
   if (!Array.isArray(mutations) || !mutations.length || mutations.length > MAX_MUTATIONS)
     throw failure('resource-limit', 'A transaction must contain 1–10,000 changes.')
@@ -46,24 +30,14 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
   }
   const path = (id: string, keys: string[], value: unknown) => {
     const record = get(id)
-    const tree = parseTree(record.after)!
-    const node = findNodeAtLocation(tree, keys)
-    if (node && value !== undefined) {
-      record.after = apply(record.after, [
-        { offset: node.offset, length: node.length, text: JSON.stringify(value) },
-      ])
-    } else {
-      record.after = apply(
-        record.after,
-        modify(record.after, keys, value, {}).map((edit) => ({
-          offset: edit.offset,
-          length: edit.length,
-          text: edit.content,
-        })),
-      )
-    }
+    const node = findNodeAtLocation(parseTree(record.after)!, keys)
+    record.after =
+      node && value !== undefined
+        ? apply(record.after, [
+            { offset: node.offset, length: node.length, text: JSON.stringify(value) },
+          ])
+        : withValue(record.after, keys, value)
   }
-  let connection = false
   for (const mutation of mutations) {
     if (mutation.kind === 'set') {
       const record = get(mutation.id)
@@ -72,7 +46,7 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
         editField(kase, mutation.id, mutation.field, mutation.value, record.after),
       )
     } else if (mutation.kind === 'move') {
-      if (!diagramOf(kase.schema).vertices.includes(mutation.id.split('/')[0]!))
+      if (!diagramOf(kase.schema).vertices.includes(elementType(mutation.id)))
         throw failure('invalid-input', 'Only diagram blocks have diagram positions.')
       if (
         mutation.position !== null &&
@@ -114,7 +88,7 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
         rows.add(located.table.records[located.row]!)
       }
       for (const [name, set] of byArray) {
-        const array = kase.arrays[name as 'buses' | 'signals' | 'devices']!
+        const array = kase.arrays[name as ArrayName]!
         const rows = [...set].sort((a, b) => a - b)
         for (let n = 0; n < rows.length; n++) {
           const first = rows[n]!
@@ -130,9 +104,8 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
         }
       }
     } else if (mutation.kind === 'connect') {
-      if (connection || mutations.length !== 1)
+      if (mutations.length !== 1)
         throw failure('invalid-input', 'A connection is one atomic transaction.')
-      connection = true
       const port = (item: { id: string; field?: string }) => {
         const located = kase.locate(item.id)
         const plan =
@@ -234,12 +207,12 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
         const plan = located.table.shape.plan.get(change.field)!
         const native =
           change.value === null ? null : Number(change.value.slice(change.value.indexOf('/') + 1))
-        path(change.id, nativePath(located.table.shape, plan), native)
+        path(change.id, nativePath(plan), native)
       }
     } else throw failure('invalid-input', 'Unknown document mutation.')
   }
 
-  // Field edits and wire gestures share the same single-driver invariant.
+  // Field edits keep the rule wiring does: a signal has at most one output driving it.
   const touchedOutputs = new Map<string, string | null>()
   for (const mutation of mutations) {
     if (mutation.kind !== 'set') continue
@@ -272,10 +245,8 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
       }
   }
   const edits = [...records.values()]
-    .flatMap((record) => {
-      const edit = minimal(record.before, record.after, record.offset)
-      return edit ? [edit] : []
-    })
+    .map((record) => minimal(record.before, record.after, record.offset))
+    .filter((edit) => edit.length > 0 || edit.text !== '')
     .concat(extra)
     .sort((a, b) => a.offset - b.offset)
   for (let index = 1; index < edits.length; index++)
@@ -286,7 +257,8 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
   return edits
 }
 const presentations = new WeakMap<Case, Record<string, Positions>>()
-/** Presentation metadata is separate from the domain Schema, stored with each native record for Git. */
+
+/** Each diagram block's position, from `extension.diagram.position` in its own record. */
 export function presentation(kase: Case): Record<string, Positions> {
   const cached = presentations.get(kase)
   if (cached) return cached
@@ -336,6 +308,8 @@ export function presentation(kase: Case): Record<string, Positions> {
   presentations.set(kase, result)
   return result
 }
+
+/** `text` with each group of edits applied in turn, every group against the text before it. */
 export function applyChanges(text: string, changes: readonly (readonly SourceEdit[])[]): string {
   for (const group of changes) text = apply(text, group)
   return text

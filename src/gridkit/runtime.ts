@@ -1,5 +1,4 @@
-/** Run GridKit's DynamicSimulation where GridKit is installed, or else in a container of an image
- *  with GridKit, and stop it with all it started. */
+/** Runs DynamicSimulation where GridKit is installed or in a container, and stops all it started. */
 
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -9,9 +8,9 @@ import { basename, delimiter, isAbsolute, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
 
+import { message } from '../shared/format.js'
 import type { GridKit, RuntimeProcess } from '../shared/messages.js'
 
-/** The simulation program, as GridKit names it. */
 const PROGRAM = 'DynamicSimulation'
 /** Where a container sees the run's folder. */
 const MOUNT = '/simulation'
@@ -28,6 +27,7 @@ export type Runtime =
 
 const executable = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
 
+/** Whether `path` is a file this process may execute. */
 async function runs(path: string): Promise<boolean> {
   try {
     if (!(await stat(path)).isFile()) return false
@@ -71,7 +71,7 @@ function isPodman(cli: string): Promise<boolean> {
   return podman
 }
 
-/** The container CLI `cli` names, or with none named docker, else podman, on PATH. */
+/** The container CLI `cli` names; with none named, docker on PATH, else podman. */
 async function containerCli(cli: string): Promise<string> {
   const found = cli
     ? isAbsolute(cli)
@@ -111,7 +111,7 @@ export async function runtimeOf({ path, image, cli }: GridKit): Promise<Runtime>
   )
 }
 
-/** Refuse an image that is not on this machine: the reader pulls images, never Studio. */
+/** Refuses an image that is not on this machine: the user pulls images, never Studio. */
 async function requireImage(cli: string, podman: boolean, image: string): Promise<void> {
   const failed = await new Promise<string | null>((resolve) => {
     try {
@@ -122,7 +122,7 @@ async function requireImage(cli: string, podman: boolean, image: string): Promis
         (error, _, stderr) => resolve(error ? stderr.trim() || error.message : null),
       )
     } catch (error) {
-      resolve(error instanceof Error ? error.message : String(error))
+      resolve(message(error))
     }
   })
   if (failed === null) return
@@ -135,8 +135,7 @@ async function requireImage(cli: string, podman: boolean, image: string): Promis
 }
 
 /** The container CLI's arguments that run DynamicSimulation in `image` on the run in `directory`:
- *  a container of its own, named `name`, removed when it ends, that reaches no network, from the
- *  image as this machine has it: never pulled. */
+ *  a container named `name`, removed when it ends, with no network, from the local image only. */
 export function containerArgs(
   image: string,
   directory: string,
@@ -163,7 +162,7 @@ export function containerArgs(
     `${directory}:${MOUNT}${linux ? ':Z' : ''}`,
     '--workdir',
     MOUNT,
-    // What the run writes stays the reader's own, to read and to delete. Docker Desktop and Podman
+    // What the run writes stays the user's own, to read and delete. Docker Desktop and Podman
     // machines on Windows and macOS map ownership themselves.
     ...(linux
       ? host.podman
@@ -180,7 +179,7 @@ export function containerArgs(
   ]
 }
 
-/** Stop `child` and every process it started. */
+/** Stops `child` and every process it started. */
 function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
   return terminateRuntime(owned).catch(() => {
@@ -188,7 +187,7 @@ function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> 
   })
 }
 
-/** Run DynamicSimulation on the `input.json` staged in `directory`, as `gridkit` says. `log` hears
+/** Runs DynamicSimulation on the `input.json` staged in `directory`, as `gridkit` says. `log` hears
  *  each line it prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. */
 export async function launch(
   gridkit: GridKit,
@@ -280,8 +279,8 @@ export async function launch(
   return { done, stop, ended: () => ended }
 }
 
-/** Stop the process `owned` names and every process it started, and remove its container; also
- *  the owner's emergency cleanup, should the data worker exit before its own. */
+/** Stops the process `owned` names and every process it started, and removes its container. The
+ *  extension also calls it, should the data worker exit before cleaning up. */
 export async function terminateRuntime(owned: RuntimeProcess): Promise<void> {
   // Ending the CLI leaves its container running: the engine removes it by name.
   if (owned.container)

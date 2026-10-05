@@ -1,3 +1,5 @@
+import { setImmediate } from 'node:timers/promises'
+
 import type { Positions } from '@latkit/diagram'
 import type { FieldValues } from '@latkit/model'
 
@@ -5,7 +7,8 @@ import { networkOf, positionOf } from '../shared/schema.js'
 import type { Case } from './case.js'
 
 const cache = new WeakMap<Case, Record<string, Positions>>()
-// A deterministic layout for a network with no places of its own. Bound work and yield in the data worker.
+
+/** A deterministic layout, unless some vertex of the network has a position of its own. */
 export async function placement(
   kase: Case,
   signal: AbortSignal,
@@ -63,6 +66,7 @@ export async function placement(
   cache.set(kase, result)
   return result
 }
+
 /** `count` points evenly on a unit circle. */
 function circle(count: number): Float64Array {
   const points = new Float64Array(count * 2)
@@ -87,7 +91,7 @@ async function settle(
   const moves = new Float64Array(count * 2)
   for (let round = 0; round < rounds; round++) {
     if (round % 4 === 0) {
-      await new Promise<void>((resolve) => setImmediate(resolve))
+      await setImmediate()
       signal.throwIfAborted()
     }
     moves.fill(0)

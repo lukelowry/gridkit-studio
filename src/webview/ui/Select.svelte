@@ -1,6 +1,6 @@
 <!-- @component
-  Bindable combobox; large lists add search and virtualization. Keep the active option mounted for aria-activedescendant.
-  Extra attributes target the trigger. Search keys edit text; Ctrl+Home/End navigate options.
+  Bindable combobox; long lists add search and mount only the rows in view. Extra attributes go to
+  the trigger.
 -->
 <script lang="ts" generics="T">
   import { untrack } from 'svelte'
@@ -27,43 +27,40 @@
     disabled = false,
     compact = false,
     hideLabel = false,
-    field = false,
-    class: className,
     ...rest
-  }: Omit<HTMLButtonAttributes, 'children' | 'value'> & {
+  }: Omit<HTMLButtonAttributes, 'children' | 'class' | 'value'> & {
     readonly options: ReadonlyArray<SelectOption<T>>
-    /** The selected value; null shows the placeholder, and the clear row sets it. */
+    /** Null shows the placeholder. */
     value?: T | null
-    /** The text that tells values apart, `String` unless given. */
+    /** Tells values apart; `String` by default. */
     readonly key?: (value: T) => string
-    /** The row label, and the start of the combobox's accessible name. */
+    /** The row label, and the start of the trigger's accessible name. */
     readonly label: string
     /** Shown while nothing is selected, and as the clear row's label. */
     readonly placeholder?: string
     /** Lead the list with a clear row that sets null. */
     readonly clearable?: boolean
     readonly disabled?: boolean
-    /** Label and value inline and hugging their content, for toolbars. */
+    /** Inline and sized to its content, for toolbars. */
     readonly compact?: boolean
     /** Keep the label for assistive technology only. */
     readonly hideLabel?: boolean
-    /** A form field: the value alone in a boxed c-field, the label for assistive technology only. */
-    readonly field?: boolean
   } = $props()
 
-  /** Past this many options, a list is searched and windowed instead of mounted whole. */
+  /** Past this many options, the list adds search and windowing. */
   const SEARCH_AT = 50
 
   const id = $props.id()
   const anchorName = `--${id}`
+  // The guesses match --select-row-height and the popup's max height until measured.
   const viewport = new Viewport(4, { rowHeight: 36, height: 320 })
 
-  /** Whether the list shows. Opening sets it; any change to `disabled` closes the list again. */
+  /** Opening sets it; any change to `disabled` closes the list. */
   let open = $derived.by(() => {
     void disabled
     return false
   })
-  /** The last move came from the keyboard, so the active row shows a cursor ring. */
+  /** The last move came from the keyboard, so the active row draws a ring. */
   let keyboard = $state(false)
   let query = $state('')
 
@@ -78,7 +75,6 @@
   const searchable = $derived(options.length > SEARCH_AT)
   const chosen = $derived(value === null ? null : key(value))
   const current = $derived(chosen === null ? undefined : index.byKey.get(chosen))
-  // Only a clearable select turns its placeholder into a row.
   const layout = $derived(layoutOptions(index, clearable ? placeholder : null, query))
   const cursor = new ListCursor({
     count: () => layout.nav.length,
@@ -88,7 +84,7 @@
     layout.nav[Math.min(cursor.active, layout.nav.length - 1)],
   )
   const activeId = $derived(open && activeRow ? optionId(activeRow) : undefined)
-  // A short list mounts whole, so each option can be found in the page; a long one mounts its window.
+  // Short lists mount every row, so find in page reaches each option; long ones mount a window.
   const runs = $derived(
     searchable
       ? windowRuns(layout, viewport.first, viewport.count, activeRow)
@@ -113,34 +109,27 @@
     if (returnFocus) trigger?.focus()
   }
 
-  /**
-   * A press on the open list or its trigger leaves focus where it is (on the trigger, or in the
-   * search field, which alone takes presses). A press on a heading, the padding or the scrollbar
-   * would otherwise hand focus to the page and the focusout would close the list; and Safari and
-   * Firefox on macOS never focus a pressed button, so a press on the trigger would close the list
-   * for the click to open it again. Scrolling and clicks are unaffected.
-   */
+  /** Keep focus put on presses in the open list or trigger, bar the search field: pressing what
+   *  takes no focus, or a button in macOS Safari or Firefox, would blur and close the list. */
   function holdFocus(event: MouseEvent): void {
     if (open && event.target !== search) event.preventDefault()
   }
 
   function choose(row: OptionRow<T>): void {
-    if (row.nav < 0) return
     value = row.value
     hide(true)
   }
 
-  /** The pointer's cursor. A label the row clips gets its full text as the row's tooltip. */
+  /** Move the cursor to the hovered row, and title a clipped label with its full text. */
   function point(row: OptionRow<T>, element: HTMLElement): void {
     const text = element.querySelector('.select__value')
     element.title = text !== null && text.scrollWidth > text.clientWidth ? row.label : ''
-    if (row.nav < 0) return
     keyboard = false
     cursor.active = row.nav
   }
 
-  /** Scroll `row` into view, or to the middle, by arithmetic: it may not be mounted. A named group's
-   *  sticky heading covers the top slot of the view, so the row must clear it. */
+  /** Scroll `row` into view, or center it, by arithmetic: it may not be mounted. A named group's
+   *  sticky heading covers the top slot, so the row must clear it. */
   function reveal(row: OptionRow<T>, center: boolean): void {
     const height = viewport.rowHeight
     const heading = row.group.label === '' ? 0 : height
@@ -173,22 +162,22 @@
         if (activeRow) choose(activeRow)
         return
       case 'Escape':
-        // Consumed here, so the Dock does not also read it as dismissing a panel.
+        // Consumed, so enclosing handlers do not also act on it.
         event.preventDefault()
         event.stopPropagation()
         hide(true)
         return
       case 'Tab':
-        // Leaving the search field removes it, so native tab order resumes from the trigger.
+        // Leaving the search field unmounts it, so tab order resumes from the trigger.
         hide(inField)
         return
       case 'Home':
       case 'End':
-        // In the search field these move the caret; with Ctrl they move through the results.
+        // In the search field these move the caret unless Ctrl is held.
         if (inField && !event.ctrlKey) return
         break
       default:
-        // In the search field, characters are the query's.
+        // In the search field, printable keys edit the query.
         if (inField && event.key.length === 1) return
     }
     const page = Math.max(1, Math.floor(viewport.height / viewport.rowHeight))
@@ -202,8 +191,8 @@
     if (open && !root?.contains(event.relatedTarget as Node | null)) hide(false)
   }
 
-  // While open: show the list in the top layer, follow its size and scroll, center the selection
-  // and hand focus to the search field.
+  // While open: show the popover, track its size and scroll, center the selection, and focus the
+  // search field.
   $effect(() => {
     if (!open || !popup || !list || !probe) return
     popup.showPopover()
@@ -225,9 +214,7 @@
       'c-row',
       'select__trigger',
       compact && 'select__trigger--compact',
-      (hideLabel || field) && 'select__trigger--unlabeled',
-      field && 'select__trigger--field',
-      className,
+      hideLabel && 'select__trigger--unlabeled',
     ]}
     aria-labelledby={`${id}-label ${id}-value`}
     aria-haspopup={searchable ? 'dialog' : 'listbox'}
@@ -239,19 +226,18 @@
     bind:this={trigger}
     onmousedown={holdFocus}
     onclick={(event) => {
-      // The trigger opens and closes the list itself; as the list's invoker it only keeps a press
-      // on it from counting as a press outside.
+      // Toggled here; as the popover's invoker the trigger only keeps a press on it from
+      // light-dismissing the list.
       event.preventDefault()
       if (open) hide(true)
       else if (!disabled) show()
     }}
     onkeydown={keydown}
   >
-    <span id={`${id}-label`} class={hideLabel || field ? 'c-sr-only' : 'c-row__label'}>
+    <span id={`${id}-label`} class={hideLabel ? 'c-sr-only' : 'c-row__label'}>
       {label}
     </span>
-    <span class={['select__control', field && 'c-field']} style:anchor-name={anchorName}>
-      {@render swatch(current?.swatch)}
+    <span class="select__control" style:anchor-name={anchorName}>
       <span
         id={`${id}-value`}
         class={['select__value', current === undefined && 'select__value--empty']}
@@ -321,7 +307,7 @@
           {/each}
         </div>
       </div>
-      <!-- Mounted with the search field, so a screen reader hears the text change. -->
+      <!-- Mounted with the search field, so screen readers announce its changes. -->
       {#if searchable}
         <p class="select__empty" role="status">
           {query !== '' && layout.slots.length === 0 ? 'No matches' : ''}
@@ -330,10 +316,6 @@
     </div>
   {/if}
 </div>
-
-{#snippet swatch(background: string | undefined)}
-  {#if background}<span class="select__swatch" style:background></span>{/if}
-{/snippet}
 
 {#snippet option(row: OptionRow<T>)}
   {@const selected = row.key === chosen}
@@ -345,21 +327,17 @@
       row.key === null && 'select__opt--clear',
       row === activeRow && 'select__opt--active',
       row === activeRow && keyboard && 'select__opt--cursor',
-      row.option?.disabled && 'select__opt--disabled',
     ]}
-    id={row.nav < 0 ? undefined : optionId(row)}
+    id={optionId(row)}
     tabindex={-1}
     aria-selected={selected}
-    aria-disabled={row.option?.disabled ? true : undefined}
     aria-posinset={row.posinset}
     aria-setsize={row.group.setsize}
     data-value={row.key ?? undefined}
-    data-part={row.key === null ? 'clear' : undefined}
     style:--at={row.slot - row.group.start}
     onpointerenter={(event) => point(row, event.currentTarget)}
     onclick={() => choose(row)}
   >
-    {@render swatch(row.option?.swatch)}
     <span class="select__value">{row.label}</span>
     <span class="select__mark" aria-hidden="true">
       {#if selected}<Icon name="check" />{/if}
@@ -372,18 +350,13 @@
     display: contents;
   }
 
-  /* The trigger is an instrument row (the c-row grid, hover and focus), so a picker reads like a
-     Switch: label left, value right, no boxed field. */
+  /* An instrument row (the c-row grid, hover and focus): label left, unboxed value right. */
   .select__trigger {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
     border: 0;
     border-radius: var(--radius-lg);
     color: var(--color-text-1);
     text-align: start;
-  }
-
-  .select__trigger .c-row__label {
-    font-weight: 500;
   }
 
   .select__trigger:disabled:hover {
@@ -421,13 +394,13 @@
   }
 
   .select__value--empty {
-    color: var(--color-text-3);
+    color: var(--color-text-2);
   }
 
   .select__chev {
     display: flex;
     flex-shrink: 0;
-    color: var(--color-text-3);
+    color: var(--color-text-2);
     transition: transform var(--motion-fast) var(--motion-hover);
   }
 
@@ -441,22 +414,14 @@
     transform: rotate(180deg);
   }
 
-  /* Compact: label and value inline, hugging their content, for a toolbar. */
   .select__trigger.select__trigger--compact {
     display: inline-flex;
     flex: 0 0 auto;
     gap: var(--spacing-sm);
     inline-size: auto;
-    min-height: 2rem;
     min-block-size: 2rem;
     padding: var(--spacing-xs) var(--spacing-sm);
     background: var(--color-surface-2);
-  }
-
-  .select__trigger--compact .c-row__label {
-    color: var(--color-text-2);
-    font-size: var(--text-sm);
-    white-space: nowrap;
   }
 
   .select__trigger--compact .select__control {
@@ -469,7 +434,7 @@
     white-space: nowrap;
   }
 
-  /* Unlabeled: the value control takes the whole row. */
+  /* Unlabeled: the value takes the whole row. */
   .select__trigger.select__trigger--unlabeled {
     grid-template-columns: minmax(0, 1fr);
     inline-size: 100%;
@@ -480,58 +445,8 @@
     flex: 1;
   }
 
-  /* Field: the trigger is the c-field box itself, one row tall, with no row around it. Hover and an
-     open list mark the border as a field's focus does; the ring sits over the border. */
-  .select__trigger.select__trigger--field {
-    min-height: 0;
-    padding: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-  }
-
-  .select__trigger--field:focus-visible {
-    outline-offset: -1px;
-  }
-
-  /* The control's own rules above outrank the c-field layer, so the box is restated here. */
-  .select__trigger--field .select__control {
-    min-block-size: var(--spacing-row-h);
-    padding: 0 var(--spacing-sm);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    transition: border-color var(--motion-fast) var(--motion-hover);
-  }
-
-  .select__trigger--field .select__value {
-    flex: 1;
-    white-space: nowrap;
-    overflow-wrap: normal;
-  }
-
-  .select__trigger--field:hover:not(:disabled) .select__control {
-    border-color: var(--color-text-3);
-    background: var(--color-surface-2);
-  }
-
-  .select__trigger--field[aria-expanded='true'] .select__control {
-    border-color: var(--color-primary-text);
-    background: var(--color-surface-2);
-  }
-
-  /* A swatch keeps a hairline neutral frame, so a ramp that ends near white or near black never
-     dissolves into the surface. */
-  .select__swatch {
-    flex-shrink: 0;
-    inline-size: 1.75rem;
-    block-size: 0.75rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-  }
-
-  /* The list, an auto popover in the top layer, anchored to the value control: at least as wide as
-     the control and 220px, below it and at most 320px tall. It flips above (keeping its bottom edge
-     against the control as a search shortens it) or leftward where there is no room, and where
-     neither side holds it whole it shrinks to the room below, else above. */
+  /* An auto popover under the value and at least as wide. It flips above or leftward where there is
+     no room, and where neither side fits whole, shrinks to the room below, else above. */
   .select__popup {
     --select-row-height: 2.25rem;
     inset: auto;
@@ -589,10 +504,6 @@
     padding: var(--spacing-xs);
   }
 
-  .select__search .c-input {
-    inline-size: 100%;
-  }
-
   .select__list {
     min-block-size: 0;
     overflow-y: auto;
@@ -616,8 +527,8 @@
     padding: 0;
   }
 
-  /* Slots: the markup's custom properties place every row and heading, so layout never waits on
-     the measurement, which only picks the rows that mount. */
+  /* Custom properties place every row and heading, so layout never waits on measurement, which only
+     picks the rows to mount. */
   .select__space {
     position: relative;
     block-size: calc(var(--rows) * var(--select-row-height));
@@ -666,16 +577,11 @@
       color var(--motion-fast) var(--motion-hover);
   }
 
-  /* One line per row: a long label ends in an ellipsis, with its full text in the row's title. */
+  /* One line per row; a clipped label's full text is the row's title. */
   .select__opt .select__value {
     flex: 1;
     white-space: nowrap;
     overflow-wrap: normal;
-  }
-
-  .select__opt .select__swatch {
-    inline-size: 2.5rem;
-    block-size: 0.875rem;
   }
 
   .select__opt--clear {
@@ -688,24 +594,17 @@
     color: var(--color-text-1);
   }
 
-  /* The selected value takes the maroon tint over the cursor's background; a keyboard cursor ring
-     still draws on top of it. */
+  /* The selection tint overrides the cursor's; a keyboard ring still draws over it. */
   .select__opt[aria-selected='true'] {
     background: var(--color-selected);
     color: var(--color-text-1);
     font-weight: 500;
   }
 
-  /* The keyboard cursor alone gets a ring, inset, since real focus stays on the trigger. */
+  /* Only the keyboard cursor gets a ring, inset, since real focus stays on the trigger. */
   .select__opt--cursor {
     outline: var(--focus-ring);
     outline-offset: calc(-1 * var(--focus-width));
-  }
-
-  .select__opt--disabled {
-    color: var(--color-text-3);
-    cursor: not-allowed;
-    opacity: 0.55;
   }
 
   .select__mark {
@@ -726,7 +625,6 @@
     }
 
     .select__trigger.select__trigger--compact {
-      min-height: var(--spacing-touch-h);
       min-block-size: var(--spacing-touch-h);
     }
   }
@@ -740,10 +638,6 @@
 
     .select__opt--cursor {
       outline-color: Highlight;
-    }
-
-    .select__swatch {
-      forced-color-adjust: none;
     }
   }
 

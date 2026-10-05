@@ -3,12 +3,12 @@ import { type FileHandle, open, rename, rm } from 'node:fs/promises'
 
 import * as vscode from 'vscode'
 
-/** A video the reader chose a place for, written where the encoder says as it is made. */
+/** An exported video, written at the encoder's offsets and published to its destination on close. */
 export class VideoFile {
   #handle?: FileHandle
   readonly #temporary: vscode.Uri
   #closed = false
-  /** The bytes of a video bound for a file system that cannot be written in place. */
+  /** The video in memory, for non-`file` destinations that cannot be written in place. */
   #bytes = new Uint8Array(0)
   #length = 0
   private constructor(readonly uri: vscode.Uri) {
@@ -22,7 +22,7 @@ export class VideoFile {
     return file
   }
 
-  /** Ask where `name` goes, beside `beside`; undefined when the reader chose nowhere. */
+  /** Ask the user where to save `name`, next to `beside`; undefined if cancelled. */
   static async choose(
     beside: vscode.Uri,
     name: string,
@@ -73,7 +73,7 @@ export class VideoFile {
     this.#closed = true
     if (this.#handle) {
       await this.#handle.close()
-      // The temporary file is on the same filesystem, so a failed rename leaves the old video.
+      // Same file system, so the rename is atomic and a failure leaves the old video.
       await rename(this.#temporary.fsPath, this.uri.fsPath)
     } else {
       await vscode.workspace.fs.writeFile(this.#temporary, this.#bytes.subarray(0, this.#length))
@@ -82,7 +82,7 @@ export class VideoFile {
     this.#bytes = new Uint8Array(0)
   }
 
-  /** Give the export up; only this export's temporary file is removed. Safe after close or failure. */
+  /** Discard the export's temporary file; the destination is untouched. Safe after close or failure. */
   async abort() {
     this.#closed = true
     await this.#handle?.close().catch(() => {})

@@ -1,10 +1,10 @@
-/** Catalog-driven schema and parser plans. */
+/** The catalog as a Schema, with each table's plan for the parser. */
 
 import type { Bounds, DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
 import { failure } from '@latkit/model'
 
 export interface Catalog {
-  /** As read: workers parse it again, and it is part of every case's version. */
+  /** As read; part of every case's version. */
   readonly text: string
   readonly bus: string
   readonly options: readonly OptionSpec[]
@@ -15,7 +15,7 @@ export interface Catalog {
   readonly schema: Schema
 }
 
-export interface ClassSpec {
+interface ClassSpec {
   readonly name: string
   readonly label: string
   readonly family: string
@@ -25,13 +25,13 @@ export interface ClassSpec {
   readonly outputs: readonly { readonly id: string; readonly unit?: string }[]
 }
 
-export interface ParamSpec {
+interface ParamSpec {
   readonly id: string
   readonly type: 'real' | 'integer' | 'flag'
   readonly unit?: string
 }
 
-export interface PortSpec {
+interface PortSpec {
   readonly required?: boolean
   readonly name: string
   readonly kind: 'bus' | 'signal'
@@ -52,7 +52,8 @@ export interface OptionSpec {
 
 export type ArrayName = 'buses' | 'signals' | 'devices'
 
-export type FieldSource =
+/** Where a field's value is in its record. */
+type FieldSource =
   | {
       readonly kind: 'identity' | 'record' | 'parameter' | 'initial' | 'header' | 'port' | 'output'
       readonly name: string
@@ -66,7 +67,7 @@ export interface FieldPlan {
   readonly source: FieldSource
 }
 
-export interface PortPlan extends FieldPlan {
+interface PortPlan extends FieldPlan {
   readonly definition: FieldDefinition & {
     readonly type: { readonly kind: 'reference'; readonly to: string }
   }
@@ -78,16 +79,15 @@ export interface Shape {
   readonly kind: 'bus' | 'signal' | 'device' | 'case'
   /** The array its records are in; null for the Case table. */
   readonly array: ArrayName | null
-  /** Its place in `Catalog.codes`; -1 for the Case table. */
-  readonly code: number
   readonly definition: TypeDefinition
-  /** All public fields, compiled once; consumers do not interpret native naming conventions. */
+  /** Every field by name, the identity and ports included. */
   readonly plan: ReadonlyMap<string, FieldPlan>
   /** The native identity: a device's id, a bus's number, a signal's id. */
   readonly identity: { readonly name: string; readonly type: 'text' | 'uint32' }
+  /** The fields the parser fills, in column order: neither the identity, a port, nor an output. */
   readonly fields: readonly FieldPlan[]
   readonly ports: readonly PortPlan[]
-  /** Native output order, used when writing monitor lists. */
+  /** Each output's place in the native order, which monitor lists follow. */
   readonly outputOrder: ReadonlyMap<string, number>
 }
 
@@ -106,9 +106,9 @@ export function catalogOf(text: string): Catalog {
     options: readonly OptionSpec[]
   }
   const codes = [
-    shapeOf(raw.bus, 'bus', 0, raw.bus.name),
+    shapeOf(raw.bus, 'bus', raw.bus.name),
     signalShape(),
-    ...raw.classes.map((spec, i) => shapeOf(spec, 'device', i + 2, raw.bus.name)),
+    ...raw.classes.map((spec) => shapeOf(spec, 'device', raw.bus.name)),
   ]
   const shapes = new Map<string, Shape>()
   for (const shape of [...codes, caseShape()]) {
@@ -125,7 +125,7 @@ export function catalogOf(text: string): Catalog {
   return { text, bus: raw.bus.name, options: raw.options, shapes, codes, schema }
 }
 
-function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', code: number, bus: string): Shape {
+function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
   const parameters = new Set(spec.params.map((param) => param.id))
   for (const port of spec.ports)
     if (parameters.has(port.name))
@@ -142,7 +142,6 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', code: number, bus: str
       type: spec.name,
       kind,
       array: kind === 'bus' ? 'buses' : 'devices',
-      code,
       identity:
         kind === 'bus' ? { name: 'number', type: 'uint32' } : { name: 'name', type: 'text' },
     },
@@ -212,7 +211,6 @@ function signalShape(): Shape {
       type: SIGNAL,
       kind: 'signal',
       array: 'signals',
-      code: 1,
       identity: { name: 'signal_id', type: 'uint32' },
     },
     { label: SIGNAL },
@@ -232,7 +230,6 @@ function caseShape(): Shape {
       type: CASE,
       kind: 'case',
       array: null,
-      code: -1,
       identity: { name: 'id', type: 'text' },
     },
     { label: CASE },
@@ -251,9 +248,9 @@ function caseShape(): Shape {
   )
 }
 
-/** Classify the plan once. The parser works with indexed arrays, never this map per row. */
+/** A table's shape, its fields sorted once into the plan, fields, ports and output order. */
 function compile(
-  table: Pick<Shape, 'type' | 'kind' | 'array' | 'code' | 'identity'>,
+  table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity'>,
   definition: Omit<TypeDefinition, 'fields'>,
   entries: readonly FieldPlan[],
 ): Shape {

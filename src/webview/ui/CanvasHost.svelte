@@ -1,29 +1,30 @@
 <!-- @component
-  Own a renderer's canvas and cleanup, including late mounts. Children overlay the canvas; failures replace it.
+  Runs a renderer on its canvas and disposes it, even when the mount resolves after teardown. A
+  failed start shows a fallback over the canvas.
 -->
 <script lang="ts">
-  import { type Snippet, untrack } from 'svelte'
+  import { untrack } from 'svelte'
+
+  import { message } from '../../shared/format.js'
 
   let {
     mount,
     fault = null,
     label,
-    children,
   }: {
-    /** Starts the renderer on the canvas and resolves to its disposer. */
+    /** Starts the renderer on the canvas; resolves to its disposer. */
     readonly mount: (canvas: HTMLCanvasElement, signal: AbortSignal) => Promise<() => void>
-    /** A problem the renderer recovered from, as text for an alert over the live canvas. */
+    /** A problem the renderer recovered from, shown as an alert over the live canvas. */
     readonly fault?: string | null
     /** The canvas's accessible name. */
     readonly label: string
-    readonly children?: Snippet
   } = $props()
 
   let canvas = $state<HTMLCanvasElement>()
   let starting = $state(true)
   let failure = $state<string | null>(null)
 
-  // One renderer per canvas: the mount runs once the canvas exists, whatever `mount` reads.
+  // One renderer per canvas: `mount` runs untracked, so only a new canvas restarts it.
   $effect(() => {
     const target = canvas
     if (!target) return
@@ -40,7 +41,7 @@
       },
       (error: unknown) => {
         if (!live) return
-        failure = error instanceof Error ? error.message : String(error)
+        failure = message(error)
         starting = false
       },
     )
@@ -61,7 +62,5 @@
     <div class="canvas-host__fallback c-empty" role="alert">
       <p class="c-empty__text">This view could not start its WebGPU renderer. {failure}</p>
     </div>
-  {:else}
-    {@render children?.()}
   {/if}
 </div>

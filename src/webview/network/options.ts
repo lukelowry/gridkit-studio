@@ -1,19 +1,19 @@
-/** Network preferences translated into the renderer's style; camera state stays with the view. */
+/** Network settings as renderer options; the camera stays with the view. */
 import type { RGBA } from '@latkit/gpu'
 import type { NetworkConfig } from '@latkit/network'
 
 import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
 
-/** The halos the theme's focus color draws, translucent over what they surround. */
+/** Alpha of the hover and selection halos over the theme's focus color. */
 const HOVER_ALPHA = 0.5
 const SELECTED_ALPHA = 0.82
-/** Borders draw faint over the ground in the theme's colors. */
+/** Alpha of borders over the theme's text color. */
 const PATH_ALPHA = 0.5
 
 const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
 
-export type NetworkStyle = Omit<NetworkConfig, 'source' | 'vertices' | 'edges' | 'paths' | 'canvas'>
+type NetworkStyle = Omit<NetworkConfig, 'source' | 'vertices' | 'edges' | 'paths' | 'canvas'>
 
 export function networkOptions(
   s: SettingsReader,
@@ -66,6 +66,6 @@ export function networkOptions(
     selectedColor: color(s.get('network.selectedColor'), faded(palette.focus, SELECTED_ALPHA)),
     vertexColor: color(s.get('network.vertexColor'), palette.network),
     edgeColor: color(s.get('network.edgeColor')) ?? 'ends',
-    pathColor: color(s.get('network.pathColor'), faded(palette.text3, PATH_ALPHA)),
+    pathColor: color(s.get('network.pathColor'), faded(palette.text2, PATH_ALPHA)),
   }
 }

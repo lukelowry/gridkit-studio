@@ -1,17 +1,13 @@
-/**
- * Typeahead for lists driven from the keyboard (Menu, Select): characters typed in quick
- * succession spell a prefix, and the cursor jumps to the next entry whose text starts with it.
- */
+/** Typeahead: quick keystrokes spell a prefix, and the cursor jumps to the next entry with it. */
 
-/** How long typing may pause before the prefix starts over. */
+/** How long typing may pause before the prefix restarts. */
 const PAUSE_MS = 500
 
-/** The prefix spelled by recent keystrokes. */
 export class Typeahead {
   #prefix = ''
   #timer: ReturnType<typeof setTimeout> | undefined
 
-  /** Add a typed character (compared without case) and return the prefix so far. */
+  /** Add a key, case-folded, and return the prefix so far. */
   type(key: string): string {
     this.#prefix += key.toLowerCase()
     clearTimeout(this.#timer)
@@ -19,7 +15,7 @@ export class Typeahead {
     return this.#prefix
   }
 
-  /** Start over now, and drop the pending timer. */
+  /** Clear the prefix and its pending timer. */
   reset(): void {
     this.#prefix = ''
     clearTimeout(this.#timer)
@@ -27,9 +23,8 @@ export class Typeahead {
 }
 
 /**
- * The first of `count` entries after index `from` whose lowercase `text` starts with `prefix`,
- * searching forward and wrapping around so `from` itself is tried last; -1 when none does. A `from`
- * of -1 starts the search at the first entry.
+ * The first of `count` entries after `from` whose lowercase `text` starts with `prefix`, wrapping
+ * so `from` is tried last; -1 when none. A `from` of -1 starts at the first entry.
  */
 export function nextMatch(
   count: number,

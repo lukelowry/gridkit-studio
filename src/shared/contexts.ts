@@ -1,37 +1,47 @@
+import type { Schema } from '@latkit/model'
+
 import { type Bindings, NUMERIC } from './bindings.js'
-import type { Element, Summary } from './messages.js'
-import { diagramOf, networkOf, placementOf } from './schema.js'
-const topology = new WeakMap<
-  Summary['schema'],
-  { network: ReturnType<typeof networkOf>; diagram: ReturnType<typeof diagramOf> }
->()
-export interface Target {
-  uri: string
-  version: number
+import type { Element, Plot, Revision, Summary } from './messages.js'
+import {
+  diagramOf,
+  type Drawn,
+  elementType,
+  isReference,
+  networkOf,
+  placementOf,
+} from './schema.js'
+
+/** What a menu was opened on; its commands act on exactly this. */
+export interface Target extends Revision {
   origin: 'network' | 'diagram' | 'table' | 'monitor' | 'inspector'
   element?: Element
   type?: string
   field?: string
+  /** Every element under the pointer. */
   items?: Element[]
-  plot?: { from: string; field: string; id?: string }
+  plot?: Plot
 }
-/** Native menus receive this exact target; opening a menu never silently selects another row. */
+
+const drawn = new WeakMap<Schema, { network: Drawn; diagram: Drawn }>()
+
+/** VS Code context keys for a menu on `target`, which carry the target to its commands; opening a
+ *  menu never selects another row. */
 export function menuContext(
   summary: Pick<Summary, 'schema' | 'editable'>,
   target: Target,
   bindings: Bindings = {},
 ) {
-  const type = target.type ?? target.element?.id.split('/')[0]
+  const type = target.type ?? (target.element && elementType(target.element.id))
   const field = target.field ?? target.element?.field
   const definition = type && field ? summary.schema.types[type]?.fields[field] : undefined
-  let drawn = topology.get(summary.schema)
-  if (!drawn)
-    topology.set(
+  let views = drawn.get(summary.schema)
+  if (!views)
+    drawn.set(
       summary.schema,
-      (drawn = { network: networkOf(summary.schema), diagram: diagramOf(summary.schema) }),
+      (views = { network: networkOf(summary.schema), diagram: diagramOf(summary.schema) }),
     )
-  const network = type ? placementOf(drawn.network, type) : null
-  const diagram = type ? placementOf(drawn.diagram, type) : null
+  const network = type ? placementOf(views.network, type) : null
+  const diagram = type ? placementOf(views.diagram, type) : null
   return {
     preventDefaultContextMenuItems: true,
     gridkitTarget: target,
@@ -43,7 +53,7 @@ export function menuContext(
     gridkitDiagram: !!diagram,
     gridkitEdge: network === 'edge',
     gridkitEditable: !!(target.element && type && field && summary.editable[type]?.includes(field)),
-    gridkitReference: typeof definition?.type === 'object' && definition.type.kind === 'reference',
+    gridkitReference: isReference(definition),
     gridkitBindable: !!network && NUMERIC.has(definition?.type),
     gridkitBound: Object.values(bindings).some(
       (binding) => binding.type === type && binding.field === field,

@@ -1,72 +1,61 @@
-/** Index select options, filter them into grouped slots, and calculate visible rows and ARIA positions. */
+/** The Select listbox model: options indexed, filtered into grouped slots, windowed into runs. */
 
-/** An option a Select offers; it may sit under a heading and carry a color swatch. */
 export interface SelectOption<T> {
   readonly value: T
   readonly label: string
-  /** Options sharing a group sit under its heading; groups keep the order they first appear in. */
+  /** The heading it sits under; groups keep the order they first appear in. */
   readonly group?: string
-  /** A CSS background painted as a small chip beside the label (a colormap gradient, say). */
-  readonly swatch?: string
-  /** Shown, but neither reachable from the keyboard nor choosable. */
-  readonly disabled?: boolean
 }
 
-/** An option, or the clear row (`option` and `key` null), with its label lowercased once for
- *  matching. */
+/** An option, or the clear row (`value` and `key` null), with its label lowercased for matching. */
 interface Entry<T> {
-  readonly option: SelectOption<T> | null
+  readonly value: T | null
   readonly key: string | null
   readonly label: string
   readonly text: string
 }
 
-/** The options by key, and grouped by heading in first-appearance order ('' for no heading). */
+/** The options by key, and their entries by heading ('' for none) in first-appearance order. */
 interface OptionIndex<T> {
   readonly byKey: ReadonlyMap<string, SelectOption<T>>
   readonly groups: readonly (readonly [heading: string, entries: readonly Entry<T>[]])[]
 }
 
-/** Rows under one heading (or none: `label` ''), occupying slots `[start, end)`, the heading's own
- *  slot included. */
+/** The rows under one heading ('' for none), in slots `[start, end)` with the heading's own. */
 export interface OptionGroup {
   readonly label: string
   readonly start: number
   readonly end: number
-  /** The size of its ARIA set: its rows, or for rows under no heading, all such rows together. */
+  /** The ARIA set size: the group's rows, or every row under no heading together. */
   readonly setsize: number
 }
 
-/** One row of the listbox: an option, or the clear row (`value` and `key` null). */
 export interface OptionRow<T> extends Entry<T> {
-  readonly value: T | null
   readonly group: OptionGroup
-  /** Its layout position: every row and every named heading takes one slot. */
+  /** Layout position; every row and every named heading takes one slot. */
   readonly slot: number
-  /** Its keyboard position, or -1 when disabled. */
+  /** Keyboard position. */
   readonly nav: number
-  /** Its 1-based position in its ARIA set. */
+  /** 1-based position in its ARIA set. */
   readonly posinset: number
 }
 
-/** What a query leaves, in layout order and in keyboard order. */
 interface OptionLayout<T> {
-  /** Each slot holds a named heading's group or a row; the count sets the scroll height. */
+  /** Named headings and rows in layout order; the count sets the scroll height. */
   readonly slots: readonly (OptionGroup | OptionRow<T>)[]
-  /** The enabled rows, in order. */
+  /** Rows in keyboard order. */
   readonly nav: readonly OptionRow<T>[]
-  /** A key's keyboard position (null for the clear row). */
+  /** Keyboard position by key (null for the clear row). */
   readonly navOf: ReadonlyMap<string | null, number>
 }
 
-/** A stretch of consecutive rows in one group, as a window mounts them. */
+/** Consecutive rows of one group, as a window mounts them. */
 interface OptionRun<T> {
   readonly group: OptionGroup
-  readonly rows: readonly OptionRow<T>[]
+  readonly rows: OptionRow<T>[]
 }
 
-/** Index `options` once under `key` (their text by default), so each query filters cached
- *  lowercase labels. */
+/** Index `options` by `key`, lowercasing labels once for every query. */
 export function indexOptions<T>(
   options: readonly SelectOption<T>[],
   key: (value: T) => string = String,
@@ -82,16 +71,20 @@ export function indexOptions<T>(
       group = []
       grouped.set(heading, group)
     }
-    // Only labels are searched: a value is opaque data (a reference, say), not text.
-    group.push({ option, key: text, label: option.label, text: option.label.toLowerCase() })
+    // Only labels are searched: a value is opaque data, not text.
+    group.push({
+      value: option.value,
+      key: text,
+      label: option.label,
+      text: option.label.toLowerCase(),
+    })
   }
   return { byKey, groups: [...grouped.entries()] }
 }
 
 /**
- * Lay out the options whose label contains every word of `query` (any case), group by group.
- * When `clear` names a clear row it leads the list, but only while there is no query: a search
- * shows matches alone. Groups left empty by the query vanish.
+ * Lay out, group by group, the options whose label contains every word of `query` in any case. A
+ * `clear` label leads as the clear row only while there is no query; groups left empty vanish.
  */
 export function layoutOptions<T>(
   index: OptionIndex<T>,
@@ -105,12 +98,11 @@ export function layoutOptions<T>(
   const slots: (OptionGroup | OptionRow<T>)[] = []
   const nav: OptionRow<T>[] = []
   const navOf = new Map<string | null, number>()
-  // Rows under no heading sit directly in the listbox, so together they form one ARIA set, whose
-  // size is known only once every group is laid out.
+  // Rows under no heading form one ARIA set, sized once every group is placed.
   const headless: { setsize: number }[] = []
   let loose = 0
 
-  // A search runs this over every option on each keystroke, so it is a plain loop.
+  // Runs over every option on each keystroke, so a plain loop.
   const matches = (entry: Entry<T>): boolean => {
     for (let at = 0; at < words.length; at++) if (!entry.text.includes(words[at]!)) return false
     return true
@@ -129,25 +121,21 @@ export function layoutOptions<T>(
     if (named) slots.push(group)
     else headless.push(group)
     for (let position = 0; position < entries.length; position++) {
-      const entry = entries[position]!
-      const enabled = entry.option === null || entry.option.disabled !== true
       const row: OptionRow<T> = {
-        ...entry,
-        value: entry.option === null ? null : entry.option.value,
+        ...entries[position]!,
         group,
         slot: slots.length,
-        nav: enabled ? nav.length : -1,
+        nav: nav.length,
         posinset: named ? position + 1 : ++loose,
       }
       slots.push(row)
-      if (!enabled) continue
       navOf.set(row.key, row.nav)
       nav.push(row)
     }
   }
 
   if (clear !== null && words.length === 0) {
-    place('', [{ option: null, key: null, label: clear, text: clear.toLowerCase() }])
+    place('', [{ value: null, key: null, label: clear, text: clear.toLowerCase() }])
   }
   for (const [heading, entries] of index.groups)
     place(heading, words.length === 0 ? entries : entries.filter(matches))
@@ -156,8 +144,8 @@ export function layoutOptions<T>(
 }
 
 /**
- * The rows in slots `[first, first + count)`, split into runs by group, with `pinned` (the active
- * row) added at whichever end it lies beyond, so it stays mounted while scrolled out of view.
+ * The rows in slots `[first, first + count)` split into runs by group, plus `pinned` (the active
+ * row) wherever it lies beyond them, so aria-activedescendant always names a mounted row.
  */
 export function windowRuns<T>(
   layout: OptionLayout<T>,
@@ -165,10 +153,10 @@ export function windowRuns<T>(
   count: number,
   pinned?: OptionRow<T>,
 ): readonly OptionRun<T>[] {
-  const runs: Run<T>[] = []
+  const runs: OptionRun<T>[] = []
   if (pinned !== undefined && pinned.slot < first) extend(runs, pinned)
   const end = Math.min(first + count, layout.slots.length)
-  // Runs on every scroll frame of a long list: a plain loop, no intermediate arrays.
+  // Runs on every scroll frame of a long list, so a plain loop.
   for (let slot = first; slot < end; slot++) {
     const held = layout.slots[slot]!
     if ('nav' in held) extend(runs, held)
@@ -177,10 +165,8 @@ export function windowRuns<T>(
   return runs
 }
 
-type Run<T> = { group: OptionGroup; rows: OptionRow<T>[] }
-
-/** Add `row` to the run it continues, or start the next run with it. */
-function extend<T>(runs: Run<T>[], row: OptionRow<T>): void {
+/** Add `row` to the run it continues, or start a new run with it. */
+function extend<T>(runs: OptionRun<T>[], row: OptionRow<T>): void {
   const last = runs[runs.length - 1]
   if (last !== undefined && last.group === row.group) last.rows.push(row)
   else runs.push({ group: row.group, rows: [row] })

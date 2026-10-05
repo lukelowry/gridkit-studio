@@ -9,7 +9,7 @@ import {
   type Parameters,
 } from '@latkit/model'
 
-import { type ResultCache, Results } from '../results/results.js'
+import { BATCH_BYTES, type ResultCache, Results } from '../results/index.js'
 import type { RunInfo, RunRequest, RuntimeProcess } from '../shared/messages.js'
 import type { Case } from './case.js'
 import { diagnose } from './edits.js'
@@ -17,6 +17,7 @@ import { commandOf, parametersOf, selections } from './parameters.js'
 import { launch } from './runtime.js'
 import { caseFile, faultOrdinal, faultRecord, inputOf, monitorsOf } from './staging.js'
 
+/** One DynamicSimulation run of a case, staged in `directory`, read as GridKit writes it. */
 export class Simulation implements Command {
   readonly parameters
   results?: Results
@@ -63,24 +64,19 @@ export class Simulation implements Command {
     if (!outputs.length)
       throw failure('invalid-input', 'Choose at least one monitored signal to run.')
     const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
-    if (columns * 8 > 8 << 20) throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
+    if (columns * 8 > BATCH_BYTES)
+      throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
     this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)
     const staged = caseFile(
       this.kase,
       monitorsOf(this.kase, outputs),
       command.fault ? faultRecord(this.kase, command.fault) : null,
     )
-    const handle = await import('node:fs/promises').then((fs) =>
-      fs.open(join(this.directory, 'case.json'), 'w'),
+    await writeFile(join(this.directory, 'case.json'), staged)
+    await writeFile(
+      join(this.directory, 'input.json'),
+      inputOf(command, 'case.json', faultOrdinal(this.kase)),
     )
-    try {
-      for (const bytes of staged) await handle.writeFile(bytes)
-    } finally {
-      await handle.close()
-    }
-    const text = inputOf(command, 'case.json', faultOrdinal(this.kase))
-
-    await writeFile(join(this.directory, 'input.json'), text)
     const process = await launch(
       this.request.gridkit,
       this.directory,

@@ -1,4 +1,4 @@
-/** Reactive list window measured from CSS row height. Offsets start at the first row. */
+/** A reactive window over fixed-height rows, sized from the page. */
 
 import { centerOffset, revealOffset, windowSize, windowStart } from './windowing.js'
 
@@ -6,11 +6,9 @@ export class Viewport {
   readonly #overscan: number
   #scroller: HTMLElement | null = null
 
-  /** How far the rows are scrolled. */
   scrollTop = $state(0)
-  /** The height the rows show in. */
+  /** The visible height. */
   height = $state(0)
-  /** One row's height. */
   rowHeight = $state(0)
 
   /** The first row to mount. */
@@ -18,8 +16,7 @@ export class Viewport {
   /** How many rows to mount from `first`. */
   readonly count = $derived.by(() => windowSize(this.height, this.rowHeight, this.#overscan))
 
-  /** A window mounting `overscan` rows beyond each end of the view, sized by the guesses given
-   *  until the page is measured. */
+  /** Mount `overscan` rows past each end of the view; `guess` sizes the window until measured. */
   constructor(overscan: number, guess: { readonly rowHeight: number; readonly height: number }) {
     this.#overscan = overscan
     this.rowHeight = guess.rowHeight
@@ -27,16 +24,14 @@ export class Viewport {
   }
 
   /**
-   * Follow `scroller`, the element the rows scroll in: its offset as it scrolls, and the sizes of
-   * `probe` (an empty element one row tall) and of the view, less `header` (a sticky head above the
-   * rows) where there is one. A size of zero (an element not laid out) keeps the last one. Returns
-   * the function that stops following.
+   * Track `scroller`'s offset and height, and a row's height from `probe`, an empty element one row
+   * tall. A zero size (not laid out) keeps the last. Returns the function that stops tracking.
    */
-  follow(scroller: HTMLElement, probe: HTMLElement, header?: HTMLElement): () => void {
+  follow(scroller: HTMLElement, probe: HTMLElement): () => void {
     this.#scroller = scroller
     const measure = (): void => {
       const row = probe.getBoundingClientRect().height
-      const view = scroller.clientHeight - (header?.offsetHeight ?? 0)
+      const view = scroller.clientHeight
       if (row > 0) this.rowHeight = row
       if (view > 0) this.height = view
     }
@@ -45,7 +40,8 @@ export class Viewport {
     }
     measure()
     const observer = new ResizeObserver(measure)
-    for (const element of [scroller, probe, header]) if (element) observer.observe(element)
+    observer.observe(scroller)
+    observer.observe(probe)
     scroller.addEventListener('scroll', scrolled, { passive: true })
     return () => {
       observer.disconnect()
@@ -54,8 +50,8 @@ export class Viewport {
     }
   }
 
-  /** Scroll so the band `[top, top + height)` shows, moving as little as possible, or centered in the
-   *  view when `center`. The band may lie beyond the rows mounted. */
+  /** Scroll the band `[top, top + height)` into view with the least movement, or centered. The band
+   *  need not be mounted. */
   reveal(top: number, height: number, center = false): void {
     const scroller = this.#scroller
     if (scroller === null) return
@@ -65,15 +61,8 @@ export class Viewport {
     this.scrollTop = scroller.scrollTop
   }
 
-  /** Back to the first row. */
   rewind(): void {
     if (this.#scroller !== null) this.#scroller.scrollTop = 0
     this.scrollTop = 0
-  }
-
-  /** Scroll to `offset`, as when a position is restored. */
-  scrollTo(offset: number): void {
-    if (this.#scroller !== null) this.#scroller.scrollTop = offset
-    this.scrollTop = this.#scroller?.scrollTop ?? offset
   }
 }

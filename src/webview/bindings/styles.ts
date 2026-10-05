@@ -5,18 +5,15 @@ import type { Data, FieldInput } from '@latkit/model'
 
 import { type Bindings, CHANNELS, channelsFor, type FieldRef } from '../../shared/bindings.js'
 
-/** A sampled field read from a run: its frames, and the values its colors span, which the renderer
- *  measures: over a window of the run, or `auto` for the frame on show. */
+/** A sampled field's run: its frames, and the domain the renderer measures its values over (a
+ *  window of the run, or `auto` for the frame on show). */
 export interface Sampled {
   readonly source: Data
   readonly domain: ScaleDomain
 }
 
-/** The channels `bindings` give `type`'s vertices or edges, by the renderer's option: each bound
- *  field read from the case or, for a sampled field `sampledOf` finds in a run, from that run over
- *  the values `sampledOf` says (`sampledOf` gives null for a sampled field no run on show has, and
- *  undefined for a field of the case). A range the reader set stands in for the measured one, and
- *  each channel spans the renderer's own range. A channel with no field is left out. */
+/** The renderer channels `bindings` give `type`'s vertices or edges. `sampledOf` gives a field's
+ *  run, null to leave it out, or undefined to read the case; a range the user set wins. */
 export function channelsOf(
   bindings: Bindings,
   type: string,

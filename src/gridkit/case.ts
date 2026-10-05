@@ -1,4 +1,4 @@
-/** A loaded case: its tables as column chunks, the Data a host reads, and the file a run's case file is written from. */
+/** A loaded case: its tables as column chunks, the Data a host reads, and the file as read. */
 
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -27,6 +27,7 @@ import {
   chunkAt,
   chunkOf,
   type Column,
+  hash,
   isValid,
   radixOrder,
   rowCount,
@@ -58,8 +59,8 @@ export interface Table {
   readonly records: Uint32Array
 }
 
-/** One array in the file: its records, and each one's `mon` value as a start and end, 0, 0 where it has none. */
-export interface RecordArray extends Records {
+/** An array's records, and each one's `mon` value as a start and end; 0, 0 where it has none. */
+interface RecordArray extends Records {
   readonly mons: Uint32Array
 }
 
@@ -70,12 +71,12 @@ export class Case {
   #signalsChecked = false
   #data: Data | undefined
 
-  /** The case at `path`. Large files are parsed in parallel ranges of about 8 MB. Small files avoid worker
-   *  startup. Column chunks join their tables in file order without a copy. */
   static async read(path: string, catalog: Catalog, signal?: AbortSignal): Promise<Case> {
     return Case.parse(await readFile(path, 'utf8'), catalog, basename(path, '.case.json'), signal)
   }
 
+  /** The case `text` holds, parsed in ranges of about 256 KiB whose column chunks join their tables
+   *  in file order without a copy. */
   static async parse(
     text: string,
     catalog: Catalog,
@@ -111,7 +112,7 @@ export class Case {
       },
       { disallowComments: true, allowTrailingComma: false },
     )
-    const file = new TextEncoder().encode(text)
+    const file = UTF8.encode(text)
     const layout = scan(file)
     const ranges = rangesOf(layout)
     const parsed = await parseAll(file, ranges, catalog, signal)
@@ -121,7 +122,7 @@ export class Case {
       .digest('hex')
       .slice(0, 32)
     const kase = joined(parsed, ranges, file, layout, catalog, version, name)
-    // Force identity indexes here: duplicate native IDs must fail before publishing a projection.
+    // Build the identity indexes here, so duplicate IDs fail the parse.
     for (const table of kase.tables.values()) {
       if (table.shape.identity.type === 'text') textIds(table.ids)
       else numberIds(table.ids)
@@ -142,8 +143,8 @@ export class Case {
     readonly monitors: Member | undefined,
   ) {}
 
-  /** Every static field and row ID, as a host reads them. Assembled on first read rather than while the parse's
-   *  buffers are still live, which keeps the load's memory high-water mark, and so the process's peak, down. */
+  /** Every static field and row ID, as a host reads them. Built on first read, once the parse's
+   *  buffers are free, to keep peak memory down. */
   get data(): Data {
     return (this.#data ??= dataOf(this.catalog.schema, this.tables))
   }
@@ -197,7 +198,7 @@ export class Case {
     return row < 0 ? null : { table: table!, row }
   }
 
-  /** Before simulation, reject signals driven by more than one output port. */
+  /** Throws when more than one output port drives a signal. */
   checkSignals(): void {
     if (this.#signalsChecked) return
     const signals = this.table(SIGNAL)
@@ -242,7 +243,7 @@ function rangesOf(layout: Layout): Range[] {
   return ranges
 }
 
-/** Runs inside Studio's single data worker. Yield between bounded ranges for cancellation. */
+/** Parses range by range, yielding between ranges so `signal` can cancel. */
 async function parseAll(
   bytes: Uint8Array,
   ranges: readonly Range[],
@@ -261,7 +262,8 @@ async function parseAll(
     throw failure('invalid-input', problems[0]!.message, { issues: problems.slice(0, 100) })
   return parsed
 }
-/** The parsed ranges as one case: each table's chunks in file order, its ports resolved, and each record's place. */
+
+/** The parsed ranges as one case: chunks joined in file order, ports resolved, records placed. */
 function joined(
   parsed: readonly Parsed[],
   ranges: readonly Range[],
@@ -436,8 +438,8 @@ function references(native: readonly Chunk[], starts: Uint32Array, target: Table
   }
 }
 
-/** Every table's static fields as one Data, sharing the parsed chunks. An empty table keeps its columns. Row IDs are
- *  written when first read: a view watching fields alone never pays for them. */
+/** Every table's static fields as one Data, sharing the parsed chunks; an empty table keeps its
+ *  columns. Row IDs are built on first read, so a view of fields alone never pays for them. */
 function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
   const batches: RowBatch[] = []
   for (const [type, table] of tables) {
@@ -507,7 +509,7 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
   }
 }
 
-/** `Type/native` IDs written straight into UTF-8, without a string per row. A loaded case has no null identity. */
+/** `Type/native` IDs written straight into UTF-8, with no string per row. No identity is null. */
 function idColumn(prefix: Uint8Array, native: Chunk): TextColumn {
   const count = native.length
   const offsets = new Int32Array(count + 1)
@@ -547,7 +549,7 @@ function decimal(value: number, bytes: Uint8Array, at: number): number {
   return end
 }
 
-// Identity indexes, built on first lookup: UTF-8 hash tables for text, direct or sorted indexes for numbers.
+// Identity indexes, built on first lookup: hash tables of UTF-8 text; direct or sorted numbers.
 const TEXT = new WeakMap<Column, TextIds>()
 const NUMBER = new WeakMap<Column, NumberIds>()
 
@@ -561,12 +563,6 @@ function numberIds(column: Column): NumberIds {
   let ids = NUMBER.get(column)
   if (ids === undefined) NUMBER.set(column, (ids = new NumberIds(column)))
   return ids
-}
-
-function hash(bytes: Uint8Array, start: number, end: number): number {
-  let h = 0x811c9dc5
-  for (let i = start; i < end; i++) h = Math.imul(h ^ bytes[i]!, 0x01000193)
-  return h >>> 0
 }
 
 class TextIds {

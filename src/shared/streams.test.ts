@@ -19,7 +19,7 @@ describe('the window of a run a view holds', () => {
   it('holds an open window from its start on, so arriving frames are appended', () => {
     const open = holdFor(undefined, [10, 20], true, 10)
     expect(open).toEqual({ from: 0 })
-    // The need follows the head: the same window serves until it trails three spans behind.
+    // The need follows the head; one window serves until its start trails three spans behind.
     expect(holdFor(open, [25, 35], true, 10)).toBe(open)
     expect(holdFor(open, [30, 40], true, 10)).toBe(open)
     expect(holdFor(open, [31, 41], true, 10)).toEqual({ from: 21 })

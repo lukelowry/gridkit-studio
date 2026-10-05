@@ -1,5 +1,4 @@
-/** The Network and Diagram editors: one canvas filling the editor, drawn straight from the case the
- *  extension streams. Framework-free, so nothing stands between opening a case and its first frame. */
+/** The Network and Diagram editors, framework-free so nothing delays a case's first frame. */
 
 import './styles/index.css'
 import './styles/canvas.css'
@@ -8,6 +7,7 @@ import type { Diagram, Positions } from '@latkit/diagram'
 import type { Data } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
+import { message } from '../shared/format.js'
 import type { Begin, Element, ViewState } from '../shared/messages.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
@@ -20,7 +20,7 @@ import { icon, type IconName } from './ui/glyphs.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
-/** A GPU lost again this soon after it was replaced is not replaced a second time. */
+/** A GPU lost again this soon after its replacement is not replaced again. */
 const RECOVER_MS = 10000
 
 const PROJECTIONS: readonly { value: Projection; label: string; icon: IconName }[] = [
@@ -36,13 +36,14 @@ function boot() {
   mark('canvas:boot')
   const kind = document.body.dataset.kind
   if (kind !== 'network' && kind !== 'diagram') return
-  const title = kind === 'network' ? 'Network' : 'Diagram'
-  const hint = title + ' view. Right-click an element for actions.'
+  const hint =
+    (kind === 'network' ? 'Network' : 'Diagram') + ' view. Right-click an element for actions.'
   document.getElementById('app')!.innerHTML =
     '<main class="canvas-host" aria-busy="true"><div class="canvas-host__fault" hidden></div><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
   const host = document.querySelector<HTMLElement>('.canvas-host')!
   const canvas = host.querySelector('canvas')!
   const fallback = host.querySelector<HTMLElement>('.canvas-host__fallback')!
+  const fallbackText = fallback.firstElementChild!
   const notice = host.querySelector<HTMLElement>('.canvas-host__fault')!
   canvas.setAttribute('aria-label', hint)
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
@@ -52,43 +53,42 @@ function boot() {
   let networkStyles: typeof import('./network/style.js') | undefined
   let diagramModule: typeof import('./diagram/diagram.js') | undefined
   let diagramStyles: typeof import('./diagram/style.js') | undefined
-  /** The case, and the case with the samples of the run on show. */
+  /** The case's rows alone, and with the shown run's samples. */
   let rows: Data | undefined
   let data: Data | undefined
   let view: Network | Diagram | undefined
-  /** What the view was last told it draws, which the next config is told only the changes of. */
+  /** The config the view last received; the next paint sends only the difference. */
   let drawn: Record<string, unknown> | undefined
   let state: ViewState = {}
-  /** The revision the case on hand was streamed for, and the times of the run it holds. */
-  let revision = 0
+  /** The times of the run the case holds; undefined when it holds all of them. */
   let held: Begin['held']
-  /** Whether the view asked for other times of the run and has yet to hold them. */
+  /** Whether the view has asked for other times of the run and not yet received them. */
   let asked = false
   let places: Record<string, Positions> = {}
   let closed = false
-  /** Whether VS Code shows the view; a hidden one keeps its webview and stands still. */
+  /** Whether VS Code shows the view; a hidden view keeps its webview but pauses. */
   let shown = true
   let rendering = false
   let queued = false
   let geographic = false
   let borders: Data | null = null
   let borderRequest: Promise<void> | undefined
-  /** Labels, like borders, wait for the first frame: laying out text never holds up the case. */
+  /** Labels, like borders, wait for the first frame so text layout never delays it. */
   let labelled = false
-  /** The selection on show, and the one this view made itself, which it does not travel to. */
+  /** The shown selection, and the last one this view made, which it does not reveal. */
   let selectionKey = ''
   let own = ''
   let preferredProjection: Projection | undefined
-  /** A problem the renderer met, said over the canvas until it draws again. */
+  /** A renderer error, shown over the canvas until the next frame. */
   let fault: string | null = null
-  /** Where the camera was when the GPU stopped, and when one was last replaced. */
+  /** The camera to restore after the GPU is lost, and when the GPU was last replaced. */
   let restore: unknown
   let recovered = -Infinity
   let saving: ReturnType<typeof setTimeout> | undefined
   let sync = () => {}
 
-  const keyOf = (element: Element | undefined) => (element?.id ?? '') + ':' + (element?.field ?? '')
-  /** Say the newest problem, or that the case on show is not the one being typed. */
+  const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
+  /** Show the newest problem, or that the shown case is not the source being typed. */
   const say = () => {
     const stale = !!state.stale && !!state.summary
     const problem = fault ?? state.error
@@ -106,16 +106,16 @@ function boot() {
     }
   }
   const error = (reason: unknown) => {
-    const message = reason instanceof Error ? reason.message : String(reason)
-    if (canvas.dataset.rendered) fault = message
+    const text = message(reason)
+    if (canvas.dataset.rendered) fault = text
     else {
       fallback.hidden = false
-      fallback.firstElementChild!.textContent = `The ${kind} could not be drawn. ${message}`
+      fallbackText.textContent = `The ${kind} could not be drawn. ${text}`
       fallback.setAttribute('role', 'alert')
     }
     host.setAttribute('aria-busy', 'false')
     say()
-    bridge.send({ kind: 'error', message })
+    bridge.send({ kind: 'error', message: text })
   }
   const drop = () => {
     view?.destroy()
@@ -124,7 +124,7 @@ function boot() {
     labelled = false
     delete canvas.dataset.rendered
   }
-  // A lost GPU is replaced once, the view drawn again where its camera was.
+  /** Replace a lost GPU and redraw where the camera was. */
   const lost = () => {
     restore = view?.camera
     drop()
@@ -132,7 +132,7 @@ function boot() {
     recovered = performance.now()
     void render().catch(error)
   }
-  // Load independent renderer resources while the worker prepares the case.
+  // Load the renderer while the worker prepares the case.
   const rendererReady =
     kind === 'network'
       ? Promise.all([import('./network/network.js'), import('./network/style.js')]).then(
@@ -151,14 +151,13 @@ function boot() {
   void owner.get(lost).catch(error)
 
   const select = (element: Element | null) => {
-    own = keyOf(element ?? undefined)
+    own = keyOf(element)
     bridge.send({ kind: 'select', element })
   }
   const open = (element: Element) => {
     select(element)
     bridge.command('elementSource')
   }
-  /** The case on show as the view draws it, as the settings, bindings, and run now have it. */
   const networkConfig = () =>
     networkStyles!.networkConfig(
       rows!,
@@ -174,7 +173,12 @@ function boot() {
   const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, places)
   const config = (): Record<string, unknown> =>
     kind === 'diagram' ? diagramConfig() : networkConfig()
-  /** Borders load after the first frame: decoration never holds up the case. */
+  const orbit = () => {
+    if (kind !== 'network' || !view || state.settings?.['accessibility.motion'] === 'reduce') return
+    const network = view as Network
+    network.set({ camera: { orbit: !network.camera.orbit } })
+  }
+  /** Load borders after the first frame, so decoration never delays the case. */
   function decorate() {
     if (
       kind !== 'network' ||
@@ -192,11 +196,11 @@ function boot() {
         paint()
       })
       .catch((reason) => {
-        bridge.send({ kind: 'error', message: 'Map boundaries: ' + String(reason) })
+        bridge.send({ kind: 'error', message: 'Map boundaries: ' + message(reason) })
       })
   }
-  /** Tell the view what changed of what it draws, and nothing else: what it keeps, it keeps read,
-   *  scaled, laid out, and uploaded. */
+  /** Send the view only what changed, so it keeps what it has read, scaled, laid out, and
+   *  uploaded. */
   function paint() {
     if (!view || !drawn || !rows || !data || closed) return
     appearance(state.settings)
@@ -210,7 +214,7 @@ function boot() {
     }
     if (canvas.dataset.rendered) decorate()
     if (kind !== 'network') return
-    // A preference change applies once; ordinary styling never resets navigation.
+    // Apply the projection setting only when it changes, so restyling never resets navigation.
     const projection = networkModule!.projectionOf(
       state.settings?.['network.camera.projection'] ?? 'flat',
       geographic,
@@ -234,14 +238,13 @@ function boot() {
           : networkModule!.networkItem(view as Network, state.selection)
         : undefined
       view.select((item ? [item] : []) as never)
-      // Only a new selection travels: the same one found again in new rows stays where it is.
+      // Reveal only a new selection, not the same one found again in new rows.
       if (item && moved && state.navigate && key !== own) view.reveal(item as never)
     } catch {
       /* A newer document projection can supersede the selection. */
     }
   }
-  /** The view's controls, over its top right: on the network, its projections (each offered only
-   *  where the case can be seen so) and Auto-rotate; on either view, Fit. */
+  /** Add the view controls over its top right; returns the function that syncs their state. */
   function toolbar() {
     const bar = document.createElement('div')
     bar.className = 'toolbar'
@@ -270,13 +273,7 @@ function boot() {
             control: button(icon, label, () => networkModule!.setProjection(network(), value)),
           }))
         : []
-    const orbit =
-      kind === 'network'
-        ? button('orbit', 'Auto-rotate', () => {
-            if (state.settings?.['accessibility.motion'] !== 'reduce')
-              network().set({ camera: { orbit: !network().camera.orbit } })
-          })
-        : undefined
+    const orbiting = kind === 'network' ? button('orbit', 'Auto-rotate', orbit) : undefined
     button('fit', 'Fit view', () => view?.fit(undefined, { animate: true }))
     host.append(bar)
     return () => {
@@ -286,11 +283,12 @@ function boot() {
         control.setAttribute('aria-pressed', String(camera.projection === value))
         control.disabled = !offered[value] || (value === 'globe' && !geographic)
       }
-      orbit!.setAttribute('aria-pressed', String(camera.orbit === true))
+      orbiting!.setAttribute('aria-pressed', String(camera.orbit === true))
     }
   }
-  function connect(shown: Network | Diagram) {
-    const events = shown as Network
+  function connect(mounted: Network | Diagram) {
+    // Both renderers emit these events; the union's `on` overloads are not callable.
+    const events = mounted as Network
     events.on('error', error)
     events.on('frame', () => {
       if (!canvas.dataset.rendered) {
@@ -300,7 +298,7 @@ function boot() {
         host.setAttribute('aria-busy', 'false')
         if (!host.querySelector('.toolbar')) sync = toolbar()
         sync()
-        // The case is on screen: now its labels, and its borders, which paint asks for.
+        // The case is on screen: add its labels, and the borders paint asks for.
         labelled = true
         if (kind === 'network') paint()
       }
@@ -317,15 +315,15 @@ function boot() {
         bridge.send({ kind: 'camera', camera })
       }, SAVE_MS)
     })
-    // The view opens where it was left; a case seen for the first time is framed whole.
+    // Open where the view was left; frame a case seen for the first time whole.
     const saved = bridge.state<{ uri?: string; camera?: unknown }>({})
     const camera = restore ?? (saved.uri === state.uri ? saved.camera : undefined)
     restore = undefined
-    if (camera) shown.set({ camera: camera as never })
+    if (camera) mounted.set({ camera: camera as never })
     else {
       const off = events.on('frame', () => {
         off()
-        if (view === shown) shown.fit(undefined, { animate: false })
+        if (view === mounted) mounted.fit(undefined, { animate: false })
       })
     }
   }
@@ -366,7 +364,7 @@ function boot() {
         if (!diagramModule.diagrammed(rows)) {
           drop()
           fallback.hidden = false
-          fallback.firstElementChild!.textContent =
+          fallbackText.textContent =
             'This case has no directed signal components. Use Network to inspect its electrical topology.'
           host.setAttribute('aria-busy', 'false')
           return
@@ -376,13 +374,12 @@ function boot() {
           view = diagramModule.mountDiagram(gpu, canvas, first, () => state, select, open)
           drawn = first
           connect(view)
-          // A large diagram is a while in its layout: say so, where the case was loading.
-          fallback.firstElementChild!.textContent = 'Arranging the diagram…'
+          // A large diagram takes a while to lay out.
+          fallbackText.textContent = 'Arranging the diagram…'
         }
       }
       mark('canvas:mounted')
       view.set({ at: clock.now() })
-      // New rows, places, or samples: the view is told only what of them it draws differently.
       paint()
       mark('canvas:styled')
       selection(true)
@@ -394,8 +391,8 @@ function boot() {
       }
     }
   }
-  // Every view of the case paints at the playhead. A network holding a window of the run asks for
-  // the times ahead before the playhead runs out of them.
+  // Paint at the playhead. A network holding a window of the run asks for the times ahead before
+  // the playhead runs out of them.
   const clock = createClock((t) => {
     if (!shown) return
     view?.set({ at: t })
@@ -410,10 +407,9 @@ function boot() {
     rows = base
     held = begin.held
     asked = false
-    revision = begin.revision.version
     const placed = kind === 'network' ? begin.placement : begin.presentation
     if (placed) places = placed
-    if (revision === state.summary?.version) void render().catch(error)
+    if (begin.revision.version === state.summary?.version) void render().catch(error)
   }, error)
   bridge.on((message) => {
     if (message.kind === 'begin') mark('canvas:begin')
@@ -427,7 +423,6 @@ function boot() {
       )
       say()
       selection()
-      // A state that changes nothing the view draws tells it nothing.
       paint()
     } else if (message.kind === 'action') {
       if (message.command === 'error') return error(message.value)
@@ -445,11 +440,8 @@ function boot() {
       if (message.command === 'fit') view.fit(undefined, { animate: true })
       else if (message.command === 'projection' && kind === 'network')
         networkModule!.setProjection(view as Network, message.value as Projection)
-      else if (message.command === 'orbit' && kind === 'network') {
-        const network = view as Network
-        if (state.settings?.['accessibility.motion'] !== 'reduce')
-          network.set({ camera: { orbit: !network.camera.orbit } })
-      } else if (message.command === 'neighborhood') {
+      else if (message.command === 'orbit') orbit()
+      else if (message.command === 'neighborhood') {
         const item = view.selection[0]
         if (item) view.fit(view.neighborhood(item as never) as never, { animate: true })
       }
@@ -457,13 +449,12 @@ function boot() {
     }
   })
   const unwatch = watchTheme(paint)
-  // Tests and the performance command read what the renderer drew; nothing is kept for them.
-  // The view's own counters, and its GPU's cumulative work (queries, uploads, allocations), which
-  // the benchmarks hold to tests/benchmarks/work.json.
+  // Test and benchmark hooks: the view's counters plus its GPU's cumulative work, which the
+  // benchmarks hold to tests/benchmarks/work.json.
   ;(window as { gridkitStats?: () => unknown }).gridkitStats = () =>
     view && { ...view.stats(), ...owner.gpu?.stats() }
-  // Where an element was drawn in the latest frame, so tests can read the color and height its
-  // fields map to.
+  // Where an element drew in the latest frame, so tests can read the color and height its fields
+  // map to.
   ;(window as { gridkitLocate?: (id: string) => unknown }).gridkitLocate = (id) => {
     const item =
       kind === 'network' && view ? networkModule?.networkItem(view as Network, { id }) : undefined

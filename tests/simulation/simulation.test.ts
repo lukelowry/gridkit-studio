@@ -10,12 +10,15 @@ import { type Arguments, type FieldSelection, type Parameters, read } from '@lat
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import catalog from '../../catalog.json'
-import { Case } from '../../src/gridkit/case.js'
-import { catalogOf } from '../../src/gridkit/definition.js'
-import { diagnose } from '../../src/gridkit/edits.js'
-import { type Runtime, runtimeOf } from '../../src/gridkit/runtime.js'
-import { Simulation } from '../../src/gridkit/simulation.js'
-import { ResultCache } from '../../src/results/results.js'
+import {
+  Case,
+  catalogOf,
+  diagnose,
+  type Runtime,
+  runtimeOf,
+  Simulation,
+} from '../../src/gridkit/index.js'
+import { ResultCache } from '../../src/results/index.js'
 import type { GridKit, RunInfo, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 
 const gridkit: GridKit = {
@@ -42,18 +45,23 @@ describe('DynamicSimulation', () => {
     )
   })
 
-  /** Run the case into its own folder under `name`, until it ends or `signal` aborts; `publish`
+  /** Run `model` into its own folder under `name`, until it ends or `signal` aborts. `publish`
    *  hears each block of frames, and may stop the run. */
   async function run(
     name: string,
     values: RunRequest['values'],
     signal: AbortSignal,
-    publish: (stop: (reason: Error) => void) => void = () => {},
-    model = kase,
-    outputs: readonly FieldSelection[] = [
-      { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } },
-    ],
-    using: GridKit = gridkit,
+    {
+      publish = () => {},
+      model = kase,
+      outputs = [{ from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } }],
+      using = gridkit,
+    }: {
+      publish?: (stop: (reason: Error) => void) => void
+      model?: Case
+      outputs?: readonly FieldSelection[]
+      using?: GridKit
+    } = {},
   ) {
     const directory = join(root, name)
     await mkdir(directory)
@@ -135,8 +143,7 @@ describe('DynamicSimulation', () => {
         fixture,
         { tmax: 0.1, dt_monitor: 0.01 },
         signal,
-        undefined,
-        model,
+        { model },
       )
       await done
       expect(released()).toBe(true)
@@ -157,14 +164,9 @@ describe('DynamicSimulation', () => {
     })
 
   it('records multiple fields in native column order', async ({ signal }) => {
-    const { info, done } = await run(
-      'multiple',
-      { tmax: 0.1, dt_monitor: 0.01 },
-      signal,
-      undefined,
-      kase,
-      [{ from: 'Bus', select: ['Va', 'Vm'], rows: { kind: 'ids', ids: ['Bus/2'] } }],
-    )
+    const { info, done } = await run('multiple', { tmax: 0.1, dt_monitor: 0.01 }, signal, {
+      outputs: [{ from: 'Bus', select: ['Va', 'Vm'], rows: { kind: 'ids', ids: ['Bus/2'] } }],
+    })
     await done
     expect((await readFile(info.path, 'utf8')).split('\n')[0]).toBe('t,Bus_2_Vm,Bus_2_Va')
     expect(info.frames).toBe(11)
@@ -174,14 +176,10 @@ describe('DynamicSimulation', () => {
     const text = await readFile('cases/WECC240.case.json', 'utf8')
     const model = await Case.parse(text, kase.catalog)
     expect(diagnose(model)).toEqual([])
-    const { info, done } = await run(
-      'WECC240',
-      { tmax: 0.1, dt_monitor: 0.01 },
-      signal,
-      undefined,
+    const { info, done } = await run('WECC240', { tmax: 0.1, dt_monitor: 0.01 }, signal, {
       model,
-      [{ from: 'Bus', select: ['Va'] }],
-    )
+      outputs: [{ from: 'Bus', select: ['Va'] }],
+    })
     await done
     expect(info.frames).toBe(11)
     // Columns follow the buses in file order; at t = 0 each angle is its initial voltage's.
@@ -238,7 +236,7 @@ describe('DynamicSimulation', () => {
       text.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'),
       kase.catalog,
     )
-    const failed = await run('native-error', { tmax: 0.1 }, signal, undefined, invalid)
+    const failed = await run('native-error', { tmax: 0.1 }, signal, { model: invalid })
     await expect(failed.done).rejects.toThrow(/Ispdlim|code/)
     expect(failed.released()).toBe(true)
     expect(await readFile(join(root, 'native-error', 'solver.log'), 'utf8')).toMatch(/Ispdlim/)
@@ -254,25 +252,16 @@ describe('DynamicSimulation', () => {
     if (runtime.kind !== 'container') skip()
     const { cli } = runtime as Extract<Runtime, { kind: 'container' }>
     const image = 'ghcr.io/lukelowry/gridkit:studio-never-pulls'
-    const { done, owned } = await run(
-      'unpulled',
-      { tmax: 0.1 },
-      signal,
-      undefined,
-      kase,
-      undefined,
-      {
-        ...gridkit,
-        image,
-      },
-    )
+    const { done, owned } = await run('unpulled', { tmax: 0.1 }, signal, {
+      using: { ...gridkit, image },
+    })
     await expect(done).rejects.toThrow(`never pulls images. Pull it yourself with`)
     expect(owned()).toBeUndefined()
     await expect(promisify(execFile)(cli, ['image', 'inspect', image])).rejects.toThrow()
   })
 
   it('rejects an empty signal selection before starting a process', async ({ signal }) => {
-    const { done, owned } = await run('empty', {}, signal, undefined, kase, [])
+    const { done, owned } = await run('empty', {}, signal, { outputs: [] })
     await expect(done).rejects.toThrow('monitored signal')
     expect(owned()).toBeUndefined()
   })
@@ -282,7 +271,7 @@ describe('DynamicSimulation', () => {
       'cancel',
       { tmax: 1000, dt_monitor: 0.001 },
       signal,
-      (stop) => stop(new Error('Cancelled by the test')),
+      { publish: (stop) => stop(new Error('Cancelled by the test')) },
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)

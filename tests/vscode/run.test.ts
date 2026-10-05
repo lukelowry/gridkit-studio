@@ -1,3 +1,6 @@
+/** Runs against real GridKit from the views: signals, live samples, playback, a cancelled run,
+ *  and a native failure. */
+
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -7,12 +10,22 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { gridkitOf } from '../../src/extension/tasks.js'
-import { runtimeOf } from '../../src/gridkit/runtime.js'
-import { colored, type TestHost, testHost, until, visible, VM } from './harness.js'
+import { frames, type TestHost, testHost, until, visible, VM } from './harness.js'
+
+/** Pixels painted in a color, not the grays of axes, text and background. */
+function colored(png: PNG): number {
+  let count = 0
+  for (let i = 0; i < png.data.length; i += 4) {
+    const r = png.data[i]!
+    const g = png.data[i + 1]!
+    const b = png.data[i + 2]!
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 30) count++
+  }
+  return count
+}
 
 suite('Run', function () {
-  // A run of the whole case takes what GridKit takes.
+  // A run of the whole case takes as long as GridKit does.
   this.timeout(600_000)
   this.bail(true)
   let bench: TestHost
@@ -20,15 +33,10 @@ suite('Run', function () {
   let monitor: Frame
   let simulation: Frame
   let end = 0
-  const painted = () => network.evaluate<number>('gridkitStats().frames')
 
   suiteSetup(async function () {
     bench = await testHost()
-    // GridKit runs where it is installed, such as the dev container, or in GRIDKIT_IMAGE; without
-    // either the suite is skipped.
-    const gridkit = gridkitOf(bench.uri)
-    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtimeOf(gridkit)
-    else if (!(await runtimeOf(gridkit).catch(() => undefined))) this.skip()
+    if (!(await bench.gridkit())) this.skip()
     network = await bench.open('network')
   })
 
@@ -38,22 +46,19 @@ suite('Run', function () {
     // The Monitor's own button brings the native Monitored Signals view back into sight.
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     await monitor.getByRole('button', { name: 'Choose monitored signals' }).click()
-    const signals = bench.page.locator('.pane', {
-      has: bench.page.locator('.pane-header', { hasText: /monitored signals/i }),
-    })
-    await signals.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 30000 })
+    const signals = await bench.signals({ reveal: false })
     // Clear every signal through the view's own title action.
     await signals.locator('.pane-header').hover()
     await signals.getByRole('button', { name: 'Record No Signals' }).click()
     await until(() => !bench.session.outputs?.length, 'all monitored fields cleared')
     simulation = await bench.view('simulation')
     await until(
-      async () => await simulation.locator('[data-testid="study-run"]').isDisabled(),
+      () => simulation.locator('[data-testid="study-run"]').isDisabled(),
       'empty selection disables Run in the view',
     )
     await bench.toggleSignal('Bus', 'Vm')
     await until(() => bench.session.outputs?.length === 1, 'one selected field')
-    // The form has heard of the selection, and of the values it had, before any is typed.
+    // The form hears of the selection, and keeps its values, before any value is typed.
     await until(
       async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
       'the view hears of the selection',
@@ -64,17 +69,17 @@ suite('Run', function () {
     await vscode.commands.executeCommand('workbench.action.closePanel')
     const { session } = bench
     const shown = session.run?.id
-    const before = await painted()
+    const before = await frames(network)
     await simulation.locator('[data-testid="study-run"]').click()
-    // No show('monitor') call: Run itself must reveal the panel.
+    // Run itself reveals the Monitor.
     monitor = await bench.view('monitor')
     await until(
       () => session.run && session.run.id !== shown && session.run.frames > 0,
       'frames arrive',
-      180000,
+      180_000,
     )
     const followed = session.run!.state !== 'running' || session.transport.state.follow
-    await until(() => session.run?.state !== 'running', 'the run ends', 300000)
+    await until(() => session.run?.state !== 'running', 'the run ends', 300_000)
     assert.equal(session.run?.state, 'complete', session.run?.message)
     assert.equal(session.run.frames, 201)
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
@@ -94,7 +99,7 @@ suite('Run', function () {
     bench.report.run = {
       frames: session.run!.frames,
       domain: session.run!.domain,
-      painted: (await painted()) - before,
+      painted: (await frames(network)) - before,
     }
   })
 
@@ -116,9 +121,9 @@ suite('Run', function () {
 
   test('scrubs the finished run from what each view holds', async () => {
     bench.studio.bind(bench.key, VM, ['vertexColor', 'vertexHeight'])
-    const rested = await painted()
+    const rested = await frames(network)
     bench.session.transport.seek(end / 2)
-    await until(async () => (await painted()) > rested, 'a seek repaints the network')
+    await until(async () => (await frames(network)) > rested, 'a seek repaints the network')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
     assert.equal(await network.locator('.canvas-host__fault:not([hidden])').count(), 0)
     await bench.capture('run-vscode')
@@ -164,13 +169,12 @@ suite('Run', function () {
   })
 
   test('runs TwoArea with its native Ispdlim values and plots the result', async () => {
-    const text = await readFile(
-      join(process.env.GRIDKIT_TEST_ROOT!, 'tests/fixtures/TwoArea.case.json'),
-      'utf8',
+    await bench.replace(
+      await readFile(
+        join(process.env.GRIDKIT_TEST_ROOT!, 'tests/fixtures/TwoArea.case.json'),
+        'utf8',
+      ),
     )
-    const edit = new vscode.WorkspaceEdit()
-    edit.replace(bench.uri, new vscode.Range(0, 0, bench.document.lineCount, 0), text)
-    await vscode.workspace.applyEdit(edit)
     await bench.settled()
     assert.deepEqual((await bench.current()).issues, [])
     const previous = bench.session.run!.id
@@ -225,13 +229,8 @@ suite('Run', function () {
 
   test('shows a native failure in Monitor and successfully retries after correction', async () => {
     const good = bench.document.getText()
-    const replace = async (text: string) => {
-      const edit = new vscode.WorkspaceEdit()
-      edit.replace(bench.uri, new vscode.Range(0, 0, bench.document.lineCount, 0), text)
-      await vscode.workspace.applyEdit(edit)
-      await bench.settled()
-    }
-    await replace(good.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'))
+    await bench.replace(good.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'))
+    await bench.settled()
     simulation = await bench.show('simulation')
     await simulation.locator('[data-testid="field-tmax"]').fill('0.1')
     const previous = bench.session.run!.id
@@ -245,7 +244,8 @@ suite('Run', function () {
       async () => /Ispdlim/.test(await monitor.locator('[role="alert"]').first().innerText()),
       'native error shown in Monitor',
     )
-    await replace(good)
+    await bench.replace(good)
+    await bench.settled()
     await simulation.locator('[data-testid="study-run"]').click()
     await until(() => bench.session.run?.state === 'complete', 'corrected TwoArea runs')
     await visible(monitor, 'canvas[data-rendered=true]')

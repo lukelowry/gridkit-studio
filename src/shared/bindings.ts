@@ -1,12 +1,8 @@
-/**
- * The network's display channels a field can drive, and how the Mappings panel names them: in full
- * where there is room (`Vertex Color`), and by one word each in a dense row (`color`). Each is the
- * renderer's channel `option` of its vertices or edges.
- */
+/** The network's display channels, and which numeric field drives each. */
 
 import type { FieldSelection } from '@latkit/model'
 
-/** Every channel, in the order the panel lists them. */
+/** Every channel, in Mappings panel order; `option` is the renderer style option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
   vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radiusPx' },
@@ -16,32 +12,30 @@ export const CHANNELS = {
   edgeDash: { label: 'Edge Dash', placement: 'edge', style: 'dash', option: 'dash' },
 } as const
 
-/** A channel: one style of the vertices or the edges. */
 export type Channel = keyof typeof CHANNELS
 
-/** A field of a network type: the type, and the field's name there. */
+const ALL = Object.keys(CHANNELS) as Channel[]
+
 export interface FieldRef {
   readonly type: string
   readonly field: string
 }
 
-/** A field driving a channel, over the values `domain` names; without one the renderer measures. */
-export interface Binding extends FieldRef {
+/** A field driving a channel; without a `domain` the renderer measures the values' range. */
+interface Binding extends FieldRef {
   readonly domain?: readonly [number, number]
 }
 
-/** The field each channel is drawn from; an absent channel is unbound. */
 export type Bindings = Readonly<Partial<Record<Channel, Binding>>>
 
-/** The numeric types a field drives a channel with. */
+/** The field data types that can drive a channel. */
 export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int32', 'uint32'])
 
-/** Whether `a` and `b` name the same field. */
 export const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.type === b.type && a.field === b.field
 
-/** Whether a run with `outputs` recorded `field` for every one of its type's `count` rows, as a
- *  field that drives a channel must be: the network draws all of them. */
+/** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel
+ *  requires: the network draws every row. */
 export function recordedWhole(
   outputs: readonly FieldSelection[],
   count: number,
@@ -56,22 +50,18 @@ export function recordedWhole(
   })
 }
 
-/** The channels the fields of a type placed as `placement` can drive. */
+/** The channels a type drawn as `placement` offers. */
 export function channelsFor(placement: 'vertex' | 'edge' | null): readonly Channel[] {
-  return (Object.keys(CHANNELS) as Channel[]).filter(
-    (channel) => CHANNELS[channel].placement === placement,
-  )
+  return ALL.filter((channel) => CHANNELS[channel].placement === placement)
 }
 
-/** The channels `field` drives now. */
+/** The channels bound to `field`. */
 export function channelsOf(bindings: Bindings, field: FieldRef): Channel[] {
-  return (Object.keys(CHANNELS) as Channel[]).filter((channel) =>
-    sameField(bindings[channel], field),
-  )
+  return ALL.filter((channel) => sameField(bindings[channel], field))
 }
 
-/** `bindings` with `field` driving exactly `channels` of the `allowed` ones: those it drove and are
- *  not listed are released, and the listed ones are taken from whichever fields drove them. */
+/** `bindings` with `field` bound to exactly `channels` of `allowed`: its other allowed channels are
+ *  released, and the listed ones are taken from whichever fields held them. */
 export function bound(
   bindings: Bindings,
   allowed: readonly Channel[],
@@ -91,12 +81,12 @@ export function bound(
   return next
 }
 
-/** `channels` by their full names, in one line: `Vertex Color, Vertex Height`. */
+/** Comma-separated labels: `Vertex Color, Vertex Height`. */
 export function fullNames(channels: readonly Channel[]): string {
   return channels.map((channel) => CHANNELS[channel].label).join(', ')
 }
 
-/** `channels` by one word each, in one line: `color, height`; empty for none. */
+/** Comma-separated one-word styles: `color, height`. */
 export function shortNames(channels: readonly Channel[]): string {
   return channels.map((channel) => CHANNELS[channel].style).join(', ')
 }

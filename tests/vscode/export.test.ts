@@ -1,3 +1,5 @@
+/** Video export: a run written to the file the user picks. */
+
 import assert from 'node:assert/strict'
 import { stat } from 'node:fs/promises'
 
@@ -21,8 +23,8 @@ suite('Export', () => {
   })
   suiteTeardown(() => simpleDialog(undefined))
 
-  test('writes a video of the run to the file its reader picks', async () => {
-    const video = vscode.Uri.joinPath(bench.uri, '..', 'two bus.webm')
+  test('writes a video of the run to the file the user picks', async () => {
+    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 run.webm')
     const exporter = await bench.show('export')
     await visible(exporter, '[data-testid="video-export"]')
     await exporter.getByRole('switch', { name: 'Monitor' }).click()
@@ -35,7 +37,7 @@ suite('Export', () => {
     await dialog.waitFor({ state: 'visible' })
     await dialog.fill(video.fsPath)
     await dialog.press('Enter')
-    await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120000 })
+    await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
     const { size } = await stat(video.fsPath)
     assert.ok(size > 1000, 'The exported video has frames')
     bench.report.videoBytes = size

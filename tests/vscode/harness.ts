@@ -1,22 +1,31 @@
-/** The VS Code under test: one VS Code holding the extension and a case, driven from inside
- *  through the extension's own exports and from outside by Playwright over its DevTools port. */
+/** The VS Code under test: the extension and a case, driven from inside through the extension's
+ *  exports and from outside by Playwright over the window's DevTools port. */
 
 import assert from 'node:assert/strict'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
-import type { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
 import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
+import { gridkitOf } from '../../src/extension/tasks.js'
+import { runtimeOf } from '../../src/gridkit/index.js'
 import type { RunInfo, ViewKind } from '../../src/shared/messages.js'
+
+const TIMEOUT = 30_000
+
+/** The window size every suite starts from. */
+export const VIEWPORT = { width: 1600, height: 1000 }
+
+/** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
+export const VM = { type: 'Bus', field: 'Vm' } as const
 
 /** Wait until `get` answers something truthy, and return it. */
 export async function until<T>(
   get: () => Promise<T> | T,
   label: string,
-  timeout = 30000,
+  timeout = TIMEOUT,
 ): Promise<NonNullable<T>> {
   const start = Date.now()
   while (Date.now() - start < timeout) {
@@ -31,33 +40,65 @@ export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 
 /** Wait for `selector` to show in `frame`. */
 export async function visible(frame: Frame, selector: string): Promise<void> {
-  await frame.locator(selector).first().waitFor({ state: 'visible', timeout: 30000 })
+  await frame.locator(selector).first().waitFor({ state: 'visible', timeout: TIMEOUT })
 }
 
-/** Pixels painted in a color, not the grays of axes, text and background. */
-export function colored(png: PNG): number {
-  let count = 0
-  for (let i = 0; i < png.data.length; i += 4) {
-    const r = png.data[i]!
-    const g = png.data[i + 1]!
-    const b = png.data[i + 2]!
-    if (Math.max(r, g, b) - Math.min(r, g, b) > 30) count++
+/** A canvas view's counters, as `gridkitStats()` reports them. */
+export const stats = <T extends { frames: number } = { frames: number }>(frame: Frame) =>
+  frame.evaluate<T>('gridkitStats()')
+
+/** How many frames a canvas view has drawn. */
+export const frames = (frame: Frame) => frame.evaluate<number>('gridkitStats().frames')
+
+/** Wait for a canvas view to stop drawing, and return its counters. */
+export async function idle<T extends { frames: number } = { frames: number }>(
+  frame: Frame,
+): Promise<T> {
+  let last = await stats<T>(frame)
+  for (;;) {
+    await pause(250)
+    const now = await stats<T>(frame)
+    if (now.frames === last.frames) return now
+    last = now
   }
-  return count
 }
 
-/** Playwright on VS Code window the tests run in. */
-export async function attach(): Promise<{ browser: Browser; page: Page }> {
+/** Whether a canvas view's canvas fills its webview edge to edge, with no padding around it. */
+export const fills = (frame: Frame) =>
+  frame.evaluate<boolean>(`(() => {
+  const r = document.querySelector('canvas').getBoundingClientRect()
+  return [r.x, r.y, r.width - innerWidth, r.height - innerHeight].every((v) => Math.abs(v) < 1) &&
+    getComputedStyle(document.body).padding === '0px'
+})()`)
+
+/** Set the color theme for the whole profile; `undefined` restores the default. */
+export const theme = (name: string | undefined) =>
+  vscode.workspace
+    .getConfiguration()
+    .update('workbench.colorTheme', name, vscode.ConfigurationTarget.Global)
+
+/** The test workspace folder, which holds the case. */
+export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
+
+/** GridKit Studio as installed in this VS Code. */
+export function extension(): vscode.Extension<{ studio: Sessions }> {
+  const found = vscode.extensions.getExtension<{ studio: Sessions }>('lukelowery.gridkit-studio')
+  assert.ok(found, 'GridKit Studio must be installed and enabled')
+  return found
+}
+
+/** Playwright on the VS Code window the tests run in. */
+async function attach(): Promise<{ browser: Browser; page: Page }> {
   const [port] = (
     await readFile(join(process.env.GRIDKIT_TEST_PROFILE!, 'DevToolsActivePort'), 'utf8')
   ).split('\n')
   const browser = await chromium.connectOverCDP('http://127.0.0.1:' + port)
   const page = browser.contexts().flatMap((context) => context.pages())[0]!
-  await page.setViewportSize({ width: 1600, height: 1000 })
+  await page.setViewportSize(VIEWPORT)
   return { browser, page }
 }
 
-/** The command that shows each panel view; the extension's own take the case. */
+/** The command that shows each panel view; the extension's own commands take the case. */
 const PANELS = {
   table: 'gridkitStudio.openTable',
   monitor: 'gridkitStudio.openMonitor',
@@ -65,9 +106,6 @@ const PANELS = {
   bindings: 'gridkitStudio.bindings.focus',
   simulation: 'gridkitStudio.simulation.focus',
 } as const
-
-/** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
-export const VM = { type: 'Bus', field: 'Vm' } as const
 
 export class TestHost {
   /** The case's source as the suites found it, and as each suite starts. */
@@ -103,24 +141,21 @@ export class TestHost {
   }
 
   static async start(): Promise<TestHost> {
-    const extension = vscode.extensions.getExtension<{ studio: Sessions }>(
-      'lukelowery.gridkit-studio',
-    )
-    assert.ok(extension, 'GridKit Studio must be installed and enabled')
-    const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0]!.uri, 'IEEE39.case.json')
+    const installed = extension()
+    const uri = vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
     const started = performance.now()
-    // A case opening is what activates the extension; nothing here calls activate().
+    // Opening a case is what activates the extension; nothing here calls activate().
     await vscode.commands.executeCommand('vscode.open', uri)
-    await until(() => extension.isActive, 'a case opening activates the extension')
+    await until(() => installed.isActive, 'a case opening activates the extension')
     const openCaseMs = performance.now() - started
     const { browser, page } = await attach()
-    // Playwright follows the frames it sees attach, so the views open only now that it watches.
+    // Playwright sees only the frames that attach once it connects, so the views open after it.
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     const output = process.env.GRIDKIT_TEST_OUTPUT!
     await mkdir(join(output, 'playwright'), { recursive: true })
     await mkdir(join(output, 'tests'), { recursive: true })
     const document = await vscode.workspace.openTextDocument(uri)
-    const bench = new TestHost(extension, browser, page, document, output)
+    const bench = new TestHost(installed, browser, page, document, output)
     bench.report.openCaseMs = openCaseMs
     return bench
   }
@@ -139,18 +174,25 @@ export class TestHost {
     return this.studio.all.get(this.key)!
   }
 
+  /** Every frame of every VS Code page, webviews' included. */
+  #frames(): Frame[] {
+    return this.browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .flatMap((page) => page.frames())
+  }
+
   /** The webview showing `kind`. */
   view(kind: ViewKind): Promise<Frame> {
     return until(async () => {
-      for (const page of this.browser.contexts().flatMap((context) => context.pages()))
-        for (const candidate of page.frames())
-          if (
-            await candidate
-              .locator('body[data-kind="' + kind + '"]')
-              .isVisible()
-              .catch(() => false)
-          )
-            return candidate
+      for (const candidate of this.#frames())
+        if (
+          await candidate
+            .locator('body[data-kind="' + kind + '"]')
+            .isVisible()
+            .catch(() => false)
+        )
+          return candidate
     }, kind + ' webview')
   }
 
@@ -168,10 +210,10 @@ export class TestHost {
   }
 
   /** Copy a case, named by its path from the repository root, into the workspace and show it
-   *  alone in Network: the only network webview is then this case's. */
+   *  alone in Network, so that the only network webview is this case's. */
   async openCase(path: string): Promise<{ uri: vscode.Uri; network: Frame }> {
     const name = basename(path)
-    const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0]!.uri, name)
+    const uri = vscode.Uri.joinPath(folder(), name)
     await copyFile(join(process.env.GRIDKIT_TEST_ROOT!, path), uri.fsPath)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
@@ -188,18 +230,19 @@ export class TestHost {
     return this.view(kind)
   }
 
-  /** Monitored Signals, shown: the native tree of what the runs to come record. */
-  async signals(): Promise<Locator> {
-    await vscode.commands.executeCommand('gridkitStudio.signals.focus')
+  /** Monitored Signals, the native tree of what the next run records, once it shows. Unless
+   *  `reveal` is false, its own command shows it first. */
+  async signals({ reveal = true } = {}): Promise<Locator> {
+    if (reveal) await vscode.commands.executeCommand('gridkitStudio.signals.focus')
     const pane = this.page.locator('.pane', {
       has: this.page.locator('.pane-header', { hasText: /monitored signals/i }),
     })
-    await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 30000 })
+    await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: TIMEOUT })
     return pane
   }
 
-  /** Check or uncheck `field` of `type` in Monitored Signals, as the reader does: open its type, then
-   *  its box. */
+  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
+   *  then click its box. */
   async toggleSignal(type: string, field: string): Promise<void> {
     const signals = await this.signals()
     const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
@@ -225,7 +268,7 @@ export class TestHost {
       .waitFor({ state: 'visible' })
   }
 
-  /** Save a picture of the whole VS Code. */
+  /** Save a picture of the whole VS Code window. */
   async capture(name: string): Promise<void> {
     await vscode.commands.executeCommand('notifications.clearAll')
     await pause(300)
@@ -243,6 +286,13 @@ export class TestHost {
       const state = this.studio.state(this.key)
       return state.summary?.version === this.document.version && !state.stale
     }, 'the case follows its document')
+  }
+
+  /** Replace the case's whole source, unsaved. */
+  async replace(text: string): Promise<void> {
+    const edit = new vscode.WorkspaceEdit()
+    edit.replace(this.uri, new vscode.Range(0, 0, this.document.lineCount, 0), text)
+    await vscode.workspace.applyEdit(edit)
   }
 
   /** Undo natively in the case's source, back to how the suites found it. */
@@ -292,16 +342,22 @@ export class TestHost {
     this.studio.changed.fire(this.key)
   }
 
+  /** Whether GridKit runs here, installed or as GRIDKIT_IMAGE. A required run fails without it. */
+  async gridkit(): Promise<boolean> {
+    const runtime = runtimeOf(gridkitOf(this.uri))
+    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtime
+    return runtime.then(
+      () => true,
+      () => false,
+    )
+  }
+
   /** Back to the case alone in its Network editor: its source as found and saved, nothing
    *  selected or mapped, its clock at rest. */
   async reset(): Promise<void> {
     if (this.session?.run?.state === 'running')
       await this.studio.client.call('stop', { uri: this.key })
-    if (this.document.getText() !== this.text) {
-      const edit = new vscode.WorkspaceEdit()
-      edit.replace(this.uri, new vscode.Range(0, 0, this.document.lineCount, 0), this.text)
-      await vscode.workspace.applyEdit(edit)
-    }
+    if (this.document.getText() !== this.text) await this.replace(this.text)
     if (this.document.isDirty) await this.document.save()
     await this.open('network')
     await this.settled()
@@ -325,7 +381,7 @@ export class TestHost {
     this.studio.changed.fire(this.key)
   }
 
-  /** What every view showed when `test` failed. */
+  /** Keep what every view showed when `test` failed, with the files of its runs. */
   async failed(test: string): Promise<void> {
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
@@ -337,14 +393,13 @@ export class TestHost {
         await cp(join(dirname(run.path), file), join(directory, file)).catch(() => {})
       await writeFile(join(directory, 'run.json'), JSON.stringify(run, null, 2))
     }
-    for (const page of this.browser.contexts().flatMap((context) => context.pages()))
-      for (const frame of page.frames()) {
-        const text = await frame
-          .locator('main')
-          .innerText({ timeout: 300 })
-          .catch(() => '')
-        if (text) console.log(text.slice(0, 1200))
-      }
+    for (const frame of this.#frames()) {
+      const text = await frame
+        .locator('main')
+        .innerText({ timeout: 300 })
+        .catch(() => '')
+      if (text) console.log(text.slice(0, 1200))
+    }
   }
 
   /** Write the report and let go of the window; a page that threw fails the run. */
@@ -365,8 +420,8 @@ export class TestHost {
 
 let started: Promise<TestHost> | undefined
 
-/** The testHost, reset: every suite starts from the case alone in its Network editor, so each
- *  runs by itself as it does among the others. */
+/** The one TestHost, reset: every suite starts from the case alone in its Network editor, so each
+ *  runs alone as it does among the others. */
 export async function testHost(): Promise<TestHost> {
   const bench = await (started ??= TestHost.start())
   await bench.reset()

@@ -1,26 +1,17 @@
-import { type Diagnostic, failure, type Value } from '@latkit/model'
-import { findNodeAtLocation, modify, parseTree } from 'jsonc-parser'
+import { failure, type Value } from '@latkit/model'
+import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-parser'
 
+import { message } from '../shared/format.js'
+import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case } from './case.js'
-import type { FieldPlan, Shape } from './definition.js'
-
-export interface SourceRange {
-  offset: number
-  length: number
-}
-export interface SourceEdit extends SourceRange {
-  text: string
-}
-export interface Issue extends SourceRange {
-  message: string
-  severity: Diagnostic['severity']
-  id?: string
-  field?: string
-}
+import type { FieldPlan } from './definition.js'
+import { realText } from './staging.js'
 
 const decoder = new TextDecoder()
 const checkpoints = new WeakMap<Case, { bytes: number[]; chars: number[] }>()
-/** Checkpoints always fall on a UTF-8 code-point boundary; VS Code positions count UTF-16 units. */
+
+/** The UTF-16 offset of `byte` in the case's file, as VS Code counts. Checkpoints every 4 KiB fall on
+ *  code-point boundaries, so only the bytes past one are decoded. */
 export function textOffset(kase: Case, byte: number): number {
   let map = checkpoints.get(kase)
   if (!map) {
@@ -49,11 +40,44 @@ export function textOffset(kase: Case, byte: number): number {
   }
   return map.chars[low]! + decoder.decode(kase.file.subarray(map.bytes[low]!, byte)).length
 }
-export function nativePath(_shape: Shape, field: FieldPlan): string[] {
+
+/** `text` with `edits` applied; each edit's offset is into `text` as given. */
+export function apply(text: string, edits: readonly SourceEdit[]): string {
+  for (const edit of [...edits].sort((a, b) => b.offset - a.offset))
+    text = text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length)
+  return text
+}
+
+/** `text` with `value` set at `path` by jsonc-parser, which leaves the rest unformatted. */
+export function withValue(text: string, path: JSONPath, value: unknown): string {
+  return apply(
+    text,
+    modify(text, path, value, {}).map((edit) => ({
+      offset: edit.offset,
+      length: edit.length,
+      text: edit.content,
+    })),
+  )
+}
+
+/** The one edit that turns `before`, at `offset`, into `after`: the span where they differ. */
+export function minimal(before: string, after: string, offset: number): SourceEdit {
+  let start = 0
+  let end = before.length
+  let stop = after.length
+  while (start < end && start < stop && before[start] === after[start]) start++
+  while (end > start && stop > start && before[end - 1] === after[stop - 1]) {
+    end--
+    stop--
+  }
+  return { offset: offset + start, length: end - start, text: after.slice(start, stop) }
+}
+
+/** Where a field's value is in its record's JSON. */
+export function nativePath(field: FieldPlan): string[] {
   const source = field.source
   switch (source.kind) {
     case 'identity':
-      return [source.name]
     case 'record':
       return [source.name]
     case 'header':
@@ -72,6 +96,8 @@ export function nativePath(_shape: Shape, field: FieldPlan): string[] {
       return ['mon']
   }
 }
+
+/** The record of row `id`: its table and row, its JSON text, and that text's offset in the file. */
 export function recordOf(kase: Case, id: string) {
   const located = kase.locate(id)
   if (!located) throw failure('invalid-input', 'This element no longer exists.')
@@ -83,19 +109,23 @@ export function recordOf(kase: Case, id: string) {
   const text = decoder.decode(kase.file.subarray(start, end))
   return { table, row, text, offset: textOffset(kase, start) }
 }
+
+/** Row `id`'s record, or its `field`'s value, or the record's first character without one. */
 export function sourceRange(kase: Case, id: string, field?: string): SourceRange {
   const record = recordOf(kase, id)
   if (!field) return { offset: record.offset, length: record.text.length }
   const plan = record.table.shape.plan.get(field)
-  const node =
-    plan && findNodeAtLocation(parseTree(record.text)!, nativePath(record.table.shape, plan))
+  const node = plan && findNodeAtLocation(parseTree(record.text)!, nativePath(plan))
   return node
     ? { offset: record.offset + node.offset, length: node.length }
     : { offset: record.offset, length: 1 }
 }
+
 export function editable(plan: FieldPlan): boolean {
   return !['identity', 'output'].includes(plan.source.kind)
 }
+
+/** The edit setting `field` of row `id` to `input`; against `recordText`, at offset 0, if given. */
 export function editField(
   kase: Case,
   id: string,
@@ -156,38 +186,28 @@ export function editField(
           { path: ['extension', 'longitude'], value: Array.isArray(value) ? value[0] : null },
           { path: ['extension', 'latitude'], value: Array.isArray(value) ? value[1] : null },
         ]
-      : [{ path: nativePath(record.table.shape, plan), value }]
-  // Existing scalar values get exact token replacements, retaining every untouched byte.
-  // Insertions use jsonc-parser without reformatting; position insertions compose against one record.
+      : [{ path: nativePath(plan), value }]
+  // An existing value's token alone is replaced; anything else is inserted through jsonc-parser.
   if (paths.length === 1) {
     const node = findNodeAtLocation(parseTree(record.text)!, paths[0]!.path)
     if (node) {
-      let text = JSON.stringify(value)
-      if (type === 'float64' && typeof value === 'number' && !/[.eE]/.test(text)) text += '.0'
+      const text =
+        type === 'float64' && typeof value === 'number' ? realText(value) : JSON.stringify(value)
       return [{ offset: record.offset + node.offset, length: node.length, text }]
     }
   }
   let next = record.text
   for (const item of paths) {
-    for (const edit of modify(next, item.path, item.value, {}).reverse())
-      next = next.slice(0, edit.offset) + edit.content + next.slice(edit.offset + edit.length)
+    next = withValue(next, item.path, item.value)
     if (typeof item.value === 'number' && (type === 'float64' || plan.source.kind === 'position')) {
       const node = findNodeAtLocation(parseTree(next)!, item.path)!
-      let token = JSON.stringify(item.value)
-      if (!/[.eE]/.test(token)) token += '.0'
-      next = next.slice(0, node.offset) + token + next.slice(node.offset + node.length)
+      next = apply(next, [{ offset: node.offset, length: node.length, text: realText(item.value) }])
     }
   }
-  let start = 0
-  let end = record.text.length
-  let stop = next.length
-  while (start < end && start < stop && record.text[start] === next[start]) start++
-  while (end > start && stop > start && record.text[end - 1] === next[stop - 1]) {
-    end--
-    stop--
-  }
-  return [{ offset: record.offset + start, length: end - start, text: next.slice(start, stop) }]
+  return [minimal(record.text, next, record.offset)]
 }
+
+/** Each value present but invalid or required but missing, and any signal with two drivers. */
 export function diagnose(kase: Case): Issue[] {
   const issues: Issue[] = []
   for (const table of kase.tables.values()) {
@@ -206,7 +226,7 @@ export function diagnose(kase: Case): Issue[] {
           record = recordOf(kase, id)
           tree = parseTree(record.text)
         }
-        const node = tree && findNodeAtLocation(tree, nativePath(table.shape, plan))
+        const node = tree && findNodeAtLocation(tree, nativePath(plan))
         if (
           (node && node.value !== null && plan.source.kind !== 'position') ||
           (plan.required && (!node || node.value === null))
@@ -234,7 +254,7 @@ export function diagnose(kase: Case): Issue[] {
       offset: 0,
       length: 1,
       severity: 'error',
-      message: error instanceof Error ? error.message : String(error),
+      message: message(error),
     })
   }
   return issues

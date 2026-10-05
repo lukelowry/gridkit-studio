@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 
+import { cancellable } from './client.js'
 import type { Sessions } from './sessions.js'
 const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
 export function registerNavigation(studio: Sessions) {
@@ -9,38 +10,30 @@ export function registerNavigation(studio: Sessions) {
     token?: vscode.CancellationToken,
   ) => {
     const summary = await studio.documents.ensure(document)
-    const controller = new AbortController()
-    const cancellation = token?.onCancellationRequested(() => controller.abort())
-    if (token?.isCancellationRequested) controller.abort()
-    try {
-      return await studio.client.call(
+    return cancellable(token, (signal) =>
+      studio.client.call(
         'context',
         {
           uri: document.uri.toString(),
           version: summary.version,
           offset: document.offsetAt(position),
         },
-        controller.signal,
-      )
-    } finally {
-      cancellation?.dispose()
-    }
+        signal,
+      ),
+    )
   }
   return [
     vscode.languages.registerCompletionItemProvider(
       selector,
       {
         async provideCompletionItems(document, position, token) {
-          const controller = new AbortController()
-          const subscription = token.onCancellationRequested(() => controller.abort())
-          if (token.isCancellationRequested) controller.abort()
-          const completions = await studio.client
-            .call(
+          const completions = await cancellable(token, (signal) =>
+            studio.client.call(
               'complete',
               { text: document.getText(), offset: document.offsetAt(position) },
-              controller.signal,
-            )
-            .finally(() => subscription.dispose())
+              signal,
+            ),
+          )
           return completions.map((field) => {
             const item = new vscode.CompletionItem(field.name, vscode.CompletionItemKind.Field)
             item.detail = field.detail
@@ -89,33 +82,29 @@ export function registerNavigation(studio: Sessions) {
     vscode.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(document, token) {
         await studio.documents.ensure(document)
-        const controller = new AbortController()
-        const subscription = token.onCancellationRequested(() => controller.abort())
-        try {
-          const symbols = await studio.client.call(
+        const symbols = await cancellable(token, (signal) =>
+          studio.client.call(
             'symbols',
             { uri: document.uri.toString(), version: document.version },
-            controller.signal,
-          )
-          return symbols.map(
-            (symbol) =>
-              new vscode.DocumentSymbol(
-                symbol.name,
-                symbol.detail,
-                vscode.SymbolKind.Object,
-                new vscode.Range(
-                  document.positionAt(symbol.offset),
-                  document.positionAt(symbol.offset + symbol.length),
-                ),
-                new vscode.Range(
-                  document.positionAt(symbol.offset),
-                  document.positionAt(symbol.offset + 1),
-                ),
+            signal,
+          ),
+        )
+        return symbols.map(
+          (symbol) =>
+            new vscode.DocumentSymbol(
+              symbol.name,
+              symbol.detail,
+              vscode.SymbolKind.Object,
+              new vscode.Range(
+                document.positionAt(symbol.offset),
+                document.positionAt(symbol.offset + symbol.length),
               ),
-          )
-        } finally {
-          subscription.dispose()
-        }
+              new vscode.Range(
+                document.positionAt(symbol.offset),
+                document.positionAt(symbol.offset + 1),
+              ),
+            ),
+        )
       },
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {

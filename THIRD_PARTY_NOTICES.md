@@ -300,9 +300,13 @@ Apache License
 
 ## GridKit case data and test fixtures
 
-The files in `cases/` and `tests/fixtures/solver/` include data adapted from
-[GridKit](https://github.com/ORNL/GridKit). Case sources and adaptations are described
-in [cases/README.md](https://github.com/lukelowry/gridkit-studio/blob/main/cases/README.md).
+The files in `cases/` and `tests/fixtures/` include data adapted from
+[GridKit's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/main/cases/PhasorDynamics),
+with numeric formatting, monitor selections, and fault examples adjusted for GridKit Studio.
+GridKit provides the dynamics models; the networks originate from:
+
+- ACTIVSg2000, ACTIVSg10k, IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
+- WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)
 
 This product includes software produced by UT-Battelle, LLC under Contract
 No. DE-AC05-00OR22725 with the Department of Energy.

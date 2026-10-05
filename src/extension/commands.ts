@@ -1,18 +1,20 @@
-import type { RowsBlock, Value } from '@latkit/model'
+import type { RowsBlock, RowsQuery, Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { channelsFor, channelsOf, NUMERIC } from '../shared/bindings.js'
 import { display, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
+import { message } from '../shared/format.js'
 import type { Element, Plot, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
-import { networkOf, placementOf } from '../shared/schema.js'
+import { elementType, networkOf, placementOf } from '../shared/schema.js'
 import type { LoopMode } from '../shared/transport.js'
 import { reviewChanges } from './git.js'
 import type { Session, Sessions } from './sessions.js'
-import { registerTasks } from './tasks.js'
+import { cacheBytesOf, registerTasks } from './tasks.js'
 import { Node } from './trees.js'
 
+/** What a command acts on: its case, and the element and field it was invoked on. */
 interface Context {
   session: Session
   summary: Summary
@@ -21,10 +23,14 @@ interface Context {
   type?: string
   field?: string
 }
+/** The case a webview's command is about. */
+type Supplied = { uri?: string }
 export function registerCommands(studio: Sessions) {
   const tasks = registerTasks(studio)
   const registrations: vscode.Disposable[] = [tasks.provider]
-  const targetOf = (value?: unknown, supplied?: { uri?: string; view?: string }) => {
+  /** The case and target an argument names: an Inspector node, a native menu context, a webview
+   *  target, or a case URI. */
+  const targetOf = (value?: unknown, supplied?: Supplied) => {
     let target: Target | undefined
     if (value instanceof Node) target = value.target
     else if (value && typeof value === 'object' && 'gridkitTarget' in value)
@@ -44,10 +50,7 @@ export function registerCommands(studio: Sessions) {
     if (!uri) throw new Error('Open a GridKit case first.')
     return { uri, target }
   }
-  const resolve = async (
-    value?: unknown,
-    supplied?: { uri?: string; view?: string },
-  ): Promise<Context> => {
+  const resolve = async (value?: unknown, supplied?: Supplied): Promise<Context> => {
     const { uri, target } = targetOf(value, supplied)
     const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
     const session = studio.all.get(uri) ?? (await studio.open(document))
@@ -64,23 +67,18 @@ export function registerCommands(studio: Sessions) {
       summary,
       target,
       element,
-      type: target?.type ?? element?.id.split('/')[0],
+      type: target?.type ?? (element && elementType(element.id)),
       field: target?.field ?? element?.field,
     }
   }
-  const register = (
-    id: string,
-    run: (value?: unknown, supplied?: { uri?: string; view?: string }) => unknown,
-  ) =>
+  const register = (id: string, run: (value?: unknown, supplied?: Supplied) => unknown) =>
     registrations.push(
       vscode.commands.registerCommand('gridkitStudio.' + id, async (value, supplied) => {
         try {
           return await run(value, supplied)
         } catch (error) {
           studio.output.error(String(error))
-          void vscode.window.showErrorMessage(
-            error instanceof Error ? error.message : String(error),
-          )
+          void vscode.window.showErrorMessage(message(error))
         }
       }),
     )
@@ -90,10 +88,6 @@ export function registerCommands(studio: Sessions) {
     studio.persist(session)
     studio.changed.fire(session.uri)
   }
-  command('chooseSignals', async ({ session }) => {
-    studio.activate(session.uri)
-    await vscode.commands.executeCommand('gridkitStudio.signals.focus')
-  })
   const action = (context: Context, command: string, value?: unknown, view?: string) =>
     studio.action.fire({
       uri: context.session.uri,
@@ -110,30 +104,50 @@ export function registerCommands(studio: Sessions) {
     )
     if (context.element) studio.select(context.session.uri, context.element)
   }
-  const panel = async (context: Context, kind: 'table' | 'monitor') => {
-    studio.activate(context.session.uri)
-    if (context.element) studio.select(context.session.uri, context.element)
-    await vscode.commands.executeCommand('gridkitStudio.' + kind + '.focus')
+  /** Activate the case and focus its `view` panel, selecting `element` there. */
+  const focus = async (session: Session, view: string, element?: Element) => {
+    studio.activate(session.uri)
+    if (element) studio.select(session.uri, element)
+    await vscode.commands.executeCommand('gridkitStudio.' + view + '.focus')
   }
-  const rows = async (context: Context, from: string, select: string[], ids?: string[]) =>
+  const queryRows = async (context: Context, query: RowsQuery, signal?: AbortSignal) =>
     rowsOf(
-      (await studio.client.call('query', {
-        uri: context.session.uri,
-        version: context.summary.version,
-        query: {
-          kind: 'rows',
-          from,
-          select,
-          ids: true,
-          limit: 100,
-          ...(ids ? { rows: { kind: 'ids', ids } } : {}),
-        },
-      })) as RowsBlock[],
+      (await studio.client.call(
+        'query',
+        { uri: context.session.uri, version: context.summary.version, query },
+        signal,
+      )) as RowsBlock[],
     )
-  /** The recorded field the command is about, or one the reader picks. */
-  async function chooseSignal(
+  /** The stored value of `field` on the `type` element `id`. */
+  const valueOf = async (context: Context, type: string, field: string, id: string) => {
+    const [row] = await queryRows(context, {
+      kind: 'rows',
+      from: type,
+      select: [field],
+      ids: true,
+      limit: 1,
+      rows: { kind: 'ids', ids: [id] },
+    })
+    return row?.values[field]
+  }
+  /** The id of the row the reference `value` points to; throws `missing` when it points nowhere. */
+  const referred = async (context: Context, value: unknown, missing: string) => {
+    const reference = value as { index?: { type: string }; row?: number } | null
+    if (!reference?.index || reference.row === undefined) throw new Error(missing)
+    const [row] = await queryRows(context, {
+      kind: 'rows',
+      from: reference.index.type,
+      select: [],
+      rows: { kind: 'range', offset: reference.row, count: 1 },
+      ids: true,
+      limit: 1,
+    })
+    return row?.id
+  }
+  /** The recorded field in context, or one the user picks. */
+  const chooseSignal = async (
     context: Context,
-  ): Promise<{ type: string; field: string } | undefined> {
+  ): Promise<{ type: string; field: string } | undefined> => {
     const { schema, counts } = context.summary
     if (context.type && context.field && schema.types[context.type]?.fields[context.field]?.sampled)
       return { type: context.type, field: context.field }
@@ -153,25 +167,26 @@ export function registerCommands(studio: Sessions) {
     )
     return choice ? { type: choice.type, field: choice.field } : undefined
   }
-  /** The id of the row the reference `value` names; `missing` says it names none. */
-  async function referred(context: Context, value: unknown, missing: string) {
-    const reference = value as { index?: { type: string }; row?: number } | null
-    if (!reference?.index || reference.row === undefined) throw new Error(missing)
-    const blocks = (await studio.client.call('query', {
-      uri: context.session.uri,
-      version: context.summary.version,
-      query: {
-        kind: 'rows',
-        from: reference.index.type,
-        select: [],
-        rows: { kind: 'range', offset: reference.row, count: 1 },
-        ids: true,
-        limit: 1,
-      },
-    })) as RowsBlock[]
-    return rowsOf(blocks)[0]?.id
+  const pickPlot = (session: Session, title: string) =>
+    vscode.window.showQuickPick(
+      session.plots.map((plot) => ({
+        label: plot.from + '.' + plot.field,
+        description: plot.id,
+        ...plot,
+      })),
+      { title },
+    )
+  /** Ask for an increasing `minimum, maximum` pair; undefined if cancelled. */
+  const askRange = async (title: string, value?: string) => {
+    const text = await vscode.window.showInputBox({ title, prompt: 'Minimum, maximum', value })
+    if (text === undefined) return
+    const range = text.split(/[, ]+/).map(Number)
+    if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
+      throw new Error('Enter two increasing finite bounds.')
+    return [range[0]!, range[1]!] as const
   }
-  async function pickReference(context: Context, type: string): Promise<string | undefined> {
+  /** Search the `type` elements by name, or by exact id once the input starts with `type/`. */
+  const pickReference = (context: Context, type: string): Promise<string | undefined> => {
     const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { id: string }>()
     picker.title = 'Choose ' + type
     picker.placeholder = 'Search names or enter an exact ' + type + '/ID'
@@ -187,28 +202,24 @@ export function registerCommands(studio: Sessions) {
       const name = context.summary.schema.types[type]?.fields.name ? 'name' : undefined
       try {
         const exact = picker.value.startsWith(type + '/')
-        const blocks = (await studio.client.call(
-          'query',
+        const rows = await queryRows(
+          context,
           {
-            uri: context.session.uri,
-            version: context.summary.version,
-            query: {
-              kind: 'rows',
-              from: type,
-              select: name ? [name] : [],
-              limit: 100,
-              ids: true,
-              ...(exact
-                ? { rows: { kind: 'ids', ids: [picker.value] } }
-                : picker.value && name
-                  ? { where: [{ field: name, operator: 'contains', value: picker.value }] }
-                  : {}),
-            },
+            kind: 'rows',
+            from: type,
+            select: name ? [name] : [],
+            limit: 100,
+            ids: true,
+            ...(exact
+              ? { rows: { kind: 'ids', ids: [picker.value] } }
+              : picker.value && name
+                ? { where: [{ field: name, operator: 'contains', value: picker.value }] }
+                : {}),
           },
           controller.signal,
-        )) as RowsBlock[]
+        )
         if (current !== generation) return
-        picker.items = rowsOf(blocks)
+        picker.items = rows
           .filter((row) => row.id)
           .map((row) => ({
             label: name ? display(row.values[name]) : row.id!,
@@ -258,9 +269,10 @@ export function registerCommands(studio: Sessions) {
   command('reveal', (context) => open(context, 'network'))
   command('openDiagram', (context) => open(context, 'diagram'))
   command('revealDiagram', (context) => open(context, 'diagram'))
-  command('openTable', (context) => panel(context, 'table'))
-  command('showInTable', (context) => panel(context, 'table'))
-  command('openMonitor', (context) => panel(context, 'monitor'))
+  command('openTable', (context) => focus(context.session, 'table', context.element))
+  command('showInTable', (context) => focus(context.session, 'table', context.element))
+  command('openMonitor', (context) => focus(context.session, 'monitor', context.element))
+  command('chooseSignals', ({ session }) => focus(session, 'signals'))
   register('showSource', (value, supplied) =>
     studio.documents.reveal(targetOf(value, supplied).uri),
   )
@@ -277,10 +289,9 @@ export function registerCommands(studio: Sessions) {
   })
   command('followReference', async (context) => {
     if (!context.element || !context.field || !context.type) return
-    const row = (await rows(context, context.type, [context.field], [context.element.id]))[0]
     const id = await referred(
       context,
-      row?.values[context.field],
+      await valueOf(context, context.type, context.field, context.element.id),
       'This reference is disconnected.',
     )
     if (id) studio.select(context.session.uri, { id })
@@ -288,7 +299,7 @@ export function registerCommands(studio: Sessions) {
   command('editField', async (context) => {
     const { session, summary, element } = context
     if (!element) return
-    const type = element.id.split('/')[0]!
+    const type = elementType(element.id)
     const field =
       context.field ??
       (await vscode.window.showQuickPick(summary.editable[type] ?? [], {
@@ -296,7 +307,7 @@ export function registerCommands(studio: Sessions) {
       }))
     if (!field) return
     const spec = summary.schema.types[type]!.fields[field]!
-    const current = (await rows(context, type, [field], [element.id]))[0]?.values[field]
+    const current = await valueOf(context, type, field, element.id)
     let value: Value
     if (typeof spec.type === 'object' && spec.type.kind === 'reference') {
       const choice = await pickReference(context, spec.type.to)
@@ -317,7 +328,6 @@ export function registerCommands(studio: Sessions) {
           } catch {
             return 'Enter a valid JSON value.'
           }
-          return undefined
         },
       })
       if (text === undefined) return
@@ -329,19 +339,14 @@ export function registerCommands(studio: Sessions) {
   command('copyValue', async (context) => {
     if (context.element && context.type && context.field)
       await vscode.env.clipboard.writeText(
-        display(
-          (await rows(context, context.type, [context.field], [context.element.id]))[0]?.values[
-            context.field
-          ],
-        ),
+        display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
   command('run', (context) => tasks.run(context.session.uri))
   register('stop', (value, supplied) =>
     studio.client.call('stop', { uri: targetOf(value, supplied).uri }),
   )
-  command('clearRun', async (context) => {
-    const session = context.session
+  command('clearRun', async ({ session }) => {
     await studio.client.call('clear', { uri: session.uri })
     studio.show(session, undefined)
     changed(session)
@@ -349,40 +354,25 @@ export function registerCommands(studio: Sessions) {
   const plot = async (context: Context) => {
     const selected = await chooseSignal(context)
     if (!selected) return
-    // A view that names the signal plots every element; elsewhere, the element at hand.
+    // From the Monitor, plot the field of every element; elsewhere, of the element in context.
     const element = context.target?.origin === 'monitor' ? undefined : context.element
     const id = element?.id.startsWith(selected.type + '/') ? element.id : undefined
     const plot: Plot = { from: selected.type, field: selected.field, ...(id ? { id } : {}) }
     if (!context.session.plots.some((item) => JSON.stringify(item) === JSON.stringify(plot)))
       context.session.plots.push(plot)
     changed(context.session)
-    await panel(context, 'monitor')
+    await focus(context.session, 'monitor', context.element)
   }
   command('plot', plot)
   command('removePlot', async (context) => {
-    const session = context.session
-    const targeted = context.target?.plot
-    const selected =
-      targeted ??
-      (await vscode.window.showQuickPick(
-        session.plots.map((plot) => ({
-          label: plot.from + '.' + plot.field,
-          description: plot.id,
-          ...plot,
-        })),
-        { title: 'Remove plot' },
-      ))
-    if (selected) {
-      session.plots = session.plots.filter(
-        (plot) =>
-          !(
-            plot.from === selected.from &&
-            plot.field === selected.field &&
-            plot.id === selected.id
-          ),
-      )
-      changed(session)
-    }
+    const { session } = context
+    const selected = context.target?.plot ?? (await pickPlot(session, 'Remove plot'))
+    if (!selected) return
+    session.plots = session.plots.filter(
+      (plot) =>
+        !(plot.from === selected.from && plot.field === selected.field && plot.id === selected.id),
+    )
+    changed(session)
   })
   command('signalElements', async (context) => {
     const plot = context.target?.plot ?? context.session.plots.at(-1)
@@ -393,13 +383,11 @@ export function registerCommands(studio: Sessions) {
       changed(context.session)
     }
   })
-  command('addFault', async (context) => {
-    context.session.values.fault = true
-    if (context.element && context.type === 'Bus')
-      context.session.values.fault_bus = context.element.id
-    changed(context.session)
-    studio.activate(context.session.uri)
-    await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
+  command('addFault', async ({ session, element, type }) => {
+    session.values.fault = true
+    if (element && type === 'Bus') session.values.fault_bus = element.id
+    changed(session)
+    await focus(session, 'simulation')
   })
   command('importResults', async (context) => {
     const selected = await vscode.window.showOpenDialog({
@@ -407,16 +395,11 @@ export function registerCommands(studio: Sessions) {
       canSelectMany: false,
     })
     if (!selected?.[0]) return
-    const cacheBytes =
-      vscode.workspace
-        .getConfiguration('gridkitStudio', selected[0])
-        .get<number>('resultCacheMiB', 256) *
-      (1 << 20)
     await studio.client.call('import', {
       uri: context.session.uri,
       version: context.summary.version,
       path: selected[0].fsPath,
-      cacheBytes,
+      cacheBytes: cacheBytesOf(selected[0]),
     })
     await plot(context)
   })
@@ -435,7 +418,6 @@ export function registerCommands(studio: Sessions) {
     )
     studio.output.show()
   })
-  // Playback is the case's clock; these are its keyboard and palette entries.
   command('toggleTimeline', ({ session }) => session.transport.playPause())
   command('followTime', ({ session }) => session.transport.goLive())
   command('seekTime', async ({ session }, value) => {
@@ -484,18 +466,14 @@ export function registerCommands(studio: Sessions) {
     action(context, 'resetMonitorWindow', undefined, 'monitor')
     changed(context.session)
   })
-  command('monitorWindow', async (context) => {
-    const value = await vscode.window.showInputBox({
-      title: 'Time window [s]',
-      prompt: 'Minimum, maximum',
-      value: (context.session.window ?? context.session.run?.domain)?.join(', '),
-    })
-    if (value === undefined) return
-    const range = value.split(/[, ]+/).map(Number)
-    if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
-      throw new Error('Enter two increasing finite bounds.')
-    context.session.window = [range[0]!, range[1]!]
-    changed(context.session)
+  command('monitorWindow', async ({ session }) => {
+    const range = await askRange(
+      'Time window [s]',
+      (session.window ?? session.run?.domain)?.join(', '),
+    )
+    if (!range) return
+    session.window = range
+    changed(session)
   })
   command('chooseOverlapping', async (context) => {
     const selected = await vscode.window.showQuickPick(
@@ -571,8 +549,11 @@ export function registerCommands(studio: Sessions) {
       )
       const field = edge?.ends?.[side]
       if (!field) return
-      const row = (await rows(context, context.type, [field], [context.element.id]))[0]
-      const target = await referred(context, row?.values[field], 'The endpoint is disconnected.')
+      const target = await referred(
+        context,
+        await valueOf(context, context.type, field, context.element.id),
+        'The endpoint is disconnected.',
+      )
       if (target) studio.select(context.session.uri, { id: target })
     })
   command('toggleDiagramEditing', (context) => {
@@ -588,7 +569,7 @@ export function registerCommands(studio: Sessions) {
     })
     if (value) action(context, 'projection', value, 'network')
   })
-  // Mapping is the Mappings panel's: a command about a field opens the panel's editor on it.
+  // Mapping commands open the Mappings panel's editor on the field in context.
   command('bind', async (context) => {
     const { schema } = context.summary
     const definition = context.type ? schema.types[context.type]?.fields[context.field ?? ''] : null
@@ -599,8 +580,7 @@ export function registerCommands(studio: Sessions) {
     if (field && !channelsFor(placementOf(networkOf(schema), field.type)).length)
       throw new Error('This type has no network display channels.')
     context.session.editing = field
-    studio.activate(context.session.uri)
-    await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
+    await focus(context.session, 'bindings')
   })
   command('unbind', async (context) => {
     const field =
@@ -610,27 +590,13 @@ export function registerCommands(studio: Sessions) {
     else await vscode.commands.executeCommand('gridkitStudio.bindings.focus')
   })
   command('signalRange', async (context) => {
+    const { plots } = context.session
     const plot =
       context.target?.plot ??
-      (context.session.plots.length === 1
-        ? context.session.plots[0]
-        : await vscode.window.showQuickPick(
-            context.session.plots.map((plot) => ({
-              label: plot.from + '.' + plot.field,
-              description: plot.id,
-              ...plot,
-            })),
-            { title: 'Choose plot' },
-          ))
+      (plots.length === 1 ? plots[0] : await pickPlot(context.session, 'Choose plot'))
     if (!plot) return
-    const text = await vscode.window.showInputBox({
-      title: 'Plot value range',
-      prompt: 'Minimum, maximum',
-    })
-    if (text === undefined) return
-    const range = text.split(/[, ]+/).map(Number)
-    if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
-      throw new Error('Enter two increasing finite bounds.')
+    const range = await askRange('Plot value range')
+    if (!range) return
     action(
       context,
       'signalRange',
@@ -689,12 +655,7 @@ export function registerCommands(studio: Sessions) {
       'Delete diagram element',
     )
   })
-  command('reviewChanges', async (context) => {
-    await reviewChanges(vscode.Uri.parse(context.session.uri))
-  })
-  command('exportVideo', async (context) => {
-    studio.activate(context.session.uri)
-    await vscode.commands.executeCommand('gridkitStudio.export.focus')
-  })
+  command('reviewChanges', (context) => reviewChanges(vscode.Uri.parse(context.session.uri)))
+  command('exportVideo', ({ session }) => focus(session, 'export'))
   return registrations
 }

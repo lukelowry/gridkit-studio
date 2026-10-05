@@ -3,12 +3,11 @@ import type { DiagramConfig, DiagramInput, LayoutOptions } from '@latkit/diagram
 import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
 
-export type DiagramStyle = Omit<
+type DiagramStyle = Omit<
   DiagramConfig,
   'source' | 'vertices' | 'edges' | 'groups' | 'canvas' | 'layout' | 'input'
 > & { readonly layout: LayoutOptions; readonly input: DiagramInput }
 
-/** How the settings lay the diagram out. */
 export function layoutOf(s: SettingsReader): LayoutOptions {
   return {
     algorithm: s.get('diagram.layout.algorithm'),
@@ -19,10 +18,10 @@ export function layoutOf(s: SettingsReader): LayoutOptions {
   }
 }
 
-/** The same options drive the live view and an export. */
+/** Diagram settings as renderer options, shared by the live view and video export. */
 export function diagramOptions(s: SettingsReader, palette: Palette, font: string): DiagramStyle {
   const family = s.get('diagram.font') || font
-  const [r, g, b] = palette.text3
+  const [r, g, b] = palette.text2
   return {
     motion: s.get('accessibility.motion') === 'reduce' ? 'reduce' : 'auto',
     ...(family && { font: { family } }),

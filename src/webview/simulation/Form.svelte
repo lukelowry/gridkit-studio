@@ -1,4 +1,4 @@
-<!-- Render command parameters as typed inputs, choices, and switches. -->
+<!-- Command parameters as text fields, dropdowns and switches. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
 
@@ -17,16 +17,16 @@
     onenter,
     ontoggle,
   }: {
-    /** The command's parameters, by name, in the catalog's order. */
+    /** Name and parameter pairs, in catalog order. */
     parameters: readonly (readonly [string, Parameter])[]
-    /** Each entry's text as typed, by parameter name. */
+    /** Text as typed, by parameter name. */
     text: Readonly<Record<string, string>>
-    /** What keeps each parameter from running, by name. */
+    /** Validation messages, by parameter name. */
     problems: Readonly<Record<string, string>>
     disabled: boolean
-    /** What the form holds for a parameter: what was entered, else its default. */
+    /** The entered value, else the default. */
     value: (name: string, parameter: Parameter) => InputValue | undefined
-    /** A type's elements as choices, which a reference parameter picks among. */
+    /** The choices for a reference parameter's target type. */
     elements: (type: string) => Promise<readonly Choice[]>
     onenter: (name: string, parameter: Parameter, text: string) => void
     ontoggle: (name: string, on: boolean) => void

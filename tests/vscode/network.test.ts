@@ -1,14 +1,25 @@
+/** The Network editor: drawing, its own controls, selection, a kept webview, and the shared clock. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 
-import { pause, type TestHost, testHost, until, visible, VM } from './harness.js'
+import {
+  fills,
+  frames,
+  pause,
+  stats,
+  type TestHost,
+  testHost,
+  until,
+  visible,
+  VM,
+} from './harness.js'
 
 suite('Network', () => {
   let bench: TestHost
   let network: Frame
-  const drawn = () => network.evaluate<number>('gridkitStats().frames')
 
   suiteSetup(async () => {
     bench = await testHost()
@@ -18,15 +29,8 @@ suite('Network', () => {
   test('draws the case, filling its editor', async () => {
     assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, 39)
     assert.equal(await network.locator('.status').count(), 0)
-    const edges = await network.evaluate<number[]>(`(() => {
-  const r = document.querySelector('canvas').getBoundingClientRect()
-  return [r.x, r.y, r.width - innerWidth, r.height - innerHeight]
-})()`)
-    assert.ok(
-      edges.every((edge) => Math.abs(edge) < 1),
-      'Network must fill its editor',
-    )
-    bench.report.network = await network.evaluate('gridkitStats()')
+    assert.ok(await fills(network), 'Network must fill its editor')
+    bench.report.network = await stats(network)
     await bench.capture('network-vscode')
   })
 
@@ -40,9 +44,9 @@ suite('Network', () => {
   })
 
   test('clearing the canvas selection clears the shared selection', async () => {
-    const frames = await drawn()
+    const drawn = await frames(network)
     bench.studio.select(bench.key, { id: 'Bus/' + bench.source.buses[0]!.number })
-    await until(async () => (await drawn()) > frames, 'the selected bus is drawn')
+    await until(async () => (await frames(network)) > drawn, 'the selected bus is drawn')
     await network.locator('canvas').focus()
     await network.locator('canvas').press('Escape')
     await until(() => bench.session.selection === undefined, 'selection cleared across the case')
@@ -50,7 +54,7 @@ suite('Network', () => {
   })
 
   test('keeps its webview while another editor hides it', async () => {
-    // Marked, so that the view shown again can be told from one built again.
+    // A mark that tells the same view shown again from one built again.
     await network.evaluate('window.gridkitKept = true')
     await bench.open('diagram')
     network = await bench.open('network')
@@ -63,10 +67,10 @@ suite('Network', () => {
     bench.studio.bind(bench.key, VM, ['vertexColor'])
     transport.setLoop('wrap')
     transport.seek(0)
-    const still = await drawn()
+    const still = await frames(network)
     transport.play()
-    // Frame after frame while the clock plays, with no word from the extension.
-    await until(async () => (await drawn()) > still + 10, 'the network paints the playhead')
+    // Frame after frame while the clock plays, with no message from the extension.
+    await until(async () => (await frames(network)) > still + 10, 'the network paints the playhead')
     transport.pause()
     assert.equal(await network.locator('.canvas-host__fault:not([hidden])').count(), 0)
     await bench.capture('network-mapped-signal')
@@ -76,11 +80,11 @@ suite('Network', () => {
     const { transport } = bench.session
     await bench.open('diagram')
     await pause(300)
-    const hidden = await drawn()
+    const hidden = await frames(network)
     transport.play()
     await pause(500)
     assert.equal(transport.state.status, 'playing')
-    assert.equal(await drawn(), hidden)
+    assert.equal(await frames(network), hidden)
     transport.pause()
   })
 })

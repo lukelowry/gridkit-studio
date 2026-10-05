@@ -1,7 +1,6 @@
-/** WECC240 end to end against real GridKit: a run records voltage angle alone, and the network maps
- *  it to vertex color and height. Each bus's color must lie on the colormap in step with its
- *  recorded angle, each unmapped branch must be one color, the average of its ends', and a bus whose
- *  angle rises must rise on the tilted network. */
+/** WECC240 against real GridKit: a run of voltage angle alone, mapped to vertex color and height,
+ *  read back pixel by pixel from the flat and tilted network. */
+
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,10 +12,8 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { gridkitOf } from '../../src/extension/tasks.js'
-import { runtimeOf } from '../../src/gridkit/runtime.js'
 import { recordedWhole } from '../../src/shared/bindings.js'
-import { pause, type TestHost, testHost, until } from './harness.js'
+import { frames, idle, type TestHost, testHost, until } from './harness.js'
 
 const VA = { type: 'Bus', field: 'Va' } as const
 /** Markers and lines wide enough that their center pixels are solid, with nothing drawn over
@@ -63,7 +60,7 @@ function onColormap(rgb: RGB, name: ColormapName): { t: number; off: number } {
 }
 
 suite('WECC240 run', function () {
-  // A run of the whole case takes what GridKit takes.
+  // A run of the whole case takes as long as GridKit does.
   this.timeout(600_000)
   this.bail(true)
   let bench: TestHost
@@ -78,17 +75,6 @@ suite('WECC240 run', function () {
   const session = () => bench.studio.all.get(uri.toString())!
   const camera = () =>
     session().cameras.network as { projection?: string; pitch?: number; fit?: boolean }
-  const frames = async () => (await network.evaluate<{ frames: number }>('gridkitStats()')).frames
-  /** Once the view stops drawing. */
-  async function settled() {
-    let last = await frames()
-    for (;;) {
-      await pause(250)
-      const now = await frames()
-      if (now === last) return
-      last = now
-    }
-  }
   /** Each bus's recorded angle at `t`, as the views read it. */
   async function anglesAt(t: number): Promise<Map<string, number>> {
     const angles = new Map<string, number>()
@@ -121,7 +107,7 @@ suite('WECC240 run', function () {
   async function at(t: number): Promise<Shown> {
     session().transport.seek(t)
     await until(() => Math.abs(session().transport.currentT() - t) < 1e-9, `seek to ${t}`)
-    await settled()
+    await idle(network)
     const png = PNG.sync.read(await network.locator('canvas').screenshot())
     const located = await network.evaluate(
       (ids) =>
@@ -157,11 +143,7 @@ suite('WECC240 run', function () {
 
   suiteSetup(async function () {
     bench = await testHost()
-    // GridKit runs where it is installed, such as the dev container, or in GRIDKIT_IMAGE; without
-    // either the suite is skipped.
-    const gridkit = gridkitOf(bench.uri)
-    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtimeOf(gridkit)
-    else if (!(await runtimeOf(gridkit).catch(() => undefined))) this.skip()
+    if (!(await bench.gridkit())) this.skip()
     const source = JSON.parse(
       await readFile(join(process.env.GRIDKIT_TEST_ROOT!, 'cases/WECC240.case.json'), 'utf8'),
     ) as {
@@ -199,10 +181,10 @@ suite('WECC240 run', function () {
       fault_start: 0.1,
       fault_duration: 0.05,
     }
-    const before = await frames()
+    const before = await frames(network)
     await vscode.commands.executeCommand('gridkitStudio.run', uri)
     await until(() => (session().run?.frames ?? 0) > 0, 'frames arrive', 180_000)
-    await until(async () => (await frames()) > before, 'live Va frames repaint the network')
+    await until(async () => (await frames(network)) > before, 'live Va frames repaint the network')
     await until(() => session().run?.state !== 'running', 'the run ends', 300_000)
     const run = session().run!
     assert.equal(run.state, 'complete', run.message)

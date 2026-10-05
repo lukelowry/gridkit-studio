@@ -1,4 +1,4 @@
-/** Shared column chunks; every field in a table uses the same row boundaries. */
+/** Column chunks and their builders; every column of a table shares one set of chunk boundaries. */
 
 import type {
   BooleanColumn,
@@ -26,7 +26,7 @@ export interface Column {
   readonly chunks: readonly Chunk[]
   /** starts[i] is chunk i's first row; the last entry is the row count. */
   readonly starts: Uint32Array
-  /** Reference target; kept here so empty columns retain their index. */
+  /** A reference column's target, kept here so an empty column has it too. */
   readonly index?: Index
 }
 
@@ -63,6 +63,13 @@ export function utf8(bytes: Uint8Array, start: number, end: number): string {
   return Buffer.from(bytes.buffer, bytes.byteOffset + start, end - start).toString('utf8')
 }
 
+/** FNV-1a over bytes [start, end). */
+export function hash(bytes: Uint8Array, start: number, end: number): number {
+  let h = 0x811c9dc5
+  for (let i = start; i < end; i++) h = Math.imul(h ^ bytes[i]!, 0x01000193)
+  return h >>> 0
+}
+
 export function valueAt(chunk: Chunk, at: number): Value {
   if (!isValid(chunk, at)) return null
   const i = chunk.offset + at
@@ -91,7 +98,7 @@ export function valueAt(chunk: Chunk, at: number): Value {
 export interface Builder {
   readonly length: number
   push(value: Value): void
-  /** Exactly sized, in its own ArrayBuffer: moved out of a worker and published as a borrowed view. */
+  /** Exactly sized, in its own ArrayBuffer, so it can be published as a borrowed view. */
   finish(): Chunk
 }
 

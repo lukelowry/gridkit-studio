@@ -2,10 +2,13 @@ import { createReadStream } from 'node:fs'
 
 import type { FieldSelection } from '@latkit/model'
 
-import type { Case } from '../gridkit/case.js'
+import type { Case } from '../gridkit/index.js'
 import { messages } from './arrow.js'
 import { csvMessages } from './csv.js'
-/** Match native names in catalog/row order, including repeated bus names, as Server's decoder does. */
+import { columnName, fold } from './decode.js'
+
+/** The outputs a results file records, matched to the case's rows in catalog and row order; a
+ *  repeated name matches its rows in turn. */
 export async function importedFields(
   kase: Case,
   path: string,
@@ -18,7 +21,7 @@ export async function importedFields(
     for await (const message of format === 'arrow' ? messages(source) : csvMessages(source)) {
       if (message.kind !== 'schema') throw new Error('Results must start with a schema.')
       for (const field of message.fields.slice(1)) {
-        const key = field.name.normalize('NFC').toLowerCase()
+        const key = fold(field.name)
         counts.set(key, (counts.get(key) ?? 0) + 1)
       }
       break
@@ -32,9 +35,7 @@ export async function importedFields(
       const rows: number[] = []
       for (let row = 0; row < table.records.length; row++) {
         signal.throwIfAborted()
-        const identity =
-          table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
-        const key = `${table.shape.type}_${identity}_${field}`.normalize('NFC').toLowerCase()
+        const key = fold(columnName(kase, table, row, field))
         const count = counts.get(key) ?? 0
         if (count) {
           rows.push(row)

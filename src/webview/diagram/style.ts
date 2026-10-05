@@ -1,6 +1,3 @@
-/** The diagram's config: what it draws, from the case and where its blocks were arranged, in the
- *  theme, settings, and editing mode. */
-
 import type { DiagramConfig, Positions } from '@latkit/diagram'
 import type { Data } from '@latkit/model'
 
@@ -11,16 +8,13 @@ import { font, palette } from '../theme.js'
 import { labelsOf } from './labels.js'
 import { diagramOptions } from './options.js'
 
-/** What a diagram is told: everything but its canvas and camera. */
-export type DiagramDrawn = Omit<DiagramConfig, 'canvas' | 'camera'>
-
-/** The diagram of `source`. Blocks the case arranged stand where `places` says; without any, the
- *  diagram lays them out. */
+/** The diagram config for `source`, in the settings and editing mode. Blocks stand where `places`
+ *  puts them; without any, the diagram lays them out. */
 export function diagramConfig(
   source: Data,
   state: ViewState,
-  places: Readonly<Record<string, Positions>> = {},
-): DiagramDrawn {
+  places: Readonly<Record<string, Positions>>,
+): Omit<DiagramConfig, 'canvas' | 'camera'> {
   const s = reader(state.settings)
   const drawn = diagramOf(source.schema)
   const editing = state.diagramEditing === true

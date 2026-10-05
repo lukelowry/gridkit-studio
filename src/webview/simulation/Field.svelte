@@ -1,4 +1,4 @@
-<!-- Labeled DynamicSimulation form control with units and validation feedback. -->
+<!-- A parameter's text field or dropdown, with its unit and validation note. -->
 <script lang="ts">
   import Select from '../ui/Select.svelte'
   import type { Row } from './rows.js'
@@ -11,18 +11,17 @@
     onvalue,
   }: {
     row: Row
-    /** The field's text; a dropdown shows its placeholder while it is empty. */
+    /** The field's text; empty shows a dropdown's placeholder. */
     value: string
-    /** What is wrong with the value; no note without it. */
     error?: string
     disabled?: boolean
-    /** Every edit: each keystroke, or a pick (empty for the clear row). */
+    /** Each keystroke or pick; a cleared dropdown gives ''. */
     onvalue: (text: string) => void
   } = $props()
 
   const control = $derived(`field-${row.key}`)
   const note = $derived(error ? `${control}-error` : undefined)
-  /** The text field's name for assistive technology: the label, then its unit in parentheses. */
+  /** The input's accessible name: the label, then its unit in parentheses. */
   const spoken = $derived(row.unit === '' ? row.label : `${row.label} (${row.unit})`)
 </script>
 
@@ -30,7 +29,7 @@
   <Select
     label={row.label}
     options={row.choices}
-    placeholder={row.placeholder || (row.required ? 'None' : 'Default')}
+    placeholder={row.required ? 'None' : 'Default'}
     clearable={!row.required}
     {disabled}
     aria-required={row.required || undefined}
@@ -40,10 +39,7 @@
     bind:value={() => (value === '' ? null : value), (picked) => onvalue(picked ?? '')}
   />
 {:else}
-  <label
-    class={['c-row', 'c-setting-row', 'entry', row.stack && 'c-row--stack']}
-    title={row.description}
-  >
+  <label class="c-row c-setting-row entry" title={row.description}>
     <span class="c-row__label">
       {row.label}{#if row.unit}<span class="entry__unit">
           ({row.unit})
@@ -55,7 +51,6 @@
       type="text"
       spellcheck="false"
       inputmode={row.inputmode}
-      placeholder={row.placeholder}
       required={row.required}
       {disabled}
       {value}
@@ -72,33 +67,29 @@
 {/if}
 
 <style>
-  /* The row is the input's label, so a press anywhere on it lands in the input. */
+  /* The whole row is the input's label, so a click anywhere on it focuses the input. */
   .entry {
     cursor: text;
   }
 
   .entry__unit {
     margin-inline-start: 0.25em;
-    color: var(--color-text-3);
+    color: var(--color-text-2);
     font-weight: 400;
   }
 
+  /* One width for every number, in tabular digits. */
   .field-input {
-    inline-size: var(--field-input-w, 9ch);
+    inline-size: 9ch;
     font-variant-numeric: tabular-nums;
     text-align: end;
-  }
-
-  .entry.c-row--stack .field-input {
-    inline-size: 100%;
-    text-align: start;
   }
 
   .field-input[aria-invalid='true'] {
     border-color: var(--color-error-text);
   }
 
-  /* Once a narrow panel stacks the settings rows, the field takes the full width. */
+  /* A narrow panel gives the field its column's full width. */
   @container settings (max-width: 24rem) {
     .field-input {
       inline-size: 100%;

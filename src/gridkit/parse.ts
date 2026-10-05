@@ -1,5 +1,5 @@
-/** A case's JSON bytes: members and records located in one pass over strings and brackets, then records
- *  parsed directly into columns. Unknown fields are skipped; invalid values become null. */
+/** A case's JSON bytes: members and records found in one pass over strings and brackets, then
+ *  records parsed straight into columns. Unknown fields are skipped; invalid values become null. */
 
 import type { DataType, Problem } from '@latkit/model'
 import { failure } from '@latkit/model'
@@ -9,12 +9,14 @@ import {
   builder,
   type Chunk,
   CHUNK_ROWS,
+  hash,
   type ListBuilder,
   NumericBuilder,
   type TextBuilder,
   type VectorBuilder,
 } from './columns.js'
 import type { ArrayName, Catalog, Shape } from './definition.js'
+
 const QUOTE = 0x22
 const BACKSLASH = 0x5c
 const COMMA = 0x2c
@@ -36,7 +38,7 @@ export interface Member {
   readonly end: number
 }
 
-/** One array's brackets, and each record's start and end, in shared memory for the parse workers. */
+/** One array's brackets, and each record's start and end. */
 export interface Records {
   readonly open: number
   readonly close: number
@@ -100,7 +102,7 @@ function recordsOf(bytes: Uint8Array, open: number): Records {
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
     else if (bytes[i] !== CLOSE_ARRAY) malformed(i, 'a comma or the end of the array')
   }
-  return { open, close: i, starts: shared(starts, count), ends: shared(ends, count) }
+  return { open, close: i, starts: starts.slice(0, count), ends: ends.slice(0, count) }
 }
 
 /** Just past the JSON value at `i`. */
@@ -136,7 +138,7 @@ function stringEnd(bytes: Uint8Array, i: number): number {
   return malformed(i, 'a closed string')
 }
 
-export function skipSpace(bytes: Uint8Array, i: number): number {
+function skipSpace(bytes: Uint8Array, i: number): number {
   while (i < bytes.length) {
     const c = bytes[i]
     if (c !== 0x20 && c !== 0x0a && c !== 0x0d && c !== 0x09) break
@@ -145,7 +147,7 @@ export function skipSpace(bytes: Uint8Array, i: number): number {
   return i
 }
 
-/** The members of one object: per member, its key's text (inside the quotes) and its value, as four numbers. */
+/** One object's members, four numbers each: its key's text inside the quotes, and its value. */
 export class Members {
   spans = new Int32Array(256)
 
@@ -195,12 +197,6 @@ function grown(array: Uint32Array): Uint32Array {
   return next
 }
 
-function shared(array: Uint32Array, count: number): Uint32Array {
-  const out = new Uint32Array(new SharedArrayBuffer(count * 4))
-  out.set(array.subarray(0, count))
-  return out
-}
-
 /** Records of one array, the first of them record `first`. */
 export interface Range {
   readonly array: ArrayName
@@ -208,7 +204,7 @@ export interface Range {
   readonly starts: Uint32Array
 }
 
-export interface ParsedTable {
+interface ParsedTable {
   readonly ids: readonly Chunk[]
   readonly fields: readonly (readonly Chunk[])[]
   readonly ports: readonly (readonly Chunk[])[]
@@ -262,12 +258,6 @@ class Keys {
     }
     return -1
   }
-}
-
-function hash(bytes: Uint8Array, start: number, end: number): number {
-  let h = 0x811c9dc5
-  for (let i = start; i < end; i++) h = Math.imul(h ^ bytes[i]!, 0x01000193)
-  return h >>> 0
 }
 
 type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'ports' | 'extension'
@@ -631,8 +621,8 @@ function stage(spans: Int32Array, at: number, value: number, end: number): void 
   spans[2 * at + 1] = end
 }
 
-/** Visit each item of the array at `open`; `item` returns just past the item, or -1 to refuse it. Returns just
- *  past the array, or -1 when it is not an array or an item was refused. */
+/** Visits each item of the array at `open`; `item` returns just past it, or -1 to refuse it.
+ *  Returns just past the array, or -1 when it is not one or an item was refused. */
 function eachItem(bytes: Uint8Array, open: number, item: (at: number) => number): number {
   if (bytes[open] !== OPEN_ARRAY) return -1
   let at = skipSpace(bytes, open + 1)
@@ -646,8 +636,8 @@ function eachItem(bytes: Uint8Array, open: number, item: (at: number) => number)
   return at + 1
 }
 
-/** A JSON number from its digits: exact through Clinger's fast path when it has at most 15 significant digits and
- *  a small exponent, else through the platform's parser. NaN when it is not a JSON number. */
+/** A JSON number: exact by Clinger's fast path for up to 15 significant digits and a small
+ *  exponent, else by the platform's parser; NaN when it is not a JSON number. */
 function parseNumber(bytes: Uint8Array, start: number, end: number): number {
   let i = start
   const negative = bytes[i] === 0x2d

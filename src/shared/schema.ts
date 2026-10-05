@@ -1,11 +1,4 @@
-/**
- * What a case's types are and how they wire together, read from its schema alone. Topology is its
- * reference fields: a field naming a row of another type wires the two. What each view draws
- * follows from them. The network draws a type with a field of points as vertices, and a type with
- * two references to vertex types as edges between them, bent along its own list of points when it
- * has one; a position field says whether its points are longitude and latitude. The diagram draws a type that directed references name as nets, and a type holding them as
- * blocks, each such reference a port.
- */
+/** A case's topology, read from its schema alone: what the network and the diagram draw. */
 
 import type { FieldDefinition, Schema } from '@latkit/model'
 
@@ -16,12 +9,12 @@ interface Reference {
   readonly direction?: 'in' | 'out'
 }
 
-/** An edge type a view draws: joining the two vertices its `ends` name, or, with none, a net joining
- *  the vertices that name it. */
-export interface Edge {
+/** A type drawn as edges: each joins the vertices its two `ends` fields name, or, without `ends`,
+ *  is a net joining every vertex that names it. */
+interface Edge {
   readonly type: string
   readonly ends?: readonly [source: string, target: string]
-  /** Its list of intermediate points, when it has one. */
+  /** The route field of intermediate points. */
   readonly bends?: string
 }
 
@@ -29,36 +22,47 @@ export interface Edge {
 export interface Drawn {
   readonly vertices: readonly string[]
   readonly edges: readonly Edge[]
-  /** Whether its vertices are placed in longitude and latitude. */
+  /** Whether vertices are placed by longitude and latitude. */
   readonly geographic: boolean
 }
 
-/** `type`'s name: its label, or its key. */
+/** A type's first field of 2D or 3D points: one per row, or a route of them. */
+interface Position {
+  readonly field: string
+  readonly kind: 'point' | 'route'
+  /** Whether the points are longitude and latitude. */
+  readonly geographic: boolean
+}
+
+/** The type an element id names: `Bus` of `Bus/7`. */
+export function elementType(id: string): string {
+  return id.split('/', 1)[0]!
+}
+
+/** `type`'s label, or its key. */
 export function typeName(schema: Schema, type: string): string {
   return schema.types[type]?.label ?? type
 }
 
-/** The fields of `type`; none for a type the schema lacks. */
 function fieldsOf(schema: Schema, type: string): Readonly<Record<string, FieldDefinition>> {
   return schema.types[type]?.fields ?? {}
 }
 
-/** A name with its unit after it, the one way the page shows the two together. */
-export function withUnit(name: string, unit: string | undefined): string {
+/** The one format for a name with a unit. */
+function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 
-/** A field's name with its unit: its label, or its key. */
+/** A field's label, or its key, with its unit. */
 export function fieldName(definition: FieldDefinition | undefined, field: string): string {
   return withUnit(definition?.label ?? field, definition?.unit)
 }
 
-/** Whether `definition` names a row of another type. */
 export function isReference(definition: FieldDefinition | undefined): boolean {
   return typeof definition?.type === 'object' && definition.type.kind === 'reference'
 }
 
-/** The field a row of `type` is named by: `name` when it has one, else its first text field. */
+/** The field naming a row of `type`: `name` when it has one, else its first text field. */
 export function nameFieldOf(schema: Schema, type: string): string | null {
   const texts = Object.entries(fieldsOf(schema, type)).filter(
     ([, definition]) => definition.type === 'text',
@@ -66,7 +70,6 @@ export function nameFieldOf(schema: Schema, type: string): string | null {
   return (texts.find(([field]) => field === 'name') ?? texts[0])?.[0] ?? null
 }
 
-/** The fields of `type` that name a row of another type. */
 function referencesOf(schema: Schema, type: string): Reference[] {
   return Object.entries(fieldsOf(schema, type)).flatMap(([field, { type: data, direction }]) =>
     typeof data === 'object' && data.kind === 'reference'
@@ -75,15 +78,6 @@ function referencesOf(schema: Schema, type: string): Reference[] {
   )
 }
 
-/** Where a type stands: its first field of 2D or 3D points, one per row or a list of them. */
-export interface Position {
-  readonly field: string
-  readonly kind: 'point' | 'route'
-  /** Whether its points are longitude and latitude. */
-  readonly geographic: boolean
-}
-
-/** Where `type` stands; null for a type with no points. */
 export function positionOf(schema: Schema, type: string): Position | null {
   for (const [field, definition] of Object.entries(fieldsOf(schema, type))) {
     const data = definition.type
@@ -98,7 +92,8 @@ export function positionOf(schema: Schema, type: string): Position | null {
   return null
 }
 
-/** What the network draws; see the module header. */
+/** Vertices are types with a point field; edges are other types with exactly two references to
+ *  vertex types, bent along their route if they have one. */
 export function networkOf(schema: Schema): Drawn {
   const vertices = Object.keys(schema.types).filter(
     (type) => positionOf(schema, type)?.kind === 'point',
@@ -116,7 +111,8 @@ export function networkOf(schema: Schema): Drawn {
   return { vertices, edges, geographic }
 }
 
-/** What the diagram draws; see the module header. */
+/** Nets are types that directed references name; blocks are the other types holding those
+ *  references, each one a port. */
 export function diagramOf(schema: Schema): Drawn {
   const directed = Object.keys(schema.types).flatMap((type) =>
     referencesOf(schema, type)
@@ -130,7 +126,6 @@ export function diagramOf(schema: Schema): Drawn {
   return { vertices, edges: nets.map((type) => ({ type })), geographic: false }
 }
 
-/** Where `drawn` draws `type`: as a vertex, as an edge, or not at all. */
 export function placementOf(drawn: Drawn, type: string): 'vertex' | 'edge' | null {
   if (drawn.vertices.includes(type)) return 'vertex'
   return drawn.edges.some((edge) => edge.type === type) ? 'edge' : null

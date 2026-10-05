@@ -1,5 +1,5 @@
-/** The VS Code suites, in the order a reader meets the views. Each starts from the case alone in
- *  its Network editor, so the order is only the order of the report. */
+/** The VS Code suites, in the order the user meets the views. Each starts from the case alone in
+ *  its Network editor, so the order matters only to the report. */
 
 import './run.test.js'
 import './wecc.test.js'

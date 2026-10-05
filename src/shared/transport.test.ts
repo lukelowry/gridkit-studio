@@ -4,7 +4,7 @@ import { advance, clamp, type ClockState, fold, IDLE, Transport } from './transp
 
 const SPAN: readonly [number, number] = [0, 10]
 
-/** A clock state that plays from 0 over SPAN at real time, played once, unless `over` says. */
+/** A state playing SPAN from 0 at rate 1 with no loop, unless `over` says otherwise. */
 const playing = (over: Partial<ClockState> = {}): ClockState => ({
   ...IDLE,
   epoch: 1,
@@ -13,7 +13,7 @@ const playing = (over: Partial<ClockState> = {}): ClockState => ({
   ...over,
 })
 
-/** A transport on a wall clock the test moves, and every change it reported. */
+/** A transport on a manual wall clock, with every change it reports. */
 function rig() {
   let now = 1_000
   const changes: ClockState[] = []
@@ -290,7 +290,7 @@ describe('Transport', () => {
     transport.setLoop('pingpong')
     transport.play()
     wait(12_000)
-    // Two seconds past the far end, on the way back; the state itself is as it was last changed.
+    // Two seconds back from the far end; `state` itself holds the last change.
     expect(transport.snapshot()).toMatchObject({ status: 'playing', direction: -1 })
     expect(transport.snapshot().t).toBeCloseTo(8, 12)
     expect(transport.state).toMatchObject({ t: 0, direction: 1 })

@@ -1,12 +1,10 @@
-/** The least patch that brings a view from the config it holds to the one it should: what is
- *  unchanged is left out, so the view keeps the very objects its memoized reads, scales, labels,
- *  and uploads key on, and a frame where nothing changed reads and uploads nothing. */
+/** Least config patches: unchanged values stay out, so views keep their memoized work. */
 
 type Plain = Record<string, unknown>
 
-/** How a view's `set` merges its config: a record per entry and then per option, a merged object
- *  per option, and every other key whole. */
-export interface Shape {
+/** How a view's `set` merges each key: `records` per entry then per option, `merged` per option,
+ *  and every other key whole. */
+interface Shape {
   readonly records: readonly string[]
   readonly merged: readonly string[]
 }
@@ -29,18 +27,19 @@ function isPlain(value: unknown): value is Plain {
 
 const keysOf = (a: Plain, b: Plain) => new Set([...Object.keys(a), ...Object.keys(b)])
 
-/** Whether `a` and `b` are the same options. Absent and null are both unset; a Data, a typed
- *  array, or any other instance is the same only as itself. */
+/** Whether `a` and `b` are the same options. Absent equals null; Data, typed arrays, and other
+ *  instances compare by identity. */
 export function same(a: unknown, b: unknown): boolean {
   if (a === b || (a == null && b == null)) return true
   if (Array.isArray(a))
     return Array.isArray(b) && a.length === b.length && a.every((value, i) => same(value, b[i]))
+  // Data is a plain object: its `tables` tell it apart.
   if (!isPlain(a) || !isPlain(b) || 'tables' in a) return false
   for (const key of keysOf(a, b)) if (!same(a[key], b[key])) return false
   return true
 }
 
-/** Each option of `after` that differs from `before`, and null for each it leaves out. */
+/** The options of `after` that differ from `before`, with null for each it drops. */
 function options(before: Plain, after: Plain): Plain {
   const patch: Plain = {}
   for (const key of keysOf(before, after))
@@ -48,8 +47,7 @@ function options(before: Plain, after: Plain): Plain {
   return patch
 }
 
-/** What of `next` differs from `previous`, as one patch for a view of `shape`; null when nothing
- *  does. */
+/** The patch from `previous` to `next` for a view of `shape`; null when nothing changed. */
 export function patchOf(previous: Plain, next: Plain, shape: Shape): Plain | null {
   const patch: Plain = {}
   for (const key of keysOf(previous, next)) {

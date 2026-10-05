@@ -10,11 +10,11 @@ describe('networkOptions', () => {
   it('colors an unmapped edge by its ends', () => {
     expect(networkOptions(reader(), palette, 'mono', false).edgeColor).toBe('ends')
   })
-  it('keeps an edge color the reader chose', () => {
+  it('keeps an edge color the user chose', () => {
     const s = reader({ 'network.edgeColor': '#ff0000' })
     expect(networkOptions(s, palette, 'mono', false).edgeColor).toEqual([1, 0, 0, 1])
   })
-  it('draws halos in the theme, translucent, unless the reader chose a color with its alpha', () => {
+  it('draws halos in the theme, translucent, unless the user chose a color with its alpha', () => {
     expect(networkOptions(reader(), palette, 'mono', false).hoverColor).toEqual([
       0.8, 0.8, 0.8, 0.5,
     ])

@@ -1,10 +1,10 @@
-<!-- Accessible playback controls. Size time readouts from the full span to prevent layout shifts. -->
+<!-- Playback controls; the time readout is sized from the span so it never shifts the layout. -->
 <script lang="ts">
   import type { Axis, Domain } from '@latkit/model'
 
+  import { formatNumber } from '../../shared/format.js'
   import type { ClockState, LoopMode } from '../../shared/transport.js'
   import type { Clock } from '../clock.js'
-  import { formatNumber } from '../format.js'
   import type { IconName } from '../ui/glyphs.js'
   import Icon from '../ui/Icon.svelte'
   import Select from '../ui/Select.svelte'
@@ -19,29 +19,28 @@
     recorded,
     axis,
   }: {
-    /** The case's clock, which the controls change. */
     clock: Clock
-    /** The clock as of its last change, and the playhead now. */
+    /** The clock as of its last change. */
     tick: ClockState
+    /** The playhead. */
     t: number
     /** Whether the run on show is still receiving frames. */
     live: boolean
     /** Frames recorded so far. */
     frames: number
-    /** The times those frames cover, which bound a step. */
+    /** The times those frames cover, which bound steps and Home/End. */
     recorded: Domain
     axis?: Axis
   } = $props()
 
   /** The speeds always offered, in simulated seconds per second. */
   const SPEEDS = [0.5, 1, 2, 4]
-  /** The two frame steps: which way each moves, and its tooltip, which names the key that does the
-   *  same on the playback controls. */
+  /** Each step button's direction, and a tooltip naming the key that does the same. */
   const STEPS = {
     back: { direction: -1, hint: 'Previous sample (Left arrow on playback controls)' },
     forward: { direction: 1, hint: 'Next sample (Right arrow on playback controls)' },
   } as const
-  /** The repeat modes in the order the control steps through them, each with its name and symbol. */
+  /** Repeat modes in the order the button cycles through them. */
   const REPEATS: readonly { readonly mode: LoopMode; readonly label: string; glyph: IconName }[] = [
     { mode: 'none', label: 'Once', glyph: 'play-once' },
     { mode: 'wrap', label: 'Loop', glyph: 'repeat' },
@@ -61,14 +60,14 @@
   )
   /** The repeat mode a press moves to. */
   const following = $derived(REPEATS[(repeat + 1) % REPEATS.length]!)
-  // A speed set elsewhere is offered after the usual ones, so the control can show it.
+  // A rate set elsewhere is appended so the control can show it.
   const speeds = $derived(
     (SPEEDS.includes(tick.rate) ? SPEEDS : [...SPEEDS, tick.rate]).map((rate) => ({
       value: rate,
       label: `${formatNumber(rate)}×`,
     })),
   )
-  /** Whether a frame lies behind the playhead, and ahead of it, to step to. */
+  /** Whether there is a frame to step to before, and after, the playhead. */
   const earlier = $derived(frames >= 2 && t > recorded[0])
   const later = $derived(frames >= 2 && t < recorded[1])
 
@@ -76,7 +75,7 @@
   const unit = $derived(axis?.unit ? ' ' + axis.unit : '')
   const start = $derived(tick.span[0].toFixed(2))
   const end = $derived(tick.span[1].toFixed(2))
-  /** Room for the widest time the span can show, in digits. */
+  /** The widest time the span can show, in characters. */
   const digits = $derived(Math.max(start.length, end.length))
 
   const step = (direction: 1 | -1) => clock.act({ action: 'step', value: direction })
@@ -185,7 +184,7 @@
 </div>
 
 <style>
-  /* One row: the run's name yields space before the controls do. */
+  /* One row that never wraps; the header's run name gives way first. */
   .playback {
     display: flex;
     flex-wrap: nowrap;
@@ -195,7 +194,7 @@
     min-inline-size: 0;
   }
 
-  /* Controls side by side sit as a panel header's actions do. */
+  /* Control groups laid out like a panel header's actions. */
   .playback__position,
   .playback__buttons,
   .playback__settings {
@@ -216,13 +215,12 @@
     flex-wrap: nowrap;
   }
 
-  /* An unlabeled trigger takes its row's width, but this group takes its content's, so the trigger
-     hugs its value instead of collapsing. */
+  /* An unlabeled trigger fills its row, and would collapse in this content-sized group. */
   .playback__settings :global(.select__trigger.select__trigger--unlabeled) {
     inline-size: auto;
   }
 
-  /* The time: a caption, then the playhead over the span's end in fixed-width digits. */
+  /* A caption, then playhead / end in fixed-width digits. */
   .playback__clock {
     display: inline-flex;
     flex-wrap: nowrap;
@@ -236,7 +234,7 @@
     font-size: var(--text-sm);
   }
 
-  /* The two readouts stand a digit apart however the markup is spaced. */
+  /* The readouts sit one digit apart, whatever whitespace the markup has. */
   .playback__time {
     display: inline-flex;
     gap: 1ch;

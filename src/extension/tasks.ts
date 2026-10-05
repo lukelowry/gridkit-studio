@@ -5,8 +5,8 @@ import * as vscode from 'vscode'
 import type { GridKit, RunRequest } from '../shared/messages.js'
 import type { Sessions } from './sessions.js'
 
-/** Where GridKit runs for the case at `uri`, as its settings say. A relative install path is the
- *  workspace's own. */
+/** The GridKit install the settings name for the case at `uri`; a relative path resolves against
+ *  its workspace folder. */
 export function gridkitOf(uri: vscode.Uri): GridKit {
   const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
   const path = settings.get<string>('gridkitPath', '').trim()
@@ -17,6 +17,14 @@ export function gridkitOf(uri: vscode.Uri): GridKit {
     image: settings.get<string>('gridkitImage', '').trim(),
     cli: settings.get<string>('containerCli', '').trim(),
   }
+}
+
+/** The `resultCacheMiB` setting for `uri`, in bytes. */
+export function cacheBytesOf(uri: vscode.Uri) {
+  return (
+    vscode.workspace.getConfiguration('gridkitStudio', uri).get<number>('resultCacheMiB', 256) *
+    (1 << 20)
+  )
 }
 
 export function registerTasks(studio: Sessions) {
@@ -47,14 +55,13 @@ export function registerTasks(studio: Sessions) {
               const document = await vscode.workspace.openTextDocument(uri)
               const session = await studio.open(document)
               const summary = await studio.documents.ensure(document)
-              const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
               const request: RunRequest = {
                 uri: uri.toString(),
                 version: summary.version,
                 values: structuredClone(values ?? session.values),
                 outputs: session.outputs ?? [],
                 gridkit: gridkitOf(uri),
-                cacheBytes: settings.get<number>('resultCacheMiB', 256) * (1 << 20),
+                cacheBytes: cacheBytesOf(uri),
               }
               write.fire(
                 `Captured ${document.isDirty ? 'unsaved ' : ''}case revision ${summary.version}.\r\n`,

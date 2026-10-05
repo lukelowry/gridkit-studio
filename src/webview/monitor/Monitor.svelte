@@ -1,8 +1,9 @@
-<!-- Plot the recorded signals of the run on show, one lane each, under the case's playback controls. -->
+<!-- One lane per plotted signal of the run on show, under the case's playback controls. -->
 <script lang="ts">
   import type { Data, Domain } from '@latkit/model'
   import { onMount } from 'svelte'
 
+  import { message } from '../../shared/format.js'
   import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../shared/messages.js'
   import { fieldName, typeName } from '../../shared/schema.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
@@ -12,30 +13,32 @@
   import { receive } from '../stream.js'
   import { appearance, font, palette, watchTheme } from '../theme.js'
   import Select from '../ui/Select.svelte'
-  import { windowOf } from './plot.js'
+  import { sameWindow, windowOf } from './plot.js'
   import Plot from './Plot.svelte'
   import Transport from './Transport.svelte'
 
-  /** How long the plots rest at other times before the extension hears of them. */
+  /** How long a window the user chose must rest before the extension hears of it. */
   const WINDOW_MS = 120
 
   let view = $state.raw<ViewState>({})
-  /** The case with the run's frames so far, and the times of the run it holds; none is all of it. */
+  /** The case with the run's frames so far. */
   let source = $state.raw<Data | undefined>()
+  /** The times `source` holds; absent when it holds the whole run. */
   let held = $state.raw<Begin['held']>()
-  /** The clock as of its last change, and the playhead, refreshed every frame while it plays. */
+  /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   let live = $state(false)
+  /** The playhead, updated every frame while playing. */
   let t = $state(0)
   let theme = $state.raw({ palette: palette(), font: font() })
-  /** Grows each time the GPU stops, so every plot draws again on a new one. */
+  /** Bumped on GPU loss or retry, so every plot remounts. */
   let epoch = $state(0)
   let fault = $state<string | null>(null)
-  /** Whether VS Code shows the view; a hidden one keeps its webview and stands still. */
+  /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
   let visible = $state(true)
   let hidden = $state(document.hidden)
   const paused = $derived(!visible || hidden)
-  /** The times the reader turned the plots to, and the ones the extension was last told. */
+  /** The window the user chose, and the last one sent to the extension. */
   let chosen = $state.raw<Domain | undefined>()
   let told: Domain | undefined
   let telling: ReturnType<typeof setTimeout> | undefined
@@ -53,18 +56,18 @@
   const run = $derived(view.run)
   const plots = $derived(view.plots ?? [])
   const running = $derived(run?.state === 'running')
-  /** The times every plot shows: the reader's, or else the run, of which a growing one shows a
-   *  window that widens by doubling; a run held only in part shows its tail. */
+  /** The window every plot shows: the user's, else the run's. A growing run's widens by doubling;
+   *  a run held only in part shows its tail. */
   const shown = $derived.by((): Domain => {
     const window = chosen ?? view.window
     if (window) return window
     if (!run || !(run.domain[1] > run.domain[0]))
       return [run?.domain[0] ?? 0, (run?.domain[0] ?? 0) + 1]
     if (held) return [Math.max(run.domain[0], run.domain[1] - TAIL), run.domain[1]]
-    // A run that says how long it is shows all of that from its first frame.
+    // A running run with a known span shows all of it from its first frame.
     return running && run.span ? run.span : windowOf(run.domain, running)
   })
-  /** The run in a line: what it is, how it stands, and how much of it there is. */
+  /** The run in one line: name, state and sample count. */
   const about = $derived(
     run
       ? `${run.name} · ${run.state} · ${run.frames.toLocaleString()} samples`
@@ -77,9 +80,7 @@
         ? 'These results belong to an earlier case revision.'
         : null,
   )
-  const same = (a: Domain | undefined, b: Domain | undefined) =>
-    a?.[0] === b?.[0] && a?.[1] === b?.[1]
-  /** Every signal the run on show records (or the runs to come, before the first), type by type. */
+  /** The signals the run on show records, else those the next run will. */
   const signals = $derived.by(() => {
     const schema = view.summary?.schema
     if (!schema) return []
@@ -93,7 +94,7 @@
   })
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
-  /** The reader turned a plot to `bounds`: every plot follows, and the extension hears once they rest. */
+  /** Every plot follows `bounds` at once; the extension hears once they rest. */
   function turn(bounds: Domain) {
     chosen = bounds
     clearTimeout(telling)
@@ -105,21 +106,22 @@
 
   onMount(() => {
     const stops = [
-      bridge.on((message) => {
-        if (message.kind === 'state') {
+      bridge.on((incoming) => {
+        if (incoming.kind === 'state') {
           const before = view
-          view = merged(view, message.state)
+          view = merged(view, incoming.state)
           appearance(view.settings)
-          // Another run starts at its own times; times the extension chose replace the reader's.
+          // Another run resets the window; one the extension set replaces the user's.
           if (view.run?.id !== before.run?.id) chosen = told = undefined
-          else if (!same(view.window, before.window) && !same(view.window, told)) chosen = undefined
-        } else if (message.kind === 'action') {
-          if (message.command === 'shown') visible = message.value === true
-          else if (message.command === 'resetMonitorWindow') chosen = told = undefined
-          else if (message.command === 'retryMonitor') {
+          else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
+            chosen = undefined
+        } else if (incoming.kind === 'action') {
+          if (incoming.command === 'shown') visible = incoming.value === true
+          else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
+          else if (incoming.command === 'retryMonitor') {
             fault = null
             epoch++
-          } else if (message.command === 'error') fault = String(message.value)
+          } else if (incoming.command === 'error') fault = String(incoming.value)
         }
       }),
       receive(
@@ -128,7 +130,7 @@
           held = begin.held
           fault = null
         },
-        (reason) => (fault = reason instanceof Error ? reason.message : String(reason)),
+        (reason) => (fault = message(reason)),
       ),
       watchTheme(() => (theme = { palette: palette(), font: font() })),
     ]
@@ -255,7 +257,7 @@
     container: monitor / inline-size;
   }
 
-  /* The head is a panel's header: the run where the title stands, then the playback. */
+  /* Styled as a panel header: the plot picker, the run as its title, then playback. */
   .monitor__head {
     display: flex;
     flex-wrap: wrap;
@@ -291,7 +293,7 @@
     flex: 1;
   }
 
-  /* One lane a signal, side by side while there is room, joined by a hairline. */
+  /* Side by side while there is room; the 1px gap shows the border color as hairlines. */
   .monitor__lanes {
     display: grid;
     flex: 1;
@@ -303,7 +305,7 @@
     background: var(--color-border);
   }
 
-  /* Too narrow for one row: the playback takes a row of its own under the run. */
+  /* Too narrow for one row: playback wraps to its own row. */
   @container monitor (max-width: 36rem) {
     .monitor__playback {
       order: 1;

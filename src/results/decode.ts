@@ -1,43 +1,50 @@
-/** Decode native results into one reused staging area; never accumulate a run. */
+/** Decodes native results into one reused staging area, never a whole run at once. */
+
 import { addAbortSignal, type Readable } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
 
 import { failure, type SampleBatch } from '@latkit/model'
 
-import type { Case, Table } from '../gridkit/case.js'
-import type { Field } from '../gridkit/parameters.js'
+import type { Case, Field, Table } from '../gridkit/index.js'
 import { type ArrowField, messages } from './arrow.js'
 import { csvMessages } from './csv.js'
 import { BATCH_BYTES } from './limits.js'
 
-export type ResultFormat = 'arrow' | 'csv'
+type ResultFormat = 'arrow' | 'csv'
+
 /** Decoded frames. Views are borrowed until `publish` settles, then overwritten. */
-export interface Frames {
+interface Frames {
   readonly firstFrame: number
   readonly count: number
   readonly coordinates: Float64Array
   /** Per output field, `count` frames of its rows, frame-major. */
   readonly values: readonly Float64Array[]
 }
-export interface Reading {
+
+interface Reading {
   readonly signal: AbortSignal
-  /** connect's publish resolves after copying into its frame; other consumers copy what they keep. */
+  /** Copies what it keeps of `frames`: their views are overwritten once it settles. */
   readonly publish: (frames: Frames) => void | Promise<void>
 }
-export interface Plan {
+
+/** Where each output's rows are among the columns. */
+interface Plan {
+  /** Per column, 1 when it holds float64, 0 when float32. */
   readonly doubles: Uint8Array
+  /** Per output, the column of each of its rows; -1 where none holds it. */
   readonly columns: readonly Int32Array[]
+  /** Per output, the step between its rows' columns when they are evenly spaced; -1 when not. */
   readonly strides: Int32Array
 }
-/** How a run's results read, learned from their header once: its columns, and the column each
- *  output's row reads. Every page after the first reuses it, so a wide run is not matched name by
- *  name again for each of its frames. */
+
+/** How a run's results read, learned once from their header: its columns, and the column each
+ *  output's row reads. Every page reuses it, so a wide run's names are matched once. */
 export interface Layout {
   fields?: readonly ArrowField[]
   plan?: Plan
 }
 
-/** One sample batch per output field over the same frames; connect sizes them for the wire. */
+/** One sample batch per output field, all over the same frames. */
 export function samplesOf(fields: readonly Field[], frames: Frames): SampleBatch[] {
   return fields.map((field, f) => {
     const values = frames.values[f]!
@@ -61,15 +68,15 @@ export function samplesOf(fields: readonly Field[], frames: Frames): SampleBatch
   })
 }
 
+/** Reads the results in `source`, publishing each batch of frames as it decodes. */
 export async function readResults(
   source: Readable,
   outputs: readonly Field[],
   kase: Case,
   reading: Reading,
-  format: ResultFormat = 'arrow',
-  batchRows = 64,
-  layout: Layout = {},
-): Promise<{ readonly frames: number }> {
+  format: ResultFormat,
+  layout: Layout,
+): Promise<void> {
   let plan: Plan | undefined
   let received = 0
   let lastTime = -Infinity
@@ -83,7 +90,7 @@ export async function readResults(
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
     for await (const message of format === 'csv'
-      ? csvMessages(chunks, batchRows, layout.fields)
+      ? csvMessages(chunks, layout.fields)
       : messages(chunks)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
@@ -112,7 +119,7 @@ export async function readResults(
             throw failure('io', 'Result times must be finite and nondecreasing.')
           lastTime = value
         }
-        // Without outputs, times are still checked and counted.
+        // With no outputs, only the times are checked.
         if (!outputs.length) continue
         const { coordinates, values } = staging.take(count)
         if (message.kind === 'rows') {
@@ -139,7 +146,6 @@ export async function readResults(
       }
     }
     if (!plan) throw failure('io', 'The results contain no schema.')
-    return { frames: received }
   } catch (error) {
     reading.signal.throwIfAborted()
     throw error
@@ -147,7 +153,7 @@ export async function readResults(
 }
 
 /** One run's sample staging, grown to its largest batch and reused for every batch after it.
- *  The copy kernels write every cell, so no batch reads values left by an earlier one. */
+ *  The copy kernels write every cell, so no batch reads values another left. */
 class Staging {
   #coordinates = new Float64Array(0)
   #values: Float64Array[] = []
@@ -298,8 +304,8 @@ function copyRows(
   }
 }
 
-/** A row's column: `<class>_<identity>_<output>`, a bus by its name. */
-function columnName(kase: Case, table: Table, row: number, output: string): string {
+/** The native column of a row's output: `<class>_<identity>_<output>`, a bus by its name. */
+export function columnName(kase: Case, table: Table, row: number, output: string): string {
   const identity =
     table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
   return `${table.shape.type}_${identity}_${output}`
@@ -342,6 +348,7 @@ function placementOf(fields: readonly ArrowField[], outputs: readonly Field[], k
   return { doubles, columns, strides }
 }
 
-function fold(name: string): string {
+/** A column name as names match: NFC-normalized, in lower case. */
+export function fold(name: string): string {
   return name.normalize('NFC').toLowerCase()
 }

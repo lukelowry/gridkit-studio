@@ -1,3 +1,5 @@
+/** The Case table: its place in the panel, its native menu, and edits through the document. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'

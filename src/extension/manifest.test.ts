@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 
 import catalogJson from '../../catalog.json'
-import { catalogOf } from '../gridkit/definition.js'
+import { catalogOf } from '../gridkit/index.js'
 import { menuContext } from '../shared/contexts.js'
 import { defaults, definitions, validateSettings } from '../shared/preferences.js'
 describe('native VS Code contract', () => {
@@ -51,8 +51,7 @@ describe('native VS Code contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    // The side bar folds the case's panels, Mappings and Export among them; what runs record is a
-    // native view of its own under DynamicSimulation.
+    // The side bar holds the case's panels; Monitored Signals is a native tree, not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
       [
         'gridkitStudio.inspector',
@@ -77,7 +76,7 @@ describe('native VS Code contract', () => {
         (view: { id: string }) => view.id === 'gridkitStudio.simulation',
       ).name,
     ).toBe('DynamicSimulation')
-    // Playback and the camera belong to the views; the title bars carry none of their commands.
+    // Playback and camera commands live in the views, not the title bars.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
       manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
     )

@@ -110,7 +110,10 @@ describe('real worker protocol', () => {
       // A malformed newer revision keeps the old projection unavailable to stale edits.
       await expect(call('parse', { ...revision, version: 4, text: '{' }).done).rejects.toThrow()
       await expect(
-        call('edit', { ...revision, id: 'Bus/1', field: 'name', value: 'stale' }).done,
+        call('transact', {
+          ...revision,
+          mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'stale' }],
+        }).done,
       ).rejects.toThrow(/changed/)
       await call('release', { uri: revision.uri }).done
       expect(await call('stats', {}).done).toMatchObject({ sessions: 0, runs: 0, cacheBytes: 0 })

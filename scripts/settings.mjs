@@ -1,6 +1,10 @@
-import { build } from 'esbuild'
+/** Writes the display settings of src/shared/preferences.ts into package.json, after the runtime
+ *  settings it keeps; `--check` fails where package.json differs instead. */
 import { readFile, writeFile } from 'node:fs/promises'
-const result = await build({
+
+import { build } from 'esbuild'
+
+const bundle = await build({
   entryPoints: ['src/shared/preferences.ts'],
   bundle: true,
   write: false,
@@ -8,61 +12,67 @@ const result = await build({
   format: 'esm',
 })
 const { SETTINGS } = await import(
-  'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].contents).toString('base64')
+  'data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].contents).toString('base64')
 )
 const path = new URL('../package.json', import.meta.url)
-const manifest = JSON.parse(await readFile(path, 'utf8'))
-const configurations = Array.isArray(manifest.contributes.configuration)
-  ? manifest.contributes.configuration
-  : [manifest.contributes.configuration]
-const runtime = configurations.find((group) => group.title === 'GridKit Studio') ?? {
-  title: 'GridKit Studio',
-  properties: {},
+const source = await readFile(path, 'utf8')
+const manifest = JSON.parse(source)
+const runtime = manifest.contributes.configuration.find((group) => group.title === 'GridKit Studio')
+
+/** A setting as package.json declares it. `--check` compares key order too. */
+function property(group, setting) {
+  const base = {
+    default: setting.default,
+    scope: 'resource',
+    markdownDescription:
+      [group.label, setting.label].filter(Boolean).join(' — ') +
+      (setting.description ? '. ' + setting.description : ''),
+  }
+  switch (setting.kind) {
+    case 'choice':
+      return {
+        ...base,
+        type: typeof setting.default,
+        enum: setting.options.map((option) => option.value),
+        enumDescriptions: setting.options.map((option) => option.label),
+      }
+    case 'number': {
+      const type = setting.step === 1 ? 'integer' : 'number'
+      return {
+        ...base,
+        type: setting.default === null ? [type, 'null'] : type,
+        minimum: setting.min,
+        maximum: setting.max,
+      }
+    }
+    case 'color':
+      return {
+        ...base,
+        markdownDescription: base.markdownDescription + '. Null follows the current VS Code theme.',
+        type: ['string', 'null'],
+        pattern: '^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
+        format: 'color-hex',
+      }
+    default:
+      return { ...base, type: setting.kind === 'boolean' ? 'boolean' : 'string' }
+  }
 }
-for (const key of Object.keys(runtime.properties))
-  if (/^gridkitStudio\.(network|diagram|monitor|accessibility)\./.test(key))
-    delete runtime.properties[key]
+
 const groups = SETTINGS.map((category) => ({
   id: 'gridkitStudio.' + category.id,
   title: 'GridKit Studio: ' + category.label,
   order: ['network', 'diagram', 'monitor', 'accessibility'].indexOf(category.id) + 1,
   properties: Object.fromEntries(
     category.groups.flatMap((group) =>
-      group.settings.map((setting) => {
-        const property = {
-          default: setting.default,
-          scope: 'resource',
-          markdownDescription:
-            [group.label, setting.label].filter(Boolean).join(' — ') +
-            (setting.description ? '. ' + setting.description : ''),
-        }
-        if (setting.kind === 'choice') {
-          property.type = typeof setting.default
-          property.enum = setting.options.map((option) => option.value)
-          property.enumDescriptions = setting.options.map((option) => option.label)
-        } else if (setting.kind === 'number') {
-          property.type = setting.default === null ? ['number', 'null'] : 'number'
-          property.minimum = setting.min
-          property.maximum = setting.max
-          if (setting.step === 1)
-            property.type = setting.default === null ? ['integer', 'null'] : 'integer'
-        } else if (setting.kind === 'color') {
-          property.type = ['string', 'null']
-          property.pattern = '^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$'
-          property.format = 'color-hex'
-          property.markdownDescription += '. Null follows the current VS Code theme.'
-        } else property.type = setting.kind === 'boolean' ? 'boolean' : 'string'
-        return ['gridkitStudio.' + setting.id, property]
-      }),
+      group.settings.map((setting) => ['gridkitStudio.' + setting.id, property(group, setting)]),
     ),
   ),
 }))
 manifest.contributes.configuration = [runtime, ...groups]
-const text = JSON.stringify(manifest, null, 2) + '\n'
 if (process.argv.includes('--check')) {
-  if (JSON.stringify(JSON.parse(await readFile(path, 'utf8'))) !== JSON.stringify(manifest))
+  if (JSON.stringify(JSON.parse(source)) !== JSON.stringify(manifest))
     throw new Error('Native settings are stale. Run pnpm settings.')
-} else await writeFile(path, text)
+} else await writeFile(path, JSON.stringify(manifest, null, 2) + '\n')
 console.log(
   groups.reduce((n, group) => n + Object.keys(group.properties).length, 0) +
     ' display settings contribute to native VS Code Settings.',

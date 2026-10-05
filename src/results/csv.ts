@@ -1,30 +1,30 @@
-/** Numeric CSV with quoted UTF-8 headers. Consume each batch before its storage is reused. */
+/** GridKit's numeric CSV results, under a header of quoted UTF-8 names. */
 
 import { failure } from '@latkit/model'
 
 import type { ArrowField } from './arrow.js'
 import { BATCH_BYTES } from './limits.js'
 
-export type CsvMessage =
+type CsvMessage =
   | { readonly kind: 'schema'; readonly fields: readonly ArrowField[] }
   | {
       readonly kind: 'rows'
       readonly length: number
+      /** `length` rows of `width` numbers, row-major. */
       readonly values: Float64Array
       readonly width: number
     }
 
 const HEADER_CHARS = 16 << 20
 const CELL_CHARS = 1024
+const BATCH_ROWS = 64
 
-/** `known` is the header's columns, when an earlier read of the same results parsed it. */
+/** The header, then batches of rows whose values are reused, so consume each before advancing.
+ *  `known` is the header's columns, when another read of the same results parsed it. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
-  batchRows = 64,
   known?: readonly ArrowField[],
 ): AsyncGenerator<CsvMessage> {
-  if (!Number.isSafeInteger(batchRows) || batchRows < 1)
-    throw new RangeError('CSV batch rows must be positive.')
   let header = ''
   let quoted = false
   let values: Float64Array | undefined
@@ -53,14 +53,14 @@ export async function* csvMessages(
       header = ''
       if (fields.length * 8 > BATCH_BYTES)
         throw failure('resource-limit', 'One CSV frame exceeds 8 MiB of numbers.')
-      capacity = Math.min(batchRows, Math.floor(BATCH_BYTES / (8 * fields.length)))
+      capacity = Math.min(BATCH_ROWS, Math.floor(BATCH_BYTES / (8 * fields.length)))
       width = fields.length
       values = new Float64Array(fields.length * capacity)
       yield { kind: 'schema', fields }
       start++
     }
 
-    // Cache the next newline: searching for it again for every comma is quadratic on wide cases.
+    // Keep the next newline: searching again for every comma is quadratic in a wide case.
     let newline = text.indexOf('\n', start)
     let comma = text.indexOf(',', start)
     while (start < text.length) {
@@ -98,7 +98,7 @@ export async function* csvMessages(
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
 }
 
-/** A final newline terminates an otherwise complete last record; blank records are ignored. */
+/** `source` as text, with a newline after it to end a last record that has none. */
 async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
   const decoder = new TextDecoder('utf-8', { fatal: true })
   for await (const part of source) {
@@ -117,7 +117,7 @@ async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<st
   }
 }
 
-/** Quotes, doubled quotes, commas, and embedded newlines in names; never split an identity on underscores. */
+/** The header's names, each whole: a quoted name may hold doubled quotes, commas and newlines. */
 function headerOf(text: string): string[] {
   if (text.endsWith('\r')) text = text.slice(0, -1)
   const names: string[] = []
@@ -163,7 +163,7 @@ function numberOf(text: string, frame: number, column: number): number {
   let token = text.trim()
   if (token[0] === '"' && token.at(-1) === '"') token = token.slice(1, -1).trim()
   if (token.length === 0) return NaN
-  // Number accepts hexadecimal, octal, and binary literals; GridKit's CSV contains decimal numbers only.
+  // Number accepts hexadecimal, octal and binary literals; GridKit writes decimal numbers only.
   const prefix = token.charCodeAt(1) | 32
   if (!(token.charCodeAt(0) === 48 && (prefix === 120 || prefix === 111 || prefix === 98))) {
     const value = Number(token)

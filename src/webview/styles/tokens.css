@@ -1,9 +1,4 @@
-/*
-  The structural and color tokens every screen is written against, with the colors and the
-  faces read from VS Code theme rather than a palette of Studio's own. A view sits on the
-  surface of the part of VS Code that holds it: the editor, the panel, or the side bar.
-  Higher contrast and reduced motion, asked for by the theme or chosen in the settings, rewrite a few.
-*/
+/* Design tokens drawn from the VS Code theme, and element defaults. */
 
 :root {
   --font-body: var(--vscode-font-family, system-ui, sans-serif);
@@ -13,7 +8,7 @@
   --text-sm: 12px;
   --text-md: var(--vscode-font-size, 13px);
 
-  /* Spacing on a 4px step, with a half step and a wide gutter at the ends. */
+  /* A 4px scale, with a half step and a wide gutter at the ends. */
   --spacing-2xs: 2px;
   --spacing-xs: 4px;
   --spacing-sm: 8px;
@@ -21,11 +16,10 @@
   --spacing-lg: 16px;
   --spacing-xl: 24px;
 
-  /* Fixed heights: a panel header and its controls, and a compact row. */
+  /* Fixed heights: a panel header, a touch target, and a compact row or control. */
   --spacing-header-h: 32px;
   --spacing-touch-h: 44px;
   --spacing-row-h: 28px;
-  --control-h: 28px;
 
   --radius-sm: 2px;
   --radius-md: 4px;
@@ -40,7 +34,6 @@
   --color-border: var(--vscode-panel-border, var(--vscode-widget-border, transparent));
   --color-text-1: var(--vscode-foreground);
   --color-text-2: var(--vscode-descriptionForeground);
-  --color-text-3: var(--vscode-descriptionForeground);
   --color-primary: var(--vscode-button-background);
   --color-on-primary: var(--vscode-button-foreground);
   --color-primary-text: var(--vscode-textLink-foreground);
@@ -49,20 +42,17 @@
   --color-network: var(--vscode-editor-foreground);
   --color-row-hover: var(--vscode-list-hoverBackground);
   --color-selected: var(--vscode-list-inactiveSelectionBackground);
-  --color-red: var(--vscode-errorForeground);
-  --color-red-dim: var(--vscode-inputValidation-errorBackground, var(--color-bg));
+  --color-error-bg: var(--vscode-inputValidation-errorBackground, var(--color-bg));
   --color-error-text: var(--vscode-errorForeground);
   --color-warning-text: var(--vscode-editorWarning-foreground);
   --color-scrollbar: var(--vscode-scrollbarSlider-background);
-  /* The shadow every floating surface casts. */
   --shadow-overlay: 0 4px 12px var(--vscode-widget-shadow, rgb(0 0 0 / 0.36));
 
-  /* The one keyboard focus ring. Every ring is drawn from it, so higher contrast thickens them all. */
+  /* Every focus ring draws from these, so higher contrast thickens them all. */
   --focus-width: 2px;
   --focus-ring: var(--focus-width) solid var(--color-focus-ring);
 
-  /* Motion: one curve for hover states, one for things that appear, and two durations. Every
-     transition reads these, so zeroing the durations stills the whole interface. */
+  /* Every transition reads these, so zeroing the durations stills the interface. */
   --motion-hover: cubic-bezier(0.22, 1, 0.36, 1);
   --motion-entrance: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-fast: 80ms;
@@ -71,6 +61,7 @@
   color-scheme: light dark;
 }
 
+/* Each view sits on the surface of the VS Code part that holds it. */
 body[data-kind='table'],
 body[data-kind='monitor'] {
   --color-bg: var(--vscode-panel-background, var(--vscode-editor-background));
@@ -94,18 +85,16 @@ body[data-motion='reduce'] {
   --motion-mid: 0ms;
 }
 
-/* Each quiet tier steps up one, and every focus ring thickens. */
+/* Higher contrast: quiet text tiers step up to the foreground, and focus rings thicken. */
 body[data-contrast='high'],
 body.vscode-high-contrast {
   --color-border: var(--vscode-contrastBorder, var(--color-text-1));
   --color-text-2: var(--color-text-1);
-  --color-text-3: var(--color-text-1);
   --color-scrollbar: var(--color-text-1);
   --focus-width: 3px;
 }
 
-/* Element defaults: no user-agent margins, padding or borders; headings and form controls inherit
-   their type; thin scrollbars, one focus ring for every control, and the selection tint. */
+/* Element defaults: no user-agent box spacing or borders; headings and controls inherit type. */
 *,
 *::before,
 *::after {
@@ -134,7 +123,7 @@ body {
   line-height: 1.5;
 }
 
-/* The VS Code pads a webview's body; these views fill theirs. */
+/* VS Code pads a webview's body; these views fill theirs. */
 body[data-kind] {
   padding: 0;
 }
@@ -178,8 +167,7 @@ select {
   display: none !important;
 }
 
-/* The ring shows for keyboard focus only. A control that needs its ring elsewhere moves this one
-   rather than drawing its own. */
+/* Keyboard focus only. Controls reposition this ring rather than drawing their own. */
 :focus-visible {
   outline: var(--focus-ring);
   outline-offset: 2px;

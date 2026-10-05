@@ -1,10 +1,12 @@
+/** The Diagram editor beside the Network: editing, arrangement through the document, settings. */
+
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until } from './harness.js'
+import { stats, type TestHost, testHost, until } from './harness.js'
 
 suite('Diagram', () => {
   let bench: TestHost
@@ -22,7 +24,7 @@ suite('Diagram', () => {
   })
 
   test('draws the case beside its Network', async () => {
-    bench.report.diagram = await diagram.evaluate('gridkitStats()')
+    bench.report.diagram = await stats(diagram)
     await bench.capture('diagram-vscode')
   })
 

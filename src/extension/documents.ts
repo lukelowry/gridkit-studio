@@ -3,13 +3,21 @@ import * as vscode from 'vscode'
 
 import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
+
+/** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
+export function isWritable(document: vscode.TextDocument) {
+  return vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) !== false
+}
+
 interface Entry {
   document: vscode.TextDocument
   summary?: Summary
   pending?: Promise<Summary>
   controller?: AbortController
   timer?: ReturnType<typeof setTimeout>
+  /** The version the worker's source mirror holds. */
   workerVersion?: number
+  /** Edits since `workerVersion`, sent as a delta on the next parse. */
   changes: SourceEdit[][]
   editing?: Promise<void>
   stale: boolean
@@ -46,7 +54,7 @@ export class Documents {
         const entry = this.entries.get(uri)
         if (!entry) return
         entry.controller?.abort()
-        clearTimeout(entry?.timer)
+        clearTimeout(entry.timer)
         this.entries.delete(uri)
         this.changed.fire(uri)
         this.diagnostics.delete(document.uri)
@@ -90,6 +98,7 @@ export class Documents {
     const pending = this.client
       .call('parse', input, controller.signal)
       .catch((error) => {
+        // The worker's mirror is not at the delta's base: resend the whole text.
         if (
           error.message === 'Source mirror is stale.' &&
           !controller.signal.aborted &&
@@ -153,7 +162,6 @@ export class Documents {
     entry.pending = pending
     return pending
   }
-  /** Every surface commits through this serialized, revision-checked native text boundary. */
   edit(uri: string, expected: number, element: Element & { field: string }, value: Value) {
     return this.transact(
       uri,
@@ -162,6 +170,8 @@ export class Documents {
       'Edit ' + element.field,
     )
   }
+  /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
+   *  checked against revision `expected`. */
   transact(
     uri: string,
     expected: number,
@@ -175,8 +185,7 @@ export class Documents {
         throw new Error('The case document is closed.')
       if (entry.document.version !== expected || entry.stale)
         throw new Error('The document changed. Refresh before editing.')
-      if (vscode.workspace.fs.isWritableFileSystem(entry.document.uri.scheme) === false)
-        throw new Error('This document is read-only.')
+      if (!isWritable(entry.document)) throw new Error('This document is read-only.')
     }
     const pending = (entry.editing ?? Promise.resolve())
       .catch(() => {})

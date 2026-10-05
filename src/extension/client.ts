@@ -2,16 +2,33 @@ import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import type { DataBatch } from '@latkit/model'
-import { EventEmitter, type ExtensionContext } from 'vscode'
+import { type CancellationToken, EventEmitter, type ExtensionContext } from 'vscode'
 
-import { terminateRuntime } from '../gridkit/runtime.js'
+import { terminateRuntime } from '../gridkit/index.js'
 import type { FromWorker, Method, Requests, RuntimeProcess } from '../shared/messages.js'
+
+/** Run `run` with a signal that aborts when `token` is cancelled. */
+export async function cancellable<T>(
+  token: CancellationToken | undefined,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController()
+  const subscription = token?.onCancellationRequested(() => controller.abort())
+  if (token?.isCancellationRequested) controller.abort()
+  try {
+    return await run(controller.signal)
+  } finally {
+    subscription?.dispose()
+  }
+}
 
 export class Client {
   #worker?: Worker
   #next = 0
   #disposed = false
+  /** The GridKit process the worker runs for each case, terminated here if the worker dies. */
   #owned = new Map<string, RuntimeProcess>()
+  /** Pending teardown of a failed worker; calls wait for it before starting another. */
   #cleanup?: Promise<void>
   #pending = new Map<
     number,

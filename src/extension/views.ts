@@ -4,6 +4,7 @@ import { type DataBatch, type Domain, type FieldSelection, staticFields } from '
 import * as vscode from 'vscode'
 
 import { recordedWhole } from '../shared/bindings.js'
+import { message } from '../shared/format.js'
 import {
   type FromView,
   type RunInfo,
@@ -15,20 +16,21 @@ import {
   type ViewRequests,
   type ViewState,
 } from '../shared/messages.js'
+import type { SettingsValues } from '../shared/preferences.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import { type Held, holdFor } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
 import { VideoFile } from './video.js'
 
-/** A run's samples a view holds whole; past it the view holds a window of them. */
+/** The most run samples a view holds whole; past it the view holds a window of them. */
 const WHOLE_RUN_BYTES = 48 << 20
-/** The most a video export holds: every frame of what it draws, over the times it covers. */
+/** The most a video export holds: every frame it draws, over the times it covers. */
 const EXPORT_BYTES = 1 << 30
 /** Results decode to float64. */
 const SAMPLE_BYTES = 8
 /** The views that draw the case, and so are streamed its rows and samples. */
 const DRAWN: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor', 'export'])
-/** The commands a view may ask for. */
+/** The commands a webview may run. */
 const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
   'plot',
@@ -37,7 +39,7 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'stop',
   'chooseSignals',
 ])
-/** What a view that draws nothing itself shows of the case; it hears of nothing else. */
+/** The state each non-drawing view shows; it is sent state only when this changes. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
   table: ({ version, stale, error, writable, selection, bindings, table }) => [
     version,
@@ -59,16 +61,15 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
   bindings: ({ uri, stale, error, bindings, editing }) => [uri, stale, error, bindings, editing],
 }
 
-/** What becomes of a view while it is hidden: destroyed with its webview, kept but idle, or kept
- *  at work. */
+/** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
 type Hidden = 'destroyed' | 'idle' | 'working'
 
 /** What a view is streamed. */
 interface Demand {
-  /** The rows' identity: when it changes, they replace the case the view holds. */
+  /** Identity of the static rows; a change replaces what the view holds. */
   base: string
   statics: FieldSelection[]
-  /** The samples' identity: while it holds, the frames a run adds are appended. */
+  /** Identity of the sampled fields; while it holds, new frames are appended. */
   samples: string
   sampled: FieldSelection[]
   run?: RunInfo
@@ -90,10 +91,10 @@ function html(
 <link rel="stylesheet" href="${asset('dist/webview/' + entry + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
-export class View {
+class View {
   #requests = new Map<number, AbortController>()
   #summary?: Summary
-  #settings?: import('../shared/preferences.js').SettingsValues
+  #settings?: SettingsValues
   #shown = ''
   #ready = false
   #disposed = false
@@ -106,21 +107,21 @@ export class View {
   #pages = 0
   #frames = 0
   #held?: Held
-  /** The demand that last failed, which is not asked for again until it changes. */
+  /** The last demand that failed; it is not retried until it changes. */
   #failed = ''
   #failure = ''
-  /** Whether the view needs another look, and the look under way. */
+  /** Whether another update is due, and the update in progress. */
   #again = false
   #running?: Promise<void>
-  /** The newest clock change this view made itself. */
+  /** The sequence number of the latest transport change this view made. */
   #seq = 0
   /** The times a network holding a window of the run needs next. */
   #need?: Domain
-  /** What a video export asked to hold. */
+  /** The data a video export asked for. */
   #video?: ViewRequests['videoData']['input']
   #files = new Map<number, VideoFile>()
   #file = 0
-  /** Whether the view is doing something it must not be replaced during. */
+  /** Whether the view is mid-task and must not be replaced. */
   busy = false
   readonly disposables: vscode.Disposable[] = []
   constructor(
@@ -164,7 +165,7 @@ export class View {
             this.tick()
             void this.update().catch(report)
           } else if (hidden === 'destroyed') {
-            // The view that replaces a destroyed one starts over.
+            // The webview is destroyed; its replacement sends 'ready' again.
             this.#ready = false
             this.cancel(true)
           }
@@ -176,7 +177,7 @@ export class View {
   send(message: ToView) {
     return this.panel.webview.postMessage(message)
   }
-  /** Tell the view the clock, settled as it is sent. */
+  /** Send the view a snapshot of the clock. */
   tick() {
     const session = this.studio.all.get(this.uri)
     if (!session || !this.#ready || !this.panel.visible) return
@@ -253,7 +254,7 @@ export class View {
         this.studio.bind(this.uri, message.field, message.channels, message.domain)
         return
       case 'editing':
-        // Kept so the panel opens as it was left; the view that said so knows already.
+        // Kept so the panel reopens as it was left; no update, as the sender already knows.
         if (session) session.editing = message.field ?? undefined
         return
       case 'values':
@@ -294,7 +295,7 @@ export class View {
         return this.answer(message.id, message.method, message.input)
     }
   }
-  /** Answer the view's request `id`, unless it gave up on it. */
+  /** Reply to the view's request `id` unless it was cancelled. */
   async answer(id: number, method: keyof ViewRequests, input: unknown) {
     if (this.#requests.size >= 16) {
       await this.send({ kind: 'reply', id, error: 'Too many pending requests.' })
@@ -310,7 +311,7 @@ export class View {
         await this.send({
           kind: 'reply',
           id,
-          error: error instanceof Error ? error.message : String(error),
+          error: message(error),
         })
     } finally {
       this.#requests.delete(id)
@@ -378,7 +379,7 @@ export class View {
         query.limit! > 100
       )
         throw new Error('Invalid row query')
-      // A row read at a time reads the run on show.
+      // A query `at` a time reads the shown run.
       const run = query.at === undefined ? undefined : studio.all.get(uri)?.run?.id
       return studio.client.call(
         'query',
@@ -390,8 +391,7 @@ export class View {
       const edit = input as ViewRequests['transact']['input']
       return studio.documents.transact(uri, edit.version, [...edit.mutations], edit.label)
     }
-    const edit = input as ViewRequests['edit']['input']
-    return studio.documents.edit(uri, edit.version, edit, edit.value)
+    throw new Error('Unknown view request: ' + method)
   }
   /** Bring the view up to date; resolves once it is. */
   update(): Promise<void> {
@@ -419,7 +419,7 @@ export class View {
       state.summary !== this.#summary ||
       state.settings !== this.#settings
     ) {
-      // The summary and the settings are large and change seldom: each is sent when it has.
+      // The summary and settings are large and change seldom; each is sent only when it changed.
       const sent = { ...state }
       if (state.summary === this.#summary) delete sent.summary
       if (state.settings === this.#settings) delete sent.settings
@@ -439,13 +439,12 @@ export class View {
     if (key === this.#failed) return
     await this.#streamed(state.summary, demand, base, append, key)
   }
-  /** What the view draws: the rows of the types it shows, and the samples of the fields bound to
-   *  the network and plotted, whole while they are few and over a window of the run past that. */
+  /** The rows the view draws, and the samples it binds or plots: the whole run while it is small,
+   *  a window of it past that. */
   #demand(summary: Summary, shown: RunInfo | undefined, session: Session): Demand | undefined {
     const { kind } = this
     const video = this.#video
     if (kind === 'export' && !video) return undefined
-    const draws = (view: VideoView) => this.#draws(view)
     const { schema } = summary
     const bindings = Object.values(session.bindings)
     const network = networkOf(schema)
@@ -466,11 +465,10 @@ export class View {
         ),
       }))
       .filter((field) => field.select.length > 0)
-    // The network draws only a run of the case as it stands; a plot draws whichever run is on show.
+    // The network draws only a run of the current revision; plots draw whichever run is shown.
     const current = shown?.fingerprint === summary.fingerprint
-    // The worker publishes a run's result pages before reporting its first samples. Until then
-    // only stream the case; the run ID does not yet identify readable results.
-    const run = shown?.frames && (draws('monitor') || current) ? shown : undefined
+    // A run's results are readable only once it reports frames; until then only the case streams.
+    const run = shown?.frames && (this.#draws('monitor') || current) ? shown : undefined
     const base =
       (kind === 'monitor' && run ? run.fingerprint : summary.fingerprint) +
       ':' +
@@ -485,14 +483,15 @@ export class View {
       else if (!id) delete found.ids
       else if (found.ids && !found.ids.includes(id)) found.ids.push(id)
     }
-    if (draws('network') && current)
+    if (this.#draws('network') && current)
       for (const binding of bindings)
         if (
           schema.types[binding.type]?.fields[binding.field]?.sampled &&
           recordedWhole(shown.outputs, summary.counts[binding.type] ?? 0, binding)
         )
           add(binding.type, binding.field)
-    if (draws('monitor')) for (const plot of session.plots) add(plot.from, plot.field, plot.id)
+    if (this.#draws('monitor'))
+      for (const plot of session.plots) add(plot.from, plot.field, plot.id)
     const sampled = [...fields.values()].map(({ from, select, ids }): FieldSelection => ({
       from,
       select,
@@ -521,12 +520,12 @@ export class View {
       ...(video && { maxBytes: EXPORT_BYTES }),
     }
   }
-  /** Whether the view draws what `view` shows: itself, or a video of it. */
+  /** Whether this view draws `view`, as itself or in a video export. */
   #draws(view: VideoView): boolean {
     return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
   }
-  /** The window of `run` the view holds: the Monitor's visible times, or the few seconds about
-   *  the Network's playhead. A view at the run's head holds from there on. */
+  /** The window of `run` to hold: the Monitor's visible times, or a few seconds around the
+   *  playhead. A view following the run's head holds an open-ended window. */
   #window(run: RunInfo, session: Session): Held {
     const { transport } = session
     const [start, end] = run.domain
@@ -564,7 +563,7 @@ export class View {
           }),
       })
       let sequence = 0
-      // One batch at a time: the next is sent once the view has taken this one.
+      // Backpressure: the next batch waits for the view to ack this one.
       const consume = async (batches: readonly DataBatch[]) => {
         controller.signal.throwIfAborted()
         await new Promise<void>((resolve, reject) => {
@@ -617,7 +616,7 @@ export class View {
     } catch (error) {
       if (controller.signal.aborted) return
       this.#failed = key
-      this.#failure = error instanceof Error ? error.message : String(error)
+      this.#failure = message(error)
       studio.output.error(this.#failure)
       await this.send({ kind: 'action', command: 'error', value: this.#failure })
     }
@@ -630,7 +629,7 @@ export class View {
     for (const disposable of this.disposables) disposable.dispose()
   }
 }
-/** What each panel says before a case is open. */
+/** Each panel's placeholder while no case is open. */
 const EMPTY: Record<Exclude<ViewKind, 'network' | 'diagram'>, string> = {
   table: 'Open a GridKit case to inspect its fields.',
   monitor: 'Open a GridKit case to inspect its recorded signals.',
@@ -646,9 +645,9 @@ export function registerViews(studio: Sessions) {
         'gridkitStudio.' + kind,
         {
           resolveCustomTextEditor(document, panel) {
-            // A canvas keeps its webview while hidden, so showing it again costs nothing.
+            // A canvas keeps its webview while hidden, so showing it again is free.
             new View(studio, panel, document.uri.toString(), kind, 'idle')
-            // Let VS Code display and initialize the webview while the worker parses.
+            // Not awaited, so the webview loads while the worker parses.
             void studio.open(document).catch((error) => studio.output.error(String(error)))
           },
         },
@@ -659,8 +658,8 @@ export function registerViews(studio: Sessions) {
       ),
     )
   for (const kind of ['table', 'monitor', 'simulation', 'bindings', 'export'] as const) {
-    // An export goes on while its panel is folded away.
-    // The Monitor is hidden by every run's terminal and shown again after: it is kept, idle.
+    // An export keeps working while its panel is collapsed. Each run's terminal hides the
+    // Monitor, so it is kept idle rather than destroyed.
     const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'
     subscriptions.push(
       vscode.window.registerWebviewViewProvider(

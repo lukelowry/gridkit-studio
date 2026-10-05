@@ -103,7 +103,7 @@ describe('a container run', () => {
     expect(args).not.toContain('--user')
   })
 
-  it('leaves what a run writes to the reader on Linux, for Docker and rootless Podman alike', () => {
+  it('leaves what a run writes readable by the user on Linux, for Docker and rootless Podman alike', () => {
     const docker = run('linux', false).join(' ')
     expect(docker).toContain('--user 1000:100')
     expect(docker).toContain('/runs/run-1:/simulation:Z')

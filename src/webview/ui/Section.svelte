@@ -1,16 +1,13 @@
 <!-- @component
-  Titled group of rows.
+  A titled group of rows.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import type { HTMLAttributes } from 'svelte/elements'
 
   let {
     label,
     children,
-    class: className,
-    ...rest
-  }: Omit<HTMLAttributes<HTMLElement>, 'children'> & {
+  }: {
     /** The heading, and the region's accessible name. */
     readonly label: string
     readonly children: Snippet
@@ -19,7 +16,7 @@
   const id = $props.id()
 </script>
 
-<section {...rest} class={['section', className]} aria-labelledby={id}>
+<section class="section" aria-labelledby={id}>
   <h2 {id} class="section__title">{label}</h2>
   <div class="section__body">{@render children()}</div>
 </section>
@@ -31,8 +28,7 @@
     min-width: 0;
   }
 
-  /* Stacked sections keep a gap between one heading and the rows above it. The earlier section is
-     another instance of this component, so it can only be matched globally. */
+  /* The previous section is another instance, so it matches only globally. */
   :global(.section) + .section {
     margin-block-start: var(--spacing-lg);
   }

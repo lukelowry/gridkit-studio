@@ -1,12 +1,12 @@
 /**
- * The benchmark regression gate, after latkit's.
+ * The benchmark regression gate for views.ts.
  *
  *   node tests/benchmarks/gate.mjs base.json head.json   check head's work against work.json
  *   node tests/benchmarks/gate.mjs --update head.json    record head's work as work.json
  *
- * It fails only when exact work per run grows. Timings vary between runs, even on one machine, so it
- * reports scenarios that ran slower than the base, and time per bus that grows faster than linearly
- * across the cases, without failing.
+ * It fails only when exact work per run grows. Timings vary between runs, even on one machine, so
+ * it reports, without failing, scenarios slower than the base and time per bus that grows faster
+ * than linearly across the cases.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 
@@ -66,7 +66,7 @@ if (basePath && existsSync(basePath)) {
   }
 } else notes.push('no base timings; skipped the comparison against the base')
 
-// 3. Time per bus may grow at most 3× from the smallest case to the largest.
+// 3. Time per bus may grow at most SUPERLINEAR times from the smallest case to the largest.
 const scaled = new Map()
 for (const [name, samples] of Object.entries(head.timings)) {
   // Groups are named `<view> <size> buses`, such as `network 2000 buses`.
@@ -86,8 +86,7 @@ for (const [name, points] of scaled) {
 }
 
 for (const note of notes) console.log(note)
-if (timed.length)
-  console.log('Timings to check by hand; one run can differ by 1.5×:\n' + timed.join('\n'))
+if (timed.length) console.log('Timings to check by hand; single runs vary:\n' + timed.join('\n'))
 if (failures.length) {
   console.error(failures.join('\n'))
   process.exit(1)

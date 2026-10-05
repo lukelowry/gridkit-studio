@@ -20,7 +20,7 @@ describe('bindings', () => {
     expect(channelsOf(second, kv)).toEqual(['vertexSize'])
     expect(second.vertexColor).toEqual({ ...vm, domain: [0.9, 1.1] })
     expect(second.vertexHeight).toEqual({ ...vm, domain: [0.9, 1.1] })
-    // The earlier bindings are untouched: each change is a new record.
+    // Each change returns a new record and leaves its input untouched.
     expect(first.vertexColor).toEqual(kv)
   })
 

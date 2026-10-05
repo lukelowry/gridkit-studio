@@ -18,7 +18,7 @@
   import Icon from '../ui/Icon.svelte'
   import Editor from './Editor.svelte'
 
-  /** The two kinds of field every type lists, parameters first: its own data, then what runs record. */
+  /** The field groups each type lists: case parameters, then signals that runs record. */
   const KINDS = [
     { id: 'parameters', label: 'Parameters', kind: 'column' },
     { id: 'variables', label: 'Signals', kind: 'signal' },
@@ -33,21 +33,20 @@
   }
 
   let view = $state.raw<ViewState>({})
-  /** The search over the fields. */
   let query = $state('')
-  /** The field the editor is open for, and the channels checked for it, applied only on Apply. */
+  /** The field the editor is open for, and its checked channels, applied only on Apply. */
   let editing = $state.raw<FieldRef | null>(null)
   let checked = $state.raw<readonly Channel[]>([])
   /** What the last Apply did, for a screen reader. */
   let said = $state('')
-  /** The field button whose editor is open, which gets focus back when the editor closes. */
+  /** The field button that opened the editor; focus returns to it on close. */
   let opener: HTMLButtonElement | null = null
 
   const bindings = $derived(view.bindings ?? {})
   const needle = $derived(query.trim().toLocaleLowerCase())
 
-  /** The drawn types that have rows, each with its numeric fields of both kinds that match the
-   *  search. A type none of whose fields match drops out while a search is on. */
+  /** Drawn types with rows, each with its numeric fields by kind that match the search; a type with
+   *  no match drops out while a search is on. */
   const owners = $derived.by(() => {
     const summary = view.summary
     if (!summary) return []
@@ -89,21 +88,19 @@
     ),
   )
 
-  /** Whether `field` is the one the editor is open for. */
   const isEditing = (field: Listed): boolean => editing !== null && sameField(editing, field.ref)
 
-  /** Whether `owner` lists the field the editor is open for; a search can leave it out, and then the
-   *  editor shows nowhere. */
+  /** Whether `owner` lists the edited field; a search can hide it, and then no editor shows. */
   const listsEditing = (owner: (typeof owners)[number]): boolean =>
     owner.groups.some((group) => group.fields.some(isEditing))
 
-  /** The field the editor is open for, as listed. */
+  /** The edited field as listed; null while the search hides it. */
   const edited = $derived(
     owners.flatMap((owner) => owner.groups.flatMap((group) => group.fields)).find(isEditing) ??
       null,
   )
 
-  /** What a field's button says: its tooltip, and its name for assistive technology. */
+  /** A field button's tooltip and accessible name. */
   function captions(field: Listed, bound: string): { title: string; name: string } {
     const channels = channelsOf(bindings, field.ref)
     const name =
@@ -113,38 +110,41 @@
     return { title: `${field.label} — ${bound || 'Map to display'}`, name }
   }
 
-  /** Open the editor for `field`, or close it with none; the extension keeps which, so the panel
-   *  opens as it was left. */
-  function edit(field: FieldRef | null): void {
+  /** Show the editor for `field` with its bound channels checked, or hide it for null. */
+  function show(field: FieldRef | null): void {
     editing = field
     checked = field ? channelsOf(bindings, field) : []
+  }
+
+  /** Like `show`, and tells the extension, so the panel reopens as it was left. */
+  function edit(field: FieldRef | null): void {
+    show(field)
     bridge.send({ kind: 'editing', field })
   }
 
-  /** Open the editor for `field` from `button`, or close it when it is open for `field` already. */
   function toggle(field: Listed, button: HTMLButtonElement): void {
     opener = button
     edit(isEditing(field) ? null : field.ref)
   }
 
-  /** Close the editor, and give focus back to the field it was open for. */
-  async function closeEditor(): Promise<void> {
-    edit(null)
+  async function refocus(): Promise<void> {
     await tick()
     if (opener?.isConnected) opener.focus()
   }
 
-  /** The editor applied `channels` to `field`. */
+  function closeEditor(): void {
+    edit(null)
+    void refocus()
+  }
+
+  /** The editor applied `channels` to `field`; the bind message clears the extension's editing. */
   function applied(field: Listed, channels: readonly Channel[]): void {
     said =
       channels.length === 0
         ? `${field.label} display bindings cleared.`
         : `${field.label} bound to ${fullNames(channels)}.`
-    editing = null
-    checked = []
-    void tick().then(() => {
-      if (opener?.isConnected) opener.focus()
-    })
+    show(null)
+    void refocus()
   }
 
   onMount(() => {
@@ -153,13 +153,10 @@
       const before = view.editing
       view = merged(view, message.state)
       appearance(view.settings)
-      // A field VS Code asked to map opens its editor, as one left open does again.
+      // A field VS Code asked to map opens its editor, as does one left open.
       const field = view.editing ?? null
       const moved = field ? !sameField(before, field) : before !== undefined
-      if (moved && (field ? !sameField(editing ?? undefined, field) : editing !== null)) {
-        editing = field
-        checked = field ? channelsOf(view.bindings ?? {}, field) : []
-      }
+      if (moved && (field ? !sameField(editing ?? undefined, field) : editing !== null)) show(field)
     })
     bridge.send({ kind: 'ready' })
     return stop
@@ -269,7 +266,7 @@
                   field={field.ref}
                   label={field.label}
                   bind:checked
-                  close={() => void closeEditor()}
+                  close={closeEditor}
                   save={(channels) => applied(field, channels)}
                 />
               {/key}
@@ -310,7 +307,7 @@
     overscroll-behavior: contain;
   }
 
-  /* One type: its name over its parameters and signals in two columns, and the editor beneath. */
+  /* A type: its name, its two field groups side by side, then the editor. */
   .bindings__class + .bindings__class {
     margin-block-start: var(--spacing-md);
     border-block-start: 1px solid var(--color-border);
@@ -347,11 +344,11 @@
 
   .bindings__none {
     padding: var(--spacing-xs);
-    color: var(--color-text-3);
+    color: var(--color-text-2);
     font-size: var(--text-xs);
   }
 
-  /* A field: its label, what it drives in a word or two, and a link glyph, all one button. */
+  /* A field button: its label, its bound channels in short, and a link glyph. */
   .bindings__field {
     display: flex;
     gap: var(--spacing-xs);
@@ -403,7 +400,7 @@
   .bindings__glyph {
     display: flex;
     flex: 0 0 auto;
-    color: var(--color-text-3);
+    color: var(--color-text-2);
   }
 
   /* A bound field's summary and glyph take the accent. */

@@ -8,14 +8,13 @@ import {
   windowRuns,
 } from './listbox.js'
 
-/** Whether a slot holds a row rather than a heading. */
 const isRow = <T>(slot: OptionGroup | OptionRow<T>): slot is OptionRow<T> => 'nav' in slot
 
 describe('the listbox model', () => {
-  it('gives headings and rows one slot each, and skips disabled rows in keyboard order', () => {
+  it('gives headings and rows one slot each, and keyboard positions to rows alone', () => {
     const index = indexOptions([
       { value: 'a', label: 'Alpha', group: 'First' },
-      { value: 'b', label: 'Beta', group: 'Second', disabled: true },
+      { value: 'b', label: 'Beta', group: 'Second' },
       { value: 'c', label: 'Gamma', group: 'First' },
     ])
     const layout = layoutOptions(index, 'None')
@@ -27,10 +26,10 @@ describe('the listbox model', () => {
       '# Second',
       'b',
     ])
-    expect(layout.nav.map((row) => row.value)).toEqual([null, 'a', 'c'])
+    expect(layout.nav.map((row) => row.value)).toEqual([null, 'a', 'c', 'b'])
     expect(layout.navOf.get('c')).toBe(2)
-    expect(layout.navOf.has('b')).toBe(false)
-    expect(layout.slots.filter(isRow).map((row) => row.nav)).toEqual([0, 1, 2, -1])
+    expect(layout.navOf.get('b')).toBe(3)
+    expect(layout.slots.filter(isRow).map((row) => row.nav)).toEqual([0, 1, 2, 3])
     expect(index.byKey.get('b')?.label).toBe('Beta')
   })
 

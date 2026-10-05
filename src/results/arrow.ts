@@ -10,7 +10,7 @@ export interface ArrowField {
   readonly type: 'float32' | 'float64'
 }
 
-export interface BatchHeader {
+interface BatchHeader {
   readonly length: number
   /** Per field, in pre-order, its length and null count. */
   readonly nodes: Float64Array
@@ -19,7 +19,7 @@ export interface BatchHeader {
 }
 
 /** A message as it arrives: a schema, or a batch and its 8-byte aligned body. */
-export type Message =
+type Message =
   | {
       readonly kind: 'schema'
       readonly fields: readonly ArrowField[]
@@ -35,7 +35,6 @@ type Header =
 const HEADER = { schema: 1, batch: 3 } as const
 const FLOAT = 3
 const CONTINUATION = 0xffffffff
-// Reading ------------------------------------------------------------------------------------------------
 
 /** A flatbuffer table: its fields by slot. */
 class Table {
@@ -164,12 +163,9 @@ function readField(field: Table): ArrowField {
   }
 }
 
-/** Parse metadata once and reuse aligned body buffers. Consume each batch before advancing. */
-export async function* messages(
-  source: AsyncIterable<Uint8Array>,
-  maxMessageBytes = MESSAGE_BYTES,
-): AsyncGenerator<Message> {
-  const unread = new Unread(maxMessageBytes)
+/** The messages in `source`; each batch's body is reused for the next, so consume it first. */
+export async function* messages(source: AsyncIterable<Uint8Array>): AsyncGenerator<Message> {
+  const unread = new Unread()
   for await (const bytes of source) {
     unread.push(bytes)
     for (let next = unread.next(); next !== null; next = unread.next()) {
@@ -182,7 +178,6 @@ export async function* messages(
 
 /** Bytes that arrived and are not read yet. */
 class Unread {
-  constructor(private readonly maxMessageBytes: number) {}
   #pieces: Uint8Array[] = []
   #length = 0
   /** The message whose metadata is in: where its body starts, and how long it is. */
@@ -200,7 +195,7 @@ class Unread {
     this.#length += bytes.length
   }
 
-  /** The next whole message; 'skipped' for another kind, 'end' at the end marker, null until more arrives. */
+  /** The next message, 'skipped' for another kind, 'end' at the end, or null until more arrives. */
   next(): Message | 'skipped' | 'end' | null {
     if (this.#pending === null) {
       if (this.#length < 4) return null
@@ -208,7 +203,7 @@ class Unread {
       const prefix = first === CONTINUATION ? 8 : 4
       if (this.#length < prefix) return null
       const size = prefix === 8 ? this.#uint32(4) : first
-      if (size > this.maxMessageBytes)
+      if (size > MESSAGE_BYTES)
         throw failure('resource-limit', 'Arrow metadata exceeds the message budget.')
       if (size === 0) {
         this.#drop(prefix)
@@ -222,7 +217,7 @@ class Unread {
       if (
         !Number.isSafeInteger(bodyLength) ||
         bodyLength < 0 ||
-        prefix + size + bodyLength > this.maxMessageBytes
+        prefix + size + bodyLength > MESSAGE_BYTES
       )
         throw failure('resource-limit', 'Arrow message exceeds the message budget.')
       this.#pending = { header, start: prefix + size, body: bodyLength }

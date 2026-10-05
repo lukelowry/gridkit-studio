@@ -44,6 +44,12 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
 
+## Author
+
+[Luke Lowery](https://lukelowry.github.io/), PhD student in the [Birchfield Research Group](https://birchfield.engr.tamu.edu/) at Texas A&M University · [Google Scholar](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) · [ORCID](https://orcid.org/0009-0000-0029-3403)
+
 ## License
 
-MIT. See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled code, case data, and map borders. Made by [Luke Lowery](https://lukelowry.github.io/).
+[MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md).
+
+Uses [GridKit](https://github.com/ORNL/GridKit) from Oak Ridge National Laboratory and cases from the [Texas A&M Electric Grid Test Case Repository](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/).

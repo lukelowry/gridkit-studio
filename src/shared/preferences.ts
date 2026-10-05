@@ -495,8 +495,8 @@ export const SETTINGS = [
             label: 'Edge color',
             description: 'Edges while no field drives their color.',
             default: null,
-            placeholder: 'Theme',
-            swatch: 'var(--color-text-3)',
+            placeholder: 'Average of its ends',
+            swatch: 'var(--color-network)',
           },
           {
             kind: 'color',

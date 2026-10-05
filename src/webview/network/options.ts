@@ -64,8 +64,7 @@ export function networkOptions(
       highlight ? s.get('network.selectedAlpha') : 0,
     ],
     vertexBaseColor: color(s.get('network.vertexBaseColor'), palette.network),
-    // A branch carries no bus value: one theme color unless a branch field drives it. Null would
-    // blend each line between its ends' colors.
-    edgeBaseColor: color(s.get('network.edgeBaseColor'), palette.text3),
+    // Null colors each edge with the average of its two ends' colors.
+    edgeBaseColor: color(s.get('network.edgeBaseColor')),
   }
 }

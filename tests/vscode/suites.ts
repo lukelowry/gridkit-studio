@@ -2,6 +2,7 @@
  *  its Network editor, so the order is only the order of the report. */
 
 import './run.test.js'
+import './wecc.test.js'
 import './network.test.js'
 import './diagram.test.js'
 import './table.test.js'

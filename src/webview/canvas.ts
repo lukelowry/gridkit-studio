@@ -464,7 +464,10 @@ function boot() {
   })
   const unwatch = watchTheme(paint)
   // Tests and the performance command read what the renderer drew; nothing is kept for them.
-  ;(window as { gridkitStats?: () => unknown }).gridkitStats = () => view?.stats()
+  // The view's own counters, and its GPU's cumulative work (queries, uploads, allocations), which
+  // the benchmarks hold to tests/benchmarks/work.json.
+  ;(window as { gridkitStats?: () => unknown }).gridkitStats = () =>
+    view && { ...view.stats(), ...owner.gpu?.stats() }
   document.addEventListener('visibilitychange', () =>
     view?.set({ paused: !shown || document.hidden }),
   )

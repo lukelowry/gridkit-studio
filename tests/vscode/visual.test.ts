@@ -94,7 +94,7 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
         await compare('network-' + name, network.locator('canvas'))
       })
 
-    test('mapped vertex colors leave each edge one color', async () => {
+    test('mapped vertex colors give each edge the average of its ends', async () => {
       await themed('Default Dark Modern', 'vscode-dark')
       const field = { type: 'Bus', field: 'init.Vr' }
       bench.studio.bind(bench.key, field, ['vertexColor'])

@@ -8,7 +8,7 @@ import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
 import { dynamicSimulation } from '../../src/gridkit/runtime.js'
-import { type TestHost, testHost, until, visible, VM } from './harness.js'
+import { colored, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 suite('Run', function () {
   // A run of the whole case takes what GridKit takes.
@@ -86,12 +86,10 @@ suite('Run', function () {
     )
     assert.ok(followed, 'The playhead follows a run as it arrives')
     const plot = PNG.sync.read(await monitor.locator('canvas').screenshot())
-    let colored = 0
-    for (let i = 0; i < plot.data.length; i += 4) {
-      const rgb = [plot.data[i]!, plot.data[i + 1]!, plot.data[i + 2]!]
-      if (Math.max(...rgb) - Math.min(...rgb) > 30) colored++
-    }
-    assert.ok(colored > plot.width, 'Native traces must be painted, not just axes and a playhead')
+    assert.ok(
+      colored(plot) > plot.width,
+      'Native traces must be painted, not just axes and a playhead',
+    )
     bench.report.run = {
       frames: session.run!.frames,
       domain: session.run!.domain,

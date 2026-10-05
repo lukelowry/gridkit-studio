@@ -2,11 +2,12 @@
  *  through the extension's own exports and from outside by Playwright over its DevTools port. */
 
 import assert from 'node:assert/strict'
-import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 
 import { sampledFields } from '@latkit/model'
 import { type Browser, chromium, type Frame, type Page } from 'playwright-core'
+import type { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
 import type { Sessions } from '../../src/extension/sessions.js'
@@ -32,6 +33,18 @@ export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 /** Wait for `selector` to show in `frame`. */
 export async function visible(frame: Frame, selector: string): Promise<void> {
   await frame.locator(selector).first().waitFor({ state: 'visible', timeout: 30000 })
+}
+
+/** Pixels painted in a color, not the grays of axes, text and background. */
+export function colored(png: PNG): number {
+  let count = 0
+  for (let i = 0; i < png.data.length; i += 4) {
+    const r = png.data[i]!
+    const g = png.data[i + 1]!
+    const b = png.data[i + 2]!
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 30) count++
+  }
+  return count
 }
 
 /** Playwright on VS Code window the tests run in. */
@@ -153,6 +166,19 @@ export class TestHost {
     const frame = await this.view(kind)
     await visible(frame, 'canvas[data-rendered=true]')
     return frame
+  }
+
+  /** Copy a case, named by its path from the repository root, into the workspace and show it in
+   *  Network. */
+  async openCase(path: string): Promise<{ uri: vscode.Uri; network: Frame }> {
+    const name = basename(path)
+    const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0]!.uri, name)
+    await copyFile(join(process.env.GRIDKIT_TEST_ROOT!, path), uri.fsPath)
+    await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
+    const network = await this.view('network')
+    await visible(network, 'canvas[data-rendered=true]')
+    await until(() => this.studio.documents.entries.get(uri.toString())?.summary, name + ' parsed')
+    return { uri, network }
   }
 
   /** Show one of the case's panel views. */

@@ -38,12 +38,14 @@ function cell(column: Column, row: number, references?: ReadonlyMap<string, stri
     }
     case 'vector':
       return Array.from({ length: column.size }, (_, n) =>
-        cell(column.values, (column.offset + row) * column.size + n),
+        cell(column.values, (column.offset + row) * column.size + n, references),
       )
     case 'list': {
       const start = column.offsets[column.offset + row]!
       const end = column.offsets[column.offset + row + 1]!
-      return Array.from({ length: end - start }, (_, n) => cell(column.values, start + n))
+      return Array.from({ length: end - start }, (_, n) =>
+        cell(column.values, start + n, references),
+      )
     }
   }
 }
@@ -109,20 +111,33 @@ export async function referenceNames(
   query: (query: RowsQuery) => Promise<RowsBlock[]>,
 ): Promise<Map<string, string>> {
   const groups = new Map<string, { index: Index; rows: Set<number> }>()
-  for (const block of blocks)
-    for (const column of Object.values(block.columns)) {
-      if (column.kind !== 'reference') continue
+  const visit = (column: Column, row: number) => {
+    if (column.validity && !bitAt(column.validity, column.offset + row)) return
+    if (column.kind === 'reference') {
       const key = JSON.stringify(column.index)
       let group = groups.get(key)
       if (!group) {
         group = { index: column.index, rows: new Set() }
         groups.set(key, group)
       }
-      for (let row = 0; row < column.length; row++) {
-        const value = numberAt(column, row)
-        if (value !== null) group.rows.add(value)
-      }
+      const value = numberAt(column, row)
+      if (value !== null) group.rows.add(value)
+    } else if (
+      column.kind === 'list' &&
+      (column.values.kind === 'reference' || column.values.kind === 'list')
+    ) {
+      for (
+        let n = column.offsets[column.offset + row]!;
+        n < column.offsets[column.offset + row + 1]!;
+        n++
+      )
+        visit(column.values, n)
     }
+  }
+  for (const block of blocks)
+    for (const column of Object.values(block.columns))
+      if (column.kind === 'reference' || column.kind === 'list')
+        for (let row = 0; row < column.length; row++) visit(column, row)
   const names = new Map<string, string>()
   for (const { index, rows } of groups.values()) {
     const values = Uint32Array.from(rows)

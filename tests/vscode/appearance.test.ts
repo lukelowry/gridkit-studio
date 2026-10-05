@@ -39,9 +39,15 @@ suite('Appearance', () => {
 
   test('offers the case to language models through its tools', async () => {
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
-    assert.equal(tools.length, 4)
+    assert.equal(tools.length, 10)
     const rows = await vscode.lm.invokeTool('gridkit_query_rows', {
-      input: { from: 'Bus', select: ['name', 'params.kv'], limit: 2 },
+      input: {
+        uri: bench.document.uri.toString(),
+        version: bench.document.version,
+        from: 'Bus',
+        select: ['name', 'params.kv'],
+        limit: 2,
+      },
       toolInvocationToken: undefined,
     })
     assert.ok(rows.content.length)

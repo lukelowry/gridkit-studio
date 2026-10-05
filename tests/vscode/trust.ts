@@ -20,6 +20,14 @@ export async function run(): Promise<void> {
   const session = await studio.open(document)
   assert.ok(studio.state(session.uri).summary, 'Inspection remains available without trust')
   await assert.rejects(tasks.run(session.uri), /Trust this workspace/)
+  await assert.rejects(
+    async () =>
+      vscode.lm.invokeTool('gridkit_propose_run', {
+        input: { uri: session.uri, version: document.version },
+        toolInvocationToken: undefined,
+      }),
+    /Trust this workspace/,
+  )
   assert.equal(session.run, undefined)
   console.log('Workspace Trust: inspection allowed; execution blocked.')
 }

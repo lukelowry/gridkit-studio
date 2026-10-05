@@ -14,6 +14,7 @@ import type {
   Value,
 } from '@latkit/model'
 
+import type { Analysis, AnalysisOptions, Comparison, RunTarget } from './analysis.js'
 import type { Bindings } from './bindings.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
@@ -121,6 +122,8 @@ export interface RunInfo {
   /** The times the run will cover, once its command says. */
   span?: Domain
   message?: string
+  /** Bounded solver evidence, retained even when a failed run has no result file. */
+  evidence?: string[]
   started: number
   outputs: readonly FieldSelection[]
   /** A ContingencyAnalysis study: the bus each contingency faults, those that failed, how many
@@ -145,6 +148,42 @@ export interface RunRequest extends Revision {
 
 /** What the extension asks of the data worker. */
 export interface Requests {
+  runs: { input: { uri: string }; output: RunInfo[] }
+  preflight: {
+    input: RunRequest
+    output: {
+      values: Record<string, unknown>
+      program: Program
+      domain: Domain
+      scenarios: number
+      columns: number
+      runtime: string
+    }
+  }
+  analyze: { input: RunTarget & AnalysisOptions; output: Analysis }
+  compare: { input: { before: RunTarget; after: RunTarget } & AnalysisOptions; output: Comparison }
+  rank: {
+    input: RunTarget & AnalysisOptions & { contingencies?: number[] }
+    output: {
+      study: string
+      revision: Revision
+      from: string
+      field: string
+      unit: string | null
+      window: Domain
+      failed: number[]
+      unavailable: number[]
+      total: number
+      rows: {
+        contingency: number
+        bus: number
+        state: 'measured' | 'failed' | 'unavailable'
+        worst?: Analysis['rows'][number]
+        snapshot?: Analysis['snapshot']
+        message?: string
+      }[]
+    }
+  }
   parse: {
     input: Revision &
       ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
@@ -161,7 +200,10 @@ export interface Requests {
   placement: { input: Revision; output: Record<string, Positions> }
   /** Where the diagram's blocks are arranged. */
   presentation: { input: Revision; output: Record<string, Positions> }
-  query: { input: Revision & { query: Query; run?: string }; output: QueryBlock[] }
+  query: {
+    input: Revision & { query: Query; run?: string; maxBytes?: number }
+    output: QueryBlock[]
+  }
   batches: {
     input: Revision & {
       fields?: readonly FieldSelection[]

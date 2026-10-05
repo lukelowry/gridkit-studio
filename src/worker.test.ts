@@ -172,6 +172,56 @@ describe('real worker protocol', () => {
       await expect(call('batches', { ...stream, maxBytes: 64 }).done).rejects.toThrow(
         /Visible data exceeds/,
       )
+
+      const analysis = { uri: revision.uri, run: run.id, from: 'Bus', field: 'Vm' }
+      const measured = await call('analyze', analysis).done
+      expect(measured.rows[0]).toMatchObject({
+        id: 'Bus/1',
+        valid: 200,
+        min: { value: 1 },
+        max: { value: 1.199, time: 1.99 },
+      })
+      expect(measured.total).toBe(1)
+      await expect(call('analyze', { ...analysis, ids: ['Bus/2'] }).done).rejects.toThrow(
+        /not recorded/,
+      )
+      await expect(
+        call('analyze', { ...analysis, uri: 'file:///other.case.json' }).done,
+      ).rejects.toThrow(/no longer open/)
+      await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()
+      expect((await call('analyze', analysis).done).revision).toEqual(revision)
+      const comparison = await call('compare', {
+        before: analysis,
+        after: analysis,
+        from: 'Bus',
+        field: 'Vm',
+        window: [0.5, 1],
+      }).done
+      expect(comparison).toMatchObject({
+        matched: 1,
+        rows: [{ id: 'Bus/1', minDelta: 0, maxDelta: 0 }],
+      })
+      await expect(
+        call('compare', {
+          before: analysis,
+          after: analysis,
+          from: 'Bus',
+          field: 'Vm',
+          window: [-1, 1],
+        }).done,
+      ).rejects.toThrow(/covered by both/)
+      // Clearing a run aborts a stream even when its consumer never acknowledges a batch.
+      rig.acknowledge = false
+      const received = new Promise<void>((resolve) => {
+        rig.firstBatch = resolve
+      })
+      const held = call('batches', stream)
+      const rejected = expect(held.done).rejects.toThrow(/cleared or replaced/)
+      await received
+      await call('clear', { uri: revision.uri }).done
+      await rejected
+      expect(await call('stats', {}).done).toMatchObject({ runs: 0, cacheBytes: 0 })
+      await expect(call('analyze', analysis).done).rejects.toThrow(/no longer open/)
     } finally {
       await stop()
     }

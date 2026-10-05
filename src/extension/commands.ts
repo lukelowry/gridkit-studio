@@ -16,9 +16,10 @@ import type { Element, Plot, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
 import { elementType, networkOf, placementOf, typeName } from '../shared/schema.js'
 import type { LoopMode } from '../shared/transport.js'
+import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
 import type { Session, Sessions } from './sessions.js'
-import { cacheBytesOf, registerTasks } from './tasks.js'
+import { cacheBytesOf, type Tasks } from './tasks.js'
 import { Node } from './trees.js'
 
 /** What a command acts on: its case, and the element and field it was invoked on. */
@@ -40,9 +41,8 @@ function rangeOf(text: string): [number, number] | undefined {
     : undefined
 }
 
-export function registerCommands(studio: Sessions) {
-  const tasks = registerTasks(studio)
-  const registrations: vscode.Disposable[] = [tasks.provider]
+export function registerCommands(studio: Sessions, tasks: Tasks) {
+  const registrations: vscode.Disposable[] = []
   /** The case and target an argument names: an Inspector node, a native menu context, a webview
    *  target, or a case URI. */
   const targetOf = (value?: unknown, supplied?: Supplied) => {
@@ -377,10 +377,7 @@ export function registerCommands(studio: Sessions) {
     const element = context.target?.origin === 'monitor' ? undefined : context.element
     const id = element?.id.startsWith(selected.type + '/') ? element.id : undefined
     const plot: Plot = { from: selected.type, field: selected.field, ...(id ? { id } : {}) }
-    if (!context.session.plots.some((item) => JSON.stringify(item) === JSON.stringify(plot)))
-      context.session.plots.push(plot)
-    changed(context.session)
-    await focus(context.session, 'monitor', context.element)
+    await showPlot(studio, context.session, plot, context.element)
   }
   command('plot', plot)
   command('removePlot', async (context) => {

@@ -28,7 +28,7 @@ export function cacheBytesOf(uri: vscode.Uri) {
 }
 
 export function registerTasks(studio: Sessions) {
-  const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
+  const make = (uri: vscode.Uri, values?: Record<string, unknown>, captured?: RunRequest) => {
     const definition = {
       type: 'gridkit',
       case: uri.toString(),
@@ -55,14 +55,16 @@ export function registerTasks(studio: Sessions) {
               const document = await vscode.workspace.openTextDocument(uri)
               const session = await studio.open(document)
               const summary = await studio.documents.ensure(document)
-              const request: RunRequest = {
-                uri: uri.toString(),
-                version: summary.version,
-                values: structuredClone(values ?? session.values),
-                outputs: session.outputs ?? [],
-                gridkit: gridkitOf(uri),
-                cacheBytes: cacheBytesOf(uri),
-              }
+              const request: RunRequest = captured
+                ? structuredClone(captured)
+                : {
+                    uri: uri.toString(),
+                    version: summary.version,
+                    values: structuredClone(values ?? session.values),
+                    outputs: structuredClone(session.outputs ?? []),
+                    gridkit: gridkitOf(uri),
+                    cacheBytes: cacheBytesOf(uri),
+                  }
               write.fire(
                 `Captured ${document.isDirty ? 'unsaved ' : ''}case revision ${summary.version}.\r\n`,
               )
@@ -75,6 +77,9 @@ export function registerTasks(studio: Sessions) {
                 preserveFocus: true,
               })
               if (cancelled) throw new Error('Task cancelled before launch.')
+              studio.documents.require(request)
+              if (!vscode.workspace.isTrusted)
+                throw new Error('Trust this workspace to execute GridKit.')
               started = true
               const result = await studio.client.call('run', request)
               write.fire(
@@ -124,11 +129,18 @@ export function registerTasks(studio: Sessions) {
   })
   return {
     provider,
-    async run(uri: string) {
+    async run(uri: string, captured?: RunRequest) {
       if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
       if (studio.all.get(uri)?.run?.state === 'running')
         throw new Error('A simulation is already active for this case.')
-      return vscode.tasks.executeTask(make(vscode.Uri.parse(uri)))
+      if (captured) {
+        if (captured.uri !== uri) throw new Error('Run proposal targets a different case.')
+        studio.documents.require(captured)
+      }
+      return vscode.tasks.executeTask(
+        make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)),
+      )
     },
   }
 }
+export type Tasks = ReturnType<typeof registerTasks>

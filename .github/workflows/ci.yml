@@ -76,6 +76,7 @@ jobs:
       - run: docker pull ghcr.io/lukelowry/gridkit:latest
       - run: pnpm test:simulation
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
+      - run: dbus-run-session -- xvfb-run -a pnpm test:ai
       - run: dbus-run-session -- xvfb-run -a pnpm test:trust
       - uses: actions/upload-artifact@v7
         if: inputs.baselines

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
 
 import {
@@ -16,14 +16,15 @@ import {
 
 import {
   applyChanges,
+  available,
   Case,
   catalog,
   completionsAt,
-  contingencyFile,
   diagnose,
   editable,
   parametersOf,
   placement,
+  preflight,
   presentation,
   selections,
   Simulation,
@@ -31,7 +32,11 @@ import {
   sourceRange,
   transaction,
 } from './gridkit/index.js'
+import { analysisLimit, analyze, compare, ScanBudget, snapshot } from './results/analysis.js'
 import { importedFields, ResultCache, Results } from './results/index.js'
+import { Readers } from './results/readers.js'
+import { rank, sibling } from './results/study.js'
+import type { RunTarget } from './shared/analysis.js'
 import { message } from './shared/format.js'
 import type {
   FromWorker,
@@ -53,6 +58,24 @@ const operations = new Map<number, AbortController>()
 const acknowledgements = new Map<number, () => void>()
 const running = new Map<string, { controller: AbortController; done: Promise<unknown> }>()
 const histories = new Map<string, Results[]>()
+const readers = new Readers<object>()
+/** Contingencies share a directory lifetime even when the displayed Results object changes. */
+const owners = new Map<string, object>()
+const ownerOf = (run: Results): object => {
+  if (!run.ownedDirectory) return run
+  let owner = owners.get(run.ownedDirectory)
+  if (!owner) {
+    owner = {}
+    owners.set(run.ownedDirectory, owner)
+  }
+  return owner
+}
+async function disposeRun(run: Results) {
+  await readers.retire(ownerOf(run))
+  await run.dispose(scratch)
+  if (run.ownedDirectory) owners.delete(run.ownedDirectory)
+}
+let analyzing = false
 const cache = new ResultCache()
 const scratch = workerData.scratch as string
 const cacheLimit = (value: number) => {
@@ -76,12 +99,32 @@ const get = (revision: Revision) => {
     throw new Error('The document changed. Wait for the current revision.')
   return entry
 }
-const findRun = (id: string) => {
-  for (const runs of histories.values()) {
-    const run = runs.find((run) => run.info.id === id)
+const findRun = (id: string, uri?: string, allowStudy = false) => {
+  for (const [key, runs] of histories) {
+    if (uri !== undefined && key !== uri) continue
+    const run = runs.find(
+      (run) => run.info.id === id || (allowStudy && run.info.contingency?.study === id),
+    )
     if (run) return run
   }
   throw new Error('The run is no longer open.')
+}
+
+async function withTarget<T>(
+  target: RunTarget,
+  signal: AbortSignal,
+  read: (result: Results) => Promise<T>,
+  budget: ScanBudget,
+) {
+  const current = findRun(target.run, target.uri, true)
+  if (target.contingency === undefined || target.contingency === current.info.contingency?.shown)
+    return read(current)
+  const result = await sibling(current, target.contingency, signal, false, budget)
+  try {
+    return await read(result)
+  } finally {
+    result.release()
+  }
 }
 /** Sends `batches` for request `id`; resolves once the view acknowledges them. */
 async function emit(id: number, batches: readonly DataBatch[], signal: AbortSignal) {
@@ -113,7 +156,10 @@ async function retain(uri: string, run: Results) {
   const runs = histories.get(uri) ?? []
   runs.unshift(run)
   histories.set(uri, runs)
-  while (runs.length > 2) await runs.pop()!.dispose(scratch)
+  while (runs.length > 2) {
+    const old = runs.pop()!
+    await disposeRun(old)
+  }
 }
 
 function runCase(input: RunRequest) {
@@ -166,6 +212,9 @@ function runCase(input: RunRequest) {
         },
         // At most 100 lines a second; the rest are counted, and the count sent.
         log: (entry) => {
+          const evidence = (info.evidence ??= [])
+          evidence.push(entry.message.slice(0, 512))
+          if (evidence.length > 16) evidence.shift()
           if (Date.now() - logWindow > 1000) {
             if (dropped)
               send({
@@ -197,8 +246,78 @@ function runCase(input: RunRequest) {
   return done
 }
 
-async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
+async function dispatch(request: Request, signal: AbortSignal): Promise<unknown> {
   switch (request.method) {
+    case 'runs':
+      return (histories.get(request.input.uri) ?? []).map((run) => run.info)
+    case 'preflight': {
+      const { values, command, columns } = preflight(
+        get(request.input).kase,
+        request.input.values,
+        request.input.outputs,
+      )
+      const runtime = await available(request.input.gridkit, command.program)
+      signal.throwIfAborted()
+      get(request.input)
+      return {
+        values,
+        program: command.program,
+        domain: command.domain,
+        scenarios: command.program === 'ContingencyAnalysis' ? command.faults.length : 1,
+        columns,
+        runtime: runtime.kind,
+      }
+    }
+    case 'analyze': {
+      const budget = new ScanBudget()
+      return withTarget(
+        request.input,
+        signal,
+        async (run) => {
+          const result = await analyze(run, request.input, signal, budget)
+          result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
+          return result
+        },
+        budget,
+      )
+    }
+    case 'compare': {
+      const input = request.input
+      const budget = new ScanBudget()
+      return withTarget(
+        input.before,
+        signal,
+        (before) =>
+          withTarget(
+            input.after,
+            signal,
+            async (after) => {
+              const left = snapshot(before)
+              const right = snapshot(after)
+              const window = input.window ?? [
+                Math.max(left.info.domain[0], right.info.domain[0]),
+                Math.min(left.info.domain[1], right.info.domain[1]),
+              ]
+              if (
+                window[0] > window[1] ||
+                window[0] < Math.max(left.info.domain[0], right.info.domain[0]) ||
+                window[1] > Math.min(left.info.domain[1], right.info.domain[1])
+              )
+                throw new Error('Comparison needs an interval covered by both runs.')
+              const options = { ...input, window: window as readonly [number, number] }
+              return compare(
+                await analyze(before, options, signal, budget, left),
+                await analyze(after, options, signal, budget, right),
+                analysisLimit(input.limit),
+              )
+            },
+            budget,
+          ),
+        budget,
+      )
+    }
+    case 'rank':
+      return rank(findRun(request.input.run, request.input.uri, true), request.input, signal)
     case 'placement':
       return placement(get(request.input).kase, signal)
     case 'parse': {
@@ -242,30 +361,39 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       return summary
     }
     case 'query': {
-      const { kase } = get(request.input)
+      const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
+      const kase = run?.kase ?? get(request.input).kase
       const query = request.input.query
       if (
         query.kind === 'rows' &&
         (query.limit === undefined || query.limit > 100 || query.limit < 0)
       )
         throw new Error('Queries are limited to 100 rows.')
-      const data = request.input.run
-        ? await findRun(request.input.run).data(
+      const data = run
+        ? await run.data(
             query.kind === 'rows' && query.at !== undefined ? [query.at, query.at] : undefined,
             signal,
           )
         : kase.data
       const blocks: QueryBlock[] = []
+      const maxBytes = request.input.maxBytes ?? 64 << 20
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 << 20)
+        throw new Error('Query byte budget must be between 1 byte and 64 MiB.')
+      let bytes = 0
       for await (const block of read(data, query, {
         signal,
         maxBlockBytes: BLOCK_BYTES,
         buffers: 'owned',
-      }))
+      })) {
+        bytes += blockByteLength(block)
+        if (bytes > maxBytes)
+          throw new Error('Query exceeds its byte budget. Request fewer rows or fields.')
         blocks.push(block)
+      }
       return blocks
     }
     case 'batches': {
-      const run = request.input.run ? findRun(request.input.run) : undefined
+      const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
       const kase = run?.kase ?? get(request.input).kase
       const fields = request.input.fields ?? staticFields(kase.schema)
       const statics = fields
@@ -363,31 +491,18 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       return runCase(request.input)
     case 'contingency': {
       const current = findRun(request.input.run)
-      const study = current.info.contingency
       const { shown } = request.input
-      if (!study || !Number.isInteger(shown) || shown < 0 || shown >= study.buses.length)
-        throw new Error('The run has no such contingency.')
-      if (study.failed.includes(shown))
-        throw new Error('That contingency failed; it has no results.')
-      const info: RunInfo = {
-        ...current.info,
-        id: crypto.randomUUID(),
-        path: join(dirname(current.info.path), contingencyFile(study.offset + shown)),
-        frames: 0,
-        domain: [0, 0],
-        contingency: { ...study, shown },
-      }
-      const next = new Results(info, current.kase, current.fields, cache, current.ownedDirectory)
-      await next.ingest(
-        signal,
-        () => true,
-        async () => {},
-      )
-      // The contingency takes its study's place among the runs, and the study's folder with it.
-      for (const runs of histories.values()) {
-        const at = runs.indexOf(current)
-        if (at >= 0) runs[at] = next
-      }
+      const next = await readers.use([ownerOf(current)], signal, async (s) => {
+        const loaded = await sibling(current, shown, s, true)
+        const runs = [...histories.values()].find((runs) => runs.includes(current))
+        if (s.aborted || !runs) {
+          loaded.release()
+          throw new Error('The run was cleared or replaced.')
+        }
+        runs[runs.indexOf(current)] = loaded
+        return loaded
+      })
+      const info = next.info
       current.release()
       send({ kind: 'run', info })
       return info
@@ -404,8 +519,9 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       const run = running.get(uri)
       run?.controller.abort(new Error('Case closed.'))
       await run?.done
-      for (const result of histories.get(uri) ?? []) await result.dispose(scratch)
+      const results = histories.get(uri) ?? []
       histories.delete(uri)
+      for (const result of results) await disposeRun(result)
       if (request.method === 'release') {
         cases.delete(uri)
         parses.delete(uri)
@@ -420,7 +536,7 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       const outputs = await importedFields(kase, request.input.path, format, signal)
       const info: RunInfo = {
         id: crypto.randomUUID(),
-        revision: request.input,
+        revision: { uri: request.input.uri, version: request.input.version },
         fingerprint: kase.version,
         name: basename(request.input.path),
         state: 'running',
@@ -434,10 +550,12 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
       const result = new Results(info, kase, selections(kase, outputs), cache)
       await retain(request.input.uri, result)
       try {
-        await result.ingest(
-          signal,
-          () => true,
-          async () => {},
+        await readers.use([ownerOf(result)], signal, (s) =>
+          result.ingest(
+            s,
+            () => true,
+            async () => {},
+          ),
         )
         info.state = 'complete'
       } catch (error) {
@@ -460,6 +578,31 @@ async function handle(request: Request, signal: AbortSignal): Promise<unknown> {
         sessions: cases.size,
         runs: [...histories.values()].reduce((n, runs) => n + runs.length, 0),
       }
+  }
+}
+
+async function handle(request: Request, signal: AbortSignal) {
+  const input = request.input
+  const analysis =
+    request.method === 'analyze' || request.method === 'compare' || request.method === 'rank'
+  if (analysis && analyzing)
+    throw new Error('An analysis is already running. Retry after it finishes or cancel it.')
+  const targets =
+    request.method === 'compare'
+      ? [
+          findRun(request.input.before.run, request.input.before.uri, true),
+          findRun(request.input.after.run, request.input.after.uri, true),
+        ]
+      : request.method !== 'contingency' && 'run' in input && typeof input.run === 'string'
+        ? [findRun(input.run, 'uri' in input ? input.uri : undefined, analysis)]
+        : []
+  if (analysis) analyzing = true
+  try {
+    return await readers.use(targets.map(ownerOf), signal, (s) => dispatch(request, s))
+  } finally {
+    for (const target of targets)
+      if (!histories.get(target.info.revision.uri)?.includes(target)) target.release()
+    if (analysis) analyzing = false
   }
 }
 port.on('message', (request: ToWorker) => {

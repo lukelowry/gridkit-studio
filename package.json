@@ -51,6 +51,7 @@
     "test": "vitest run --project unit",
     "test:simulation": "vitest run --project simulation",
     "test:vscode": "pnpm build && node tests/vscode/launch.mjs",
+    "test:ai": "pnpm build && node tests/vscode/launch.mjs tests/vscode/ai.ts",
     "test:package": "node tests/vscode/package.mjs",
     "test:trust": "pnpm build && node tests/vscode/launch.mjs --untrusted tests/vscode/trust.ts",
     "bench": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/views.ts",
@@ -565,6 +566,11 @@
         "category": "GridKit Studio",
         "icon": "$(device-camera-video)",
         "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.reviewAIProposal",
+        "title": "Review AI Proposal",
+        "category": "GridKit"
       }
     ],
     "menus": {
@@ -2696,74 +2702,713 @@
     "languageModelTools": [
       {
         "name": "gridkit_inspect_case",
-        "displayName": "Inspect case",
-        "modelDescription": "Inspect the active open GridKit case, counts, schema and units. Read only.",
-        "userDescription": "Inspect the active open GridKit case, counts, schema and units. Read only.",
+        "displayName": "Inspect GridKit cases",
+        "modelDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type?s fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
+        "userDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type?s fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_inspect_case",
         "inputSchema": {
           "type": "object",
-          "properties": {},
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Optional exact type to inspect, including types with no elements."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "select": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "maxItems": 40,
+              "uniqueItems": true,
+              "description": "With from, restrict returned field definitions to these names."
+            }
+          },
+          "required": [],
           "additionalProperties": false
         }
       },
       {
         "name": "gridkit_query_rows",
         "displayName": "Query case rows",
-        "modelDescription": "Read at most 100 rows and 32 KiB from the active open GridKit case. Read only.",
-        "userDescription": "Read at most 100 rows and 32 KiB from the active open GridKit case. Read only.",
+        "modelDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Maximum 100 rows, 40 fields and 32 KiB, also respecting the host token budget. Use analyze_run for sampled outputs. Read only.",
+        "userDescription": "Read static case values by explicit URI and version. Supports stable IDs, filters, sorting and paging. References resolve to stable IDs. Returns total and nextOffset; follow nextOffset with the same query. Maximum 100 rows, 40 fields and 32 KiB, also respecting the host token budget. Use analyze_run for sampled outputs. Read only.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_query_rows",
         "inputSchema": {
           "type": "object",
           "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
             "from": {
               "type": "string",
-              "description": "Catalog type, such as Bus."
+              "minLength": 1
             },
             "select": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               },
-              "maxItems": 40
+              "minItems": 1,
+              "maxItems": 40,
+              "uniqueItems": true
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable Type/key identity, e.g. Bus/1."
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            },
+            "where": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "equal",
+                      "notEqual",
+                      "lessThan",
+                      "lessThanOrEqual",
+                      "greaterThan",
+                      "greaterThanOrEqual",
+                      "contains"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "field",
+                  "operator",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 20,
+              "uniqueItems": true
+            },
+            "orderBy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "ascending",
+                      "descending"
+                    ]
+                  }
+                },
+                "required": [
+                  "field",
+                  "direction"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 8,
+              "uniqueItems": true
             },
             "offset": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "default": 0
             },
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 100
+              "maximum": 100,
+              "default": 20
             }
           },
+          "required": [
+            "uri",
+            "version",
+            "from",
+            "select"
+          ],
           "additionalProperties": false
         }
       },
       {
         "name": "gridkit_read_diagnostics",
-        "displayName": "Read diagnostics",
-        "modelDescription": "Read current GridKit case diagnostics and revision. Read only.",
-        "userDescription": "Read current GridKit case diagnostics and revision. Read only.",
+        "displayName": "Read case diagnostics",
+        "modelDescription": "Read parser and semantic diagnostics, including invalid cases. Reports current, parsed and diagnostic versions separately. Lines and columns are one-based. Follow nextOffset for more. Read only.",
+        "userDescription": "Read parser and semantic diagnostics, including invalid cases. Reports current, parsed and diagnostic versions separately. Lines and columns are one-based. Follow nextOffset for more. Read only.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_read_diagnostics",
         "inputSchema": {
           "type": "object",
-          "properties": {},
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          "required": [
+            "uri"
+          ],
           "additionalProperties": false
         }
       },
       {
         "name": "gridkit_summarize_run",
-        "displayName": "Summarize run",
-        "modelDescription": "Read the current and previous local GridKit simulation summaries. Read only.",
-        "userDescription": "Read the current and previous local GridKit simulation summaries. Read only.",
+        "displayName": "Inspect run evidence",
+        "modelDescription": "Discover current and previous run IDs, stable study IDs, recorded outputs, revision, sample extent, solver state and bounded log evidence. Recording describes future runs, not historical coverage. Failed contingencies are solver failures, not measured worst cases. Read only.",
+        "userDescription": "Discover current and previous run IDs, stable study IDs, recorded outputs, revision, sample extent, solver state and bounded log evidence. Recording describes future runs, not historical coverage. Failed contingencies are solver failures, not measured worst cases. Read only.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_summarize_run",
         "inputSchema": {
           "type": "object",
-          "properties": {},
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_analyze_run",
+        "displayName": "Analyze recorded signals",
+        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run?s captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
+        "userDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run?s captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Cancellation and a 20-million-observation/256-MiB page-scan budget apply. Read only.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_analyze_run",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Retained run id, or stable contingency study id from summarize_run."
+            },
+            "contingency": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Zero-based contingency index; does not change the displayed result."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact catalog type."
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One recorded sampled numeric field."
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable Type/key identity, e.g. Bus/1."
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            },
+            "window": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "Inclusive [start,end] seconds; defaults to published data, or shared overlap for comparison."
+            },
+            "order": {
+              "type": "string",
+              "enum": [
+                "min",
+                "max"
+              ],
+              "default": "min",
+              "description": "Rank by lowest minimum or highest maximum; ties use stable element IDs."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          "required": [
+            "uri",
+            "run",
+            "from",
+            "field"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_compare_runs",
+        "displayName": "Compare run extrema",
+        "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots with the same limits as analyze_run; does not change the UI.",
+        "userDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots with the same limits as analyze_run; does not change the UI.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_compare_runs",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "before": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+                },
+                "run": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Retained run id, or stable contingency study id from summarize_run."
+                },
+                "contingency": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Zero-based contingency index; does not change the displayed result."
+                }
+              },
+              "required": [
+                "uri",
+                "run"
+              ],
+              "additionalProperties": false
+            },
+            "after": {
+              "type": "object",
+              "properties": {
+                "uri": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+                },
+                "run": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Retained run id, or stable contingency study id from summarize_run."
+                },
+                "contingency": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Zero-based contingency index; does not change the displayed result."
+                }
+              },
+              "required": [
+                "uri",
+                "run"
+              ],
+              "additionalProperties": false
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact catalog type."
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One recorded sampled numeric field."
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable Type/key identity, e.g. Bus/1."
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            },
+            "window": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "Inclusive [start,end] seconds; defaults to published data, or shared overlap for comparison."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          "required": [
+            "before",
+            "after",
+            "from",
+            "field"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_rank_contingencies",
+        "displayName": "Rank contingency results",
+        "modelDescription": "Rank a completed study?s contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
+        "userDescription": "Rank a completed study?s contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices (at most 100). Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Work limits shared across the entire request; narrow indices/IDs/window when needed.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_rank_contingencies",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Retained run id, or stable contingency study id from summarize_run."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact catalog type."
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "One recorded sampled numeric field."
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable Type/key identity, e.g. Bus/1."
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            },
+            "window": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "Inclusive [start,end] seconds; defaults to published data, or shared overlap for comparison."
+            },
+            "order": {
+              "type": "string",
+              "enum": [
+                "min",
+                "max"
+              ],
+              "default": "min",
+              "description": "Rank by lowest minimum or highest maximum; ties use stable element IDs."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "contingencies": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "uri",
+            "run",
+            "from",
+            "field"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_show_element",
+        "displayName": "Show an element or plot",
+        "modelDescription": "Reveal an element in source, or add its recorded signal to Monitor. Requires explicit case/revision/ID. Plot additionally requires a sampled field and currently displayed run id with matching case content. Changes display and selection only; does not change recording or simulation settings.",
+        "userDescription": "Reveal an element in source, or add its recorded signal to Monitor. Requires explicit case/revision/ID. Plot additionally requires a sampled field and currently displayed run id with matching case content. Changes display and selection only; does not change recording or simulation settings.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_show_element",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "reveal",
+                "plot"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "action",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_propose_edits",
+        "displayName": "Propose reviewed field edits",
+        "modelDescription": "Validate 1?100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit: Review AI Proposal to inspect and approve. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
+        "userDescription": "Validate 1?100 field edits through the native transaction validator and prepare a diff. Only editable fields and stable IDs from inspection are accepted. Does not apply edits. Tell the user to run GridKit: Review AI Proposal to inspect and approve. Proposals expire after 10 minutes or any source change; approval uses one native undoable transaction.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_propose_edits",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "set",
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null",
+                      "array",
+                      "object"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id",
+                  "field",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 100,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "changes"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gridkit_propose_run",
+        "displayName": "Propose a reviewed simulation",
+        "modelDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit: Review AI Proposal. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
+        "userDescription": "Preflight a captured simulation request using the same validation as execution; checks local runtime availability without pulling images or launching the solver. Values override current settings; outputs replace recording for this proposal only. Does not start a run. Tell the user to run GridKit: Review AI Proposal. Approval uses the existing VS Code task runner with captured settings, trust and revision checks.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "gridkit_propose_run",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "values": {
+              "type": "object",
+              "description": "Simulation parameters from inspect_case."
+            },
+            "outputs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "select": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "minItems": 1,
+                    "maxItems": 40,
+                    "uniqueItems": true
+                  },
+                  "rows": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "ids",
+                        "type": "string"
+                      },
+                      "ids": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Stable Type/key identity, e.g. Bus/1."
+                        },
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "uniqueItems": true
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "ids"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "from",
+                  "select"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 40,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "uri",
+            "version"
+          ],
           "additionalProperties": false
         }
       }

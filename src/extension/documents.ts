@@ -1,7 +1,7 @@
 import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
+import type { Element, Mutation, Revision, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
 
 /** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
@@ -22,6 +22,7 @@ interface Entry {
   editing?: Promise<void>
   stale: boolean
   error?: string
+  diagnosticsVersion?: number
 }
 export class Documents {
   readonly entries = new Map<string, Entry>()
@@ -77,6 +78,18 @@ export class Documents {
     if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
     return entry?.pending ?? this.parse(document)
   }
+  /** Require an explicitly captured, still-current projection. */
+  require(revision: Revision): Summary {
+    const entry = this.entries.get(revision.uri)
+    if (!entry || entry.document.isClosed) throw new Error('The case document is closed.')
+    if (
+      entry.stale ||
+      entry.document.version !== revision.version ||
+      entry.summary?.version !== revision.version
+    )
+      throw new Error('The document changed or is invalid. Inspect the case again.')
+    return entry.summary
+  }
   parse(document: vscode.TextDocument): Promise<Summary> {
     const uri = document.uri.toString()
     let entry = this.entries.get(uri)
@@ -118,6 +131,7 @@ export class Documents {
           current.summary = summary
           current.stale = false
           current.error = undefined
+          current.diagnosticsVersion = version
           this.diagnostics.set(
             document.uri,
             summary.issues.map((issue) => {
@@ -142,6 +156,7 @@ export class Documents {
           if (!controller.signal.aborted && document.version === version) {
             current.stale = true
             current.error = error.message
+            current.diagnosticsVersion = version
             this.diagnostics.set(document.uri, [
               new vscode.Diagnostic(
                 new vscode.Range(

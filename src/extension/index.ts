@@ -5,19 +5,22 @@ import { registerCommands } from './commands.js'
 import { registerNavigation } from './navigation.js'
 import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
+import { registerTasks } from './tasks.js'
 import { registerTrees } from './trees.js'
 import { registerViews } from './views.js'
 let studio: Sessions | undefined
 export function activate(context: ExtensionContext) {
   const started = performance.now()
   studio = new Sessions(context)
+  const tasks = registerTasks(studio)
   context.subscriptions.push(
+    tasks.provider,
     ...registerViews(studio),
-    ...registerCommands(studio),
+    ...registerCommands(studio, tasks),
     ...registerTrees(studio),
     ...registerSignals(studio),
     ...registerNavigation(studio),
-    ...registerAI(studio),
+    ...registerAI(studio, tasks),
   )
   studio.output.info(
     `Activated in ${(performance.now() - started).toFixed(1)} ms; data worker starts on demand.`,

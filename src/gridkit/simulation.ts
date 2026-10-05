@@ -2,27 +2,15 @@ import { readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import {
-  type Arguments,
-  type Command,
-  type CommandContext,
-  failure,
-  type Parameters,
-} from '@latkit/model'
+import { type Arguments, type Command, type CommandContext, type Parameters } from '@latkit/model'
 
-import { BATCH_BYTES, type ResultCache, Results } from '../results/index.js'
+import { type ResultCache, Results } from '../results/index.js'
 import type { RunInfo, RunRequest, RuntimeProcess } from '../shared/messages.js'
 import type { Case } from './case.js'
-import { diagnose } from './edits.js'
-import {
-  commandOf,
-  type Field,
-  parametersOf,
-  selections,
-  type SimulationCommand,
-} from './parameters.js'
+import { type Field, parametersOf, type SimulationCommand } from './parameters.js'
+import { preflight } from './preflight.js'
 import { launch } from './runtime.js'
-import { caseFile, faultOrdinal, faultRecords, inputOf, monitorsOf } from './staging.js'
+import { caseFile, faultOrdinal, inputOf, monitorsOf } from './staging.js'
 
 /** The file ContingencyAnalysis writes for its fault `ordinal` from the sink `results.csv`, as
  *  GridKit names it: `name + "_" + fault_id + ext`. */
@@ -45,40 +33,8 @@ export class Simulation implements Command {
   }
   async run(input: Arguments<Parameters>, context: CommandContext): Promise<void> {
     context.signal.throwIfAborted()
-    this.kase.checkSignals()
-    const invalid = diagnose(this.kase).find((issue) => issue.severity === 'error')
-    if (invalid) throw failure('invalid-input', `${invalid.id ?? 'Case'}: ${invalid.message}`)
-    for (const name of Object.keys(input))
-      if (!(name in this.parameters))
-        throw failure('invalid-input', 'Unknown simulation parameter: ' + name)
-    const values: Record<string, unknown> = {}
-    for (const [name, parameter] of Object.entries(this.parameters)) {
-      const value = input[name] ?? ('default' in parameter ? parameter.default : undefined)
-      if (value === undefined && parameter.optional) continue
-      const valid =
-        parameter.type === 'number'
-          ? typeof value === 'number' &&
-            Number.isFinite(value) &&
-            (!parameter.integer || Number.isInteger(value)) &&
-            (parameter.min === undefined || value >= parameter.min) &&
-            (parameter.max === undefined || value <= parameter.max)
-          : parameter.type === 'boolean'
-            ? typeof value === 'boolean'
-            : parameter.type === 'choice'
-              ? typeof value === 'string' && parameter.choices.includes(value)
-              : typeof value === 'string'
-      if (!valid) throw failure('invalid-input', `Invalid value for ${name}.`)
-      values[name] = value
-    }
-    const command = commandOf(this.kase, values as Arguments<Parameters>)
+    const { command, outputs, faults } = preflight(this.kase, input, context.outputs)
     this.info.span = [command.domain[0], command.domain[1]]
-    const outputs = selections(this.kase, context.outputs)
-    if (!outputs.length)
-      throw failure('invalid-input', 'Choose at least one monitored signal to run.')
-    const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
-    if (columns * 8 > BATCH_BYTES)
-      throw failure('resource-limit', 'One selected frame exceeds 8 MiB.')
-    const faults = faultRecords(this.kase, command.faults)
     const ordinal = faultOrdinal(this.kase)
     await writeFile(
       join(this.directory, 'case.json'),

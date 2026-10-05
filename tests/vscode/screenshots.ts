@@ -37,10 +37,10 @@ async function simulate(
   if (session.run?.state !== 'complete') throw new Error(session.run?.message ?? 'The run failed.')
 }
 
-/** Save the workbench below its title bar, which names the test host, once `network` settles. */
-async function shoot(bench: TestHost, name: string, network: Frame): Promise<void> {
+/** Save the workbench below its title bar, which names the test host, once `view` settles. */
+async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> {
   await vscode.commands.executeCommand('notifications.clearAll')
-  await idle(network)
+  await idle(view)
   await pause(500)
   const bar = (await bench.page.locator('.part.titlebar').boundingBox())?.height ?? 0
   await bench.page.screenshot({
@@ -123,6 +123,7 @@ export async function run() {
   const set = (key: string, value: unknown) => settings.update(key, value, global)
   const SHOWN = {
     'network.hover': 'off',
+    'diagram.hover': 'off',
     'network.colormap': 'batlow',
     'network.vertexRadiusPx': 2,
     'network.zScale': 0.4,
@@ -183,6 +184,19 @@ export async function run() {
     for (let notch = 0; notch < FRAMING.notches; notch++) await bench.page.mouse.wheel(0, -120)
     await bench.page.mouse.move(0, WINDOW.height / 2)
     await shoot(bench, 'activsg25k', wide.network)
+
+    // An IEEE39 generator in the diagram, framed on its exciter and stabilizer.
+    await bench.reset()
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    const diagram = await bench.open('diagram')
+    await vscode.commands.executeCommand('workbench.action.closePanel')
+    await vscode.commands.executeCommand('workbench.action.closeSidebar')
+    await idle(diagram)
+    bench.studio.select(bench.key, { id: 'Genrou/30_1_genrou' })
+    await vscode.commands.executeCommand('gridkitStudio.neighborhood', bench.uri)
+    await idle(diagram)
+    bench.studio.select(bench.key, undefined)
+    await shoot(bench, 'diagram', diagram)
 
     // IEEE39 during a fault at bus 16: every bus voltage on the network and in the Monitor, which
     // colors it the same way.

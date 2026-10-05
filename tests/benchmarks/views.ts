@@ -13,7 +13,7 @@ import { fills, idle, testHost } from '../vscode/harness.js'
 
 /** Cases by bus count; the gate checks time per bus across them. */
 const CASES = [
-  ['tests/fixtures/IEEE39.case.json', 39],
+  ['cases/IEEE39.case.json', 39],
   ['cases/WECC240.case.json', 243],
   ['cases/ACTIVSg2000.case.json', 2000],
   ['cases/ACTIVSg10k.case.json', 10000],

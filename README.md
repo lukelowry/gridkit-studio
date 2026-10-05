@@ -14,12 +14,12 @@ Studio runs the first GridKit it finds:
 
 1. **GridKit Path** (`gridkitStudio.gridkitPath`): an install folder, such as `/opt/gridkit`.
 2. `DynamicSimulation` on `PATH` where the workspace is: a dev container, SSH remote, or WSL.
-3. **GridKit Image** (`gridkitStudio.gridkitImage`): a container image, run with Docker or Podman.
+3. **GridKit Image** (`gridkitStudio.gridkitImage`): a container image, run with Docker or Podman. By default `ghcr.io/lukelowry/gridkit:latest`.
 
-Studio never pulls images. Pull one yourself first:
+Studio never pulls images. Pull it yourself first:
 
 ```sh
-docker pull ghcr.io/lukelowry/gridkit:arrow    # or: podman pull …
+docker pull ghcr.io/lukelowry/gridkit:latest    # or: podman pull …
 ```
 
 Runs need a trusted workspace.
@@ -41,13 +41,13 @@ Every view edits the same JSON document, with native undo, save, and Git. Settin
 
 ```sh
 pnpm install
-pnpm quality        # format, lint, types, unit tests
-pnpm test:vscode    # VS Code suites
-pnpm test:gridkit   # everything against real GridKit in the dev container image
-pnpm package        # dist/gridkit-studio-<version>.vsix
+pnpm quality           # format, lint, types, unit tests
+pnpm test:simulation   # GridKit itself, as Studio runs it
+pnpm test:vscode       # VS Code suites, runs included
+pnpm package           # dist/gridkit-studio-<version>.vsix
 ```
 
-`GRIDKIT_IMAGE=ghcr.io/lukelowry/gridkit:arrow` runs the simulation suites on any Docker or Podman host.
+The GridKit suites run the default image; `GRIDKIT_IMAGE` names another. `cases/` holds unmodified copies of [GridKit v0.2.0](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics)'s cases.
 
 ## License
 

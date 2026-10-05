@@ -1,5 +1,5 @@
-/** GridKit's own DynamicSimulation, run where GridKit is installed: the dev container has it, and
- *  GRIDKIT_PATH names an install elsewhere. Without one, GRIDKIT_IMAGE runs it in Docker or Podman. */
+/** GridKit's own DynamicSimulation, run as Studio runs it: GRIDKIT_PATH names an install, else the
+ *  one on PATH, else Studio's default image or GRIDKIT_IMAGE runs in Docker or Podman. */
 
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
@@ -9,13 +9,13 @@ import { promisify } from 'node:util'
 import { type Arguments, type FieldSelection, type Parameters, read } from '@latkit/model'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import catalog from '../../catalog.json'
+import manifest from '../../package.json'
 import {
+  available,
   Case,
-  catalogOf,
+  catalog,
   diagnose,
   type Runtime,
-  runtimeOf,
   Simulation,
 } from '../../src/gridkit/index.js'
 import { ResultCache } from '../../src/results/index.js'
@@ -23,7 +23,13 @@ import type { GridKit, RunInfo, RunRequest, RuntimeProcess } from '../../src/sha
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',
-  image: process.env.GRIDKIT_IMAGE ?? '',
+  image:
+    process.env.GRIDKIT_IMAGE ??
+    (
+      manifest.contributes.configuration[0]!.properties['gridkitStudio.gridkitImage'] as {
+        default: string
+      }
+    ).default,
   cli: process.env.GRIDKIT_CONTAINER_CLI ?? '',
 }
 
@@ -37,12 +43,9 @@ describe('DynamicSimulation', () => {
     root = await mkdtemp('output/simulation/run-')
     console.log('Simulation inputs, results and logs:', root)
     // Without GridKit there is nothing to test, and that is a failure said once.
-    runtime = await runtimeOf(gridkit)
+    runtime = await available(gridkit)
     console.log('GridKit runs', runtime)
-    kase = await Case.parse(
-      await readFile('tests/fixtures/IEEE39.case.json', 'utf8'),
-      catalogOf(JSON.stringify(catalog)),
-    )
+    kase = await Case.parse(await readFile('cases/IEEE39.case.json', 'utf8'), catalog)
   })
 
   /** Run `model` into its own folder under `name`, until it ends or `signal` aborts. `publish`
@@ -130,17 +133,17 @@ describe('DynamicSimulation', () => {
     return values
   }
 
-  for (const [fixture, expected] of [
+  for (const [name, expected] of [
     ['IEEE39', [1.0485160677316046, 1.051597761407972]],
     ['TwoArea', [1.0000062524673949, 0.9976070932623818]],
   ] as const)
-    it(`${fixture}: diagnoses, stages and records native CSV with reference voltages`, async ({
+    it(`${name}: diagnoses, stages and records native CSV with reference voltages`, async ({
       signal,
     }) => {
-      const model = await Case.read(`tests/fixtures/${fixture}.case.json`, kase.catalog)
+      const model = await Case.read(`cases/${name}.case.json`, kase.catalog)
       expect(diagnose(model)).toEqual([])
       const { simulation, info, done, released } = await run(
-        fixture,
+        name,
         { tmax: 0.1, dt_monitor: 0.01 },
         signal,
         { model },
@@ -231,7 +234,7 @@ describe('DynamicSimulation', () => {
   it('reports native initialization errors and retains the solver log, then retries successfully', async ({
     signal,
   }) => {
-    const text = await readFile('tests/fixtures/TwoArea.case.json', 'utf8')
+    const text = await readFile('cases/TwoArea.case.json', 'utf8')
     const invalid = await Case.parse(
       text.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'),
       kase.catalog,

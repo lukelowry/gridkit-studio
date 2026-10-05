@@ -3,6 +3,8 @@
 import type { Bounds, DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
 import { failure } from '@latkit/model'
 
+import models from './catalog.json'
+
 export interface Catalog {
   /** As read; part of every case's version. */
   readonly text: string
@@ -99,8 +101,9 @@ export const CASE_ROW = 'case'
 const POINT: DataType = { kind: 'vector', items: 'float64', size: 2 }
 const ROUTE: DataType = { kind: 'list', items: POINT }
 
-export function catalogOf(text: string): Catalog {
-  const raw = JSON.parse(text) as {
+function catalogOf(json: unknown): Catalog {
+  const text = JSON.stringify(json)
+  const raw = json as {
     bus: ClassSpec
     classes: readonly ClassSpec[]
     options: readonly OptionSpec[]
@@ -291,3 +294,6 @@ function compile(
     definition: { ...definition, fields: definitions },
   }
 }
+
+/** GridKit's models, as Studio knows them. Pure, so bundles that never read it leave it out. */
+export const catalog: Catalog = /* @__PURE__ */ catalogOf(models)

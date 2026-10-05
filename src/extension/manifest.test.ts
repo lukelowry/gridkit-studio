@@ -2,8 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import { describe, expect, it } from 'vitest'
 
-import catalogJson from '../../catalog.json'
-import { catalogOf } from '../gridkit/index.js'
+import { catalog } from '../gridkit/index.js'
 import { menuContext } from '../shared/contexts.js'
 import { defaults, definitions, validateSettings } from '../shared/preferences.js'
 describe('native VS Code contract', () => {
@@ -97,7 +96,7 @@ describe('native VS Code contract', () => {
       for (const { command } of items) if (command) expect(commands).toContain(command)
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
-    const schema = catalogOf(JSON.stringify(catalogJson)).schema
+    const schema = catalog.schema
     const summary = { schema, editable: { BusFault: ['ports.control_signal'] } }
     const target = {
       uri: 'file:///a.case.json',

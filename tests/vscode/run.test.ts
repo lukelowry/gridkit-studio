@@ -170,10 +170,7 @@ suite('Run', function () {
 
   test('runs TwoArea with its native Ispdlim values and plots the result', async () => {
     await bench.replace(
-      await readFile(
-        join(process.env.GRIDKIT_TEST_ROOT!, 'tests/fixtures/TwoArea.case.json'),
-        'utf8',
-      ),
+      await readFile(join(process.env.GRIDKIT_TEST_ROOT!, 'cases/TwoArea.case.json'), 'utf8'),
     )
     await bench.settled()
     assert.deepEqual((await bench.current()).issues, [])

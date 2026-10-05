@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import catalogJson from '../../catalog.json'
 import { Case } from './case.js'
-import { catalogOf } from './definition.js'
+import { catalog } from './definition.js'
 import { placement } from './placement.js'
 import { applyChanges, presentation, transaction } from './transactions.js'
-const catalog = catalogOf(JSON.stringify(catalogJson))
 const text =
   '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"BusFault","id":"load","ports":{"bus":7}},{"class":"BusFault","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)

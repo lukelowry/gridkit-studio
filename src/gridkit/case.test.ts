@@ -10,17 +10,15 @@ import {
 } from '@latkit/model'
 import { describe, expect, it } from 'vitest'
 
-import catalogJson from '../../catalog.json'
 import { rowsOf } from '../shared/cells.js'
 import { diagramOf, networkOf } from '../shared/schema.js'
 import { Case } from './case.js'
-import { catalogOf } from './definition.js'
+import { catalog } from './definition.js'
 import { diagnose, editField, sourceRange } from './edits.js'
 import { completionsAt } from './navigation.js'
 import { parametersOf, selections } from './parameters.js'
 import { caseFile, monitorsOf } from './staging.js'
 
-const catalog = catalogOf(JSON.stringify(catalogJson))
 const source = `{
  "header": {"case_name": "東京 ⚡"},
  "buses": [
@@ -138,10 +136,7 @@ describe('single catalog and source ownership', () => {
     expect(text).toContain('230.000')
   })
   it('handles native infinite buses and reports invalid known values from the catalog', async () => {
-    const kase = await Case.parse(
-      await readFile('tests/fixtures/solver/two-bus.case.json', 'utf8'),
-      catalog,
-    )
+    const kase = await Case.parse(await readFile('cases/TwoBusBasic.case.json', 'utf8'), catalog)
     expect(kase.table('Bus').records.length).toBe(2)
     const invalid = await Case.parse(source.replace('230.000', '1e400'), catalog)
     expect(diagnose(invalid).some((issue) => issue.field === 'kv')).toBe(true)
@@ -159,10 +154,7 @@ describe('single catalog and source ownership', () => {
     expect(completionsAt(catalog, text, text.length).map((field) => field.name)).toContain('kv')
   })
   it('loads the real TwoArea case', async () => {
-    const kase = await Case.parse(
-      await readFile('tests/fixtures/TwoArea.case.json', 'utf8'),
-      catalog,
-    )
+    const kase = await Case.parse(await readFile('cases/TwoArea.case.json', 'utf8'), catalog)
     expect(kase.table('Bus').records.length).toBe(10)
     expect(kase.data.tables.Branch).toBeDefined()
     expect(diagnose(kase)).toEqual([])

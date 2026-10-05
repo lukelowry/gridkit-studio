@@ -298,15 +298,15 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.
 
-## GridKit case data and test fixtures
+## GridKit case data
 
-The files in `cases/` and `tests/fixtures/` include data adapted from
-[GridKit's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/main/cases/PhasorDynamics),
-with numeric formatting, monitor selections, and fault examples adjusted for GridKit Studio.
+The files in `cases/` are unmodified copies of
+[GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics).
 GridKit provides the dynamics models; the networks originate from:
 
 - ACTIVSg2000, ACTIVSg10k, IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
 - WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)
+- TwoArea: Kundur's two-area system; TwoBusBasic: GridKit's own example
 
 This product includes software produced by UT-Battelle, LLC under Contract
 No. DE-AC05-00OR22725 with the Department of Energy.

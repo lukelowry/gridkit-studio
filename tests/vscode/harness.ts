@@ -10,7 +10,7 @@ import * as vscode from 'vscode'
 
 import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/tasks.js'
-import { runtimeOf } from '../../src/gridkit/index.js'
+import { available } from '../../src/gridkit/index.js'
 import type { RunInfo, ViewKind } from '../../src/shared/messages.js'
 
 const TIMEOUT = 30_000
@@ -342,9 +342,10 @@ export class TestHost {
     this.studio.changed.fire(this.key)
   }
 
-  /** Whether GridKit runs here, installed or as GRIDKIT_IMAGE. A required run fails without it. */
+  /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
+   *  without it. */
   async gridkit(): Promise<boolean> {
-    const runtime = runtimeOf(gridkitOf(this.uri))
+    const runtime = available(gridkitOf(this.uri))
     if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtime
     return runtime.then(
       () => true,

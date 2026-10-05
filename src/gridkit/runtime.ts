@@ -82,7 +82,7 @@ async function containerCli(cli: string): Promise<string> {
   throw new Error(
     cli
       ? `${cli} was not found. Check GridKit Studio: Container CLI.`
-      : 'GridKit Studio: GridKit Image runs in Docker or Podman, and neither is installed here.',
+      : 'GridKit is not installed here, and GridKit Image runs in Docker or Podman. Install one, set GridKit Studio: GridKit Path to an install, or open this folder in a dev container with GridKit.',
   )
 }
 
@@ -132,6 +132,13 @@ async function requireImage(cli: string, podman: boolean, image: string): Promis
       ? `${image} is not on this machine, and GridKit Studio never pulls images. Pull it yourself with \`${engine} pull ${image}\`, then run again.`
       : `${engine} could not find ${image}: ${failed}`,
   )
+}
+
+/** Where `gridkit` runs DynamicSimulation now: an install, or a container whose image is here. */
+export async function available(gridkit: GridKit): Promise<Runtime> {
+  const runtime = await runtimeOf(gridkit)
+  if (runtime.kind === 'container') await requireImage(runtime.cli, runtime.podman, runtime.image)
+  return runtime
 }
 
 /** The container CLI's arguments that run DynamicSimulation in `image` on the run in `directory`:
@@ -196,8 +203,7 @@ export async function launch(
   log: (text: string) => void,
   lifecycle: (process?: RuntimeProcess) => void = () => {},
 ) {
-  const runtime = await runtimeOf(gridkit)
-  if (runtime.kind === 'container') await requireImage(runtime.cli, runtime.podman, runtime.image)
+  const runtime = await available(gridkit)
   signal.throwIfAborted()
   const container =
     runtime.kind === 'container'

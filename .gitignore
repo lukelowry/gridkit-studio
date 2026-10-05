@@ -1,9 +1,4 @@
 node_modules/
 dist/
-coverage/
 output/
 .vscode-test/
-.impeccable/
-*.vsix
-*.tsbuildinfo
-cases/**/*.mon.csv

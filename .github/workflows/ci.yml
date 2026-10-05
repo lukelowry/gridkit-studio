@@ -10,13 +10,18 @@ on:
         description: Publish release
         type: boolean
         default: false
+      baselines:
+        description: Redraw the pixel baselines
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
 jobs:
-  build:
+  # Format, lint, settings, types, unit tests and the VSIX, on every OS.
+  check:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -32,35 +37,17 @@ jobs:
           package-manager-cache: false
       - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
-      - name: Check release version
-        if: runner.os == 'Linux' && startsWith(github.ref, 'refs/tags/v')
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          node --input-type=module <<'JS'
-          import assert from 'node:assert/strict'
-          import { readFileSync } from 'node:fs'
-          const { version } = JSON.parse(readFileSync('package.json', 'utf8'))
-          assert.equal(process.env.RELEASE_TAG, `v${version}`, 'Tag must match package.json version')
-          JS
-      - run: pnpm settings:check
-      - run: pnpm lint
-        if: runner.os == 'Linux'
-      - run: pnpm format:check
-        if: runner.os == 'Linux'
-      - run: pnpm build
-        if: runner.os != 'Linux'
-      - name: Package VSIX
-        run: pnpm package
-        if: runner.os == 'Linux'
-      - run: pnpm test
+      - run: pnpm quality
+      - run: pnpm package
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
         with:
           name: gridkit-studio
           path: dist/gridkit-studio-*.vsix
           if-no-files-found: error
-  vscode:
+  # The VSIX against real GridKit, from Studio's default image, in the oldest and newest VS Code.
+  gridkit:
+    needs: check
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -68,7 +55,9 @@ jobs:
       fail-fast: false
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}
+      GRIDKIT_TEST_REQUIRED: '1'
       GRIDKIT_TEST_SOFTWARE_GPU: '1'
+      GRIDKIT_UPDATE_BASELINES: ${{ inputs.baselines && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,21 +68,31 @@ jobs:
           package-manager-cache: false
       - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
-      - run: pnpm package
+      - uses: actions/download-artifact@v8
+        with:
+          name: gridkit-studio
+          path: dist
+      # Studio never pulls; the runner does, as a user would.
+      - run: docker pull ghcr.io/lukelowry/gridkit:latest
+      - run: pnpm test:simulation
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
       - run: dbus-run-session -- xvfb-run -a pnpm test:trust
       - uses: actions/upload-artifact@v7
+        if: inputs.baselines
+        with:
+          name: baselines-${{ matrix.vscode }}
+          path: tests/vscode/baselines
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: vscode-${{ matrix.vscode }}
+          name: gridkit-${{ matrix.vscode }}
           path: |
+            output/simulation
             output/packaged-*/playwright
             output/packaged-*/tests
-  gridkit:
-    uses: ./.github/workflows/gridkit.yml
   release:
     if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish)
-    needs: [build, vscode, gridkit]
+    needs: [check, gridkit]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -113,6 +112,10 @@ jobs:
         run: |
           asset="$(ls dist/gridkit-studio-*.vsix)"
           tag="v$(unzip -p "$asset" extension/package.json | jq -er .version)"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match package.json, which is $tag."
+            exit 1
+          fi
           if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
             echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
             exit 0

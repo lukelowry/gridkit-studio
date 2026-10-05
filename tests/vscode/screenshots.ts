@@ -1,5 +1,4 @@
-/** The README's pictures, from real GridKit runs, written to docs/images. Needs GridKit installed or
- *  GRIDKIT_IMAGE set. */
+/** The README's pictures, from real GridKit runs, written to docs/images. */
 
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -45,7 +44,7 @@ async function shoot(bench: TestHost, name: string, network: Frame): Promise<voi
 export async function run() {
   const bench = await testHost()
   try {
-    if (!(await bench.gridkit())) throw new Error('Install GridKit, or set GRIDKIT_IMAGE.')
+    if (!(await bench.gridkit())) throw new Error('GridKit does not run here.')
     await mkdir(IMAGES, { recursive: true })
     await bench.page.setViewportSize(WINDOW)
 

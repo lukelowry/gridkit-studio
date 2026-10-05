@@ -73,7 +73,7 @@ describe('real worker protocol', () => {
       const revision = { uri: 'file:///test.case.json', version: 1 }
       await call('parse', {
         ...revision,
-        text: await readFile('tests/fixtures/TwoArea.case.json', 'utf8'),
+        text: await readFile('cases/TwoArea.case.json', 'utf8'),
       }).done
       const received = new Promise<void>((resolve) => {
         rig.firstBatch = resolve
@@ -127,7 +127,7 @@ describe('real worker protocol', () => {
     rig.acknowledge = true
     try {
       const revision = { uri: 'file:///test.case.json', version: 1 }
-      const text = await readFile('tests/fixtures/TwoArea.case.json', 'utf8')
+      const text = await readFile('cases/TwoArea.case.json', 'utf8')
       await call('parse', { ...revision, text }).done
       // 200 frames of one bus's voltage: a few pages of results.
       const path = join(scratch, 'waveform.csv')

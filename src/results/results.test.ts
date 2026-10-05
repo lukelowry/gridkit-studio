@@ -6,8 +6,7 @@ import { Readable } from 'node:stream'
 import { blockBuffers, read, type SampleBatch, selectBatches, staticFields } from '@latkit/model'
 import { describe, expect, it } from 'vitest'
 
-import catalogJson from '../../catalog.json'
-import { Case, catalogOf, selections } from '../gridkit/index.js'
+import { Case, catalog, selections } from '../gridkit/index.js'
 import type { RunInfo } from '../shared/messages.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultCache, Results } from './results.js'
@@ -34,10 +33,7 @@ describe('native results and ownership', () => {
     expect(Array.from(cache.get('run:0')![0]!.coordinates)).toEqual([0, 1])
   })
   it('owned query buffers can transfer without detaching retained case data', async () => {
-    const kase = await Case.parse(
-      '{"buses":[{"class":"Bus","number":1,"name":"A"}]}',
-      catalogOf(JSON.stringify(catalogJson)),
-    )
+    const kase = await Case.parse('{"buses":[{"class":"Bus","number":1,"name":"A"}]}', catalog)
     for await (const batch of selectBatches(kase.data, staticFields(kase.schema), {
       buffers: 'owned',
       maxBlockBytes: 4096,
@@ -55,10 +51,7 @@ describe('native results and ownership', () => {
       expect(block.columns.number!.kind).toBe('numeric')
   })
   it('reads every page of a run with the layout its header gave the first', async () => {
-    const kase = await Case.parse(
-      '{"buses":[{"class":"Bus","number":1,"name":"A"}]}',
-      catalogOf(JSON.stringify(catalogJson)),
-    )
+    const kase = await Case.parse('{"buses":[{"class":"Bus","number":1,"name":"A"}]}', catalog)
     const fields = selections(kase, [{ from: 'Bus', select: ['Vm'] }])
     const layout: Layout = {}
     const page = async (text: string) => {
@@ -88,10 +81,7 @@ describe('native results and ownership', () => {
   it('evicts within budget and reloads exact native-file windows', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gridkit-results-test-'))
     try {
-      const kase = await Case.parse(
-        '{"buses":[{"class":"Bus","number":1,"name":"A"}]}',
-        catalogOf(JSON.stringify(catalogJson)),
-      )
+      const kase = await Case.parse('{"buses":[{"class":"Bus","number":1,"name":"A"}]}', catalog)
       const outputs = [{ from: 'Bus', select: ['Vm'] }]
       const fields = selections(kase, outputs)
       const path = join(directory, 'results.csv')

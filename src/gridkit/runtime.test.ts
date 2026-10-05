@@ -34,7 +34,7 @@ describe('where GridKit runs', () => {
     const installed = await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
     await program(join(root, 'path'), 'DynamicSimulation')
     await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: join(root, 'opt'), image: 'gridkit:arrow', cli: '' })).toEqual({
+    expect(await runtimeOf({ path: join(root, 'opt'), image: 'gridkit:latest', cli: '' })).toEqual({
       kind: 'installed',
       program: installed,
     })
@@ -43,14 +43,14 @@ describe('where GridKit runs', () => {
   it('refuses a path with no GridKit rather than falling back to the image', async () => {
     await program(join(root, 'path'), 'docker')
     await expect(
-      runtimeOf({ path: join(root, 'missing'), image: 'gridkit:arrow', cli: '' }),
+      runtimeOf({ path: join(root, 'missing'), image: 'gridkit:latest', cli: '' }),
     ).rejects.toThrow(/GridKit Path/)
   })
 
   it('runs DynamicSimulation on PATH, as a dev container has it, before the image', async () => {
     const installed = await program(join(root, 'path'), 'DynamicSimulation')
     await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: '', image: 'gridkit:arrow', cli: '' })).toEqual({
+    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toEqual({
       kind: 'installed',
       program: installed,
     })
@@ -58,17 +58,17 @@ describe('where GridKit runs', () => {
 
   it('runs the image where GridKit is not installed, in Docker, else Podman', async () => {
     const podman = await program(join(root, 'path'), 'podman')
-    expect(await runtimeOf({ path: '', image: 'gridkit:arrow', cli: '' })).toEqual({
+    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toEqual({
       kind: 'container',
       cli: podman,
       podman: true,
-      image: 'gridkit:arrow',
+      image: 'gridkit:latest',
     })
     const docker = await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: '', image: 'gridkit:arrow', cli: '' })).toMatchObject({
+    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toMatchObject({
       cli: docker,
     })
-    expect(await runtimeOf({ path: '', image: 'gridkit:arrow', cli: 'podman' })).toMatchObject({
+    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: 'podman' })).toMatchObject({
       cli: podman,
       podman: true,
     })
@@ -76,10 +76,10 @@ describe('where GridKit runs', () => {
 
   it('says how to run GridKit when it has nowhere to', async () => {
     await expect(runtimeOf({ path: '', image: '', cli: '' })).rejects.toThrow(/GridKit Image/)
-    await expect(runtimeOf({ path: '', image: 'gridkit:arrow', cli: '' })).rejects.toThrow(
+    await expect(runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).rejects.toThrow(
       /Docker or Podman/,
     )
-    await expect(runtimeOf({ path: '', image: 'gridkit:arrow', cli: 'nerdctl' })).rejects.toThrow(
+    await expect(runtimeOf({ path: '', image: 'gridkit:latest', cli: 'nerdctl' })).rejects.toThrow(
       /Container CLI/,
     )
   })
@@ -87,7 +87,7 @@ describe('where GridKit runs', () => {
 
 describe('a container run', () => {
   const run = (platform: NodeJS.Platform, podman: boolean) =>
-    containerArgs('gridkit:arrow', '/runs/run-1', 'gridkit-studio-1', {
+    containerArgs('gridkit:latest', '/runs/run-1', 'gridkit-studio-1', {
       platform,
       podman,
       uid: 1000,
@@ -99,7 +99,7 @@ describe('a container run', () => {
     expect(args.slice(0, 2)).toEqual(['run', '--rm'])
     expect(args.join(' ')).toContain('--pull never --name gridkit-studio-1 --network none')
     expect(args.join(' ')).toContain('--volume /runs/run-1:/simulation --workdir /simulation')
-    expect(args.slice(-3)).toEqual(['gridkit:arrow', 'DynamicSimulation', 'input.json'])
+    expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'input.json'])
     expect(args).not.toContain('--user')
   })
 

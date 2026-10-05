@@ -14,11 +14,10 @@ import {
   staticFields,
 } from '@latkit/model'
 
-import catalogJson from '../catalog.json'
 import {
   applyChanges,
   Case,
-  catalogOf,
+  catalog,
   completionsAt,
   diagnose,
   editable,
@@ -46,7 +45,6 @@ import { nameFieldOf } from './shared/schema.js'
 
 const port = parentPort!
 const BLOCK_BYTES = 256 << 10
-const catalog = catalogOf(JSON.stringify(catalogJson))
 const cases = new Map<string, { kase: Case; summary: Summary }>()
 const parses = new Map<string, number>()
 const mirrors = new Map<string, { version: number; text: string }>()

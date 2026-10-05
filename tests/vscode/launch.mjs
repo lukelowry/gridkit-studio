@@ -45,7 +45,7 @@ try {
       'workbench.startupEditor': 'none',
       'workbench.secondarySideBar.defaultVisibility': 'hidden',
       'security.workspace.trust.startupPrompt': 'never',
-      // An install of GridKit other than the one on PATH, or an image to run without one.
+      // An install of GridKit other than the one on PATH, or an image other than the default.
       ...(process.env.GRIDKIT_PATH && { 'gridkitStudio.gridkitPath': process.env.GRIDKIT_PATH }),
       ...(process.env.GRIDKIT_IMAGE && { 'gridkitStudio.gridkitImage': process.env.GRIDKIT_IMAGE }),
       ...(process.env.GRIDKIT_CONTAINER_CLI && {
@@ -56,7 +56,7 @@ try {
   const workspace = path.join(run, 'workspace')
   await mkdir(workspace)
   await copyFile(
-    path.join(root, 'tests/fixtures/IEEE39.case.json'),
+    path.join(root, 'cases/IEEE39.case.json'),
     path.join(workspace, 'IEEE39.case.json'),
   )
 

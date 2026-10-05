@@ -34,7 +34,20 @@ export async function run() {
     const first = await client()
     const second = await client()
     const tools = (await first.listTools()).tools
-    assert.equal(tools.length, 11)
+    assert.equal(tools.length, 20)
+    assert.equal(mcp.listening, true)
+    await until(() => mcp.connected, 'MCP initialized client status')
+    assert.equal((await mcp.test(launch)).tools, 20)
+    // Commands write only this isolated test workspace and verify the real relay first.
+    await mcp.configureProject('codex')
+    const codex = await readFile(vscode.Uri.joinPath(folder(), '.codex/config.toml').fsPath, 'utf8')
+    assert.ok(codex.includes('[mcp_servers.gridkit]'))
+    assert.ok(codex.includes('ELECTRON_RUN_AS_NODE'))
+    await mcp.configureProject('claude')
+    const claude = JSON.parse(
+      await readFile(vscode.Uri.joinPath(folder(), '.mcp.json').fsPath, 'utf8'),
+    )
+    assert.deepEqual(claude.mcpServers.gridkit, { type: 'stdio', ...launch })
     assert.deepEqual(
       tools.map((tool) => tool.name).sort(),
       vscode.lm.tools
@@ -48,6 +61,9 @@ export async function run() {
       return result.structuredContent as Record<string, unknown>
     }
     const inspected = await call('inspect_case', { uri, from: 'Bus' })
+    const discovered = await call('find_cases', {})
+    assert.ok((discovered.cases as { uri: string }[]).some((item) => item.uri === uri))
+    assert.equal((await call('open_case', { uri })).version, document.version)
     const native = await vscode.lm.invokeTool('gridkit_inspect_case', {
       input: { uri, from: 'Bus' },
       toolInvocationToken: undefined,
@@ -118,6 +134,105 @@ export async function run() {
     await until(() => document.getText() === original, 'undo MCP changes')
     assert.equal((await call('action_status', { action: stale.action })).status, 'stale')
 
+    await call('inspect_case', { uri })
+    const added = await call('propose_components', {
+      uri,
+      version: document.version,
+      components: [
+        {
+          type: 'Branch',
+          key: 'agent-created',
+          fields: {
+            'ports.bus1': 'Bus/1',
+            'ports.bus2': 'Bus/999',
+            'params.R': 0,
+            'params.X': 0.1,
+          },
+        },
+        { type: 'Bus', key: 999, fields: { name: 'Agent-created bus', 'params.kv': 230 } },
+      ],
+    })
+    assert.equal(document.getText(), original)
+    await vscode.commands.executeCommand(
+      'gridkitStudio.approveAIProposal',
+      vscode.Uri.parse(`gridkit-proposal://${added.action}/edit.json`),
+    )
+    await until(() => document.getText().includes('agent-created'), 'MCP component creation')
+    await call('inspect_case', { uri })
+    const neighbors = await call('inspect_neighborhood', {
+      uri,
+      version: document.version,
+      id: 'Bus/999',
+      network: 'electrical',
+      hops: 2,
+    })
+    assert.equal(neighbors.nodes, 3)
+    await vscode.window.showTextDocument(document)
+    await vscode.commands.executeCommand('undo')
+    await until(() => document.getText() === original, 'undo atomic bus and branch creation')
+    await call('inspect_case', { uri })
+    const selected = await call('select_elements', {
+      uri,
+      version: document.version,
+      from: 'Bus',
+      ids: ['Bus/1'],
+    })
+    assert.equal(selected.count, 1)
+    const aggregated = await call('aggregate_case', {
+      uri,
+      version: document.version,
+      from: 'Bus',
+      fields: ['params.kv'],
+    })
+    assert.equal(aggregated.matched, 39)
+    const csv = vscode.Uri.joinPath(folder(), 'recorded.csv').fsPath
+    const bus = JSON.parse(original).buses.find((bus: { number: number }) => bus.number === 1)
+    await writeFile(csv, `time,Bus_${bus.name}_Vm\n0,1\n1,0.8\n2,1\n3,1\n`)
+    const recorded = await studio.client.call('import', {
+      uri,
+      version: document.version,
+      path: csv,
+      cacheBytes: 16 << 20,
+    })
+    const background = await call('analyze_run', {
+      uri,
+      run: recorded.id,
+      from: 'Bus',
+      field: 'Vm',
+      selection: selected.selection,
+      background: true,
+      metrics: [
+        { kind: 'threshold', lower: 0.9, durationMethod: 'left-hold', maxGapSeconds: 1 },
+        { kind: 'settling', after: 1, band: [0.9, 1.1], holdSeconds: 1, maxGapSeconds: 1 },
+      ],
+    })
+    const completed = await call('analysis_job', { job: background.job, waitMs: 10000 })
+    assert.equal(completed.status, 'complete')
+    const analysis = completed.result as {
+      evidence: string
+      rows: { threshold: { estimatedSeconds: number }; settling: { settledAt: number } }[]
+    }
+    assert.equal(analysis.rows[0]!.threshold.estimatedSeconds, 1)
+    assert.equal(analysis.rows[0]!.settling.settledAt, 2)
+    const saved = await call('read_evidence', { evidence: analysis.evidence })
+    assert.deepEqual(saved.rows, analysis.rows)
+    const samples = await call('query_signals', {
+      uri,
+      run: recorded.id,
+      from: 'Bus',
+      field: 'Vm',
+      ids: ['Bus/1'],
+      window: [0, 3],
+      representation: { kind: 'exact', maxSamples: 2 },
+    })
+    assert.equal(samples.nextOffset, 2)
+    const historical = await call('summarize_run', {
+      uri,
+      run: recorded.id,
+      include: ['configuration'],
+    })
+    assert.equal((historical.run as { configuration: unknown }).configuration, null)
+
     const directory = launch.args[2]!
     const recordPath = join(
       directory,
@@ -153,7 +268,7 @@ export async function run() {
     const next = await replacement.start()
     assert.deepEqual(next, launch)
     const reconnected = await client()
-    assert.equal((await reconnected.listTools()).tools.length, 11)
+    assert.equal((await reconnected.listTools()).tools.length, 20)
     await replacement.stop()
     const cancelledStart = replacement.start().then(
       () => false,

@@ -355,7 +355,7 @@ export async function launch(
     }
   })
   void done.catch(() => {})
-  return { done, stop, ended: () => ended, failed: (): ReadonlySet<string> => failed }
+  return { done, stop, ended: () => ended, failed: (): ReadonlySet<string> => failed, runtime }
 }
 
 /** Stops the process `owned` names and every process it started, and removes its container. The

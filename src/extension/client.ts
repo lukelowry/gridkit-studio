@@ -111,6 +111,7 @@ export class Client {
           pending.reject(
             Object.assign(new Error(message.message), {
               offset: message.offset,
+              code: message.code,
               length: message.length,
               ...(message.defect && { defect: true, detail: message.detail }),
             }),

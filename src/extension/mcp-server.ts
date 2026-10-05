@@ -4,7 +4,9 @@ import type { Socket } from 'node:net'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 
+import { message } from '../shared/format.js'
 import { boundedResult } from './ai-output.js'
+import { outputSchemas } from './ai-schemas.js'
 import type { ToolHandler } from './ai-tools.js'
 
 export interface ToolDefinition {
@@ -19,11 +21,17 @@ export function createAdapter(
   handlers: readonly ToolHandler[],
   definitions: readonly ToolDefinition[],
   version: string,
+  initialized?: (socket: Socket, client: { name: string; version: string }) => void,
 ) {
   const catalog = definitions.map((definition) => {
     const handler = handlers.find((handler) => handler.name === definition.name)
     if (!handler) throw new Error('No handler for ' + definition.name)
-    return { definition, handler, schema: fromJsonSchema(definition.inputSchema) }
+    return {
+      definition,
+      handler,
+      schema: fromJsonSchema(definition.inputSchema),
+      output: fromJsonSchema(outputSchemas[definition.name] ?? { type: 'object' }),
+    }
   })
   if (
     catalog.length !== handlers.length ||
@@ -50,13 +58,18 @@ export function createAdapter(
               'Inspect open cases first. Use explicit case URIs, document revisions and run IDs. Analyze recorded signals in the worker. Edit and run tools open a preview in VS Code and require the user to act there. A pending preview is not an applied edit or a started run. Check action_status for the outcome. Never automatically retry a mutation after disconnect.',
           },
         )
-        for (const { definition, handler, schema } of catalog) {
+        server.server.oninitialized = () => {
+          const client = server.server.getClientVersion()
+          if (client) initialized?.(socket, client)
+        }
+        for (const { definition, handler, schema, output } of catalog) {
           server.registerTool(
             definition.name,
             {
               title: definition.displayName,
               description: definition.modelDescription,
               inputSchema: schema,
+              outputSchema: output,
               annotations: { readOnlyHint: handler.readOnly, openWorldHint: false },
             },
             async (input, context) => {
@@ -66,11 +79,17 @@ export function createAdapter(
                 const { result, text } = await boundedResult(output, () => signal.throwIfAborted())
                 return { structuredContent: result, content: [{ type: 'text', text }] }
               } catch (error) {
+                const code =
+                  typeof (error as { code?: unknown } | null)?.code === 'string'
+                    ? (error as { code: string }).code
+                    : context.mcpReq.signal.aborted
+                      ? 'cancelled'
+                      : 'operation-failed'
+                const problem = { code, message: message(error) }
                 return {
                   isError: true,
-                  content: [
-                    { type: 'text', text: error instanceof Error ? error.message : String(error) },
-                  ],
+                  structuredContent: { error: problem },
+                  content: [{ type: 'text', text: JSON.stringify({ error: problem }) }],
                 }
               }
             },

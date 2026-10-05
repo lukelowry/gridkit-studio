@@ -90,6 +90,11 @@ export function plotsFor(run: RunInfo, plots: readonly Plot[]): Plot[] {
 }
 
 export class Sessions {
+  /** A requested setup or diagnostic command's result, also kept in the extension log. */
+  inform(text: string) {
+    this.output.info(text)
+    void vscode.window.showInformationMessage(text)
+  }
   readonly client: Client
   readonly documents: Documents
   readonly all = new Map<string, Session>()

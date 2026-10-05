@@ -7,6 +7,12 @@ import type { Sessions } from './sessions.js'
 import type { Tasks } from './tasks.js'
 
 vi.mock('vscode', () => ({
+  Range: class {
+    constructor(
+      readonly start: { character: number },
+      readonly end: { character: number },
+    ) {}
+  },
   Uri: { parse: (value: string) => value },
   TabInputText: class {},
   TabInputTextDiff: class {},
@@ -32,7 +38,12 @@ function fixture() {
       version: 1,
       isClosed: false,
       uri: { scheme: 'file' },
-      getText: () => '{"name":"old"}',
+      positionAt: (offset: number) => ({ line: 0, character: Math.min(offset, 14) }),
+      offsetAt: (position: { character: number }) => position.character,
+      getText: (range?: { start: { character: number }; end: { character: number } }) =>
+        range
+          ? '{"name":"old"}'.slice(range.start.character, range.end.character)
+          : '{"name":"old"}',
     },
     stale: false,
   }
@@ -98,7 +109,9 @@ describe('reviewed AI proposals', () => {
     const changes: Mutation[] = [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'new' }]
     const proposed = proposals.edit(revision, changes, [{ offset: 9, length: 3, text: 'new' }])
     expect(proposals.status(proposed.action).status).toBe('pending')
-    expect(proposals.get(proposed.proposal).after).toBe('{"name":"new"}')
+    expect(JSON.parse(proposals.get(proposed.proposal).after)).toEqual({
+      changes: [{ line: 1, source: '{"name":"new"}' }],
+    })
     changes[0] = { kind: 'set', id: 'Bus/1', field: 'name', value: 'changed after preview' }
     await proposals.review(proposed.proposal)
     expect(vscode.commands.executeCommand).toHaveBeenCalledWith(

@@ -26,6 +26,7 @@ const builds = [
       worker: 'src/worker.ts',
       mcp: 'src/mcp.ts',
       'mcp-server': 'src/extension/mcp-server.ts',
+      'ai-clients': 'src/extension/ai-clients.ts',
     },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },

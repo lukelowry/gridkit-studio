@@ -5,6 +5,7 @@ import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf, elementType } from '../shared/schema.js'
 import type { Case } from './case.js'
+import { createRecords } from './create.js'
 import type { ArrayName } from './definition.js'
 import { apply, editField, minimal, nativePath, recordOf, textOffset, withValue } from './edits.js'
 
@@ -15,6 +16,18 @@ const MAX_MUTATIONS = 10000
 export function transaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
   if (!Array.isArray(mutations) || !mutations.length || mutations.length > MAX_MUTATIONS)
     throw failure('resource-limit', 'A transaction must contain 1–10,000 changes.')
+  if (mutations.some((mutation) => mutation.kind === 'add')) {
+    if (
+      !mutations.every(
+        (mutation): mutation is Extract<Mutation, { kind: 'add' }> => mutation.kind === 'add',
+      )
+    )
+      throw failure(
+        'invalid-input',
+        'Create elements together in a separate transaction from existing field edits.',
+      )
+    return createRecords(kase, mutations)
+  }
   const records = new Map<string, { offset: number; before: string; after: string }>()
   const extra: SourceEdit[] = []
   const get = (id: string) => {

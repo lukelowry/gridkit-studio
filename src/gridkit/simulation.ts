@@ -33,7 +33,13 @@ export class Simulation implements Command {
   }
   async run(input: Arguments<Parameters>, context: CommandContext): Promise<void> {
     context.signal.throwIfAborted()
-    const { command, outputs, faults } = preflight(this.kase, input, context.outputs)
+    const { values, command, outputs, faults } = preflight(this.kase, input, context.outputs)
+    this.info.configuration = {
+      values: structuredClone(values),
+      program: command.program,
+      options: command.options.map(({ option, value }) => ({ name: option.id, value })),
+      addedFaults: structuredClone(command.faults),
+    }
     this.info.span = [command.domain[0], command.domain[1]]
     const ordinal = faultOrdinal(this.kase)
     await writeFile(
@@ -49,6 +55,7 @@ export class Simulation implements Command {
       (message) => context.log({ severity: 'info', message }),
       this.lifecycle,
     )
+    this.info.configuration.runtime = process.runtime
     try {
       if (command.program === 'ContingencyAnalysis')
         await this.#study(command, faults.ids, ordinal, outputs, process, context)

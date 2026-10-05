@@ -20,6 +20,7 @@ import { promisify } from 'node:util'
 
 import * as vscode from 'vscode'
 
+import type * as Clients from './ai-clients.js'
 import type { ToolHandler } from './ai-tools.js'
 import type { createAdapter } from './mcp-server.js'
 import type { Sessions } from './sessions.js'
@@ -51,6 +52,7 @@ export class MCP implements vscode.Disposable {
   readonly #changed = new vscode.EventEmitter<void>()
   readonly #sockets = new Set<Socket>()
   readonly #handles = new Map<Socket, { close(): Promise<void> }>()
+  readonly #clients = new Map<Socket, { name: string; version: string }>()
   readonly #registrations: vscode.Disposable[]
   #adapter?: ReturnType<typeof createAdapter>
   #server?: Server
@@ -70,6 +72,21 @@ export class MCP implements vscode.Disposable {
     this.#registrations = [
       this.#changed,
       studio.command('gridkitStudio.connectAI', () => this.configure()),
+      studio.command('gridkitStudio.connectCodex', () => this.configureProject('codex')),
+      studio.command('gridkitStudio.connectClaude', () => this.configureProject('claude')),
+      studio.command('gridkitStudio.testAI', () => this.test()),
+      studio.command('gridkitStudio.aiStatus', () =>
+        this.studio.inform(
+          !this.#connection
+            ? 'GridKit AI connection is off.'
+            : this.#clients.size
+              ? 'GridKit connected clients: ' +
+                [...this.#clients.values()]
+                  .map((client) => client.name + ' ' + client.version)
+                  .join(', ')
+              : 'GridKit is listening. No AI client has completed the MCP handshake. Restart or reconnect MCP in your AI client.',
+        ),
+      ),
       studio.command('gridkitStudio.disconnectAI', async () => {
         await context.workspaceState.update('mcp.enabled', false)
         await context.workspaceState.update('mcp.vscode', false)
@@ -102,7 +119,109 @@ export class MCP implements vscode.Disposable {
   }
 
   get connected() {
+    return this.#clients.size > 0
+  }
+
+  get listening() {
     return !!this.#connection
+  }
+
+  #clientTools(): typeof Clients {
+    const context = this.studio.context
+    return createRequire(join(context.extensionPath, 'package.json'))(
+      context.asAbsolutePath('dist/ai-clients.cjs'),
+    ) as typeof Clients
+  }
+
+  async test(launch?: Launch) {
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Testing GridKit AI connection',
+        cancellable: true,
+      },
+      async (_, token) => {
+        const controller = new AbortController()
+        const subscription = token.onCancellationRequested(() => controller.abort())
+        const timeout = setTimeout(
+          () => controller.abort(new Error('Connection test timed out.')),
+          15000,
+        )
+        try {
+          return await this.#clientTools().testConnection(
+            launch ?? (await this.start()),
+            controller.signal,
+          )
+        } finally {
+          clearTimeout(timeout)
+          subscription.dispose()
+        }
+      },
+    )
+    if (!launch)
+      void this.studio.inform(
+        `GridKit relay verified: ${result.tools} tools available. This test does not connect your AI app; use Connect Codex or Connect Claude Code.`,
+      )
+    return result
+  }
+
+  async configureProject(client: 'codex' | 'claude') {
+    if (!vscode.workspace.isTrusted)
+      throw new Error('Trust this workspace before configuring an AI client.')
+    const folders = vscode.workspace.workspaceFolders
+    if (!folders?.length) throw new Error('Open a workspace folder before connecting an AI client.')
+    const folder =
+      folders.length === 1
+        ? folders[0]
+        : await vscode.window.showWorkspaceFolderPick({
+            placeHolder:
+              'Project to configure for ' + (client === 'codex' ? 'Codex' : 'Claude Code'),
+          })
+    if (!folder) return
+    const launch = await this.start()
+    await this.test(launch)
+    const uri = vscode.Uri.joinPath(
+      folder.uri,
+      client === 'codex' ? '.codex/config.toml' : '.mcp.json',
+    )
+    let document: vscode.TextDocument | undefined
+    try {
+      await vscode.workspace.fs.stat(uri)
+      document = await vscode.workspace.openTextDocument(uri)
+    } catch (error) {
+      if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') throw error
+    }
+    if (document?.isDirty)
+      throw new Error(
+        'Save ' +
+          vscode.workspace.asRelativePath(uri) +
+          ' before connecting; it has unsaved changes.',
+      )
+    const content = this.#clientTools().clientConfig(client, document?.getText() ?? '', launch)
+    const edit = new vscode.WorkspaceEdit()
+    if (document)
+      edit.replace(
+        uri,
+        new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)),
+        content,
+      )
+    else {
+      if (client === 'codex')
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder.uri, '.codex'))
+      edit.createFile(uri, { overwrite: false })
+      edit.insert(uri, new vscode.Position(0, 0), content)
+    }
+    if (!(await vscode.workspace.applyEdit(edit)))
+      throw new Error('The client configuration changed. Try connecting again.')
+    document = await vscode.workspace.openTextDocument(uri)
+    if (!(await document.save()))
+      throw new Error('Save the client configuration to finish connecting.')
+    await this.studio.context.workspaceState.update('mcp.enabled', true)
+    await vscode.window.showTextDocument(document, { preview: false })
+    const name = client === 'codex' ? 'Codex' : 'Claude Code'
+    void this.studio.inform(
+      `${name} project configuration saved; GridKit relay verified. Reconnect MCP or restart ${name} in this project and accept its project trust prompt. Keep this VS Code workspace open.`,
+    )
   }
 
   /** The workspace directory is stable across reloads; an exact-window launch is opt-in. */
@@ -224,6 +343,7 @@ export class MCP implements vscode.Disposable {
     socket.once('close', () => {
       clearTimeout(timer)
       this.#sockets.delete(socket)
+      this.#clients.delete(socket)
       void this.#handles
         .get(socket)
         ?.close()
@@ -263,6 +383,9 @@ export class MCP implements vscode.Disposable {
             this.tools,
             context.extension.packageJSON.contributes.languageModelTools,
             context.extension.packageJSON.version,
+            (socket, client) => {
+              if (client.name !== 'gridkit-connection-test') this.#clients.set(socket, client)
+            },
           )
         }
         const handle = this.#adapter(socket)
@@ -280,7 +403,16 @@ export class MCP implements vscode.Disposable {
   async configure() {
     const client = await vscode.window.showQuickPick(
       [
-        { label: 'Codex', description: 'Generate config.toml settings', value: 'codex' },
+        {
+          label: 'Codex',
+          description: 'Configure this project and verify the connection',
+          value: 'codex',
+        },
+        {
+          label: 'Claude Code',
+          description: 'Configure this project and verify the connection',
+          value: 'claude',
+        },
         {
           label: 'Other MCP client',
           description: 'Generate a stdio server configuration',
@@ -295,6 +427,8 @@ export class MCP implements vscode.Disposable {
       { title: 'Connect AI client to this GridKit workspace' },
     )
     if (!client) return
+    if (client.value === 'codex' || client.value === 'claude')
+      return this.configureProject(client.value)
     const scope =
       client.value === 'vscode'
         ? 'window'
@@ -326,14 +460,10 @@ export class MCP implements vscode.Disposable {
       await vscode.commands.executeCommand('workbench.mcp.listServer')
       return
     }
-    const content =
-      client.value === 'codex'
-        ? '# Add to ~/.codex/config.toml on this same computer or remote environment, then restart the client.\n# Keep this GridKit workspace open. Disconnect with GridKit Studio: Disconnect AI Clients.\n[mcp_servers.gridkit]\n' +
-          `command = ${JSON.stringify(launch.command)}\nargs = ${JSON.stringify(launch.args)}\nenv = { ELECTRON_RUN_AS_NODE = "1" }\n`
-        : JSON.stringify({ mcpServers: { gridkit: launch } }, null, 2)
+    const content = JSON.stringify({ mcpServers: { gridkit: launch } }, null, 2)
     await vscode.window.showTextDocument(
       await vscode.workspace.openTextDocument({
-        language: client.value === 'codex' ? 'toml' : 'json',
+        language: 'json',
         content,
       }),
     )
@@ -347,6 +477,7 @@ export class MCP implements vscode.Disposable {
       for (const socket of this.#sockets) socket.destroy()
       await Promise.all([...this.#handles.values()].map((handle) => handle.close()))
       this.#handles.clear()
+      this.#clients.clear()
       const server = this.#server
       this.#server = undefined
       if (server) await new Promise<void>((resolve) => server.close(() => resolve()))

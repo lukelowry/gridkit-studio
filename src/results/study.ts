@@ -78,6 +78,7 @@ export async function rank(
         state: result.rows.some((r) => r.valid) ? 'measured' : 'unavailable',
         worst: result.rows[0],
         snapshot: result.snapshot,
+        population: result.population,
       })
     } catch (error) {
       signal.throwIfAborted()

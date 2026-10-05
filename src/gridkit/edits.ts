@@ -140,41 +140,11 @@ export function editField(
   const plan = record.table.shape.plan.get(field)
   if (!plan || !editable(plan))
     throw failure('invalid-input', 'Edit identities and structural changes in JSON.')
-  const definition = plan.definition
-  const type = definition.type
-  let value: unknown = input
-  if (value !== null) {
-    if (typeof type === 'string') {
-      const valid =
-        type === 'text'
-          ? typeof value === 'string'
-          : type === 'boolean'
-            ? typeof value === 'boolean'
-            : typeof value === 'number' &&
-              Number.isFinite(value) &&
-              (type === 'int32'
-                ? Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
-                : true)
-      if (!valid) throw failure('invalid-input', `Expected ${type} for ${field}.`)
-    } else if (type.kind === 'reference') {
-      const target = typeof value === 'string' ? kase.locate(value) : null
-      if (!target || target.table.shape.type !== type.to)
-        throw failure('invalid-input', `Choose an existing ${type.to} reference.`)
-      value = kase.native(target.table, target.row)
-    } else if (type.kind === 'list') {
-      if (
-        !Array.isArray(value) ||
-        !value.every(
-          (point) =>
-            Array.isArray(point) &&
-            point.length === 2 &&
-            point.every((n) => typeof n === 'number' && Number.isFinite(n)),
-        )
-      )
-        throw failure('invalid-input', 'A route is an array of [longitude, latitude] points.')
-    }
-  } else if (!definition.nullable || plan.required)
-    throw failure('invalid-input', 'This field cannot be null.')
+  const value = fieldValue(plan, input, (id, type) => {
+    const target = kase.locate(id)
+    return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
+  })
+  const type = plan.definition.type
   const path = nativePath(plan)
   const real = type === 'float64' && typeof value === 'number'
   // An existing value's token alone is replaced; anything else is inserted through jsonc-parser.
@@ -262,4 +232,48 @@ export function diagnose(kase: Case): Issue[] {
     })
   }
   return issues
+}
+
+/** Shared validation for existing fields and newly created records. */
+export function fieldValue(
+  plan: FieldPlan,
+  input: Value,
+  resolve: (id: string, type: string) => string | number | undefined,
+): unknown {
+  const definition = plan.definition
+  const type = definition.type
+  let value: unknown = input
+  if (value !== null) {
+    if (typeof type === 'string') {
+      const valid =
+        type === 'text'
+          ? typeof value === 'string'
+          : type === 'boolean'
+            ? typeof value === 'boolean'
+            : typeof value === 'number' &&
+              Number.isFinite(value) &&
+              (type === 'int32'
+                ? Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+                : true)
+      if (!valid) throw failure('invalid-input', `Expected ${type} for ${plan.name}.`)
+    } else if (type.kind === 'reference') {
+      const target = typeof value === 'string' ? resolve(value, type.to) : undefined
+      if (target === undefined)
+        throw failure('invalid-input', `Choose an existing or proposed ${type.to} reference.`)
+      value = target
+    } else if (type.kind === 'list') {
+      if (
+        !Array.isArray(value) ||
+        !value.every(
+          (point) =>
+            Array.isArray(point) &&
+            point.length === 2 &&
+            point.every((n) => typeof n === 'number' && Number.isFinite(n)),
+        )
+      )
+        throw failure('invalid-input', 'A route is an array of [longitude, latitude] points.')
+    }
+  } else if (!definition.nullable || plan.required)
+    throw failure('invalid-input', 'This field cannot be null.')
+  return value
 }

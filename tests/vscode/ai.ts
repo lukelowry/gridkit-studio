@@ -25,7 +25,7 @@ export async function run() {
       .join('')
     return JSON.parse(text) as T
   }
-  assert.equal(vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_')).length, 11)
+  assert.equal(vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_')).length, 20)
   const document = await vscode.workspace.openTextDocument(
     vscode.Uri.joinPath(folder(), 'IEEE39.case.json'),
   )
@@ -175,6 +175,15 @@ export async function run() {
   }>('summarize_run', { uri })
   assert.equal(summarized.current.retained, true)
   assert.equal(summarized.previous.retained, true)
+  const captured = await invoke<{
+    run: {
+      configuration: { values: { tmax: number }; runtime: { kind: string } }
+      matchesDocument: boolean
+    }
+  }>('summarize_run', { uri, run: dynamic.id, include: ['configuration'] })
+  assert.equal(captured.run.configuration.values.tmax, 0.02)
+  assert.ok(captured.run.configuration.runtime.kind)
+  assert.equal(captured.run.matchesDocument, true)
   await vscode.commands.executeCommand('gridkitStudio.clearRun', vscode.Uri.parse(uri))
   assert.equal((await studio.client.call('stats', {})).cacheBytes, 0)
   assert.equal(session.run, undefined)

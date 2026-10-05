@@ -86,7 +86,7 @@ try {
   assert.equal(packaged.version, manifest.version)
   assert.equal(packaged.engines.vscode, manifest.engines.vscode)
   await verify(target)
-  for (const name of ['extension.cjs', 'worker.cjs', 'mcp.cjs', 'mcp-server.cjs'])
+  for (const name of ['extension.cjs', 'worker.cjs', 'mcp.cjs', 'mcp-server.cjs', 'ai-clients.cjs'])
     assert.ok(existsSync(join(target, 'dist', name)), 'Missing packaged bundle: ' + name)
   const entries = process.argv.slice(2)
   if (!entries.length) entries.push('tests/vscode/mcp.ts', 'tests/vscode/index.ts')

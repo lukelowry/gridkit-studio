@@ -135,15 +135,35 @@ export class Proposals implements vscode.Disposable {
     this.studio.documents.require(revision)
     const document = this.studio.documents.entries.get(revision.uri)!.document
     if (!isWritable(document)) throw new Error('This document is read-only.')
-    const before = document.getText()
-    let after = before
-    for (const edit of [...edits].sort((a, b) => b.offset - a.offset))
-      after = after.slice(0, edit.offset) + edit.text + after.slice(edit.offset + edit.length)
-    if (before === after) throw new Error('The proposed edits do not change this case.')
+    if (!edits.length) throw new Error('The proposed edits do not change this case.')
+    // Capture just changed source spans with local context, independent of document size.
+    const length = document.offsetAt(document.positionAt(Number.MAX_SAFE_INTEGER))
+    const hunks = edits.map((edit) => {
+      const start = Math.max(0, edit.offset - 80)
+      const end = Math.min(length, edit.offset + edit.length + 80)
+      const before = document.getText(
+        new vscode.Range(document.positionAt(start), document.positionAt(end)),
+      )
+      const after =
+        before.slice(0, edit.offset - start) +
+        edit.text +
+        before.slice(edit.offset - start + edit.length)
+      return { line: document.positionAt(edit.offset).line + 1, before, after }
+    })
+    const before = JSON.stringify(
+      { changes: hunks.map(({ line, before: source }) => ({ line, source })) },
+      null,
+      2,
+    )
+    const after = JSON.stringify(
+      { changes: hunks.map(({ line, after: source }) => ({ line, source })) },
+      null,
+      2,
+    )
     return this.#add({
       ...revision,
       kind: 'edit',
-      title: `Edit ${mutations.length} field${mutations.length === 1 ? '' : 's'}`,
+      title: `${mutations[0]?.kind === 'add' ? 'Add' : 'Change'} ${mutations.length} item${mutations.length === 1 ? '' : 's'}`,
       mutations,
       before,
       after,

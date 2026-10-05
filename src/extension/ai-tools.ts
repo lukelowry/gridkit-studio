@@ -1,22 +1,22 @@
 import type { FieldSelection, RowsBlock, RowsQuery } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import type { AnalysisOptions, RunTarget } from '../shared/analysis.js'
+import type { AnalysisOptions, RunTarget, SignalOptions } from '../shared/analysis.js'
 import { referenceNames, rowsOf } from '../shared/cells.js'
+import {
+  type AggregateQuery,
+  type CaseQuery,
+  type NeighborhoodQuery,
+  pageOf as page,
+} from '../shared/inspection.js'
 import type { Mutation, Revision, RunRequest } from '../shared/messages.js'
 import { elementType } from '../shared/schema.js'
 import { showPlot } from './actions.js'
+import { AnalysisJobs } from './analysis-jobs.js'
 import type { Proposals } from './proposals.js'
 import type { Sessions } from './sessions.js'
 import { cacheBytesOf, gridkitOf } from './tasks.js'
 
-const page = (input: { offset?: number; limit?: number }) => {
-  const offset = input.offset ?? 0
-  const limit = input.limit ?? 20
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
-    throw new Error('Use a nonnegative offset and a positive limit.')
-  return { offset, limit }
-}
 const revisionOf = (revision: Revision): Revision => ({
   uri: revision.uri,
   version: revision.version,
@@ -42,6 +42,13 @@ export interface ToolHandler {
 /** One set of handlers for native tools and every MCP connection in this window. */
 export function createTools(studio: Sessions, proposals: Proposals) {
   const handlers: ToolHandler[] = []
+  const jobs = new AnalysisJobs()
+  studio.disposables.push(jobs)
+  const analysis = (
+    background: boolean | undefined,
+    signal: AbortSignal,
+    run: (signal: AbortSignal) => Promise<Record<string, unknown>>,
+  ) => (background ? jobs.start(run) : run(signal))
   const sessionOf = (uri: string) => {
     const session = studio.all.get(uri)
     if (!session) throw new Error('The case is not open. Inspect open cases first.')
@@ -58,7 +65,13 @@ export function createTools(studio: Sessions, proposals: Proposals) {
     handlers.push({
       name: 'gridkit_' + name,
       message: description,
-      readOnly: !['show_element', 'propose_edits', 'propose_run'].includes(name),
+      readOnly: ![
+        'show_element',
+        'open_case',
+        'propose_components',
+        'propose_edits',
+        'propose_run',
+      ].includes(name),
       async run(input, signal) {
         signal.throwIfAborted()
         return run(input as T, signal)
@@ -66,75 +79,146 @@ export function createTools(studio: Sessions, proposals: Proposals) {
     })
   }
 
-  register<{ uri?: string; from?: string; select?: string[]; offset?: number; limit?: number }>(
-    'inspect_case',
-    'Inspecting GridKit cases',
-    async (input) => {
-      const { offset, limit } = page(input)
-      if (input.select && !input.from)
-        throw new Error('Choose a type with from before selecting fields.')
-      if (!input.uri) {
-        const cases = [...studio.all.values()].map((session) => {
-          const entry = studio.documents.entries.get(session.uri)
-          return {
-            uri: session.uri,
-            version: entry?.document.version,
-            parsedVersion: entry?.summary?.version,
-            name: entry?.summary?.name,
-            stale: entry?.stale ?? true,
-          }
-        })
+  register<{
+    uri?: string
+    from?: string
+    select?: string[]
+    include?: ('settings' | 'empty-types')[]
+    offset?: number
+    limit?: number
+  }>('inspect_case', 'Inspecting GridKit cases', async (input) => {
+    const { offset, limit } = page(input)
+    if (input.select && !input.from)
+      throw new Error('Choose a type with from before selecting fields.')
+    if (!input.uri) {
+      const cases = [...studio.all.values()].map((session) => {
+        const entry = studio.documents.entries.get(session.uri)
         return {
-          active: studio.active,
-          cases: cases.slice(offset, offset + limit),
-          offset,
-          total: cases.length,
-          nextOffset: offset + limit < cases.length ? offset + limit : null,
+          uri: session.uri,
+          version: entry?.document.version,
+          parsedVersion: entry?.summary?.version,
+          name: entry?.summary?.name,
+          stale: entry?.stale ?? true,
         }
-      }
-      const session = sessionOf(input.uri)
-      const entry = studio.documents.entries.get(input.uri)
-      if (!entry) throw new Error('The case document is closed.')
-      await studio.documents.ensure(entry.document).catch(() => {})
-      const summary = entry.summary
-      const entries = Object.entries(summary?.schema.types ?? {}).filter(([type]) =>
-        input.from ? type === input.from : !!summary?.counts[type],
-      )
-      if (input.from && !entries.length) throw new Error('Unknown case type.')
-      const types = entries.slice(offset, offset + limit).map(([type, definition]) => ({
-        type,
-        label: definition.label,
-        count: summary?.counts[type] ?? 0,
-        identity: summary?.identities[type],
-        ...(input.from
-          ? {
-              fields: input.select
-                ? Object.fromEntries(
-                    input.select.map((field) => {
-                      if (!definition.fields[field]) throw new Error('Unknown field: ' + field)
-                      return [field, definition.fields[field]]
-                    }),
-                  )
-                : definition.fields,
-              editable: summary?.editable[type] ?? [],
-            }
-          : {}),
-      }))
+      })
       return {
-        revision: { uri: input.uri, version: entry.document.version },
-        parsedVersion: summary?.version,
-        fingerprint: summary?.fingerprint,
-        name: summary?.name,
-        stale: entry.stale,
-        error: entry.error,
-        selection: session.selection,
-        types,
+        active: studio.active,
+        cases: cases.slice(offset, offset + limit),
         offset,
-        total: entries.length,
-        nextOffset: offset + limit < entries.length ? offset + limit : null,
-        ...(input.from ? {} : { parameters: summary?.parameters }),
+        total: cases.length,
+        nextOffset: offset + limit < cases.length ? offset + limit : null,
+      }
+    }
+    const session = sessionOf(input.uri)
+    const entry = studio.documents.entries.get(input.uri)
+    if (!entry) throw new Error('The case document is closed.')
+    await studio.documents.ensure(entry.document).catch(() => {})
+    const summary = entry.summary
+    const entries = Object.entries(summary?.schema.types ?? {}).filter(([type]) =>
+      input.from
+        ? type === input.from
+        : input.include?.includes('empty-types') || !!summary?.counts[type],
+    )
+    if (input.from && !entries.length) throw new Error('Unknown case type.')
+    const types = entries.slice(offset, offset + limit).map(([type, definition]) => ({
+      type,
+      label: definition.label,
+      count: summary?.counts[type] ?? 0,
+      identity: summary?.identities[type],
+      ...(input.from
+        ? {
+            fields: input.select
+              ? Object.fromEntries(
+                  input.select.map((field) => {
+                    if (!definition.fields[field]) throw new Error('Unknown field: ' + field)
+                    return [field, definition.fields[field]]
+                  }),
+                )
+              : definition.fields,
+            editable: summary?.editable[type] ?? [],
+            creation: summary?.creation?.[type],
+          }
+        : {}),
+    }))
+    return {
+      revision: { uri: input.uri, version: entry.document.version },
+      parsedVersion: summary?.version,
+      fingerprint: summary?.fingerprint,
+      name: summary?.name,
+      stale: entry.stale,
+      error: entry.error,
+      selection: session.selection,
+      types,
+      offset,
+      total: entries.length,
+      nextOffset: offset + limit < entries.length ? offset + limit : null,
+      ...(input.include?.includes('settings')
+        ? { parameters: summary?.parameters, values: session.values, recording: session.outputs }
+        : {}),
+    }
+  })
+  register<{ offset?: number; limit?: number }>(
+    'find_cases',
+    'Finding workspace cases',
+    async (input, signal) => {
+      const { offset, limit } = page(input)
+      const controller = new vscode.CancellationTokenSource()
+      const abort = () => controller.cancel()
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        const files = await vscode.workspace.findFiles(
+          '**/*.case.json',
+          '**/{node_modules,.git}/**',
+          undefined,
+          controller.token,
+        )
+        signal.throwIfAborted()
+        files.sort((a, b) => a.toString().localeCompare(b.toString()))
+        return {
+          cases: files.slice(offset, offset + limit).map((uri) => ({
+            uri: uri.toString(),
+            path: vscode.workspace.asRelativePath(uri),
+            open: studio.all.has(uri.toString()),
+          })),
+          offset,
+          total: files.length,
+          nextOffset: offset + limit < files.length ? offset + limit : null,
+        }
+      } finally {
+        signal.removeEventListener('abort', abort)
+        controller.dispose()
       }
     },
+  )
+  register<{ uri: string }>('open_case', 'Opening a GridKit case', async (input, signal) => {
+    const uri = vscode.Uri.parse(input.uri)
+    if (!vscode.workspace.getWorkspaceFolder(uri) || !uri.path.endsWith('.case.json'))
+      throw new Error('Choose a workspace .case.json URI from find_cases.')
+    const document = await vscode.workspace.openTextDocument(uri)
+    signal.throwIfAborted()
+    await studio.open(document)
+    return { uri: input.uri, version: document.version, next: 'gridkit_inspect_case' }
+  })
+  register<CaseQuery>('select_elements', 'Selecting GridKit elements', async (input, signal) => ({
+    ...(await studio.client.call('selection', input, signal)),
+  }))
+  register<AggregateQuery>('aggregate_case', 'Aggregating GridKit fields', (input, signal) =>
+    studio.client.call('aggregate', input, signal),
+  )
+  register<NeighborhoodQuery>(
+    'inspect_neighborhood',
+    'Reading GridKit connections',
+    (input, signal) => studio.client.call('neighborhood', input, signal),
+  )
+  register<SignalOptions>(
+    'query_signals',
+    'Reading recorded signal samples',
+    async (input, signal) => ({ ...(await studio.client.call('signals', input, signal)) }),
+  )
+  register<{ evidence: string; offset?: number; limit?: number }>(
+    'read_evidence',
+    'Reading saved analysis rows',
+    async (input, signal) => ({ ...(await studio.client.call('evidence', input, signal)) }),
   )
   register<
     Revision & {
@@ -223,24 +307,54 @@ export function createTools(studio: Sessions, proposals: Proposals) {
       }
     },
   )
-  register<{ uri: string }>(
+  register<{ uri: string; run?: string; include?: ('configuration' | 'recording' | 'logs')[] }>(
     'summarize_run',
     'Reading GridKit run evidence',
     async (input, signal) => {
       const session = sessionOf(input.uri)
       const retained = await studio.client.call('runs', { uri: input.uri }, signal)
-      const version = studio.documents.entries.get(input.uri)?.document.version
+      const entry = studio.documents.entries.get(input.uri)
+      const version = entry?.document.version
+      const fingerprint = !entry?.stale ? entry?.summary?.fingerprint : undefined
       const describe = (run: typeof session.run) =>
         run
           ? {
-              ...run,
-              matchesDocument: version === run.revision.version,
+              id: run.id,
+              revision: run.revision,
+              fingerprint: run.fingerprint,
+              state: run.state,
+              frames: run.frames,
+              domain: run.domain,
+              span: run.span,
+              started: run.started,
+              message: run.message,
+              ...(run.contingency
+                ? {
+                    study: run.contingency.study,
+                    contingency: run.contingency.shown,
+                    completed: run.contingency.done,
+                    scenarios: run.contingency.buses.length,
+                  }
+                : {}),
+              matchesDocument: fingerprint ? fingerprint === run.fingerprint : null,
+              ...(input.include?.includes('configuration')
+                ? { configuration: run.configuration ?? null }
+                : {}),
+              ...(input.include?.includes('recording') ? { outputs: run.outputs } : {}),
+              ...(input.include?.includes('logs') ? { logs: run.evidence ?? [] } : {}),
               retained: retained.some((item) => item.id === run.id),
               scope: run.contingency
                 ? 'displayed contingency; use study id and index to inspect siblings'
                 : 'single run',
             }
           : null
+      if (input.run) {
+        const run =
+          retained.find((run) => run.id === input.run || run.contingency?.study === input.run) ??
+          [session.run, session.previous].find((run) => run?.id === input.run)
+        if (!run) throw new Error('Unknown run. Inspect the retained runs first.')
+        return { uri: input.uri, run: describe(run) }
+      }
       return {
         uri: input.uri,
         documentVersion: version,
@@ -251,24 +365,38 @@ export function createTools(studio: Sessions, proposals: Proposals) {
           study: run.contingency?.study,
           revision: run.revision,
         })),
-        recording: session.outputs,
+        ...(input.include?.includes('recording') ? { currentRecording: session.outputs } : {}),
       }
     },
   )
-  register<RunTarget & AnalysisOptions>(
+  register<{ job: string; action?: 'status' | 'cancel'; waitMs?: number }>(
+    'analysis_job',
+    'Checking GridKit analysis',
+    (input, signal) => jobs.read(input, signal),
+  )
+  register<RunTarget & AnalysisOptions & { background?: boolean }>(
     'analyze_run',
     'Analyzing recorded GridKit signals',
-    async (input, signal) => ({ ...(await studio.client.call('analyze', input, signal)) }),
+    (input, signal) =>
+      analysis(input.background, signal, async (s) => ({
+        ...(await studio.client.call('analyze', input, s)),
+      })),
   )
-  register<{ before: RunTarget; after: RunTarget } & AnalysisOptions>(
+  register<{ before: RunTarget; after: RunTarget; background?: boolean } & AnalysisOptions>(
     'compare_runs',
     'Comparing recorded GridKit extrema',
-    async (input, signal) => ({ ...(await studio.client.call('compare', input, signal)) }),
+    (input, signal) =>
+      analysis(input.background, signal, async (s) => ({
+        ...(await studio.client.call('compare', input, s)),
+      })),
   )
-  register<RunTarget & AnalysisOptions & { contingencies?: number[] }>(
+  register<RunTarget & AnalysisOptions & { contingencies?: number[]; background?: boolean }>(
     'rank_contingencies',
     'Ranking GridKit contingencies',
-    async (input, signal) => ({ ...(await studio.client.call('rank', input, signal)) }),
+    (input, signal) =>
+      analysis(input.background, signal, async (s) => ({
+        ...(await studio.client.call('rank', input, s)),
+      })),
   )
   register<Revision & { action: 'reveal' | 'plot'; id: string; field?: string; run?: string }>(
     'show_element',
@@ -329,6 +457,29 @@ export function createTools(studio: Sessions, proposals: Proposals) {
       const action = proposals.edit(revisionOf(input), input.changes, edits)
       await proposals.review(action.proposal)
       return action
+    },
+  )
+  register<Revision & { components: Omit<Extract<Mutation, { kind: 'add' }>, 'kind'>[] }>(
+    'propose_components',
+    'Preparing new GridKit components',
+    async (input, signal) => {
+      studio.documents.require(input)
+      const mutations: Mutation[] = input.components.map((component) => ({
+        ...component,
+        kind: 'add',
+      }))
+      const edits = await studio.client.call(
+        'transact',
+        { ...revisionOf(input), mutations },
+        signal,
+      )
+      signal.throwIfAborted()
+      const action = proposals.edit(revisionOf(input), mutations, edits)
+      await proposals.review(action.proposal)
+      return {
+        ...action,
+        ids: input.components.map((component) => component.type + '/' + component.key),
+      }
     },
   )
   register<Revision & { values?: Record<string, unknown>; outputs?: FieldSelection[] }>(

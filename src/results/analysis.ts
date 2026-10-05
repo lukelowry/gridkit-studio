@@ -3,6 +3,7 @@ import { setImmediate as yieldTurn } from 'node:timers/promises'
 import { read, sampleAt, selectRows } from '@latkit/model'
 
 import type { Analysis, AnalysisOptions, Comparison, ElementStats } from '../shared/analysis.js'
+import { Measurements, validateMetrics } from './measurements.js'
 import type { Results } from './results.js'
 
 export function snapshot(run: Results) {
@@ -22,7 +23,11 @@ export function analysisSelection(
 ) {
   const { from, field, ids, order = 'min' } = options
   analysisLimit(options.limit)
-  if (order !== 'min' && order !== 'max') throw new Error('Order must be min or max.')
+  validateMetrics(options.metrics)
+  if (!['min', 'max', 'duration'].includes(order))
+    throw new Error('Order must be min, max or duration.')
+  if (order === 'duration' && !options.metrics?.some((metric) => metric.kind === 'threshold'))
+    throw new Error('Duration ordering requires a threshold measurement.')
   const definition = run.kase.schema.types[from]?.fields[field]
   if (!definition?.sampled) throw new Error('Choose a sampled numeric field from the run outputs.')
   const recorded = run.fields.find((f) => f.index.type === from && f.name === field)
@@ -69,9 +74,12 @@ export async function analyze(
     captured,
   )
   const stats = new Map<number, ElementStats>()
+  const measurements = new Map<number, Measurements>()
   const rowsSelection = { kind: 'indices' as const, index: recorded.index, values: selected }
   for (const row of selected)
     stats.set(row, { id: run.kase.id(table, row), valid: 0, missing: 0, min: null, max: null })
+  if (options.metrics?.length)
+    for (const [row, item] of stats) measurements.set(row, new Measurements(item, options.metrics))
   for (let p = 0; p < captured.pages; p++) {
     const page = run.pages[p]!
     if (page.domain[1] < window[0] || page.domain[0] > window[1]) continue
@@ -98,6 +106,9 @@ export async function analyze(
         const item = stats.get(physical)!
         for (let frame = 0; frame < block.coordinates.length; frame++) {
           const value = sampleAt(column, row, frame)
+          measurements
+            .get(physical)
+            ?.add(block.coordinates[frame]!, block.firstFrame + frame, value)
           if (value === null || !Number.isFinite(value)) {
             item.missing++
             continue
@@ -128,12 +139,30 @@ export async function analyze(
     window,
     total: rows.length,
     rows,
+    ...(options.metrics?.length
+      ? {
+          metrics: options.metrics,
+          population: {
+            measured: rows.filter((row) => row.valid > 0).length,
+            unmeasured: rows.filter((row) => row.valid === 0).length,
+            missingSamples: rows.reduce((sum, row) => sum + row.missing, 0),
+            ...(options.metrics.some((m) => m.kind === 'threshold')
+              ? { affected: rows.filter((row) => row.threshold!.samples > 0).length }
+              : {}),
+            ...(options.metrics.some((m) => m.kind === 'settling')
+              ? { settled: rows.filter((row) => row.settling!.settledAt !== null).length }
+              : {}),
+          },
+        }
+      : {}),
   }
 }
 
-export function compareStats(a: ElementStats, b: ElementStats, order: 'min' | 'max') {
-  const av = a[order]?.value
-  const bv = b[order]?.value
+export function compareStats(a: ElementStats, b: ElementStats, order: 'min' | 'max' | 'duration') {
+  const av =
+    order === 'duration' ? (a.valid ? a.threshold?.estimatedSeconds : undefined) : a[order]?.value
+  const bv =
+    order === 'duration' ? (b.valid ? b.threshold?.estimatedSeconds : undefined) : b[order]?.value
   return (
     (av === undefined
       ? bv === undefined
@@ -153,6 +182,11 @@ export function compare(before: Analysis, after: Analysis, limit: number): Compa
     throw new Error('Comparison requires the same field and units.')
   const earlier = new Map(before.rows.map((row) => [row.id, row]))
   const rows: Comparison['rows'] = []
+  const covered = (row: ElementStats, analysis: Analysis) =>
+    row.valid > 0 &&
+    row.missing === 0 &&
+    row.threshold?.unknownSeconds === 0 &&
+    row.threshold.coveredSeconds >= analysis.window[1] - analysis.window[0] - 1e-9
   for (const row of after.rows) {
     const previous = earlier.get(row.id)
     if (previous)
@@ -162,6 +196,22 @@ export function compare(before: Analysis, after: Analysis, limit: number): Compa
         after: row,
         minDelta: previous.min && row.min ? row.min.value - previous.min.value : null,
         maxDelta: previous.max && row.max ? row.max.value - previous.max.value : null,
+        ...(previous.threshold && row.threshold
+          ? {
+              durationDelta:
+                covered(previous, before) && covered(row, after)
+                  ? row.threshold.estimatedSeconds - previous.threshold.estimatedSeconds
+                  : null,
+              newlyAffected:
+                covered(previous, before) && row.valid
+                  ? previous.threshold.samples === 0 && row.threshold.samples > 0
+                  : null,
+              recovered:
+                covered(row, after) && previous.valid
+                  ? previous.threshold.samples > 0 && row.threshold.samples === 0
+                  : null,
+            }
+          : {}),
       })
   }
   rows.sort(

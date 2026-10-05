@@ -70,11 +70,12 @@
     "@latkit/monitor": "0.14.0",
     "@latkit/network": "0.19.0",
     "@latkit/video": "0.6.1",
+    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/server": "2.3.1",
-    "jsonc-parser": "3.3.1"
+    "jsonc-parser": "3.3.1",
+    "toml-eslint-parser": "1.0.3"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
     "@types/mocha": "10.0.10",
     "@types/node": "^24.19.0",
     "@types/pngjs": "6.0.5",
@@ -602,6 +603,26 @@
       {
         "command": "gridkitStudio.disconnectAI",
         "title": "Disconnect AI Clients",
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.connectCodex",
+        "title": "Connect Codex",
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.connectClaude",
+        "title": "Connect Claude Code",
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.testAI",
+        "title": "Test AI Connection",
+        "category": "GridKit Studio"
+      },
+      {
+        "command": "gridkitStudio.aiStatus",
+        "title": "Show AI Connection Status",
         "category": "GridKit Studio"
       }
     ],
@@ -2762,7 +2783,7 @@
       {
         "name": "gridkit_inspect_case",
         "displayName": "Inspect GridKit cases",
-        "modelDescription": "Start here. With no URI, discover open cases. With URI, inspect revision, type counts, selection and simulation parameters. Add from to read that type's fields, units, native identity and editable fields. Stale schema carries its parsedVersion; do not use it to edit or query. Read only.",
+        "modelDescription": "Start here for open cases, revisions, fingerprints and compact type counts. Specify uri and from to inspect field definitions, editable fields and creation requirements. include:[\"settings\"] returns current parameter definitions/settings/recording; include:[\"empty-types\"] lists catalog types with no elements. Find unopened workspace cases with find_cases. Use explicit URI/version for edits; never guess the active case.",
         "userDescription": "Lists the open GridKit cases, or describes one: its element types, counts, fields and simulation parameters.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_inspect_case",
@@ -2798,6 +2819,18 @@
               "minItems": 1,
               "uniqueItems": true,
               "description": "With from, restrict returned field definitions to these names."
+            },
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "settings",
+                  "empty-types"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
             }
           },
           "required": [],
@@ -2971,7 +3004,7 @@
       {
         "name": "gridkit_summarize_run",
         "displayName": "Inspect run evidence",
-        "modelDescription": "Discover current and previous run IDs, stable study IDs, recorded outputs, revision, sample extent, solver state and bounded log evidence. Recording describes future runs, not historical coverage. Failed contingencies are solver failures, not measured worst cases. Read only.",
+        "modelDescription": "Compact current, previous and retained run status, immutable case fingerprint and exact captured coverage. Optionally select run ID (or study ID) and include configuration, recording or logs. configuration is the normalized launch configuration, not current editor settings; null means imported/unknown. matchesDocument compares content fingerprints and is null while the editor parse is stale. Failed runs and absent recordings are not successful evidence.",
         "userDescription": "Describes a case's current and previous runs: what they recorded, how far they got, and how they ended.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_summarize_run",
@@ -2982,6 +3015,23 @@
               "type": "string",
               "minLength": 1,
               "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1
+            },
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "configuration",
+                  "recording",
+                  "logs"
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
             }
           },
           "required": [
@@ -2994,7 +3044,7 @@
       {
         "name": "gridkit_analyze_run",
         "displayName": "Analyze recorded signals",
-        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run's captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Read only.",
+        "modelDescription": "Compute per-element min/max with exact sample times/frames and valid/missing counts. Uses the run's captured case, even if source is now invalid. Live runs stop at an immutable published-page snapshot. Returns up to limit ranked rows from recorded coverage; select IDs or a narrower window to refine. No resampling. Read only. Optional metrics add initial/final observations, threshold episodes and estimated duration, or final continuous settling in a band. Threshold duration uses left-hold between valid adjacent samples only; maxGapSeconds declares the largest credible gap. Missing data is unknown, not healthy. Settling describes the final observed in-band span; it does not predict future stability. Results include an evidence ID; page read_evidence to inspect remaining rows without rescanning.",
         "userDescription": "Finds each element's minimum and maximum of a recorded signal, and when they happened.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_analyze_run",
@@ -3049,15 +3099,121 @@
               "type": "string",
               "enum": [
                 "min",
-                "max"
+                "max",
+                "duration"
               ],
               "default": "min",
-              "description": "Rank by lowest minimum or highest maximum; ties use stable element IDs."
+              "description": "min ascending, max descending, or longest threshold duration first (requires a threshold metric)."
             },
             "limit": {
               "type": "integer",
               "minimum": 1,
               "default": 20
+            },
+            "selection": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Opaque select_elements ID; use instead of ids. Must match the captured case fingerprint and type."
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "extrema"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "initial-final"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "threshold"
+                      },
+                      "lower": {
+                        "type": "number"
+                      },
+                      "upper": {
+                        "type": "number"
+                      },
+                      "durationMethod": {
+                        "const": "left-hold"
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "durationMethod",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "settling"
+                      },
+                      "after": {
+                        "type": "number"
+                      },
+                      "band": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "holdSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "after",
+                      "band",
+                      "holdSeconds",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "background": {
+              "type": "boolean",
+              "default": false,
+              "description": "Return a background job ID immediately. Use analysis_job to wait, get the result or cancel."
             }
           },
           "required": [
@@ -3073,7 +3229,7 @@
       {
         "name": "gridkit_compare_runs",
         "displayName": "Compare run extrema",
-        "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots as analyze_run does and does not change the UI.",
+        "modelDescription": "Compare the same field and units on an interval covered by both runs, matching stable element IDs. Returns extrema differences (after minus before), coverage counts and unmatched element counts, ordered by absolute extrema change. This is not a pointwise trajectory comparison. Reads snapshots as analyze_run does and does not change the UI. Optional metrics add initial/final observations, threshold episodes and estimated duration, or final continuous settling in a band. Threshold duration uses left-hold between valid adjacent samples only; maxGapSeconds declares the largest credible gap. Missing data is unknown, not healthy. Settling describes the final observed in-band span; it does not predict future stability. Results include an evidence ID; page read_evidence to inspect remaining rows without rescanning.",
         "userDescription": "Compares a recorded signal's minimums and maximums between two runs.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_compare_runs",
@@ -3163,6 +3319,111 @@
               "type": "integer",
               "minimum": 1,
               "default": 20
+            },
+            "selection": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Opaque select_elements ID; use instead of ids. Must match the captured case fingerprint and type."
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "extrema"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "initial-final"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "threshold"
+                      },
+                      "lower": {
+                        "type": "number"
+                      },
+                      "upper": {
+                        "type": "number"
+                      },
+                      "durationMethod": {
+                        "const": "left-hold"
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "durationMethod",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "settling"
+                      },
+                      "after": {
+                        "type": "number"
+                      },
+                      "band": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "holdSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "after",
+                      "band",
+                      "holdSeconds",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "background": {
+              "type": "boolean",
+              "default": false,
+              "description": "Return a background job ID immediately. Use analysis_job to wait, get the result or cancel."
             }
           },
           "required": [
@@ -3178,7 +3439,7 @@
       {
         "name": "gridkit_rank_contingencies",
         "displayName": "Rank contingency results",
-        "modelDescription": "Rank a completed study's contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices. Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results.",
+        "modelDescription": "Rank a completed study's contingencies by the lowest element minimum or highest maximum. Use stable study id and optional distinct zero-based indices. Reads siblings sequentially without switching the displayed result. Solver failures and unmeasured outcomes are explicitly separate from measured results. Optional metrics add initial/final observations, threshold episodes and estimated duration, or final continuous settling in a band. Threshold duration uses left-hold between valid adjacent samples only; maxGapSeconds declares the largest credible gap. Missing data is unknown, not healthy. Settling describes the final observed in-band span; it does not predict future stability. Results include an evidence ID; page read_evidence to inspect remaining rows without rescanning.",
         "userDescription": "Ranks the contingencies of a finished contingency analysis by a recorded signal's worst value.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "gridkit_rank_contingencies",
@@ -3228,10 +3489,11 @@
               "type": "string",
               "enum": [
                 "min",
-                "max"
+                "max",
+                "duration"
               ],
               "default": "min",
-              "description": "Rank by lowest minimum or highest maximum; ties use stable element IDs."
+              "description": "min ascending, max descending, or longest threshold duration first (requires a threshold metric)."
             },
             "limit": {
               "type": "integer",
@@ -3246,6 +3508,111 @@
               },
               "minItems": 1,
               "uniqueItems": true
+            },
+            "selection": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Opaque select_elements ID; use instead of ids. Must match the captured case fingerprint and type."
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "extrema"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "initial-final"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "threshold"
+                      },
+                      "lower": {
+                        "type": "number"
+                      },
+                      "upper": {
+                        "type": "number"
+                      },
+                      "durationMethod": {
+                        "const": "left-hold"
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "durationMethod",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "const": "settling"
+                      },
+                      "after": {
+                        "type": "number"
+                      },
+                      "band": {
+                        "type": "array",
+                        "items": {
+                          "type": "number"
+                        },
+                        "minItems": 2,
+                        "maxItems": 2
+                      },
+                      "holdSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "maxGapSeconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "after",
+                      "band",
+                      "holdSeconds",
+                      "maxGapSeconds"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "background": {
+              "type": "boolean",
+              "default": false,
+              "description": "Return a background job ID immediately. Use analysis_job to wait, get the result or cancel."
             }
           },
           "required": [
@@ -3479,6 +3846,530 @@
           },
           "required": [
             "action"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_find_cases",
+        "displayName": "Find workspace cases",
+        "toolReferenceName": "gridkit_find_cases",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Find workspace cases.",
+        "modelDescription": "List workspace .case.json files with URI and open state, without opening them. Paged, respecting workspace search exclusions.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_open_case",
+        "displayName": "Open a workspace case",
+        "toolReferenceName": "gridkit_open_case",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Open a workspace case.",
+        "modelDescription": "Open and parse one workspace .case.json URI from find_cases. Does not modify or simulate the case. Then inspect_case for schema and revision.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "uri"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_select_elements",
+        "displayName": "Select case elements",
+        "toolReferenceName": "gridkit_select_elements",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Select case elements.",
+        "modelDescription": "Evaluate static row predicates in the worker and return an opaque ID plus count and a small sample. Reuse selection in analyze_run, compare_runs or rank_contingencies without sending thousands of IDs. It is bound to case content and type and expires when the case closes.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "where": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "equal",
+                      "notEqual",
+                      "lessThan",
+                      "lessThanOrEqual",
+                      "greaterThan",
+                      "greaterThanOrEqual",
+                      "contains"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "field",
+                  "operator",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "from"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_aggregate_case",
+        "displayName": "Aggregate case fields",
+        "toolReferenceName": "gridkit_aggregate_case",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Aggregate case fields.",
+        "modelDescription": "Compute numeric static field count, missing count, sum, mean, min and max in the worker. Optional groupBy is a static field; references become stable IDs. Page grouped results. Use for voltage classes, areas and parameter populations; this is not a sampled-signal analysis.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "where": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "equal",
+                      "notEqual",
+                      "lessThan",
+                      "lessThanOrEqual",
+                      "greaterThan",
+                      "greaterThanOrEqual",
+                      "contains"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "field",
+                  "operator",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "groupBy": {
+              "type": "string",
+              "minLength": 1
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "from",
+            "fields"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_inspect_neighborhood",
+        "displayName": "Inspect connected elements",
+        "toolReferenceName": "gridkit_inspect_neighborhood",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Inspect connected elements.",
+        "modelDescription": "Read electrical or control port connections around a stable element ID. One hop is one device-port connection; a bus to an adjacent bus through a branch takes two hops. Traversal is undirected; returned direction is the authored port direction. This describes structure, not causality, energized connectivity or power flow. Paged edges include counts and fingerprint.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "network": {
+              "type": "string",
+              "enum": [
+                "electrical",
+                "control"
+              ]
+            },
+            "hops": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "id",
+            "network",
+            "hops"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_query_signals",
+        "displayName": "Read signal samples",
+        "toolReferenceName": "gridkit_query_signals",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Read signal samples.",
+        "modelDescription": "Read explicit recorded element IDs in a time window. exact returns at most maxSamples per element and nextOffset. envelope retains first/last/min/max and a missing marker per bucket, each with original timestamp/frame; it is a reduced trace, never a basis for precise integration or duration. Prefer analyze_run for measurements. Snapshot metadata states the published coverage.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "run": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Retained run id, or stable contingency study id from summarize_run."
+            },
+            "contingency": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Zero-based contingency index; does not change the displayed result."
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1
+            },
+            "field": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "window": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2,
+              "description": "Inclusive [start,end] seconds; defaults to published data, or shared overlap for comparison."
+            },
+            "representation": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "exact"
+                    },
+                    "maxSamples": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "maxSamples"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "envelope"
+                    },
+                    "buckets": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "buckets"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "uri",
+            "run",
+            "from",
+            "field",
+            "ids",
+            "window",
+            "representation"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_read_evidence",
+        "displayName": "Read saved analysis",
+        "toolReferenceName": "gridkit_read_evidence",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Read saved analysis.",
+        "modelDescription": "Page immutable analysis rows by evidence ID without rescanning the recording. Includes original query/run snapshot metadata. Available during this open case and extension session; not a permanent archive.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            }
+          },
+          "required": [
+            "evidence"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_propose_components",
+        "displayName": "Preview new buses and components",
+        "toolReferenceName": "gridkit_propose_components",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Preview new buses and components.",
+        "modelDescription": "Validate and preview creation of buses, branches, signals and catalog devices in one undoable transaction. Inspect the type schema/creation first; empty-types discovers absent types. Use native number or string key and editable field names. References use stable Type/key strings and may refer to other components in the same batch, in any order. Required ports, compatible types, duplicate identities and signal output drivers are checked. Opens a VS Code diff; only the user can Apply Changes. Check action_status afterward.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Exact open case URI returned by inspect_case. Never infer the active case."
+            },
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Current parsed document version from inspect_case; stale versions reject."
+            },
+            "components": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "key": {
+                    "type": [
+                      "string",
+                      "number"
+                    ]
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "required": [
+                  "type",
+                  "key",
+                  "fields"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "uri",
+            "version",
+            "components"
+          ],
+          "additionalProperties": false
+        },
+        "when": "!gridkitStudio.mcpChat"
+      },
+      {
+        "name": "gridkit_analysis_job",
+        "displayName": "Check or cancel analysis",
+        "toolReferenceName": "gridkit_analysis_job",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Check or cancel background analysis.",
+        "modelDescription": "Read status and compact result of a background analysis. waitMs (0?30000) avoids repeated polling without bounding the analysis duration. action:cancel cancels only this analysis; it never stops a simulation. On completion, page the returned evidence ID for remaining rows.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "job": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "status",
+                "cancel"
+              ]
+            },
+            "waitMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30000
+            }
+          },
+          "required": [
+            "job"
           ],
           "additionalProperties": false
         },

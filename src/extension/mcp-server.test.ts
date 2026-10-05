@@ -5,6 +5,8 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { describe, expect, it, vi } from 'vitest'
 
+import manifest from '../../package.json'
+import { outputSchemas } from './ai-schemas.js'
 import { createAdapter } from './mcp-server.js'
 
 vi.mock('vscode', () => ({}))
@@ -52,6 +54,24 @@ async function fixture(
 }
 
 describe('MCP adapter', () => {
+  it('publishes a result contract for every native tool', () => {
+    expect(Object.keys(outputSchemas).sort()).toEqual(
+      manifest.contributes.languageModelTools.map((tool) => tool.name).sort(),
+    )
+  })
+  it('preserves domain error codes as structured tool errors', async () => {
+    const test = await fixture(async () => {
+      throw Object.assign(new Error('Choose another field.'), { code: 'invalid-input' })
+    })
+    try {
+      expect(await test.client.callTool({ name: 'test', arguments: { value: 1 } })).toMatchObject({
+        isError: true,
+        structuredContent: { error: { code: 'invalid-input', message: 'Choose another field.' } },
+      })
+    } finally {
+      await test.close()
+    }
+  })
   it('takes a message past the SDK default of 10 MiB', async () => {
     const run = vi.fn(async () => ({}))
     const test = await fixture(run)

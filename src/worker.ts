@@ -31,9 +31,12 @@ import {
   sourceRange,
   transaction,
 } from './gridkit/index.js'
+import { aggregate, neighborhood, selectIds } from './gridkit/inspection.js'
 import { analysisLimit, analyze, compare, snapshot } from './results/analysis.js'
+import { Evidence } from './results/evidence.js'
 import { importedFields, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
+import { querySignals } from './results/signals.js'
 import { rank, sibling } from './results/study.js'
 import type { RunTarget } from './shared/analysis.js'
 import { defect, detail, message } from './shared/format.js'
@@ -88,6 +91,23 @@ async function discard(run: Results) {
 }
 const cache = new ResultCache()
 const scratch = workerData.scratch as string
+const evidence = new Evidence(join(scratch, 'evidence'))
+const selectionsById = new Map<
+  string,
+  { uri: string; fingerprint: string; from: string; ids: string[] }
+>()
+function selected<T extends { selection?: string; ids?: string[]; from: string }>(
+  input: T,
+  kase: Case,
+): T {
+  if (!input.selection) return input
+  if (input.ids) throw new Error('Choose a selection or explicit IDs, not both.')
+  const value = selectionsById.get(input.selection)
+  if (!value || value.fingerprint !== kase.version || value.from !== input.from)
+    throw new Error('Selection does not match this case content and type. Create a new selection.')
+  if (!value.ids.length) throw new Error('The selection is empty.')
+  return { ...input, ids: value.ids }
+}
 const cacheLimit = (value: number) => {
   if (!Number.isFinite(value) || value < 16 << 20 || value > 2048 * (1 << 20))
     throw new Error('Result cache must be between 16 and 2048 MiB.')
@@ -258,6 +278,31 @@ function runCase(input: RunRequest) {
 
 async function dispatch(request: Request, signal: AbortSignal): Promise<unknown> {
   switch (request.method) {
+    case 'aggregate':
+      return aggregate(get(request.input).kase, request.input, signal)
+    case 'neighborhood':
+      return neighborhood(get(request.input).kase, request.input, signal)
+    case 'selection': {
+      const { kase } = get(request.input)
+      const ids = await selectIds(kase, request.input, signal)
+      get(request.input)
+      const selection = crypto.randomUUID()
+      selectionsById.set(selection, {
+        uri: request.input.uri,
+        fingerprint: kase.version,
+        from: request.input.from,
+        ids,
+      })
+      return {
+        selection,
+        fingerprint: kase.version,
+        from: request.input.from,
+        count: ids.length,
+        sample: ids.slice(0, 5),
+      }
+    }
+    case 'evidence':
+      return evidence.read(request.input.evidence, request.input, signal)
     case 'runs':
       return (histories.get(request.input.uri) ?? []).map((run) => run.info)
     case 'preflight': {
@@ -280,10 +325,13 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     }
     case 'analyze':
       return withTarget(request.input, signal, async (run) => {
-        const result = await analyze(run, request.input, signal)
+        const result = await analyze(run, selected(request.input, run.kase), signal)
+        result.evidence = await evidence.put(request.input.uri, result, signal)
         result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
         return result
       })
+    case 'signals':
+      return withTarget(request.input, signal, (run) => querySignals(run, request.input, signal))
     case 'compare': {
       const input = request.input
       return withTarget(input.before, signal, (before) =>
@@ -301,16 +349,28 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           )
             throw new Error('Comparison needs an interval covered by both runs.')
           const options = { ...input, window: window as readonly [number, number] }
-          return compare(
-            await analyze(before, options, signal, left),
-            await analyze(after, options, signal, right),
-            analysisLimit(input.limit),
+          const result = compare(
+            await analyze(before, selected(options, before.kase), signal, left),
+            await analyze(after, selected(options, after.kase), signal, right),
+            Number.MAX_SAFE_INTEGER,
           )
+          result.evidence = await evidence.put(input.after.uri, result, signal)
+          result.rows = result.rows.slice(0, analysisLimit(input.limit))
+          return result
         }),
       )
     }
-    case 'rank':
-      return rank(findRun(request.input.run, request.input.uri, true), request.input, signal)
+    case 'rank': {
+      const run = findRun(request.input.run, request.input.uri, true)
+      const result = await rank(
+        run,
+        { ...selected(request.input, run.kase), limit: Number.MAX_SAFE_INTEGER },
+        signal,
+      )
+      result.evidence = await evidence.put(request.input.uri, result, signal)
+      result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
+      return result
+    }
     case 'placement':
       return placement(get(request.input).kase, signal)
     case 'parse': {
@@ -329,6 +389,19 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       signal.throwIfAborted()
       if (parses.get(uri) !== version) throw new Error('Superseded document revision.')
       const summary: Summary = {
+        creation: Object.fromEntries(
+          [...catalog.shapes]
+            .filter(([, shape]) => shape.array)
+            .map(([type, shape]) => [
+              type,
+              {
+                keyType: shape.identity.type,
+                required: [...shape.plan.values()]
+                  .filter((plan) => plan.required && plan.source.kind !== 'identity')
+                  .map((plan) => plan.name),
+              },
+            ]),
+        ),
         editable: Object.fromEntries(
           [...kase.tables].map(([type, { shape }]) => [
             type,
@@ -494,6 +567,15 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       histories.delete(uri)
       for (const result of results) await discard(result)
       if (request.method === 'release') {
+        await evidence.forget(uri).catch((error) =>
+          send({
+            kind: 'log',
+            level: 'warn',
+            message: 'Could not remove temporary analysis evidence: ' + message(error),
+          }),
+        )
+        for (const [id, selection] of selectionsById)
+          if (selection.uri === uri) selectionsById.delete(id)
         cases.delete(uri)
         parses.delete(uri)
         mirrors.delete(uri)
@@ -556,7 +638,10 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
 async function handle(request: Request, signal: AbortSignal) {
   const input = request.input
   const analysis =
-    request.method === 'analyze' || request.method === 'compare' || request.method === 'rank'
+    request.method === 'analyze' ||
+    request.method === 'compare' ||
+    request.method === 'rank' ||
+    request.method === 'signals'
   const targets =
     request.method === 'compare'
       ? [
@@ -583,6 +668,10 @@ port.on('message', (request: ToWorker) => {
       kind: 'error',
       id: request.id,
       message: message(error),
+      code:
+        typeof (error as { code?: unknown } | null)?.code === 'string'
+          ? (error as { code: string }).code
+          : undefined,
       offset: (error as { offset?: number } | null)?.offset,
       length: (error as { length?: number } | null)?.length,
       ...(defect(error) && { defect: true, detail: detail(error) }),

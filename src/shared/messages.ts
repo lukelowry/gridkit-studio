@@ -14,8 +14,16 @@ import type {
   Value,
 } from '@latkit/model'
 
-import type { Analysis, AnalysisOptions, Comparison, RunTarget } from './analysis.js'
+import type {
+  Analysis,
+  AnalysisOptions,
+  Comparison,
+  RunTarget,
+  SignalOptions,
+  SignalResult,
+} from './analysis.js'
 import type { Bindings } from './bindings.js'
+import type { AggregateQuery, CaseQuery, EvidencePage, NeighborhoodQuery } from './inspection.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
 import type { ClockState, LoopMode } from './transport.js'
@@ -55,6 +63,7 @@ interface ElementChoice {
 }
 
 export interface Summary extends Revision {
+  creation?: Record<string, { keyType: string; required: string[] }>
   /** The fields of each type the user can edit. */
   editable: Record<string, string[]>
   name: string
@@ -78,6 +87,7 @@ export interface SourceContext {
 }
 
 export type Mutation =
+  | { kind: 'add'; type: string; key: string | number; fields: Record<string, Value> }
   | { kind: 'remove'; ids: readonly string[] }
   | { kind: 'set'; id: string; field: string; value: Value }
   | { kind: 'move'; id: string; position: readonly [number, number] | null }
@@ -126,6 +136,22 @@ export interface RunInfo {
   evidence?: string[]
   started: number
   outputs: readonly FieldSelection[]
+  /** Values validated at launch, never the editor's later settings. Absent for legacy imports. */
+  configuration?: {
+    runtime?:
+      | { kind: 'installed'; program: string }
+      | { kind: 'container'; cli: string; podman: boolean; image: string }
+    values: Record<string, unknown>
+    program: Program
+    options: readonly { name: string; value: number | string }[]
+    addedFaults: readonly {
+      bus: number
+      start: number
+      duration: number
+      resistance: number
+      reactance: number
+    }[]
+  }
   /** A ContingencyAnalysis study: the bus each contingency faults, those that failed, how many
    *  have finished, and the one shown. Each contingency shown is a run of its own; GridKit numbers
    *  their files from `offset`, after the case's own faults. */
@@ -148,6 +174,19 @@ export interface RunRequest extends Revision {
 
 /** What the extension asks of the data worker. */
 export interface Requests {
+  aggregate: { input: AggregateQuery; output: Record<string, unknown> }
+  neighborhood: { input: NeighborhoodQuery; output: Record<string, unknown> }
+  selection: {
+    input: CaseQuery
+    output: {
+      selection: string
+      fingerprint: string
+      from: string
+      count: number
+      sample: string[]
+    }
+  }
+  evidence: { input: { evidence: string; offset?: number; limit?: number }; output: EvidencePage }
   runs: { input: { uri: string }; output: RunInfo[] }
   preflight: {
     input: RunRequest
@@ -161,12 +200,14 @@ export interface Requests {
     }
   }
   analyze: { input: RunTarget & AnalysisOptions; output: Analysis }
+  signals: { input: SignalOptions; output: SignalResult }
   compare: { input: { before: RunTarget; after: RunTarget } & AnalysisOptions; output: Comparison }
   rank: {
     input: RunTarget & AnalysisOptions & { contingencies?: number[] }
     output: {
       study: string
       revision: Revision
+      evidence?: string
       from: string
       field: string
       unit: string | null
@@ -180,6 +221,7 @@ export interface Requests {
         state: 'measured' | 'failed' | 'unavailable'
         worst?: Analysis['rows'][number]
         snapshot?: Analysis['snapshot']
+        population?: Analysis['population']
         message?: string
       }[]
     }
@@ -254,6 +296,7 @@ export type FromWorker =
       kind: 'error'
       id: number
       message: string
+      code?: string
       offset?: number
       length?: number
       /** Whether the error is a defect in Studio; `detail` is its stack. */

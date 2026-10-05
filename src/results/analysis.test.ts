@@ -9,6 +9,7 @@ import type { RunInfo } from '../shared/messages.js'
 import { analyze, compare, snapshot } from './analysis.js'
 import { Readers } from './readers.js'
 import { ResultCache, Results } from './results.js'
+import { querySignals } from './signals.js'
 import { rank, sibling } from './study.js'
 
 describe('recorded result analysis', () => {
@@ -76,6 +77,64 @@ describe('recorded result analysis', () => {
         signal,
       )
       expect(narrow.rows[0]).toMatchObject({ valid: 1, min: { value: 1.5, time: 1.5 } })
+      const measured = await analyze(
+        run,
+        {
+          from: 'Bus',
+          field: 'Vm',
+          order: 'duration',
+          metrics: [
+            { kind: 'threshold', lower: 0.9, durationMethod: 'left-hold', maxGapSeconds: 0.02 },
+            { kind: 'initial-final' },
+          ],
+        },
+        signal,
+      )
+      expect(measured.population).toMatchObject({
+        measured: 2,
+        unmeasured: 0,
+        affected: 1,
+        missingSamples: 1,
+      })
+      expect(measured.rows[0]!.threshold!.estimatedSeconds).toBeCloseTo(0.02)
+      expect(measured.rows[0]!.threshold!.unknownSeconds).toBeCloseTo(0.02)
+      expect(
+        compare(measured, measured, 2).rows.find((row) => row.id === 'Bus/1')!.durationDelta,
+      ).toBeNull()
+      const input = {
+        uri: info.revision.uri,
+        run: info.id,
+        from: 'Bus',
+        field: 'Vm',
+        ids: ['Bus/1'],
+        window: [0, 1.99] as const,
+      }
+      const exact = await querySignals(
+        run,
+        { ...input, representation: { kind: 'exact', maxSamples: 3, offset: 79 } },
+        signal,
+      )
+      expect(exact.series[0]!.samples).toEqual([
+        { time: 0.79, frame: 79, value: 1 },
+        { time: 0.8, frame: 80, value: 0.5 },
+        { time: 0.81, frame: 81, value: 0.5 },
+      ])
+      expect(exact.nextOffset).toBe(82)
+      const envelope = await querySignals(
+        run,
+        { ...input, representation: { kind: 'envelope', buckets: 2 } },
+        signal,
+      )
+      expect(envelope.series[0]!.samples).toContainEqual({ time: 0.8, frame: 80, value: 0.5 })
+      expect(envelope.series[0]!.samples).toContainEqual({ time: 1.2, frame: 120, value: null })
+      expect(envelope.series[0]!.samples.length).toBeLessThanOrEqual(10)
+      const last = await querySignals(
+        run,
+        { ...input, representation: { kind: 'exact', maxSamples: 5, offset: 198 } },
+        signal,
+      )
+      expect(last.nextOffset).toBeNull()
+      expect(last.series[0]!.samples).toHaveLength(2)
       const captured = snapshot(run)
       captured.pages = 1
       captured.info.frames = 64

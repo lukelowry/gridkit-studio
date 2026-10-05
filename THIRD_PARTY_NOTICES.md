@@ -10,7 +10,7 @@ Copyright (c) 2026 Luke Lowery. MIT License.
 
 The catalog compiler, parser, staging and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
 
-## @modelcontextprotocol/server and @modelcontextprotocol/core
+## @modelcontextprotocol/client, @modelcontextprotocol/server and @modelcontextprotocol/core
 
 The MCP TypeScript SDK 2.3.1, from https://github.com/modelcontextprotocol/typescript-sdk. Copyright (c) 2024-2025 Model Context Protocol a Series of LF Projects, LLC. Its code is under the Apache License 2.0, except contributions that stay under the MIT License while the project moves from one to the other.
 
@@ -21,6 +21,34 @@ Copyright (c) 2025 Colin McDonnell. MIT License.
 ## jsonc-parser
 
 Copyright (c) Microsoft. MIT License.
+
+## toml-eslint-parser
+
+Copyright (c) 2021 Yosuke Ota. MIT License.
+
+## MCP client and TOML parser dependencies
+
+- cross-spawn: Copyright (c) 2018 Made With MOXY Lda. MIT License.
+- eventsource: Copyright (c) EventSource GitHub organisation. MIT License.
+- eventsource-parser: Copyright (c) 2026 Espen Hovlandsdal. MIT License.
+- jose: Copyright (c) 2018 Filip Skokan. MIT License.
+- path-key and shebang-regex: Copyright (c) Sindre Sorhus. MIT License.
+- pkce-challenge: Copyright (c) 2019; package by crouchcd. MIT License.
+- shebang-command: Copyright (c) Kevin Mårtensson. MIT License.
+- eslint-visitor-keys: Toru Nagashima and contributors. Apache License 2.0.
+- isexe and which: Copyright (c) Isaac Z. Schlueter and Contributors. ISC License:
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ## svelte
 

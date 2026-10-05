@@ -1,3 +1,4 @@
+import { colormaps } from '@latkit/gpu'
 import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
@@ -19,6 +20,19 @@ it('replaces the plotted field in place, under one trace', () => {
     Object.keys(tracesOf(reader(), { type: 'Line', field: 'flow' })),
   )
   expect(Object.values(traces)[0]).toMatchObject({ from: 'Hub', y: 'level' })
+  expect(Object.values(traces)[0]).not.toHaveProperty('color')
+})
+
+it('colors a field as the network colors it: its colormap, over the same range', () => {
+  const s = reader({ 'network.colormap': 'batlow' })
+  const vertexColor = { type: 'Hub', field: 'level', domain: [0.5, 1.5] as const }
+  const [trace] = Object.values(tracesOf(s, { type: 'Hub', field: 'level' }, { vertexColor }))
+  expect(trace!.color).toMatchObject({ field: 'level', domain: [0.5, 1.5] })
+  expect(trace!.color).toMatchObject({ colormap: colormaps.batlow })
+  const height = { vertexHeight: vertexColor }
+  expect(Object.values(tracesOf(s, { type: 'Hub', field: 'level' }, height))[0]).not.toHaveProperty(
+    'color',
+  )
 })
 
 it('names the time axis in sentence case, and leaves the values to the signal menu', () => {

@@ -170,11 +170,11 @@ export async function exportVideo(
                 canvas: null,
                 input: 'none',
                 source: samples,
-                traces: tracesOf(preferences, {
-                  type: plot.from,
-                  field: plot.field,
-                  ...(plot.id && { id: plot.id }),
-                }),
+                traces: tracesOf(
+                  preferences,
+                  { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
+                  state.bindings,
+                ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,
               }),

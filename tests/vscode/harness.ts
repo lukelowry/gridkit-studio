@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
@@ -208,12 +208,12 @@ export class TestHost {
     return frame
   }
 
-  /** Copy a case, named by its path from the repository root, into the workspace and show it
-   *  alone in Network, so that the only network webview is this case's. */
+  /** Copy a case, named by its path from the repository root or in full, into the workspace and
+   *  show it alone in Network, so that the only network webview is this case's. */
   async openCase(path: string): Promise<{ uri: vscode.Uri; network: Frame }> {
     const name = basename(path)
     const uri = vscode.Uri.joinPath(folder(), name)
-    await copyFile(join(process.env.GRIDKIT_TEST_ROOT!, path), uri.fsPath)
+    await copyFile(isAbsolute(path) ? path : join(process.env.GRIDKIT_TEST_ROOT!, path), uri.fsPath)
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await this.view('network')

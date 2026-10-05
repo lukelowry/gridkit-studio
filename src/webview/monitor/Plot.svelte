@@ -78,7 +78,11 @@
     ),
   )
   const traces = $derived(
-    tracesOf(settings, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
+    tracesOf(
+      settings,
+      { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
+      view.bindings,
+    ),
   )
 
   let monitor = $state.raw<Monitor | null>(null)

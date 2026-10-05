@@ -1,8 +1,10 @@
 /** Plot options shared by the Monitor view and video export. */
 
+import { colormaps } from '@latkit/gpu'
 import type { Axis, Domain } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
+import type { Bindings } from '../../shared/bindings.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
@@ -22,17 +24,29 @@ const MARGIN_PX = [8, 12, 0, 0] as const
 export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolean =>
   a?.[0] === b?.[0] && a?.[1] === b?.[1]
 
-/** The trace of `plotted`: a line for each row of its type, or for the one row it names. */
+/** The trace of `plotted`: a line for each row of its type, or for the one row it names. A field the
+ *  network colors is colored the same way: its colormap, over the same range. */
 export function tracesOf(
   settings: SettingsReader,
   { type, field, id }: Plotted,
+  bindings: Bindings = {},
 ): MonitorConfig['traces'] {
+  const mapped = [bindings.vertexColor, bindings.edgeColor].find(
+    (binding) => binding?.type === type && binding.field === field,
+  )
   return {
     [TRACE]: {
       from: type,
       y: field,
       interpolation: settings.get('monitor.interpolation'),
       ...(id !== undefined && { rows: { kind: 'ids', ids: [id] } }),
+      ...(mapped && {
+        color: {
+          field,
+          colormap: colormaps[settings.get('network.colormap')],
+          ...(mapped.domain && { domain: mapped.domain }),
+        },
+      }),
     },
   }
 }

@@ -26,7 +26,7 @@ const STYLE: Record<string, unknown> = {
   'network.vertices.labels': false,
   'network.borders': false,
   'network.hover': 'off',
-  'network.focusEnabled': false,
+  'network.selectedColor': '#00000000',
 }
 /** Closer than this, two markers or a marker and a line overlap. */
 const CLEAR_PX = 14

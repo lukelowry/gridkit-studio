@@ -9,7 +9,7 @@ const vertex = channelsFor('vertex')
 describe('bindings', () => {
   it('offers each placement its own channels, and a type the network does not draw none', () => {
     expect(vertex).toEqual(['vertexColor', 'vertexSize', 'vertexHeight'])
-    expect(channelsFor('edge')).toEqual(['edgeColor', 'edgeDash'])
+    expect(channelsFor('edge')).toEqual(['edgeColor', 'edgeWidth', 'edgeDash'])
     expect(channelsFor(null)).toEqual([])
   })
 

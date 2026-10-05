@@ -1,7 +1,7 @@
 # Latkit-native implementation
 
 Published npm versions used by this implementation:
-model 3.0.0, GPU 0.14.0, Network 0.18.0, Diagram 0.8.0, Monitor 0.13.0, Video 0.6.0.
+model 4.0.0, GPU 0.15.0, Network 0.19.0, Diagram 0.9.0, Monitor 0.14.0, Video 0.6.1.
 
 ## Source layout
 

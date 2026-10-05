@@ -1,9 +1,9 @@
 /**
  * What a case's types are and how they wire together, read from its schema alone. Topology is its
  * reference fields: a field naming a row of another type wires the two. What each view draws
- * follows from them. The network draws a type placed at a point as vertices, and a type with two
- * references to vertex types as edges between them, bent along its own list of points when it has
- * one. The diagram draws a type that directed references name as nets, and a type holding them as
+ * follows from them. The network draws a type with a field of points as vertices, and a type with
+ * two references to vertex types as edges between them, bent along its own list of points when it
+ * has one; a position field says whether its points are longitude and latitude. The diagram draws a type that directed references name as nets, and a type holding them as
  * blocks, each such reference a port.
  */
 
@@ -75,34 +75,44 @@ function referencesOf(schema: Schema, type: string): Reference[] {
   )
 }
 
-/** The kind of `type`'s spatial field: a point, a list of points, or none. */
-function spatialOf(schema: Schema, type: string): 'point' | 'route' | null {
-  const definition = schema.types[type]
-  const data =
-    definition?.spatial === undefined
-      ? undefined
-      : definition.fields[definition.spatial.field]?.type
-  if (typeof data !== 'object') return null
-  if (data.kind === 'vector') return 'point'
-  return data.kind === 'list' && typeof data.items === 'object' && data.items.kind === 'vector'
-    ? 'route'
-    : null
+/** Where a type stands: its first field of 2D or 3D points, one per row or a list of them. */
+export interface Position {
+  readonly field: string
+  readonly kind: 'point' | 'route'
+  /** Whether its points are longitude and latitude. */
+  readonly geographic: boolean
+}
+
+/** Where `type` stands; null for a type with no points. */
+export function positionOf(schema: Schema, type: string): Position | null {
+  for (const [field, definition] of Object.entries(fieldsOf(schema, type))) {
+    const data = definition.type
+    const point = typeof data === 'object' && data.kind === 'list' ? data.items : data
+    if (typeof point === 'object' && point.kind === 'vector' && point.size >= 2)
+      return {
+        field,
+        kind: point === data ? 'point' : 'route',
+        geographic: definition.geographic === true,
+      }
+  }
+  return null
 }
 
 /** What the network draws; see the module header. */
 export function networkOf(schema: Schema): Drawn {
-  const vertices = Object.keys(schema.types).filter((type) => spatialOf(schema, type) === 'point')
+  const vertices = Object.keys(schema.types).filter(
+    (type) => positionOf(schema, type)?.kind === 'point',
+  )
   const edges = Object.keys(schema.types).flatMap((type): Edge[] => {
     if (vertices.includes(type)) return []
     const ends = referencesOf(schema, type).filter(({ to }) => vertices.includes(to))
     if (ends.length !== 2) return []
-    const bends =
-      spatialOf(schema, type) === 'route' ? schema.types[type]!.spatial!.field : undefined
+    const route = positionOf(schema, type)
+    const bends = route?.kind === 'route' ? route.field : undefined
     return [{ type, ends: [ends[0]!.field, ends[1]!.field], ...(bends !== undefined && { bends }) }]
   })
   const geographic =
-    vertices.length > 0 &&
-    vertices.every((type) => schema.types[type]!.spatial!.system === 'geographic')
+    vertices.length > 0 && vertices.every((type) => positionOf(schema, type)!.geographic)
   return { vertices, edges, geographic }
 }
 

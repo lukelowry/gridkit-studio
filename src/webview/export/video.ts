@@ -1,8 +1,8 @@
 /** Render selected views from a fixed run snapshot into a video file. */
 
-import { createDiagram } from '@latkit/diagram'
+import { createDiagram, type Positions } from '@latkit/diagram'
 import { createComposition, type Gpu, type View } from '@latkit/gpu'
-import type { Data, Domain, FieldValues } from '@latkit/model'
+import type { Data, Domain } from '@latkit/model'
 import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
@@ -10,13 +10,13 @@ import type { VideoProgress, VideoWrite } from '@latkit/video'
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
-import { diagramData, diagrammed } from '../diagram/diagram.js'
-import { diagramStyle } from '../diagram/style.js'
+import { diagrammed } from '../diagram/diagram.js'
+import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
 import { axisLabel, PLOT_LIMITS, plotOptions, tracesOf } from '../monitor/plot.js'
 import { loadBorders } from '../network/borders.js'
-import { isGeographic, networkData, projectionOf } from '../network/network.js'
-import { networkStyle } from '../network/style.js'
+import { isGeographic, projectionOf } from '../network/network.js'
+import { networkConfig } from '../network/style.js'
 import { font, palette } from '../theme.js'
 
 /** What the reader chose. */
@@ -51,8 +51,8 @@ export interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
   readonly samples: Data
-  readonly placement: Readonly<Record<string, FieldValues>>
-  readonly presentation: Readonly<Record<string, FieldValues>>
+  readonly placement: Readonly<Record<string, Positions>>
+  readonly presentation: Readonly<Record<string, Positions>>
   readonly cameras: Cameras
 }
 
@@ -140,31 +140,26 @@ export async function exportVideo(
         signal.throwIfAborted()
         const network = keep(
           createNetwork(gpu, {
-            ...networkData(rows, placement),
+            ...networkConfig(rows, samples, placement, state, geographic, borders, true),
+            ...still,
             canvas: null,
-            input: 'none',
             camera: (cameras.network as never) ?? {
               projection: projectionOf(preferences.get('network.camera.projection'), geographic),
               fit: true,
             },
           }),
         )
-        network.set({ ...networkStyle(rows, samples, state, geographic, borders, true), ...still })
         cells.push([network])
       } else if (view === 'diagram') {
         if (!diagrammed(rows)) throw new Error('This case has no diagram to export.')
         const diagram = keep(
           createDiagram(gpu, {
-            ...diagramData(rows),
+            ...diagramConfig(rows, { ...state, diagramEditing: false }, presentation),
+            ...still,
             canvas: null,
-            input: 'none',
             ...(cameras.diagram !== undefined && { camera: cameras.diagram as never }),
           }),
         )
-        diagram.set({
-          ...diagramStyle(rows, { ...state, diagramEditing: false }, presentation),
-          ...still,
-        })
         cells.push([diagram])
       } else {
         const plots = plotsOf(state)
@@ -182,10 +177,7 @@ export async function exportVideo(
                   field: plot.field,
                   ...(plot.id && { id: plot.id }),
                 }),
-                camera: {
-                  window: settings.timeRange,
-                  fit: preferences.get('monitor.camera.fit'),
-                },
+                camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,
               }),
             )

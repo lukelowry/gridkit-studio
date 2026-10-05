@@ -1,10 +1,9 @@
-/** The network styles the bindings give each type. */
+/** The network channels the bindings give each type. */
 
-import type { Colormap, ColorScale, Scale, ScaleDomain } from '@latkit/gpu'
+import type { Channel, ColorChannel, Colormap, ScaleDomain } from '@latkit/gpu'
 import type { Data, FieldInput } from '@latkit/model'
-import type { EdgeOptions, VertexOptions } from '@latkit/network'
 
-import type { Bindings, Channel, FieldRef } from '../../shared/bindings.js'
+import { type Bindings, CHANNELS, channelsFor, type FieldRef } from '../../shared/bindings.js'
 
 /** A sampled field read from a run: its frames, and the values its colors span, which the renderer
  *  measures: over a window of the run, or `auto` for the frame on show. */
@@ -13,61 +12,36 @@ export interface Sampled {
   readonly domain: ScaleDomain
 }
 
-/** The vertex styles `bindings` give type `type`; see `edgeStylesOf`. */
-export function vertexStylesOf(
+/** The channels `bindings` give `type`'s vertices or edges, by the renderer's option: each bound
+ *  field read from the case or, for a sampled field `sampledOf` finds in a run, from that run over
+ *  the values `sampledOf` says (`sampledOf` gives null for a sampled field no run on show has, and
+ *  undefined for a field of the case). A range the reader set stands in for the measured one, and
+ *  each channel spans the renderer's own range. A channel with no field is left out. */
+export function channelsOf(
   bindings: Bindings,
   type: string,
+  placement: 'vertex' | 'edge',
   colormap: Colormap,
   sampledOf: (field: FieldRef) => Sampled | null | undefined,
-): Pick<VertexOptions, 'color' | 'sizePx' | 'height'> {
-  const { color, scale } = styles(bindings, type, colormap, sampledOf)
-  return {
-    color: color('vertexColor'),
-    sizePx: scale('vertexSize', [2, 7]),
-    height: scale('vertexHeight', [0, 1]),
-  }
-}
-
-/** The edge styles `bindings` give type `type`: each channel's field, read from the case or, for a
- *  sampled field `sampledOf` finds in a run, from that run over the values `sampledOf` says
- *  (`sampledOf` gives null for a sampled field no run on show has, and undefined for a field of the
- *  case). A range the reader set for a binding stands in for the measured one. A channel with no
- *  field clears its style. */
-export function edgeStylesOf(
-  bindings: Bindings,
-  type: string,
-  colormap: Colormap,
-  sampledOf: (field: FieldRef) => Sampled | null | undefined,
-): Pick<EdgeOptions, 'color' | 'dash'> {
-  const { color, input } = styles(bindings, type, colormap, sampledOf)
-  return { color: color('edgeColor'), dash: input('edgeDash')?.field ?? null }
-}
-
-function styles(
-  bindings: Bindings,
-  type: string,
-  colormap: Colormap,
-  sampledOf: (field: FieldRef) => Sampled | null | undefined,
-) {
-  const input = (channel: Channel): { field: FieldInput; domain?: ScaleDomain } | null => {
+): Record<string, Channel | ColorChannel> {
+  const channels: Record<string, Channel | ColorChannel> = {}
+  for (const channel of channelsFor(placement)) {
     const binding = bindings[channel]
-    if (binding === undefined || binding.type !== type) return null
+    if (binding === undefined || binding.type !== type) continue
     const sampled = sampledOf(binding)
-    if (sampled === undefined)
-      return { field: binding.field, ...(binding.domain && { domain: binding.domain }) }
-    if (sampled === null) return null
-    return {
-      field: { source: sampled.source, from: type, field: binding.field },
-      domain: binding.domain ?? sampled.domain,
-    }
+    if (sampled === null) continue
+    const field: FieldInput =
+      sampled === undefined
+        ? binding.field
+        : { source: sampled.source, from: type, field: binding.field }
+    const domain = binding.domain ?? sampled?.domain
+    const { option } = CHANNELS[channel]
+    channels[option] =
+      option === 'color'
+        ? { field, colormap, ...(domain && { domain }) }
+        : option === 'dash' || domain === undefined
+          ? field
+          : { field, domain }
   }
-  const color = (channel: Channel): ColorScale | null => {
-    const found = input(channel)
-    return found === null ? null : { ...found, colormap }
-  }
-  const scale = (channel: Channel, range: readonly [number, number]): Scale | null => {
-    const found = input(channel)
-    return found === null ? null : { ...found, range }
-  }
-  return { input, color, scale }
+  return channels
 }

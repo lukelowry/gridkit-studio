@@ -15,7 +15,7 @@ import {
   type ViewRequests,
   type ViewState,
 } from '../shared/messages.js'
-import { isReference, nameFieldOf, networkOf } from '../shared/schema.js'
+import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import { type Held, holdFor } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
 import { VideoFile } from './video.js'
@@ -463,15 +463,13 @@ export class View {
       .filter((field) => !drawn || drawn.has(field.from))
       .map((field) => ({
         ...field,
-        select: field.select.filter((name) => {
-          const definition = schema.types[field.from]!
-          return (
+        select: field.select.filter(
+          (name) =>
             bindings.some((binding) => binding.type === field.from && binding.field === name) ||
             name === nameFieldOf(schema, field.from) ||
-            name === definition.spatial?.field ||
-            isReference(definition.fields[name])
-          )
-        }),
+            name === positionOf(schema, field.from)?.field ||
+            isReference(schema.types[field.from]!.fields[name]),
+        ),
       }))
       .filter((field) => field.select.length > 0)
     // The network draws only a run of the case as it stands; a plot draws whichever run is on show.

@@ -8,6 +8,7 @@ import {
   type DataBatch,
   type RowBatch,
   type SampleBatch,
+  type Schema,
 } from '@latkit/model'
 
 import type { Begin } from '../shared/messages.js'
@@ -25,6 +26,9 @@ export function receive(
   let base: Data | undefined
   let data: Data | undefined
   let batches: DataBatch[] = []
+  /** One schema while its content holds: each stream carries a copy, and the renderers keep what
+   *  they drew only for the same schema. */
+  let schema: { readonly value: Schema; readonly text: string } | undefined
   return bridge.on((message) => {
     if (message.kind === 'begin') {
       begin = message
@@ -34,11 +38,14 @@ export function receive(
       bridge.send({ kind: 'ack', stream: message.stream, sequence: message.sequence })
     } else if (message.kind === 'end' && message.stream === begin?.stream) {
       try {
-        if (begin.base)
+        if (begin.base) {
+          const text = JSON.stringify(begin.schema)
+          if (schema?.text !== text) schema = { value: begin.schema, text }
           base = createData(
-            begin.schema,
+            schema.value,
             batches.filter((batch): batch is RowBatch => batch.kind === 'rows'),
           )
+        }
         if (!base) return
         data = appendData(
           begin.append && data ? data : base,

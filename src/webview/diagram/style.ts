@@ -1,7 +1,8 @@
-/** Apply theme, settings, saved arrangement, and editing mode to the diagram renderer. */
+/** The diagram's config: what it draws, from the case and where its blocks were arranged, in the
+ *  theme, settings, and editing mode. */
 
-import type { Diagram } from '@latkit/diagram'
-import type { Data, FieldValues } from '@latkit/model'
+import type { DiagramConfig, Positions } from '@latkit/diagram'
+import type { Data } from '@latkit/model'
 
 import type { ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
@@ -10,35 +11,39 @@ import { font, palette } from '../theme.js'
 import { labelsOf } from './labels.js'
 import { diagramOptions } from './options.js'
 
-/** One style transaction: what the diagram is told, and what an export captures unchanged. Blocks
- *  the case arranged stand where `places` says; without any, the diagram lays them out. */
-export function diagramStyle(
+/** What a diagram is told: everything but its canvas and camera. */
+export type DiagramDrawn = Omit<DiagramConfig, 'canvas' | 'camera'>
+
+/** The diagram of `source`. Blocks the case arranged stand where `places` says; without any, the
+ *  diagram lays them out. */
+export function diagramConfig(
   source: Data,
   state: ViewState,
-  places: Readonly<Record<string, FieldValues>> = {},
-): Parameters<Diagram['set']>[0] {
+  places: Readonly<Record<string, Positions>> = {},
+): DiagramDrawn {
   const s = reader(state.settings)
   const drawn = diagramOf(source.schema)
   const editing = state.diagramEditing === true
+  const options = diagramOptions(s, palette(), font())
+  const maxWidth = s.get('diagram.labels.maxWidth')
   return {
-    ...diagramOptions(s, palette(), font()),
+    ...options,
     ...(editing && { detail: 'full' as const }),
-    ...(Object.keys(places).length > 0 && { layout: { algorithm: 'manual' as const } }),
+    ...(Object.keys(places).length > 0 && {
+      layout: { ...options.layout, algorithm: 'manual' as const },
+    }),
     input: {
-      mode: editing && state.writable && !state.stale ? 'edit' : s.get('diagram.input.mode'),
-      wheel: s.get('diagram.input.wheel'),
-      keyboard: s.get('diagram.input.keyboard'),
-      dragThresholdPx: s.get('diagram.input.dragThresholdPx'),
-      touchDragThresholdPx: s.get('diagram.input.touchDragThresholdPx'),
+      ...options.input,
+      mode: editing && state.writable && !state.stale ? 'edit' : options.input.mode,
     },
+    source,
     vertices: Object.fromEntries(
       drawn.vertices.map((type) => {
         const field = labelsOf(source, type)
-        const maxWidth = s.get('diagram.labels.maxWidth')
         return [
           type,
           {
-            position: places[type] ?? null,
+            ...places[type],
             shape: s.get('diagram.shape'),
             labelPosition: s.get('diagram.labelPosition'),
             labels: field

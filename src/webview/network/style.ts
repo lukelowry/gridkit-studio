@@ -1,90 +1,98 @@
-/** Apply theme, bindings, and run samples to the network renderer. */
+/** The network's config: what it draws, from the case, its places, the bindings and the run's
+ *  samples, in the theme and settings. */
 
+import type { Positions } from '@latkit/diagram'
 import { colormaps } from '@latkit/gpu'
-import { type Data, type FieldValues, rowCount } from '@latkit/model'
-import type { Network } from '@latkit/network'
+import type { Data } from '@latkit/model'
+import type { NetworkConfig } from '@latkit/network'
 
 import { type FieldRef, recordedWhole } from '../../shared/bindings.js'
 import type { ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
-import { nameFieldOf, networkOf } from '../../shared/schema.js'
-import { edgeStylesOf, type Sampled, vertexStylesOf } from '../bindings/styles.js'
-import { color, font, palette } from '../theme.js'
-import { type Border, BORDERS } from './borders.js'
+import { nameFieldOf, networkOf, positionOf } from '../../shared/schema.js'
+import { channelsOf, type Sampled } from '../bindings/styles.js'
+import { font, palette } from '../theme.js'
+import { BORDERS } from './borders.js'
 import { networkOptions } from './options.js'
 
-/** How each kind of border draws: its width, and how strongly it shows over the ground. */
-const BORDER_STYLES: Readonly<
-  Record<Border, { readonly widthPx: number; readonly alpha: number }>
-> = {
-  Coast: { widthPx: 1, alpha: 0.5 },
-  Country: { widthPx: 1, alpha: 0.5 },
-  Province: { widthPx: 0.75, alpha: 0.3 },
+/** Province lines draw thinner and fainter than coasts and countries, which draw as every path. */
+const PROVINCE = { width: 0.75, alpha: 0.6 }
+
+/** What a network is told: everything but its canvas and camera. */
+export type NetworkDrawn = Omit<NetworkConfig, 'canvas' | 'camera'>
+
+/** Whether any row of `type` has a point in its route `field`. */
+function routed(source: Data, type: string, field: string): boolean {
+  for (const { column } of source.tables[type]?.fields[field] ?? [])
+    if (
+      column.kind === 'list' &&
+      column.offsets[column.offset + column.length]! > column.offsets[column.offset]!
+    )
+      return true
+  return false
 }
 
-const hidden = new WeakMap<Data, Map<string, FieldValues>>()
-
-/** Every row of `type` in `source` hidden, as a `visible` field reads it: made once for each source
- *  and type, so the renderer uploads it once. */
-function hiddenRows(source: Data, type: string): FieldValues {
-  let types = hidden.get(source)
-  if (!types) hidden.set(source, (types = new Map()))
-  let value = types.get(type)
-  if (!value) {
-    const { index, rows } = source.tables[type]!
-    const length = rowCount(rows)
-    value = {
-      index,
-      rows,
-      values: { kind: 'boolean', offset: 0, length, values: new Uint8Array(Math.ceil(length / 8)) },
-    }
-    types.set(type, value)
-  }
-  return value
-}
-
-/** One style transaction: what the network of `source` is told, and what an export captures
- *  unchanged. Sampled fields read `samples`, the case with the run on show: over the `whole` run
- *  their colors span all it recorded; else they follow the frame on show. Labels draw only once
- *  `labelled`: a canvas holds them back until its first frame. */
-export function networkStyle(
+/** The network of `source` drawn as the settings, bindings, and run on show have it. Vertices stand
+ *  where `places` puts them, else where the case does. Sampled fields read `samples`, the case with
+ *  the run on show: over the `whole` run their colors span all it recorded; else they follow the
+ *  frame on show. Lines bend only where a case routes them, never on places laid out flat: given a
+ *  route field, the renderer splits every line through points of its own, which carry no value and
+ *  so no color of their ends. Labels draw only once `labelled`: a canvas holds them back until its
+ *  first frame. */
+export function networkConfig(
   source: Data,
   samples: Data,
+  places: Readonly<Record<string, Positions>>,
   state: ViewState,
   geographic: boolean,
   borders: Data | null,
   whole: boolean,
   labelled = true,
-): Parameters<Network['set']>[0] {
+): NetworkDrawn {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
-  const p = palette()
+  const options = networkOptions(s, palette(), font(), geographic)
   const colormap = colormaps[s.get('network.colormap')]
   const sampled = sampledFrom(samples, state, whole)
-  const borderColor = color(s.get('network.borderColor'), p.text3)
+  const bindings = state.bindings ?? {}
+  const placed = Object.keys(places).length > 0
   const labels = (type: string, enabled: boolean) => {
     const field = nameFieldOf(source.schema, type)
     return labelled && enabled && field !== null
-      ? { field, maxCount: s.get('network.labels.maxCount') }
+      ? {
+          field,
+          maxCount: s.get('network.labels.maxCount'),
+          repeatSpacingPx: s.get('network.labels.repeatSpacingPx'),
+        }
       : null
   }
+  const position = (type: string) => {
+    const field = positionOf(source.schema, type)!.field
+    return places[type] ?? { x: field, y: { field, component: 1 } }
+  }
+  const [r, g, b, a] = options.pathColor!
   return {
-    ...networkOptions(s, p, font(), geographic),
+    ...options,
+    source,
     vertices: Object.fromEntries(
       drawn.vertices.map((type) => [
         type,
         {
-          ...vertexStylesOf(state.bindings ?? {}, type, colormap, sampled),
+          ...position(type),
+          ...channelsOf(bindings, type, 'vertex', colormap, sampled),
           labels: labels(type, s.get('network.vertices.labels')),
         },
       ]),
     ),
     edges: Object.fromEntries(
-      drawn.edges.map(({ type }) => [
+      drawn.edges.map(({ type, ends, bends }) => [
         type,
         {
-          ...edgeStylesOf(state.bindings ?? {}, type, colormap, sampled),
-          visible: s.get('network.lines') ? null : hiddenRows(source, type),
+          ends,
+          ...(bends !== undefined && !placed && routed(source, type, bends) && { bends }),
+          ...channelsOf(bindings, type, 'edge', colormap, sampled),
+          // Edges hide alone: the world's borders stay drawn.
+          ...(!s.get('network.lines') && { visible: false }),
           labels: labels(type, s.get('network.edges.labels')),
         },
       ]),
@@ -92,28 +100,19 @@ export function networkStyle(
     paths:
       geographic && s.get('network.borders') && borders
         ? Object.fromEntries(
-            BORDERS.map((type) => {
-              const { widthPx, alpha } = BORDER_STYLES[type]
-              return [
-                type,
-                {
-                  source: borders,
-                  points: 'points',
-                  widthPx: widthPx * s.get('network.borderWidthPx'),
-                  baseColor:
-                    borderColor === null
-                      ? null
-                      : ([
-                          borderColor[0],
-                          borderColor[1],
-                          borderColor[2],
-                          borderColor[3] * alpha,
-                        ] as const),
-                },
-              ]
-            }),
+            BORDERS.map((type) => [
+              type,
+              {
+                source: borders,
+                points: 'points',
+                ...(type === 'Province' && {
+                  color: [r, g, b, a * PROVINCE.alpha] as const,
+                  widthPx: options.pathWidthPx! * PROVINCE.width,
+                }),
+              },
+            ]),
           )
-        : null,
+        : {},
   }
 }
 

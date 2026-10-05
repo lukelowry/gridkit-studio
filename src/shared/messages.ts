@@ -1,8 +1,8 @@
+import type { Positions } from '@latkit/diagram'
 import type {
   DataBatch,
   Domain,
   FieldSelection,
-  FieldValues,
   Parameters,
   Query,
   QueryBlock,
@@ -95,8 +95,8 @@ export type Mutation =
   | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
 export interface Requests {
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
-  placement: { input: Revision; output: Record<string, FieldValues> }
-  presentation: { input: Revision; output: Record<string, FieldValues> }
+  placement: { input: Revision; output: Record<string, Positions> }
+  presentation: { input: Revision; output: Record<string, Positions> }
 
   complete: { input: { text: string; offset: number }; output: SourceContext['completions'] }
   context: { input: Revision & { offset: number }; output: SourceContext }
@@ -216,9 +216,9 @@ export interface Begin {
   /** The times whose samples the view holds once the stream ends; absent, the whole run. */
   held?: Held
   /** Places for a network whose vertices have none of their own. */
-  placement?: Record<string, FieldValues>
+  placement?: Record<string, Positions>
   /** Where the diagram's blocks were arranged. */
-  presentation?: Record<string, FieldValues>
+  presentation?: Record<string, Positions>
 }
 export type ToView =
   | { kind: 'state'; state: ViewState }

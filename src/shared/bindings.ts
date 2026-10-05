@@ -1,17 +1,19 @@
 /**
  * The network's display channels a field can drive, and how the Mappings panel names them: in full
- * where there is room (`Vertex Color`), and by one word each in a dense row (`color`).
+ * where there is room (`Vertex Color`), and by one word each in a dense row (`color`). Each is the
+ * renderer's channel `option` of its vertices or edges.
  */
 
 import type { FieldSelection } from '@latkit/model'
 
 /** Every channel, in the order the panel lists them. */
 export const CHANNELS = {
-  vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color' },
-  vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size' },
-  vertexHeight: { label: 'Vertex Height', placement: 'vertex', style: 'height' },
-  edgeColor: { label: 'Edge Color', placement: 'edge', style: 'color' },
-  edgeDash: { label: 'Edge Dash', placement: 'edge', style: 'dash' },
+  vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
+  vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radiusPx' },
+  vertexHeight: { label: 'Vertex Height', placement: 'vertex', style: 'height', option: 'z' },
+  edgeColor: { label: 'Edge Color', placement: 'edge', style: 'color', option: 'color' },
+  edgeWidth: { label: 'Edge Width', placement: 'edge', style: 'width', option: 'widthPx' },
+  edgeDash: { label: 'Edge Dash', placement: 'edge', style: 'dash', option: 'dash' },
 } as const
 
 /** A channel: one style of the vertices or the edges. */

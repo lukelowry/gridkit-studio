@@ -64,10 +64,10 @@ suite('Diagram', () => {
     const values = {
       'diagram.labels.visible': false,
       'diagram.labels.maxWidth': 140,
-      'monitor.coordinateAxis.visible': false,
-      'monitor.coordinateAxis.precision': 3,
-      'monitor.valueAxis.visible': false,
-      'monitor.valueAxis.format': 'scientific',
+      'monitor.xAxis.visible': false,
+      'monitor.xAxis.precision': 3,
+      'monitor.yAxis.visible': false,
+      'monitor.yAxis.format': 'scientific',
     } as const
     const keys = Object.keys(values) as (keyof typeof values)[]
     try {

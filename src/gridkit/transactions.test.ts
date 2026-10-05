@@ -13,7 +13,8 @@ describe('document transactions', () => {
   it('places unlocated networks in the worker and respects authored geographic positions', async () => {
     const kase = await parse()
     const placed = await placement(kase, new AbortController().signal)
-    expect(placed.Bus?.values.length).toBe(1)
+    expect(placed.Bus?.x.values.length).toBe(1)
+    expect(placed.Bus?.y.values.length).toBe(1)
     const positioned = await parse(
       applyChanges(text, [
         transaction(kase, [{ kind: 'set', id: 'Bus/7', field: 'position', value: [-90, 40] }]),
@@ -45,7 +46,8 @@ describe('document transactions', () => {
     const next = applyChanges(text, [edits])
     const after = await parse(next)
     const layout = presentation(after).ConstantSignalSource!
-    expect(layout.values.kind).toBe('vector')
+    expect(layout.x.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(120) })
+    expect(layout.y.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(48) })
     expect(JSON.parse(next).devices[0].extension.diagram.position).toEqual([120, 48])
     expect(next).toContain('"value":1.000')
     expect(edits[0]!.length).toBeLessThan(120)

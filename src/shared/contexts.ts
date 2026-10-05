@@ -51,6 +51,6 @@ export function menuContext(
     gridkitRecorded: definition?.sampled === true,
     gridkitOverlapping: (target.items?.length ?? 0) > 1,
     gridkitPlot: !!target.plot,
-    gridkitBus: !!type && !!summary.schema.types[type]?.spatial && network === 'vertex',
+    gridkitBus: network === 'vertex',
   }
 }

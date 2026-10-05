@@ -10,16 +10,6 @@ import { bridge } from '../bridge.js'
 import { nativeMenu } from '../menu.js'
 import { editing } from './edit.js'
 
-/** What a diagram renderer of `source` draws; how each type draws is its style. */
-export function diagramData(source: Data): Pick<DiagramConfig, 'source' | 'vertices' | 'edges'> {
-  const { vertices, edges } = diagramOf(source.schema)
-  return {
-    source,
-    vertices: Object.fromEntries(vertices.map((type) => [type, {}])),
-    edges: Object.fromEntries(edges.map(({ type }) => [type, {}])),
-  }
-}
-
 /** Whether `source` has anything for a diagram to draw. */
 export function diagrammed(source: Data): boolean {
   return diagramOf(source.schema).vertices.some((type) => {
@@ -34,19 +24,17 @@ function elementOf(item: DiagramItem): Element | null {
   return { id: itemId(item), ...(item.kind === 'port' && { field: item.port }) }
 }
 
-/** The case's diagram on `canvas`, styled before it can prepare its first frame. `select` hears of
- *  the element the reader picks, and `open` of the one they open. */
+/** The case's diagram on `canvas` as `config` draws it. `select` hears of the element the reader
+ *  picks, and `open` of the one they open. */
 export function mountDiagram(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
-  source: Data,
-  style: Parameters<Diagram['set']>[0],
+  config: Omit<DiagramConfig, 'canvas'>,
   state: () => ViewState,
   select: (element: Element | null) => void,
   open: (element: Element) => void,
 ): Diagram {
-  const diagram = createDiagram(gpu, { canvas, ...diagramData(source) })
-  diagram.set(style)
+  const diagram = createDiagram(gpu, { ...config, canvas })
   const pick = (item: DiagramItem | undefined, then: (element: Element) => void) => {
     const element = item ? elementOf(item) : null
     if (element) then(element)

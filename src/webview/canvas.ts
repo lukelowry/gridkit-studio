@@ -4,8 +4,8 @@
 import './styles/index.css'
 import './styles/canvas.css'
 
-import type { Diagram } from '@latkit/diagram'
-import type { Data, FieldValues } from '@latkit/model'
+import type { Diagram, Positions } from '@latkit/diagram'
+import type { Data } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
 import type { Begin, Element, ViewState } from '../shared/messages.js'
@@ -13,6 +13,7 @@ import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu } from './gpu.js'
 import { loadBorders } from './network/borders.js'
+import { DIAGRAM, NETWORK, patchOf } from './patch.js'
 import { receive } from './stream.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
@@ -54,16 +55,16 @@ function boot() {
   /** The case, and the case with the samples of the run on show. */
   let rows: Data | undefined
   let data: Data | undefined
-  /** Whether the case's rows changed since the view last drew them. */
-  let rebased = false
   let view: Network | Diagram | undefined
+  /** What the view was last told it draws, which the next config is told only the changes of. */
+  let drawn: Record<string, unknown> | undefined
   let state: ViewState = {}
   /** The revision the case on hand was streamed for, and the times of the run it holds. */
   let revision = 0
   let held: Begin['held']
   /** Whether the view asked for other times of the run and has yet to hold them. */
   let asked = false
-  let places: Record<string, FieldValues> = {}
+  let places: Record<string, Positions> = {}
   let closed = false
   /** Whether VS Code shows the view; a hidden one keeps its webview and stands still. */
   let shown = true
@@ -119,6 +120,7 @@ function boot() {
   const drop = () => {
     view?.destroy()
     view = undefined
+    drawn = undefined
     labelled = false
     delete canvas.dataset.rendered
   }
@@ -156,12 +158,12 @@ function boot() {
     select(element)
     bridge.command('elementSource')
   }
-  /** The style of the case on show, as the settings, bindings, and run now have it. */
-  const diagramPatch = () => diagramStyles!.diagramStyle(rows!, state, places)
-  const networkPatch = () =>
-    networkStyles!.networkStyle(
+  /** The case on show as the view draws it, as the settings, bindings, and run now have it. */
+  const networkConfig = () =>
+    networkStyles!.networkConfig(
       rows!,
       data!,
+      places,
       state,
       geographic,
       borders,
@@ -169,6 +171,9 @@ function boot() {
       held === undefined && state.run?.state !== 'running',
       labelled,
     )
+  const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, places)
+  const config = (): Record<string, unknown> =>
+    kind === 'diagram' ? diagramConfig() : networkConfig()
   /** Borders load after the first frame: decoration never holds up the case. */
   function decorate() {
     if (
@@ -190,11 +195,16 @@ function boot() {
         bridge.send({ kind: 'error', message: 'Map boundaries: ' + String(reason) })
       })
   }
+  /** Tell the view what changed of what it draws, and nothing else: what it keeps, it keeps read,
+   *  scaled, laid out, and uploaded. */
   function paint() {
-    if (!view || !rows || !data || closed) return
+    if (!view || !drawn || !rows || !data || closed) return
     appearance(state.settings)
     try {
-      view.set((kind === 'diagram' ? diagramPatch() : networkPatch()) as never)
+      const next = config()
+      const patch = patchOf(drawn, next, kind === 'network' ? NETWORK : DIAGRAM)
+      if (patch) view.set(patch as never)
+      drawn = next
     } catch (reason) {
       return error(reason)
     }
@@ -214,7 +224,8 @@ function boot() {
   function selection(force = false) {
     if (!view) return
     const key = keyOf(state.selection)
-    if (!force && key === selectionKey) return
+    const moved = key !== selectionKey
+    if (!force && !moved) return
     selectionKey = key
     try {
       const item = state.selection
@@ -223,7 +234,8 @@ function boot() {
           : networkModule!.networkItem(view as Network, state.selection)
         : undefined
       view.select((item ? [item] : []) as never)
-      if (item && state.navigate && key !== own) view.reveal(item as never)
+      // Only a new selection travels: the same one found again in new rows stays where it is.
+      if (item && moved && state.navigate && key !== own) view.reveal(item as never)
     } catch {
       /* A newer document projection can supersede the selection. */
     }
@@ -332,27 +344,21 @@ function boot() {
         if (!networkModule || !networkStyles) return
         mark('canvas:module')
         geographic = networkModule.isGeographic(rows, places)
-        const drawn = networkModule.networkData(rows, places)
-        // Samples arriving change how the case is styled, not what is drawn.
-        if (view) {
-          if (rebased) (view as Network).set(networkModule.rebase(drawn, networkPatch()))
-        } else {
+        if (!view) {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
             geographic,
           )
+          const first = networkConfig()
           view = networkModule.mountNetwork(
             gpu,
             canvas,
-            drawn,
-            {
-              ...networkPatch(),
-              camera: { projection: preferredProjection, orbit: false, fit: true },
-            },
+            { ...first, camera: { projection: preferredProjection, orbit: false, fit: true } },
             () => state,
             select,
             open,
           )
+          drawn = first
           connect(view)
         }
       } else {
@@ -365,26 +371,18 @@ function boot() {
           host.setAttribute('aria-busy', 'false')
           return
         }
-        if (view) {
-          if (rebased) (view as Diagram).set({ source: rows, ...diagramPatch() })
-        } else {
-          view = diagramModule.mountDiagram(
-            gpu,
-            canvas,
-            rows,
-            diagramPatch(),
-            () => state,
-            select,
-            open,
-          )
+        if (!view) {
+          const first = diagramConfig()
+          view = diagramModule.mountDiagram(gpu, canvas, first, () => state, select, open)
+          drawn = first
           connect(view)
           // A large diagram is a while in its layout: say so, where the case was loading.
           fallback.firstElementChild!.textContent = 'Arranging the diagram…'
         }
       }
-      rebased = false
       mark('canvas:mounted')
       view.set({ at: clock.now() })
+      // New rows, places, or samples: the view is told only what of them it draws differently.
       paint()
       mark('canvas:styled')
       selection(true)
@@ -409,7 +407,6 @@ function boot() {
   receive((next, begin, base) => {
     mark('canvas:data')
     data = next
-    rebased ||= base !== rows
     rows = base
     held = begin.held
     asked = false
@@ -421,7 +418,6 @@ function boot() {
   bridge.on((message) => {
     if (message.kind === 'begin') mark('canvas:begin')
     else if (message.kind === 'state') {
-      const before = state
       state = merged(state, message.state)
       canvas.setAttribute(
         'aria-label',
@@ -431,16 +427,8 @@ function boot() {
       )
       say()
       selection()
-      if (
-        before.settings !== state.settings ||
-        before.diagramEditing !== state.diagramEditing ||
-        before.stale !== state.stale ||
-        before.writable !== state.writable ||
-        before.run?.id !== state.run?.id ||
-        before.run?.state !== state.run?.state ||
-        JSON.stringify(before.bindings) !== JSON.stringify(state.bindings)
-      )
-        paint()
+      // A state that changes nothing the view draws tells it nothing.
+      paint()
     } else if (message.kind === 'action') {
       if (message.command === 'error') return error(message.value)
       if (message.command === 'shown') {

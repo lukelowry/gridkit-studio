@@ -1,6 +1,7 @@
 <!-- Configure and export video using separate renderers so VS Code stays usable. -->
 <script lang="ts">
-  import type { Data, FieldValues } from '@latkit/model'
+  import type { Positions } from '@latkit/diagram'
+  import type { Data } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
@@ -34,8 +35,8 @@
   /** The case the extension streamed for the export under way, and where its elements stand. */
   let rows: Data | undefined
   let samples: Data | undefined
-  let placement: Record<string, FieldValues> = {}
-  let presentation: Record<string, FieldValues> = {}
+  let placement: Record<string, Positions> = {}
+  let presentation: Record<string, Positions> = {}
   let stop: AbortController | undefined
   /** Whether the reader gave the export under way up. */
   let cancelled = false

@@ -1,6 +1,6 @@
 <!-- One recorded signal of the run on show, appending frames as they arrive. Hover seeks while paused. -->
 <script lang="ts">
-  import { type Gpu, kit } from '@latkit/gpu'
+  import type { Gpu } from '@latkit/gpu'
   import { type Data, type Domain, itemId, rowAt, rowCount, selectRows } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
@@ -13,10 +13,11 @@
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
+  import { MONITOR, patchOf } from '../patch.js'
   import type { Palette } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
-  import { axisLabel, coordinateAt, PLOT_LIMITS, plotOptions, tracesOf } from './plot.js'
+  import { axisLabel, PLOT_LIMITS, plotOptions, tracesOf } from './plot.js'
 
   let {
     plot,
@@ -66,8 +67,7 @@
     ) ?? false,
   )
   const settings = $derived(reader(view.settings))
-  /** The plot in the theme's colors and face: one object while they hold, so the plot sees no
-   *  change until they do. */
+  /** The plot in the theme's colors and face. */
   const style = $derived(
     plotOptions(
       settings,
@@ -84,6 +84,8 @@
 
   let monitor = $state.raw<Monitor | null>(null)
   let fault = $state<string | null>(null)
+  /** What the plot was last told it draws, which the next config is told only the changes of. */
+  let drawn: Record<string, unknown> = {}
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
@@ -94,12 +96,12 @@
       canvas,
       at: t,
       source,
-      camera: { window: [shown[0], shown[1]] },
+      camera: { x: [shown[0], shown[1]], fit: settings.get('monitor.camera.fit') },
       traces,
       limits: PLOT_LIMITS,
     })
     made.set(style)
-    made.set({ camera: { fit: settings.get('monitor.camera.fit') } })
+    drawn = { ...style, source, traces }
     const offs = [
       made.on('error', (error) => (fault = error instanceof Error ? error.message : String(error))),
       made.on('frame', () => {
@@ -125,7 +127,7 @@
       ),
       // A camera that left the times every plot shows was turned by the reader.
       made.on('camera', (camera) => {
-        if (!same(camera.window, shown)) onwindow([camera.window[0], camera.window[1]])
+        if (!same(camera.x, shown)) onwindow([camera.x[0], camera.x[1]])
       }),
     ]
     // Views coalesce invalidations into their own animation frame; the clock moves at once.
@@ -133,13 +135,7 @@
       if (event.buttons !== 0 || event.pointerType === 'touch') return
       const { status, follow, span } = clock.state
       if (status !== 'paused' || follow) return
-      const found = coordinateAt(
-        kit.localPoint(canvas, event),
-        canvas.clientWidth,
-        canvas.clientHeight,
-        made.camera.window,
-        made.config,
-      )
+      const found = made.coordinateAt([event.offsetX, event.offsetY])
       if (found !== null && Number.isFinite(found))
         clock.seek(Math.max(span[0], Math.min(span[1], found)))
     }
@@ -157,32 +153,22 @@
   /** The plot's own menu is VS Code's, opened with the trace under the pointer. */
   const stop = (event: Event) => event.stopPropagation()
 
-  // Frames arriving are appends the plot takes as they come.
+  // Frames arriving are appends the plot takes as they come; the field, settings, and theme are
+  // told only where they changed what it draws.
   $effect(() => {
-    if (source !== undefined) monitor?.set({ source })
-  })
-  // Record entries merge per option; null clears a previous color override.
-  $effect(() => {
-    monitor?.set({
-      traces: Object.fromEntries(
-        Object.entries(traces).map(([key, trace]) => [
-          key,
-          { ...trace, baseColor: trace.baseColor ?? null },
-        ]),
-      ),
-    })
+    const next = { ...style, source, traces }
+    if (!monitor || source === undefined) return
+    const patch = patchOf(drawn, next, MONITOR)
+    drawn = next
+    if (patch) monitor.set(patch)
   })
   $effect(() => {
     monitor?.set({ camera: { fit: settings.get('monitor.camera.fit') } })
   })
   // The window follows the run, and the other plots.
   $effect(() => {
-    if (monitor && !same(monitor.camera.window, shown))
-      monitor.set({ camera: { window: [shown[0], shown[1]] } }, { animate: false })
-  })
-  // The colors and face follow the theme.
-  $effect(() => {
-    monitor?.set(style)
+    if (monitor && !same(monitor.camera.x, shown))
+      monitor.set({ camera: { x: [shown[0], shown[1]] } }, { animate: false })
   })
   // The selected element's trace stands out when it is of the plotted type.
   $effect(() => {
@@ -287,7 +273,8 @@
         range.every(Number.isFinite) &&
         range[0] < range[1]
       )
-        monitor?.set({ camera: { values: range, fit: false } })
+        // Setting the values turns fitting off.
+        monitor?.set({ camera: { y: range } })
     }),
   )
 </script>

@@ -65,12 +65,12 @@
     "test:trust": "pnpm build && node tests/vscode/launch.mjs --untrusted tests/vscode/trust.ts"
   },
   "dependencies": {
-    "@latkit/diagram": "0.8.0",
-    "@latkit/gpu": "0.14.0",
-    "@latkit/model": "3.0.0",
-    "@latkit/monitor": "0.13.0",
-    "@latkit/network": "0.18.0",
-    "@latkit/video": "0.6.0",
+    "@latkit/diagram": "0.9.0",
+    "@latkit/gpu": "0.15.0",
+    "@latkit/model": "4.0.0",
+    "@latkit/monitor": "0.14.0",
+    "@latkit/network": "0.19.0",
+    "@latkit/video": "0.6.1",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
@@ -1339,10 +1339,10 @@
             "markdownDescription": "Layers — Height poles. Draw stems from the ground up to raised vertices.",
             "type": "boolean"
           },
-          "gridkitStudio.network.graticule": {
+          "gridkitStudio.network.grid": {
             "default": false,
             "scope": "resource",
-            "markdownDescription": "Layers — Graticule. Draw lines of latitude and longitude.",
+            "markdownDescription": "Layers — Grid. Draw lines of latitude and longitude.",
             "type": "boolean"
           },
           "gridkitStudio.network.earthAxis": {
@@ -1367,10 +1367,10 @@
             "minimum": 0,
             "maximum": 8
           },
-          "gridkitStudio.network.heightScale": {
+          "gridkitStudio.network.zScale": {
             "default": 3,
             "scope": "resource",
-            "markdownDescription": "Size — Height. Multiplies how high a bound field raises vertices.",
+            "markdownDescription": "Size — Height. Multiplies how high a bound height raises vertices.",
             "type": "number",
             "minimum": 0,
             "maximum": 8
@@ -1383,7 +1383,7 @@
             "minimum": 0,
             "maximum": 48
           },
-          "gridkitStudio.network.borderWidthPx": {
+          "gridkitStudio.network.pathWidthPx": {
             "default": 1,
             "scope": "resource",
             "markdownDescription": "Size — Border width. Stroke width of coasts and country borders.",
@@ -1418,6 +1418,14 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 8192
+          },
+          "gridkitStudio.network.labels.repeatSpacingPx": {
+            "default": 0,
+            "scope": "resource",
+            "markdownDescription": "Labels — Repeat spacing. Leave out a label repeating one placed this close, as for buses of one substation. 0 labels each.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 512
           },
           "gridkitStudio.network.font": {
             "default": "",
@@ -1466,35 +1474,17 @@
             "minimum": 0,
             "maximum": 0.5
           },
-          "gridkitStudio.network.focusEnabled": {
+          "gridkitStudio.network.selectedEnds": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Highlight — Enabled. Halo the element under the pointer and the selection.",
+            "markdownDescription": "Highlight — Selected edge ends. Halo the vertices a selected edge joins.",
             "type": "boolean"
           },
-          "gridkitStudio.network.focusEnds": {
-            "default": "selected",
+          "gridkitStudio.network.hoverEnds": {
+            "default": false,
             "scope": "resource",
-            "markdownDescription": "Highlight — Edge ends. When the vertices of a highlighted edge are haloed too.",
-            "type": "string",
-            "enum": [
-              "off",
-              "selected",
-              "hover-selected"
-            ],
-            "enumDescriptions": [
-              "Never",
-              "Selected edges",
-              "Hovered and selected edges"
-            ]
-          },
-          "gridkitStudio.network.hoverAlpha": {
-            "default": 0.5,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover opacity",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
+            "markdownDescription": "Highlight — Hovered edge ends. Halo the vertices a hovered edge joins.",
+            "type": "boolean"
           },
           "gridkitStudio.network.hoverWidthPx": {
             "default": 4.75,
@@ -1503,14 +1493,6 @@
             "type": "number",
             "minimum": 0,
             "maximum": 16
-          },
-          "gridkitStudio.network.selectedAlpha": {
-            "default": 0.82,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selection opacity",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
           },
           "gridkitStudio.network.selectedWidthPx": {
             "default": 6,
@@ -1523,7 +1505,7 @@
           "gridkitStudio.network.hoverColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Highlight — Hover color. Null follows the current VS Code theme.",
+            "markdownDescription": "Highlight — Hover color. Its alpha is the halo’s opacity.. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1534,7 +1516,7 @@
           "gridkitStudio.network.selectedColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Highlight — Selection color. Null follows the current VS Code theme.",
+            "markdownDescription": "Highlight — Selection color. Its alpha is the halo’s opacity.. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1622,7 +1604,7 @@
               "Vlag"
             ]
           },
-          "gridkitStudio.network.vertexBaseColor": {
+          "gridkitStudio.network.vertexColor": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Color — Vertex color. Vertices while no field drives their color.. Null follows the current VS Code theme.",
@@ -1633,7 +1615,7 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.edgeBaseColor": {
+          "gridkitStudio.network.edgeColor": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Color — Edge color. Edges while no field drives their color.. Null follows the current VS Code theme.",
@@ -1669,7 +1651,7 @@
           "gridkitStudio.network.gridColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Graticule color. Lines of latitude and longitude.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Grid color. Lines of latitude and longitude.. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1677,7 +1659,7 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.borderColor": {
+          "gridkitStudio.network.pathColor": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Color — Border color. Coasts and country borders.. Null follows the current VS Code theme.",
@@ -1839,31 +1821,31 @@
         "title": "GridKit Studio: Monitor",
         "order": 3,
         "properties": {
-          "gridkitStudio.monitor.coordinateAxis.visible": {
+          "gridkitStudio.monitor.xAxis.visible": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Time axis",
             "type": "boolean"
           },
-          "gridkitStudio.monitor.valueAxis.visible": {
+          "gridkitStudio.monitor.yAxis.visible": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Value axis",
             "type": "boolean"
           },
-          "gridkitStudio.monitor.valueAxis.label": {
+          "gridkitStudio.monitor.yAxis.label": {
             "default": false,
             "scope": "resource",
             "markdownDescription": "Plot — Value caption. Name the plotted field above the value axis.",
             "type": "boolean"
           },
-          "gridkitStudio.monitor.coordinateAxis.grid": {
+          "gridkitStudio.monitor.xAxis.grid": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Time grid",
             "type": "boolean"
           },
-          "gridkitStudio.monitor.valueAxis.grid": {
+          "gridkitStudio.monitor.yAxis.grid": {
             "default": true,
             "scope": "resource",
             "markdownDescription": "Plot — Value grid",
@@ -1902,7 +1884,7 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.monitor.coordinateAxis.minSpacingPx": {
+          "gridkitStudio.monitor.xAxis.minSpacingPx": {
             "default": 80,
             "scope": "resource",
             "markdownDescription": "Ticks — Time spacing. Least gap between time ticks.",
@@ -1910,7 +1892,7 @@
             "minimum": 8,
             "maximum": 400
           },
-          "gridkitStudio.monitor.coordinateAxis.format": {
+          "gridkitStudio.monitor.xAxis.format": {
             "default": "auto",
             "scope": "resource",
             "markdownDescription": "Ticks — Time format",
@@ -1928,7 +1910,7 @@
               "Engineering"
             ]
           },
-          "gridkitStudio.monitor.coordinateAxis.precision": {
+          "gridkitStudio.monitor.xAxis.precision": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Ticks — Time decimals",
@@ -1939,7 +1921,7 @@
             "minimum": 0,
             "maximum": 15
           },
-          "gridkitStudio.monitor.valueAxis.minSpacingPx": {
+          "gridkitStudio.monitor.yAxis.minSpacingPx": {
             "default": 40,
             "scope": "resource",
             "markdownDescription": "Ticks — Value spacing. Least gap between value ticks.",
@@ -1947,7 +1929,7 @@
             "minimum": 8,
             "maximum": 400
           },
-          "gridkitStudio.monitor.valueAxis.format": {
+          "gridkitStudio.monitor.yAxis.format": {
             "default": "auto",
             "scope": "resource",
             "markdownDescription": "Ticks — Value format. Auto writes very large and small values with exponents.",
@@ -1965,7 +1947,7 @@
               "Engineering"
             ]
           },
-          "gridkitStudio.monitor.valueAxis.precision": {
+          "gridkitStudio.monitor.yAxis.precision": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Ticks — Value decimals",
@@ -2001,7 +1983,7 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.monitor.widthPx": {
+          "gridkitStudio.monitor.traceWidthPx": {
             "default": 1.25,
             "scope": "resource",
             "markdownDescription": "Lines — Width",
@@ -2025,7 +2007,7 @@
               "Step after"
             ]
           },
-          "gridkitStudio.monitor.baseColor": {
+          "gridkitStudio.monitor.traceColor": {
             "default": "#238b83",
             "scope": "resource",
             "markdownDescription": "Lines — Color. Null follows the current VS Code theme.",
@@ -2232,9 +2214,9 @@
             ]
           },
           "gridkitStudio.diagram.cornerRadius": {
-            "default": 8,
+            "default": 6,
             "scope": "resource",
-            "markdownDescription": "Blocks — Corner radius. Rounding of rounded blocks.",
+            "markdownDescription": "Blocks — Corner radius. Rounding of rounded blocks, groups, and wire bends.",
             "type": "integer",
             "minimum": 0,
             "maximum": 32
@@ -2269,7 +2251,7 @@
             "minimum": 0,
             "maximum": 8
           },
-          "gridkitStudio.diagram.vertexBaseColor": {
+          "gridkitStudio.diagram.vertexColor": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Blocks — Fill. Blocks while no field drives their color.. Null follows the current VS Code theme.",
@@ -2324,15 +2306,15 @@
               "Diamond"
             ]
           },
-          "gridkitStudio.diagram.portSizePx": {
+          "gridkitStudio.diagram.portSize": {
             "default": 8,
             "scope": "resource",
-            "markdownDescription": "Ports — Marker size",
+            "markdownDescription": "Ports — Marker size. Port markers, arrowheads, and junctions. They scale with zoom.",
             "type": "integer",
             "minimum": 2,
             "maximum": 24
           },
-          "gridkitStudio.diagram.portFontSizePx": {
+          "gridkitStudio.diagram.portFontSize": {
             "default": 11,
             "scope": "resource",
             "markdownDescription": "Ports — Name size. Port name size. It scales with zoom.",
@@ -2404,7 +2386,7 @@
             "minimum": 1,
             "maximum": 64
           },
-          "gridkitStudio.diagram.edgeBaseColor": {
+          "gridkitStudio.diagram.edgeColor": {
             "default": null,
             "scope": "resource",
             "markdownDescription": "Wires — Color. Wires and ports while no field drives their color.. Null follows the current VS Code theme.",
@@ -2648,9 +2630,9 @@
             "maximum": 48
           },
           "gridkitStudio.diagram.msaa": {
-            "default": 4,
+            "default": 1,
             "scope": "resource",
-            "markdownDescription": "Quality — Antialiasing. Smooths edges at some cost.",
+            "markdownDescription": "Quality — Antialiasing. Every shape already smooths its own edges; multisampling adds only cost.",
             "type": "number",
             "enum": [
               4,

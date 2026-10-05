@@ -1,7 +1,8 @@
 /** Create the case's network renderer, map element identities, and turn its camera. */
 
+import type { Positions } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
-import { type Data, type FieldValues, itemId, selectRows } from '@latkit/model'
+import { type Data, itemId, selectRows } from '@latkit/model'
 import {
   createNetwork,
   type Network,
@@ -15,52 +16,11 @@ import { defaults } from '../../shared/preferences.js'
 import { networkOf } from '../../shared/schema.js'
 import { nativeMenu } from '../menu.js'
 
-/** Whether any row of `type` has a point in its route `field`. */
-function routed(source: Data, type: string, field: string): boolean {
-  for (const { column } of source.tables[type]?.fields[field] ?? [])
-    if (
-      column.kind === 'list' &&
-      column.offsets[column.offset + column.length]! > column.offsets[column.offset]!
-    )
-      return true
-  return false
-}
-
-/** What a network renderer of `source` draws. Places the extension laid out are flat, so they draw
- *  no bends meant for longitude and latitude. Lines bend only where a case routes them: given a
- *  route field, the renderer splits every line through points of its own, which carry no value
- *  and so no color of their ends. */
-export function networkData(
-  source: Data,
-  places: Readonly<Record<string, FieldValues>> = {},
-): Pick<NetworkConfig, 'source' | 'vertices' | 'edges'> {
-  const { vertices, edges } = networkOf(source.schema)
-  const placed = Object.keys(places).length > 0
-  return {
-    source,
-    vertices: Object.fromEntries(
-      vertices.map((type) => [
-        type,
-        { position: places[type] ?? source.schema.types[type]!.spatial!.field },
-      ]),
-    ),
-    edges: Object.fromEntries(
-      edges.map(({ type, ends, bends }) => [
-        type,
-        {
-          ends,
-          ...(bends !== undefined && !placed && routed(source, type, bends) && { bends }),
-        },
-      ]),
-    ),
-  }
-}
-
 /** Whether `source` stands on Earth: its vertices are placed in longitude and latitude, by the case
  *  rather than by a layout. */
 export function isGeographic(
   source: Data,
-  places: Readonly<Record<string, FieldValues>> = {},
+  places: Readonly<Record<string, Positions>> = {},
 ): boolean {
   return networkOf(source.schema).geographic && Object.keys(places).length === 0
 }
@@ -71,43 +31,17 @@ export function projectionOf(preferred: Projection, geographic: boolean): Projec
   return preferred === 'globe' && !geographic ? 'flat' : preferred
 }
 
-type Patch = Parameters<Network['set']>[0]
-
-/** A new source with its geometry and style in one patch: source and field inputs share row
- *  identities, so the new revision never meets the previous one's labels or mappings. */
-export function rebase(data: ReturnType<typeof networkData>, style: Patch): Patch {
-  return {
-    ...style,
-    source: data.source,
-    vertices: Object.fromEntries(
-      Object.entries(data.vertices).map(([type, geometry]) => [
-        type,
-        { ...geometry, ...style.vertices?.[type] },
-      ]),
-    ),
-    // A placed layout drops the bends the case drew for longitude and latitude.
-    edges: Object.fromEntries(
-      Object.entries(data.edges ?? {}).map(([type, geometry]) => [
-        type,
-        { ...geometry, bends: geometry.bends ?? null, ...style.edges?.[type] },
-      ]),
-    ),
-  }
-}
-
-/** The case's network on `canvas`, styled before it can prepare its first frame. `select` hears of
- *  the element the reader picks, and `open` of the one they open. */
+/** The case's network on `canvas` as `config` draws it. `select` hears of the element the reader
+ *  picks, and `open` of the one they open. */
 export function mountNetwork(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
-  data: ReturnType<typeof networkData>,
-  style: Patch,
+  config: Omit<NetworkConfig, 'canvas'>,
   state: () => ViewState,
   select: (element: Element | null) => void,
   open: (element: Element) => void,
 ): Network {
-  const network = createNetwork(gpu, { canvas, ...data })
-  network.set(style)
+  const network = createNetwork(gpu, { ...config, canvas })
   network.on('select', (items) => {
     select(items[0] ? { id: itemId(items[0]) } : null)
   })

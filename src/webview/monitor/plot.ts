@@ -4,8 +4,7 @@ import type { Axis, Domain } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
-import type { Palette } from '../theme.js'
-import { color } from '../theme.js'
+import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
 
@@ -25,15 +24,12 @@ export function tracesOf(
   settings: SettingsReader,
   { type, field, id }: Plotted,
 ): MonitorConfig['traces'] {
-  const baseColor = color(settings.get('monitor.baseColor') ?? defaults['monitor.baseColor'])
   return {
     [TRACE]: {
       from: type,
-      field,
-      widthPx: settings.get('monitor.widthPx'),
+      y: field,
       interpolation: settings.get('monitor.interpolation'),
       ...(id !== undefined && { rows: { kind: 'ids', ids: [id] } }),
-      ...(baseColor !== null && { baseColor }),
     },
   }
 }
@@ -47,7 +43,7 @@ export function windowOf(range: Domain | null, growing: boolean): Domain {
   return growing && span > 0 ? [range[0], range[0] + 2 ** Math.ceil(Math.log2(span))] : range
 }
 
-/** Plot styling follows the settings and theme, including explicit resets. */
+/** Plot styling follows the settings and theme; null leaves an option to the renderer. */
 export function plotOptions(
   s: SettingsReader,
   palette: Palette | null,
@@ -55,30 +51,33 @@ export function plotOptions(
   axis: string,
   valueLabel: string,
 ): Parameters<Monitor['set']>[0] {
-  const coordinatePrecision = s.get('monitor.coordinateAxis.precision')
-  const valuePrecision = s.get('monitor.valueAxis.precision')
+  const xPrecision = s.get('monitor.xAxis.precision')
+  const yPrecision = s.get('monitor.yAxis.precision')
+  const family = s.get('monitor.font') || font
   return {
     fontSizePx: s.get('monitor.fontSizePx'),
-    font: s.get('monitor.font') || font ? { family: s.get('monitor.font') || font! } : null,
+    font: family ? { family } : null,
     paddingPx: [...MARGIN_PX],
-    coordinateAxis: s.get('monitor.coordinateAxis.visible')
+    xAxis: s.get('monitor.xAxis.visible')
       ? {
           label: axis,
-          grid: s.get('monitor.coordinateAxis.grid'),
-          minSpacingPx: s.get('monitor.coordinateAxis.minSpacingPx'),
-          format: s.get('monitor.coordinateAxis.format'),
-          ...(coordinatePrecision !== null && { precision: coordinatePrecision }),
+          grid: s.get('monitor.xAxis.grid'),
+          minSpacingPx: s.get('monitor.xAxis.minSpacingPx'),
+          format: s.get('monitor.xAxis.format'),
+          ...(xPrecision !== null && { precision: xPrecision }),
         }
       : false,
-    valueAxis: s.get('monitor.valueAxis.visible')
+    yAxis: s.get('monitor.yAxis.visible')
       ? {
-          label: s.get('monitor.valueAxis.label') ? valueLabel : '',
-          grid: s.get('monitor.valueAxis.grid'),
-          minSpacingPx: s.get('monitor.valueAxis.minSpacingPx'),
-          format: s.get('monitor.valueAxis.format'),
-          ...(valuePrecision !== null && { precision: valuePrecision }),
+          label: s.get('monitor.yAxis.label') ? valueLabel : '',
+          grid: s.get('monitor.yAxis.grid'),
+          minSpacingPx: s.get('monitor.yAxis.minSpacingPx'),
+          format: s.get('monitor.yAxis.format'),
+          ...(yPrecision !== null && { precision: yPrecision }),
         }
       : false,
+    traceColor: color(s.get('monitor.traceColor') ?? defaults['monitor.traceColor']),
+    traceWidthPx: s.get('monitor.traceWidthPx'),
     hover: s.get('monitor.hover'),
     hoverBudgetMs: s.get('monitor.hoverBudgetMs'),
     msaa: s.get('monitor.msaa'),
@@ -99,36 +98,6 @@ export function plotOptions(
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),
     selectedColor: color(s.get('monitor.selectedColor'), palette?.primaryText),
   }
-}
-
-/** Continuous time at a CSS canvas point of a plot drawn with `plotOptions`, whose area the monitor
- *  lays out inside the margin: the value labels take 7 em (64 px at least) at the left, and the time
- *  axis three lines below. Independent of trace proximity: exact-data picking cannot scrub. */
-export function coordinateAt(
-  point: readonly [number, number],
-  width: number,
-  height: number,
-  window: Domain,
-  style: Pick<MonitorConfig, 'fontSizePx' | 'coordinateAxis' | 'valueAxis'>,
-): number | null {
-  const [above, after, below, before] = MARGIN_PX
-  const size = style.fontSizePx ?? defaults['monitor.fontSizePx']
-  const labeled =
-    typeof style.valueAxis === 'string' ? style.valueAxis : style.valueAxis && style.valueAxis.label
-  const left = before + (style.valueAxis === false ? 0 : Math.max(64, size * 7))
-  const right = width - after
-  const top = above + (labeled ? size * 1.8 : 0)
-  const bottom = height - below - (style.coordinateAxis === false ? 0 : size * 3)
-  if (
-    right <= left ||
-    bottom <= top ||
-    point[0] < left ||
-    point[0] > right ||
-    point[1] < top ||
-    point[1] > bottom
-  )
-    return null
-  return window[0] + ((point[0] - left) / (right - left)) * (window[1] - window[0])
 }
 
 /** The axis's name in sentence case, as the page shows names; the producer owns its meaning. */

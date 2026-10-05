@@ -35,7 +35,7 @@ WebGPU is required only for canvas views. Source, Case Table, Inspector, and exe
 
 ## Develop
 
-Use Node.js 24 and pnpm 10.30.0. Published Latkit dependencies are pinned exactly: model 3.0.0, GPU 0.14.0, Network 0.18.0, Diagram 0.8.0, Monitor 0.13.0, and Video 0.6.0. There are no sibling-repository runtime imports.
+Use Node.js 24 and pnpm 10.30.0. Published Latkit dependencies are pinned exactly: model 4.0.0, GPU 0.15.0, Network 0.19.0, Diagram 0.9.0, Monitor 0.14.0, and Video 0.6.1. There are no sibling-repository runtime imports.
 
 ```sh
 pnpm install --frozen-lockfile

@@ -37,7 +37,9 @@ export function font(): string {
   return getComputedStyle(document.body).getPropertyValue('--font-mono').trim()
 }
 
-/** Resolve a saved hex override, or reset the renderer to its contextual default. */
+/** Resolve a saved hex override, or the contextual default; null leaves the renderer's own. */
+export function color(value: string | null, fallback: RGBA): RGBA
+export function color(value: string | null, fallback?: RGBA | null): RGBA | null
 export function color(value: string | null, fallback: RGBA | null = null): RGBA | null {
   return value === null ? fallback : (parseColor(value) ?? fallback)
 }

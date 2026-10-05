@@ -20,9 +20,11 @@ const VERSION = 'natural-earth-5.1.2'
 /** Each kind of border: its lines, each a list of longitude, latitude points. */
 const KIND = {
   fields: {
-    points: { type: { kind: 'list', items: { kind: 'vector', items: 'float32', size: 2 } } },
+    points: {
+      type: { kind: 'list', items: { kind: 'vector', items: 'float32', size: 2 } },
+      geographic: true,
+    },
   },
-  spatial: { field: 'points', system: 'geographic' },
 } as const
 const SCHEMA: Schema = { types: Object.fromEntries(BORDERS.map((type) => [type, KIND])) }
 let loading: Promise<Data> | null = null

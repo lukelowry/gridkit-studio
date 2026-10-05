@@ -1,29 +1,29 @@
 /** Turn the diagram's editing gestures into transactions on the case document. */
 
-import { arrange, type Diagram } from '@latkit/diagram'
+import { arrange, type Diagram, type Positions } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
-import { type FieldValues, itemId, numberAt, rowAt, rowCount } from '@latkit/model'
+import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
 import type { Mutation, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
+import { layoutOf } from './options.js'
 
 /** The moves that put each block where `positions` says. */
-function moves(diagram: Diagram, positions: Readonly<Record<string, FieldValues>>): Mutation[] {
+function moves(diagram: Diagram, positions: Readonly<Record<string, Positions>>): Mutation[] {
   const changes: Mutation[] = []
-  for (const field of Object.values(positions)) {
-    if (field.values.kind !== 'vector') continue
-    for (let index = 0; index < rowCount(field.rows); index++) {
+  for (const { x, y } of Object.values(positions)) {
+    if (x.values.kind !== 'numeric' || y.values.kind !== 'numeric') continue
+    for (let index = 0; index < rowCount(x.rows); index++) {
       const id = itemId({
         source: diagram.config.source,
-        index: field.index,
-        row: rowAt(field.rows, index),
+        index: x.index,
+        row: rowAt(x.rows, index),
       })
-      const offset = (field.values.offset + index) * field.values.size - field.values.values.offset
-      const x = numberAt(field.values.values, offset)
-      const y = numberAt(field.values.values, offset + 1)
-      if (x !== null && y !== null && Number.isFinite(x) && Number.isFinite(y))
-        changes.push({ kind: 'move', id, position: [x, y] })
+      const left = numberAt(x.values, index)
+      const top = numberAt(y.values, index)
+      if (left !== null && top !== null && Number.isFinite(left) && Number.isFinite(top))
+        changes.push({ kind: 'move', id, position: [left, top] })
     }
   }
   return changes
@@ -82,7 +82,7 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, sign
     const expected = state().summary?.version
     void (async () => {
       // The first move of a diagram laid out for the reader saves where every block stood.
-      const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.position)
+      const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.x != null)
       const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config, { signal }))
       const changes = new Map(all.map((change) => ['id' in change ? change.id : '', change]))
       for (const move of proposal.moves)
@@ -103,21 +103,8 @@ export function editing(diagram: Diagram, gpu: Gpu, state: () => ViewState, sign
   })
   return async () => {
     const expected = state().summary?.version
-    const s = reader(state().settings)
-    const positions = await arrange(
-      gpu,
-      {
-        ...diagram.config,
-        layout: {
-          algorithm: s.get('diagram.layout.algorithm'),
-          direction: s.get('diagram.layout.direction'),
-          vertexGap: s.get('diagram.layout.vertexGap'),
-          rankGap: s.get('diagram.layout.rankGap'),
-          sweeps: s.get('diagram.layout.sweeps'),
-        },
-      },
-      { signal },
-    )
+    const layout = layoutOf(reader(state().settings))
+    const positions = await arrange(gpu, { ...diagram.config, layout }, { signal })
     await commit(moves(diagram, positions), 'Arrange diagram', expected)
   }
 }

@@ -1,3 +1,4 @@
+import type { Positions } from '@latkit/diagram'
 import { failure, type FieldValues } from '@latkit/model'
 import { findNodeAtLocation, modify, parseTree } from 'jsonc-parser'
 
@@ -284,12 +285,12 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
     throw failure('resource-limit', 'A transaction may insert at most 4 MiB of text.')
   return edits
 }
-const presentations = new WeakMap<Case, Record<string, FieldValues>>()
+const presentations = new WeakMap<Case, Record<string, Positions>>()
 /** Presentation metadata is separate from the domain Schema, stored with each native record for Git. */
-export function presentation(kase: Case): Record<string, FieldValues> {
+export function presentation(kase: Case): Record<string, Positions> {
   const cached = presentations.get(kase)
   if (cached) return cached
-  const result: Record<string, FieldValues> = {}
+  const result: Record<string, Positions> = {}
   if (!decoder.decode(kase.file).includes('"diagram"')) {
     presentations.set(kase, result)
     return result
@@ -298,7 +299,8 @@ export function presentation(kase: Case): Record<string, FieldValues> {
     const table = kase.tables.get(type)
     if (!table?.records.length) continue
     const rows: number[] = []
-    const values: number[] = []
+    const xs: number[] = []
+    const ys: number[] = []
     for (let row = 0; row < table.records.length; row++) {
       const record = recordOf(kase, kase.id(table, row))
       const position = findNodeAtLocation(parseTree(record.text)!, [
@@ -312,26 +314,24 @@ export function presentation(kase: Case): Record<string, FieldValues> {
         position.children.every((node) => node.type === 'number' && Number.isFinite(node.value))
       ) {
         rows.push(row)
-        values.push(position.children[0]!.value, position.children[1]!.value)
+        xs.push(position.children[0]!.value)
+        ys.push(position.children[1]!.value)
       }
     }
-    if (rows.length)
-      result[type] = {
+    if (rows.length) {
+      const placed = { kind: 'indices', values: Uint32Array.from(rows) } as const
+      const axis = (values: number[]): FieldValues => ({
         index: table.index,
-        rows: { kind: 'indices', values: Uint32Array.from(rows) },
+        rows: placed,
         values: {
-          kind: 'vector',
-          size: 2,
+          kind: 'numeric',
           offset: 0,
-          length: rows.length,
-          values: {
-            kind: 'numeric',
-            values: Float64Array.from(values),
-            offset: 0,
-            length: values.length,
-          },
+          length: values.length,
+          values: Float64Array.from(values),
         },
-      }
+      })
+      result[type] = { x: axis(xs), y: axis(ys) }
+    }
   }
   presentations.set(kase, result)
   return result

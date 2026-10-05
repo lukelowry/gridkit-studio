@@ -9,23 +9,23 @@ importers:
   .:
     dependencies:
       '@latkit/diagram':
-        specifier: 0.8.0
-        version: 0.8.0
+        specifier: 0.9.0
+        version: 0.9.0
       '@latkit/gpu':
+        specifier: 0.15.0
+        version: 0.15.0
+      '@latkit/model':
+        specifier: 4.0.0
+        version: 4.0.0
+      '@latkit/monitor':
         specifier: 0.14.0
         version: 0.14.0
-      '@latkit/model':
-        specifier: 3.0.0
-        version: 3.0.0
-      '@latkit/monitor':
-        specifier: 0.13.0
-        version: 0.13.0
       '@latkit/network':
-        specifier: 0.18.0
-        version: 0.18.0
+        specifier: 0.19.0
+        version: 0.19.0
       '@latkit/video':
-        specifier: 0.6.0
-        version: 0.6.0
+        specifier: 0.6.1
+        version: 0.6.1
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -413,23 +413,23 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@latkit/diagram@0.8.0':
-    resolution: {integrity: sha512-qNfE8v/jy0Cp5tqch9KtNznO92klUAZVRJQol8j/hKI6oo98byZALK9vTHv+CApNdPc2e29OMARkpvtmLwCJBw==}
+  '@latkit/diagram@0.9.0':
+    resolution: {integrity: sha512-f9Xfq/GhUlkONtBJ0RohV0XF6riadDekWMrMGbc+ob2m71JZfS7PMusCp1BCKbQRG86CNVqK9pftgyycWUVU8w==}
 
-  '@latkit/gpu@0.14.0':
-    resolution: {integrity: sha512-UejyI6fEZ6jRma+XT5YLeSIwoGy/3ln8s5tfnWVlaQ6OAsn6FOrhNPdvNGwq34iArjJayziwj1rOy1LhU2j02g==}
+  '@latkit/gpu@0.15.0':
+    resolution: {integrity: sha512-lQVl6WO68EW9sIvgxlGF07YkpZNwYYYpL1GkUfFtbhgXEy0D5v/pCj6nIWh1n39f5BEwsr0fcwGiSN6PlhKSng==}
 
-  '@latkit/model@3.0.0':
-    resolution: {integrity: sha512-2s6qHk9FRBgpgW5jImRJ7G2Rko0KkcH8Mkzlz6AMQYjyv4Fn2F6hvNaHgHEtlYqQ2phCTUrpRWYBhHZX4aLK0Q==}
+  '@latkit/model@4.0.0':
+    resolution: {integrity: sha512-4e1BL/kNaWLS68ffimzurs99Ap4+kqMHQaCSy1OXugaE3pvfNMW76cJkYp4mPwU+yuFNITsafYNkUelU5PhqFg==}
 
-  '@latkit/monitor@0.13.0':
-    resolution: {integrity: sha512-pR0Py2/sgBFUYvN2+ToTteUQ2SQVWiUKDICzCLCU545EFqwvWIAVfuWGGfk+ieRKcSSj/t3EiUKYZTUjRtdLCA==}
+  '@latkit/monitor@0.14.0':
+    resolution: {integrity: sha512-82HpxpS3ylZ6H6o3zweHs1KGRjFyR4pe1uAued3KhlS3k6kk5OWiQt29c7ld755losACDUoOwU4NSmNi9tpFHA==}
 
-  '@latkit/network@0.18.0':
-    resolution: {integrity: sha512-FqlFi9B1AY79q3EcSfQO1Bi/hqWLl0TYB9z3jdxf/gMtRHHZhaK0gtSbx0N3iRTpUysfXLSDYX5JwSycwOBHKg==}
+  '@latkit/network@0.19.0':
+    resolution: {integrity: sha512-/OitsvS39vmGQGBeS+IxVusgD3fDS9VA02RD3pMZf9hQfOklnjWnsXYJfYsZJhp6BvbOmC/6aa3swmjvjdO8GA==}
 
-  '@latkit/video@0.6.0':
-    resolution: {integrity: sha512-1OSMcAtnEhYciLrQ8WP4ExYEgA2il/nCGepPzlMZy8mLI17acKEVmvFJRC207SjG+fdZZh99zbnc36DYo/58Tg==}
+  '@latkit/video@0.6.1':
+    resolution: {integrity: sha512-XPpjtq5GMy4QCqOLdQPDuEDOLqbV2Wkfgu4kYjynvr0hAxYe2twWK6UYkRix010XXfnW5gWWxxuXFC1kEXNK2Q==}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -2745,36 +2745,36 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@latkit/diagram@0.8.0':
+  '@latkit/diagram@0.9.0':
     dependencies:
-      '@latkit/gpu': 0.14.0
-      '@latkit/model': 3.0.0
+      '@latkit/gpu': 0.15.0
+      '@latkit/model': 4.0.0
       '@webgpu/types': 0.1.72
 
-  '@latkit/gpu@0.14.0':
+  '@latkit/gpu@0.15.0':
     dependencies:
-      '@latkit/model': 3.0.0
+      '@latkit/model': 4.0.0
       '@webgpu/types': 0.1.72
       culori: 4.0.2
 
-  '@latkit/model@3.0.0': {}
+  '@latkit/model@4.0.0': {}
 
-  '@latkit/monitor@0.13.0':
+  '@latkit/monitor@0.14.0':
     dependencies:
-      '@latkit/gpu': 0.14.0
-      '@latkit/model': 3.0.0
+      '@latkit/gpu': 0.15.0
+      '@latkit/model': 4.0.0
       '@webgpu/types': 0.1.72
 
-  '@latkit/network@0.18.0':
+  '@latkit/network@0.19.0':
     dependencies:
-      '@latkit/gpu': 0.14.0
-      '@latkit/model': 3.0.0
+      '@latkit/gpu': 0.15.0
+      '@latkit/model': 4.0.0
       '@webgpu/types': 0.1.72
 
-  '@latkit/video@0.6.0':
+  '@latkit/video@0.6.1':
     dependencies:
-      '@latkit/gpu': 0.14.0
-      '@latkit/model': 3.0.0
+      '@latkit/gpu': 0.15.0
+      '@latkit/model': 4.0.0
       '@webgpu/types': 0.1.72
       mediabunny: 1.61.1
 

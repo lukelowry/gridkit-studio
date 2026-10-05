@@ -137,7 +137,6 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', code: number, bus: str
     source,
     definition: { type, nullable: true, ...(unit !== undefined && { unit }) },
   })
-  const spatial = kind === 'bus' ? 'position' : spec.name === 'Branch' ? 'route' : undefined
   return compile(
     {
       type: spec.name,
@@ -150,7 +149,6 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', code: number, bus: str
     {
       label: spec.label,
       ...(kind === 'device' && { description: spec.family }),
-      ...(spatial !== undefined && { spatial: { field: spatial, system: 'geographic' } }),
     },
     [
       ...(kind === 'bus' ? [field('name', 'text', { kind: 'record', name: 'name' })] : []),
@@ -165,11 +163,24 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', code: number, bus: str
             {
               name: 'position',
               source: { kind: 'position' as const },
-              definition: { type: POINT, nullable: true, description: '[longitude, latitude]' },
+              definition: {
+                type: POINT,
+                nullable: true,
+                geographic: true,
+                description: '[longitude, latitude]',
+              },
             },
           ]
         : []),
-      ...(spec.name === 'Branch' ? [field('route', ROUTE, { kind: 'route' })] : []),
+      ...(spec.name === 'Branch'
+        ? [
+            {
+              name: 'route',
+              source: { kind: 'route' as const },
+              definition: { type: ROUTE, nullable: true, geographic: true },
+            },
+          ]
+        : []),
       ...spec.outputs.map((output): FieldPlan => ({
         name: output.id,
         source: { kind: 'output', name: output.id },

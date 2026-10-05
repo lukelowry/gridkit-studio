@@ -1,14 +1,15 @@
+import type { Positions } from '@latkit/diagram'
 import type { FieldValues } from '@latkit/model'
 
-import { networkOf } from '../shared/schema.js'
+import { networkOf, positionOf } from '../shared/schema.js'
 import type { Case } from './case.js'
 
-const cache = new WeakMap<Case, Record<string, FieldValues>>()
+const cache = new WeakMap<Case, Record<string, Positions>>()
 // A deterministic layout for a network with no places of its own. Bound work and yield in the data worker.
 export async function placement(
   kase: Case,
   signal: AbortSignal,
-): Promise<Record<string, FieldValues>> {
+): Promise<Record<string, Positions>> {
   const existing = cache.get(kase)
   if (existing) return existing
   const drawn = networkOf(kase.schema)
@@ -16,7 +17,7 @@ export async function placement(
   let count = 0
   for (const type of drawn.vertices) {
     const table = kase.table(type)
-    const field = kase.schema.types[type]!.spatial!.field
+    const field = positionOf(kase.schema, type)!.field
     for (let row = 0; row < table.records.length; row++) {
       const value = kase.cell(table, field, row)
       if (Array.isArray(value) && value.every(Number.isFinite)) {
@@ -49,23 +50,14 @@ export async function placement(
   const points = count > 2000 ? circle(count) : await settle(count, pairs, signal)
   signal.throwIfAborted()
   const result = Object.fromEntries(
-    banks.map(({ type, base, count }) => {
-      const table = kase.data.tables[type]!
-      const values = points.slice(base * 2, (base + count) * 2)
-      return [
-        type,
-        {
-          index: table.index,
-          rows: table.rows,
-          values: {
-            kind: 'vector' as const,
-            size: 2,
-            offset: 0,
-            length: count,
-            values: { kind: 'numeric' as const, offset: 0, length: values.length, values },
-          },
-        },
-      ]
+    banks.map(({ type, base, count }): [string, Positions] => {
+      const { index, rows } = kase.data.tables[type]!
+      const axis = (component: number): FieldValues => {
+        const values = new Float64Array(count)
+        for (let k = 0; k < count; k++) values[k] = points[(base + k) * 2 + component]!
+        return { index, rows, values: { kind: 'numeric', offset: 0, length: count, values } }
+      }
+      return [type, { x: axis(0), y: axis(1) }]
     }),
   )
   cache.set(kase, result)

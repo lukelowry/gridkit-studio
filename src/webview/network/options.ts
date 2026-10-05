@@ -1,39 +1,45 @@
-/** Network preferences translated into one renderer patch; camera state stays with the view. */
-import { viewStyle } from '@latkit/gpu'
-import type { Network } from '@latkit/network'
+/** Network preferences translated into the renderer's style; camera state stays with the view. */
+import type { RGBA } from '@latkit/gpu'
+import type { NetworkConfig } from '@latkit/network'
 
 import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
+
+/** The halos the theme's focus color draws, translucent over what they surround. */
+const HOVER_ALPHA = 0.5
+const SELECTED_ALPHA = 0.82
+/** Borders draw faint over the ground in the theme's colors. */
+const PATH_ALPHA = 0.5
+
+const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
+
+export type NetworkStyle = Omit<NetworkConfig, 'source' | 'vertices' | 'edges' | 'paths' | 'canvas'>
 
 export function networkOptions(
   s: SettingsReader,
   palette: Palette,
   font: string,
   geographic: boolean,
-): Parameters<Network['set']>[0] {
-  const highlight = s.get('network.focusEnabled')
-  const ends = s.get('network.focusEnds')
-  const hover = color(s.get('network.hoverColor'), palette.focus) ?? viewStyle.hoverColor
-  const selected =
-    color(s.get('network.selectedColor'), palette.focus) ?? viewStyle.selectedColor ?? hover
+): NetworkStyle {
   const family = s.get('network.font') || font
   return {
     markers: s.get('network.markers'),
     poles: s.get('network.poles'),
-    graticule: s.get('network.graticule'),
+    grid: s.get('network.grid'),
     earthAxis: s.get('network.earthAxis'),
     vertexRadiusPx: s.get('network.vertexRadiusPx'),
     edgeWidthPx: s.get('network.edgeWidthPx'),
-    heightScale: s.get('network.heightScale'),
+    pathWidthPx: s.get('network.pathWidthPx'),
+    zScale: s.get('network.zScale'),
     dashPeriodPx: s.get('network.dashPeriodPx'),
     daylight: s.get('network.daylight') && geographic,
     nightFloor: s.get('network.nightFloor'),
     surfaceNightFloor: s.get('network.surfaceNightFloor'),
     terminatorWidth: s.get('network.terminatorWidth'),
-    selectedEnds: ends !== 'off',
-    hoverEnds: ends === 'hover-selected',
-    hoverWidthPx: highlight ? s.get('network.hoverWidthPx') : 0,
-    selectedWidthPx: highlight ? s.get('network.selectedWidthPx') : 0,
+    selectedEnds: s.get('network.selectedEnds'),
+    hoverEnds: s.get('network.hoverEnds'),
+    hoverWidthPx: s.get('network.hoverWidthPx'),
+    selectedWidthPx: s.get('network.selectedWidthPx'),
     fitPitch: s.get('network.fitPitch'),
     fitBearing: s.get('network.fitBearing'),
     orbitRate: s.get('network.orbitRate'),
@@ -50,21 +56,16 @@ export function networkOptions(
       wheel: s.get('network.input.wheel'),
       keyboard: s.get('network.input.keyboard'),
     },
-    font: family ? { family } : null,
+    ...(family && { font: { family } }),
     fontSizePx: s.get('network.fontSizePx'),
     textColor: color(s.get('network.textColor'), palette.text1),
     background: color(s.get('network.background'), palette.background),
     surfaceColor: color(s.get('network.surfaceColor'), palette.surface2),
     gridColor: color(s.get('network.gridColor'), palette.border),
-    hoverColor: [hover[0], hover[1], hover[2], highlight ? s.get('network.hoverAlpha') : 0],
-    selectedColor: [
-      selected[0],
-      selected[1],
-      selected[2],
-      highlight ? s.get('network.selectedAlpha') : 0,
-    ],
-    vertexBaseColor: color(s.get('network.vertexBaseColor'), palette.network),
-    // Null colors each edge with the average of its two ends' colors.
-    edgeBaseColor: color(s.get('network.edgeBaseColor')),
+    hoverColor: color(s.get('network.hoverColor'), faded(palette.focus, HOVER_ALPHA)),
+    selectedColor: color(s.get('network.selectedColor'), faded(palette.focus, SELECTED_ALPHA)),
+    vertexColor: color(s.get('network.vertexColor'), palette.network),
+    edgeColor: color(s.get('network.edgeColor')) ?? 'ends',
+    pathColor: color(s.get('network.pathColor'), faded(palette.text3, PATH_ALPHA)),
   }
 }

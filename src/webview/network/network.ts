@@ -15,8 +15,21 @@ import { defaults } from '../../shared/preferences.js'
 import { networkOf } from '../../shared/schema.js'
 import { nativeMenu } from '../menu.js'
 
+/** Whether any row of `type` has a point in its route `field`. */
+function routed(source: Data, type: string, field: string): boolean {
+  for (const { column } of source.tables[type]?.fields[field] ?? [])
+    if (
+      column.kind === 'list' &&
+      column.offsets[column.offset + column.length]! > column.offsets[column.offset]!
+    )
+      return true
+  return false
+}
+
 /** What a network renderer of `source` draws. Places the extension laid out are flat, so they draw
- *  no bends meant for longitude and latitude. */
+ *  no bends meant for longitude and latitude. Lines bend only where a case routes them: given a
+ *  route field, the renderer splits every line through points of its own, which carry no value
+ *  and so no color of their ends. */
 export function networkData(
   source: Data,
   places: Readonly<Record<string, FieldValues>> = {},
@@ -34,7 +47,10 @@ export function networkData(
     edges: Object.fromEntries(
       edges.map(({ type, ends, bends }) => [
         type,
-        { ends, ...(bends !== undefined && !placed && { bends }) },
+        {
+          ends,
+          ...(bends !== undefined && !placed && routed(source, type, bends) && { bends }),
+        },
       ]),
     ),
   }

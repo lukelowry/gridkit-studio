@@ -161,6 +161,29 @@ describe('DynamicSimulation', () => {
     expect(info.frames).toBe(11)
   })
 
+  it('WECC240: records every bus angle, starting at the case power flow', async ({ signal }) => {
+    const text = await readFile('cases/WECC240.case.json', 'utf8')
+    const model = await Case.parse(text, kase.catalog)
+    expect(diagnose(model)).toEqual([])
+    const { info, done } = await run(
+      'WECC240',
+      { tmax: 0.1, dt_monitor: 0.01 },
+      signal,
+      undefined,
+      model,
+      [{ from: 'Bus', select: ['Va'] }],
+    )
+    await done
+    expect(info.frames).toBe(11)
+    // Columns follow the buses in file order; at t = 0 each angle is its initial voltage's.
+    const buses = (JSON.parse(text) as { buses: { init: { Vr: number; Vi: number } }[] }).buses
+    const first = (await readFile(info.path, 'utf8')).split('\n')[1]!.split(',').map(Number)
+    expect(first.slice(1)).toHaveLength(buses.length)
+    buses.forEach(({ init }, i) =>
+      expect(first[i + 1]).toBeCloseTo(Math.atan2(init.Vi, init.Vr), 6),
+    )
+  })
+
   it('simulates a staged bus fault and records the event boundaries', async ({ signal }) => {
     const { info, done } = await run(
       'fault',

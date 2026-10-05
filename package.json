@@ -47,6 +47,8 @@
     "test:package": "node tests/vscode/package.mjs",
     "test:simulation": "vitest run --project simulation",
     "test:devcontainer": "node scripts/devcontainer.mjs",
+    "test:gridkit": "node scripts/gridkit.mjs",
+    "test:baselines": "node scripts/gridkit.mjs --baselines",
     "bench": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/views.ts",
     "bench:update": "pnpm bench && node tests/benchmarks/gate.mjs --update output/bench/head.json",
     "bench:gate": "pnpm bench && node tests/benchmarks/gate.mjs output/bench/base.json output/bench/head.json",
@@ -72,6 +74,7 @@
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
+    "@devcontainers/cli": "0.80.2",
     "@types/mocha": "10.0.10",
     "@types/node": "^24.19.0",
     "@types/pngjs": "6.0.5",

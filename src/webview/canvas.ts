@@ -72,6 +72,8 @@ function boot() {
   let geographic = false
   let borders: Data | null = null
   let borderRequest: Promise<void> | undefined
+  /** Labels, like borders, wait for the first frame: laying out text never holds up the case. */
+  let labelled = false
   /** The selection on show, and the one this view made itself, which it does not travel to. */
   let selectionKey = ''
   let own = ''
@@ -117,6 +119,7 @@ function boot() {
   const drop = () => {
     view?.destroy()
     view = undefined
+    labelled = false
     delete canvas.dataset.rendered
   }
   // A lost GPU is replaced once, the view drawn again where its camera was.
@@ -164,6 +167,7 @@ function boot() {
       borders,
       // Colors span the whole run once all of it is held and no more is coming.
       held === undefined && state.run?.state !== 'running',
+      labelled,
     )
   /** Borders load after the first frame: decoration never holds up the case. */
   function decorate() {
@@ -284,7 +288,9 @@ function boot() {
         host.setAttribute('aria-busy', 'false')
         if (!host.querySelector('.toolbar')) sync = toolbar()
         sync()
-        decorate()
+        // The case is on screen: now its labels, and its borders, which paint asks for.
+        labelled = true
+        if (kind === 'network') paint()
       }
       if (fault !== null) {
         fault = null
@@ -468,6 +474,13 @@ function boot() {
   // the benchmarks hold to tests/benchmarks/work.json.
   ;(window as { gridkitStats?: () => unknown }).gridkitStats = () =>
     view && { ...view.stats(), ...owner.gpu?.stats() }
+  // Where an element was drawn in the latest frame, so tests can read the color and height its
+  // fields map to.
+  ;(window as { gridkitLocate?: (id: string) => unknown }).gridkitLocate = (id) => {
+    const item =
+      kind === 'network' && view ? networkModule?.networkItem(view as Network, { id }) : undefined
+    return item ? (view as Network).locate(item) : null
+  }
   document.addEventListener('visibilitychange', () =>
     view?.set({ paused: !shown || document.hidden }),
   )

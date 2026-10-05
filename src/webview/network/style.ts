@@ -45,7 +45,8 @@ function hiddenRows(source: Data, type: string): FieldValues {
 
 /** One style transaction: what the network of `source` is told, and what an export captures
  *  unchanged. Sampled fields read `samples`, the case with the run on show: over the `whole` run
- *  their colors span all it recorded; else they follow the frame on show. */
+ *  their colors span all it recorded; else they follow the frame on show. Labels draw only once
+ *  `labelled`: a canvas holds them back until its first frame. */
 export function networkStyle(
   source: Data,
   samples: Data,
@@ -53,6 +54,7 @@ export function networkStyle(
   geographic: boolean,
   borders: Data | null,
   whole: boolean,
+  labelled = true,
 ): Parameters<Network['set']>[0] {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
@@ -62,7 +64,9 @@ export function networkStyle(
   const borderColor = color(s.get('network.borderColor'), p.text3)
   const labels = (type: string, enabled: boolean) => {
     const field = nameFieldOf(source.schema, type)
-    return enabled && field !== null ? { field, maxCount: s.get('network.labels.maxCount') } : null
+    return labelled && enabled && field !== null
+      ? { field, maxCount: s.get('network.labels.maxCount') }
+      : null
   }
   return {
     ...networkOptions(s, p, font(), geographic),

@@ -168,12 +168,13 @@ export class TestHost {
     return frame
   }
 
-  /** Copy a case, named by its path from the repository root, into the workspace and show it in
-   *  Network. */
+  /** Copy a case, named by its path from the repository root, into the workspace and show it
+   *  alone in Network: the only network webview is then this case's. */
   async openCase(path: string): Promise<{ uri: vscode.Uri; network: Frame }> {
     const name = basename(path)
     const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders![0]!.uri, name)
     await copyFile(join(process.env.GRIDKIT_TEST_ROOT!, path), uri.fsPath)
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await this.view('network')
     await visible(network, 'canvas[data-rendered=true]')

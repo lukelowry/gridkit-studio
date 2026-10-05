@@ -66,13 +66,21 @@ export async function run() {
       }
 
       const firsts: number[] = []
+      const shown: number[] = []
       for (let i = 0; i < RUNS; i++) {
         await vscode.commands.executeCommand('workbench.action.closeAllEditors')
         const start = performance.now()
         ;({ uri, network } = await bench.openCase(path))
         firsts.push(performance.now() - start)
+        shown.push(
+          await network.evaluate<number>(
+            "performance.getEntriesByName('canvas:frame')[0].startTime - performance.getEntriesByName('canvas:boot')[0].startTime",
+          ),
+        )
       }
+      // Until the view settles, and what the reader sees first: the page's own first frame.
       timings[group + ' > first frame'] = firsts
+      timings[group + ' > first frame (page)'] = shown
       const page = await network.evaluate<{
         fills: boolean
         marks: Record<string, number>

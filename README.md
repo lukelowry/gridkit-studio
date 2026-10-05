@@ -42,8 +42,8 @@ pnpm install --frozen-lockfile
 pnpm quality
 pnpm test:vscode
 pnpm test:trust
-pnpm test:simulation
-pnpm test:devcontainer
+pnpm test:gridkit
+pnpm test:baselines
 pnpm package
 pnpm test:package
 pnpm bench:gate
@@ -69,12 +69,12 @@ Unit tests stay beside their implementation. `tests/vscode/` contains the extens
 Tests are in three layers:
 
 - **Unit** (`pnpm test`): beside the code they test, as `src/**/*.test.ts`. They run anywhere.
-- **VS Code** (`pnpm test:vscode`): `tests/vscode/`, a suite for each view, run by Mocha inside an actual VS Code with its webviews, with WebGPU required for the canvas suites. UI suites reset parameters, recordings, plots, mappings, results, and selection before starting; `GRIDKIT_TEST_GREP=Monitor` runs one. `pnpm test:package` runs them against an isolated installed VSIX. `pnpm test:trust` checks inspection and blocked execution in an untrusted workspace. Where GridKit is installed, the Run suites also run WECC240 with only voltage angle recorded, driving vertex color and height on a tilted network.
-- **Simulation** (`pnpm test:simulation`): real IEEE39 and TwoArea runs, diagnostics, native output columns, sample counts/times/reference voltages, cancellation, unsupported formats, initialization errors, and retry. Inputs, results, and logs stay in `output/simulation/` for inspection.
+- **VS Code** (`pnpm test:vscode`): `tests/vscode/`, a suite for each view, run by Mocha inside an actual VS Code with its webviews, with WebGPU required for the canvas suites. UI suites reset parameters, recordings, plots, mappings, results, and selection before starting; `GRIDKIT_TEST_GREP=Monitor` runs one. `pnpm test:package` runs them against an isolated installed VSIX. `pnpm test:trust` checks inspection and blocked execution in an untrusted workspace.
+- **Simulation** (`pnpm test:simulation`): real IEEE39, TwoArea, and WECC240 runs, diagnostics, native output columns, sample counts/times/reference voltages and angles, cancellation, unsupported formats, initialization errors, and retry. Inputs, results, and logs stay in `output/simulation/` for inspection.
 
-The dev container pins the verified GridKit image by digest. Inside it, **`pnpm test:devcontainer`** runs quality checks, real solver tests, packaging, the installed VSIX's full UI suite, and Workspace Trust checks. Missing GridKit, skipped tests, or filtered runs fail this required check. Ordinary host UI tests may skip the real Run suite when GridKit is absent. `GRIDKIT_PATH` names an installation elsewhere.
+GridKit is Linux-only, so host UI tests on Windows or macOS skip the Run suites; they prove nothing about simulation. **`pnpm test:gridkit`** runs the real thing from any host with Docker: it builds the dev container's image (GridKit pinned by digest), tests a copy of the checkout in it, and leaves the host's `node_modules`, `dist`, and `.vscode-test` alone. It runs the solver tests, then the VS Code Run suites (IEEE39 and TwoArea runs, plots, playback, failures) and the WECC240 suite, which records voltage angle alone and checks each bus's color against the colormap at its recorded angle, each unmapped branch as one color (the average of its ends), and each bus's height against its angle on a tilted network. Results, screenshots, and solver logs land in `output/gridkit/`. `pnpm test:gridkit --required` is the release check that CI runs on every push (`pnpm test:devcontainer` inside the container): quality, real solver tests, the installed VSIX's full UI suite, and Workspace Trust. Missing GridKit, skipped tests, or filtered runs fail it. `GRIDKIT_PATH` names an installation elsewhere.
 
-Linux UI tests with `GRIDKIT_TEST_SOFTWARE_GPU=1` compare committed pixel baselines for dark, light, high contrast, narrow, geographic, and mapped-color views. To deliberately update them in the dev container, run `GRIDKIT_UPDATE_BASELINES=1 GRIDKIT_TEST_SOFTWARE_GPU=1 GRIDKIT_TEST_GREP='Visual baselines' dbus-run-session -- xvfb-run -a pnpm test:vscode`, inspect the images in `tests/vscode/baselines/`, then run `pnpm test:devcontainer` without the update flag. Failing screenshots and diffs stay under `output/`; CI uploads them.
+Linux UI tests with `GRIDKIT_TEST_SOFTWARE_GPU=1` compare committed pixel baselines for dark, light, high contrast, narrow, geographic, and mapped-color views. `pnpm test:baselines` regenerates them in the container; inspect the images in `tests/vscode/baselines/` before committing them. Failing screenshots and diffs stay under `output/`; CI uploads them.
 
 Benchmarks follow latkit's gate. `pnpm bench` times first frame, restyle, camera move, labels, and borders on IEEE39, WECC240, ACTIVSg2000, and ACTIVSg10k, and records each scenario's exact GPU and geometry work in `output/bench/head.json`. `pnpm bench:gate` fails when that work grows past `tests/benchmarks/work.json`; it reports, without failing, scenarios slower than `output/bench/base.json` (a run of the base commit on the same machine) and time per bus that grows faster than linearly. Record intended work changes with `pnpm bench:update`. `pnpm test:performance` measures the worker separately.
 

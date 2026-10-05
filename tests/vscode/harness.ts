@@ -6,7 +6,7 @@ import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
 import { sampledFields } from '@latkit/model'
-import { type Browser, chromium, type Frame, type Page } from 'playwright-core'
+import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import type { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
@@ -187,6 +187,34 @@ export class TestHost {
     const command = PANELS[kind]
     await vscode.commands.executeCommand(command, ...(command.endsWith('.focus') ? [] : [this.uri]))
     return this.view(kind)
+  }
+
+  /** Monitored Signals, shown: the native tree of what the runs to come record. */
+  async signals(): Promise<Locator> {
+    await vscode.commands.executeCommand('gridkitStudio.signals.focus')
+    const pane = this.page.locator('.pane', {
+      has: this.page.locator('.pane-header', { hasText: /monitored signals/i }),
+    })
+    await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 30000 })
+    return pane
+  }
+
+  /** Check or uncheck `field` of `type` in Monitored Signals, as the reader does: open its type, then
+   *  its box. */
+  async toggleSignal(type: string, field: string): Promise<void> {
+    const signals = await this.signals()
+    const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
+    if ((await group.getAttribute('aria-expanded')) !== 'true') {
+      await group.locator('.monaco-tl-twistie').click()
+      await until(
+        async () => (await group.getAttribute('aria-expanded')) === 'true',
+        type + ' open',
+      )
+    }
+    await signals
+      .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
+      .getByRole('checkbox')
+      .click()
   }
 
   /** Wait for a native menu to offer `item`. */

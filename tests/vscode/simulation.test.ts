@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
+import * as vscode from 'vscode'
 
 import { type TestHost, testHost, until, visible } from './harness.js'
 
@@ -36,13 +37,48 @@ suite('DynamicSimulation', () => {
     await until(() => bench.session.values.fault === false, 'the fault switched off')
   })
 
-  test('chooses which signals the next run records', async () => {
+  test('chooses which signals the next run records in its own native view', async () => {
     assert.ok(recorded())
-    await simulation.getByRole('button', { name: 'Monitored signals', exact: true }).click()
-    await simulation.locator('[data-testid="monitor-class-Bus"]').click()
-    await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
+    await bench.toggleSignal('Bus', 'Va')
     await until(() => !recorded(), 'a signal no longer recorded')
-    await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
+    const signals = await bench.signals()
+    const bus = signals.getByRole('treeitem', { name: /^Bus,/ }).getByRole('checkbox')
+    const whole = (on: boolean) =>
+      until(
+        async () => (await bus.getAttribute('aria-checked')) === String(on),
+        on ? 'Bus checked whole' : 'Bus not checked whole',
+      )
+    await whole(false)
+    await bench.toggleSignal('Bus', 'Va')
     await until(recorded, 'the signal recorded again')
+    // A type's own box records all of its values, or none.
+    await whole(true)
+    await bus.click()
+    await until(
+      () => !(bench.session.outputs ?? []).some((output) => output.from === 'Bus'),
+      'Bus recorded not at all',
+    )
+    await whole(false)
+    await bus.click()
+    await until(recorded, 'every Bus value recorded again')
+    await whole(true)
+  })
+
+  test('says Run needs a signal, and opens Monitored Signals from there', async () => {
+    await vscode.commands.executeCommand('gridkitStudio.clearSignals')
+    await until(() => !bench.session.outputs?.length, 'nothing recorded')
+    await until(
+      async () => await simulation.locator('[data-testid="study-run"]').isDisabled(),
+      'Run waits for a signal',
+    )
+    await simulation.locator('[data-testid="study-signals"]').click()
+    await bench.signals()
+    await vscode.commands.executeCommand('gridkitStudio.selectAllSignals')
+    await until(recorded, 'every signal recorded')
+    simulation = await bench.show('simulation')
+    await until(
+      async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
+      'Run ready',
+    )
   })
 })

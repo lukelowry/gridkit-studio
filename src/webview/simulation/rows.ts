@@ -2,9 +2,6 @@
 
 import type { Parameter } from '@latkit/model'
 
-/** What the runs to come record: each type's fields. */
-export type Monitored = Readonly<Record<string, readonly string[]>>
-
 /** A choice in a dropdown row: the text a pick enters, and what the row shows for it. */
 export interface Choice {
   readonly value: string

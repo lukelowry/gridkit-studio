@@ -1,17 +1,14 @@
-<!-- Run the simulation and choose what it records. -->
+<!-- Run the simulation; what it records is chosen in the native Monitored Signals view. -->
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import type { ViewState } from '../../shared/messages.js'
-  import { typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
-  import Section from '../ui/Section.svelte'
   import Form from './Form.svelte'
-  import MonitoredSignals from './MonitoredSignals.svelte'
-  import { type Choice, labelOf, type Monitored } from './rows.js'
+  import { type Choice, labelOf } from './rows.js'
   import { problemOf, valueOf } from './values.js'
 
   let view = $state.raw<ViewState>({})
@@ -22,7 +19,6 @@
   /** Each type's elements as choices, read once for each revision of the case. */
   let read: Record<string, Promise<readonly Choice[]>> = {}
   let revision: number | undefined
-  let choosingSignals = $state(false)
 
   const summary = $derived(view.summary)
   const run = $derived(view.run)
@@ -55,27 +51,9 @@
       ? Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))
       : null,
   )
-  /** What the runs to come record, by type. */
-  const recorded = $derived<Monitored>(
-    Object.fromEntries((view.outputs ?? []).map(({ from, select }) => [from, select])),
-  )
+  /** How many values the next run records. */
   const selectedCount = $derived(
     (view.outputs ?? []).reduce((n, output) => n + output.select.length, 0),
-  )
-  /** The types with values a run can record: those the case has elements of. */
-  const recordable = $derived(
-    Object.entries(summary?.schema.types ?? {})
-      .filter(([type]) => summary!.counts[type])
-      .map(([type, { fields }]) => ({
-        type,
-        label: typeName(summary!.schema, type),
-        fields: Object.entries(fields).flatMap(([field, definition]) =>
-          definition.sampled === true
-            ? [{ field, label: definition.label ?? field, unit: definition.unit ?? '' }]
-            : [],
-        ),
-      }))
-      .filter(({ fields }) => fields.length > 0),
   )
   /** Where the newest run stands, as the bar reads it; nothing before any. */
   const standing = $derived.by(() => {
@@ -125,10 +103,6 @@
         text = {}
       }
       view = merged(view, message.state)
-      if (view.choosingSignals) {
-        choosingSignals = true
-        bridge.command('signalsShown')
-      }
       appearance(view.settings)
       if (view.summary?.version !== revision) {
         revision = view.summary?.version
@@ -206,19 +180,19 @@
       {:else if run?.state === 'failed' && run.message}
         <p class="c-note c-note--error" role="alert">{run.message}</p>
       {/if}
-      <Section
-        label="Monitored signals"
-        meta={`${selectedCount} selected`}
-        collapsible
-        bind:open={choosingSignals}
-      >
-        <MonitoredSignals
-          types={recordable}
-          {recorded}
-          disabled={running}
-          onrecord={(type, select) => bridge.send({ kind: 'record', type, select })}
-        />
-      </Section>
+      {#if selectedCount === 0}
+        <div class="c-note study__signals" role="status">
+          <span>Choose the signals to record before running.</span>
+          <button
+            type="button"
+            class="c-btn c-btn--sm"
+            data-testid="study-signals"
+            onclick={() => bridge.command('chooseSignals')}
+          >
+            Choose monitored signals
+          </button>
+        </div>
+      {/if}
       <Form
         {parameters}
         {text}
@@ -253,6 +227,13 @@
     align-items: center;
     gap: var(--spacing-sm);
     padding-block-end: var(--spacing-sm);
+  }
+
+  .study__signals {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-sm);
   }
 
   .study__standing {

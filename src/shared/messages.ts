@@ -196,8 +196,6 @@ export interface ViewState {
   bindings?: Bindings
   /** The field the Mappings editor is open for. */
   editing?: FieldRef
-  /** Open Monitored signals until the Simulation view acknowledges it. */
-  choosingSignals?: boolean
   summary?: Summary
   stale?: boolean
   /** The current source could not be parsed; summary may still hold the last valid revision. */
@@ -278,8 +276,6 @@ export type FromView =
   | ({ kind: 'transport'; seq: number } & TransportAction)
   | { kind: 'bind'; field: FieldRef; channels: readonly Channel[]; domain?: Domain }
   | { kind: 'editing'; field: FieldRef | null }
-  /** Every field of `type` the runs to come record. */
-  | { kind: 'record'; type: string; select: readonly string[] }
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
   | { kind: 'tableState'; table: TableState }
   | { kind: 'busy'; busy: boolean }

@@ -4,6 +4,7 @@ import { registerAI } from './ai.js'
 import { registerCommands } from './commands.js'
 import { registerNavigation } from './navigation.js'
 import { Sessions } from './sessions.js'
+import { registerSignals } from './signals.js'
 import { registerTrees } from './trees.js'
 import { registerViews } from './views.js'
 let studio: Sessions | undefined
@@ -14,6 +15,7 @@ export function activate(context: ExtensionContext) {
     ...registerViews(studio),
     ...registerCommands(studio),
     ...registerTrees(studio),
+    ...registerSignals(studio),
     ...registerNavigation(studio),
     ...registerAI(studio),
   )

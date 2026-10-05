@@ -51,15 +51,22 @@ describe('native VS Code contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    // The side bar folds the case's panels, Mappings and Export among them.
+    // The side bar folds the case's panels, Mappings and Export among them; what runs record is a
+    // native view of its own under DynamicSimulation.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
       [
         'gridkitStudio.inspector',
         'gridkitStudio.bindings',
         'gridkitStudio.simulation',
+        'gridkitStudio.signals',
         'gridkitStudio.export',
       ],
     )
+    expect(
+      manifest.contributes.views.gridkitStudio.find(
+        (view: { id: string }) => view.id === 'gridkitStudio.signals',
+      ).type,
+    ).toBeUndefined()
     expect(
       manifest.contributes.customEditors.map(
         (editor: { displayName: string }) => editor.displayName,

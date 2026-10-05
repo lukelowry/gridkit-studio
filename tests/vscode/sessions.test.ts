@@ -25,7 +25,7 @@ suite('Sessions', () => {
 
   test('keeps an empty recording selection when the case is opened again', async () => {
     const session = studio.current()
-    for (const { from } of session.outputs ?? []) studio.record(session.uri, from, [])
+    studio.record(session.uri, [])
     assert.deepEqual(session.outputs, [])
     await studio.open(document)
     assert.deepEqual(session.outputs, [])

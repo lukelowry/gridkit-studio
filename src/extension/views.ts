@@ -36,7 +36,6 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'run',
   'stop',
   'chooseSignals',
-  'signalsShown',
 ])
 /** What a view that draws nothing itself shows of the case; it hears of nothing else. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
@@ -49,13 +48,12 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     bindings,
     table,
   ],
-  simulation: ({ uri, stale, error, values, outputs, run, choosingSignals }) => [
+  simulation: ({ uri, stale, error, values, outputs, run }) => [
     uri,
     stale,
     error,
     values,
     outputs,
-    choosingSignals,
     run && [run.id, run.state, run.frames, run.domain, run.span, run.message],
   ],
   bindings: ({ uri, stale, error, bindings, editing }) => [uri, stale, error, bindings, editing],
@@ -257,10 +255,6 @@ export class View {
       case 'editing':
         // Kept so the panel opens as it was left; the view that said so knows already.
         if (session) session.editing = message.field ?? undefined
-        return
-      case 'record':
-        if (Array.isArray(message.select))
-          this.studio.record(this.uri, message.type, message.select)
         return
       case 'values':
         if (session && message.uri === this.uri && message.values) {

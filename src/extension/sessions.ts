@@ -22,8 +22,6 @@ export interface Session {
   bindings: Bindings
   /** The field the Mappings editor is open for. */
   editing?: FieldRef
-  /** Keep a chooser request until the Simulation webview acknowledges it. */
-  choosingSignals?: boolean
   selection?: Element
   run?: RunInfo
   previous?: RunInfo
@@ -202,7 +200,6 @@ export class Sessions {
       settings: session?.settings,
       bindings: session?.bindings,
       editing: session?.editing,
-      choosingSignals: session?.choosingSignals,
       summary: entry?.summary,
       stale: entry?.stale,
       error: entry?.error,
@@ -260,17 +257,17 @@ export class Sessions {
     session.transport.pause()
     session.transport.seek(t)
   }
-  /** Choose the fields of `type` future runs record; plots of the current results are
-   *  independent, and the next run keeps those it records. */
-  record(uri: string, type: string, select: readonly string[]) {
+  /** Choose what future runs record; plots of the current results are independent, and the next
+   *  run keeps those it records. */
+  record(uri: string, outputs: readonly FieldSelection[]) {
     const session = this.all.get(uri)
     if (!session) return
-    const others = (session.outputs ?? []).filter((output) => output.from !== type)
-    session.outputs = select.length ? [...others, { from: type, select: [...select] }] : others
+    const recorded = outputs.filter(({ select }) => select.length > 0)
+    session.outputs = recorded
     // Without results, a plot only waits for a field the next run records.
     if (!session.run)
-      session.plots = session.plots.filter(
-        (plot) => plot.from !== type || select.includes(plot.field),
+      session.plots = session.plots.filter((plot) =>
+        recorded.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
       )
     this.persist(session)
     this.changed.fire(uri)

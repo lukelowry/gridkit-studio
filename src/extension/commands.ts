@@ -91,13 +91,8 @@ export function registerCommands(studio: Sessions) {
     studio.changed.fire(session.uri)
   }
   command('chooseSignals', async ({ session }) => {
-    session.choosingSignals = true
     studio.activate(session.uri)
-    await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
-  })
-  command('signalsShown', ({ session }) => {
-    session.choosingSignals = false
-    studio.changed.fire(session.uri)
+    await vscode.commands.executeCommand('gridkitStudio.signals.focus')
   })
   const action = (context: Context, command: string, value?: unknown, view?: string) =>
     studio.action.fire({

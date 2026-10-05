@@ -182,8 +182,7 @@ suite('WECC240 run', function () {
 
   test('runs with Va alone, mapped to color and height on a tilted network', async () => {
     const key = uri.toString()
-    for (const { from } of session().outputs ?? []) bench.studio.record(key, from, [])
-    bench.studio.record(key, 'Bus', ['Va'])
+    bench.studio.record(key, [{ from: 'Bus', select: ['Va'] }])
     bench.studio.bind(key, VA, ['vertexColor', 'vertexHeight'])
     await network.getByRole('button', { name: 'Tilt', exact: true }).click()
     await until(() => camera()?.projection === 'tilt' && (camera().pitch ?? 0) > 0, 'tilted')

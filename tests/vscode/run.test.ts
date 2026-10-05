@@ -35,28 +35,29 @@ suite('Run', function () {
   test('chooses signals from the empty Monitor and runs without seeded plots', async () => {
     assert.deepEqual(bench.session.plots, [])
     monitor = await bench.show('monitor')
+    // The Monitor's own button brings the native Monitored Signals view back into sight.
+    await vscode.commands.executeCommand('workbench.action.closeSidebar')
     await monitor.getByRole('button', { name: 'Choose monitored signals' }).click()
-    simulation = await bench.view('simulation')
-    await until(
-      async () =>
-        (await simulation
-          .getByRole('button', { name: 'Monitored signals', exact: true })
-          .getAttribute('aria-expanded')) === 'true',
-      'signal chooser opens directly',
-    )
-    // Clear every group through the same controls the user sees.
-    for (const group of await simulation.locator('[data-testid^="monitor-class-"]').all()) {
-      await group.click()
-      const region = simulation.locator(`[id="${await group.getAttribute('aria-controls')}"]`)
-      await region.getByRole('button', { name: 'Clear', exact: true }).click()
-    }
+    const signals = bench.page.locator('.pane', {
+      has: bench.page.locator('.pane-header', { hasText: /monitored signals/i }),
+    })
+    await signals.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: 30000 })
+    // Clear every signal through the view's own title action.
+    await signals.locator('.pane-header').hover()
+    await signals.getByRole('button', { name: 'Record No Signals' }).click()
     await until(() => !bench.session.outputs?.length, 'all monitored fields cleared')
+    simulation = await bench.view('simulation')
     await until(
       async () => await simulation.locator('[data-testid="study-run"]').isDisabled(),
       'empty selection disables Run in the view',
     )
-    await simulation.locator('[data-testid="monitor-Bus-Vm"]').click()
+    await bench.toggleSignal('Bus', 'Vm')
     await until(() => bench.session.outputs?.length === 1, 'one selected field')
+    // The form has heard of the selection, and of the values it had, before any is typed.
+    await until(
+      async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
+      'the view hears of the selection',
+    )
     await simulation.locator('[data-testid="field-tmax"]').fill('2')
     await simulation.locator('[data-testid="field-dt_monitor"]').fill('0.01')
     await until(() => bench.session.values.tmax === 2, 'run settings captured')
@@ -143,8 +144,8 @@ suite('Run', function () {
   test('keeps existing plots when the next run selects different fields', async () => {
     const previous = bench.session.run!.id
     simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="monitor-Bus-Va"]').click()
-    await simulation.locator('[data-testid="monitor-Bus-Vm"]').click()
+    await bench.toggleSignal('Bus', 'Va')
+    await bench.toggleSignal('Bus', 'Vm')
     await until(
       () => bench.session.outputs?.[0]?.select.join() === 'Va',
       'next run records only angle',
@@ -174,7 +175,11 @@ suite('Run', function () {
     assert.deepEqual((await bench.current()).issues, [])
     const previous = bench.session.run!.id
     simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="monitor-Bus-Vm"]').click()
+    await bench.toggleSignal('Bus', 'Vm')
+    await until(
+      () => bench.session.outputs?.some((output) => output.select.includes('Vm')),
+      'voltage recorded',
+    )
     await simulation.locator('[data-testid="study-run"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state !== 'running',

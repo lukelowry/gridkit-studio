@@ -239,6 +239,20 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
+        "command": "gridkitStudio.selectAllSignals",
+        "title": "Record All Signals",
+        "category": "GridKit Studio",
+        "icon": "$(check-all)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.clearSignals",
+        "title": "Record No Signals",
+        "category": "GridKit Studio",
+        "icon": "$(clear-all)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
         "command": "gridkitStudio.run",
         "title": "Run DynamicSimulation",
         "category": "GridKit Studio",
@@ -694,6 +708,16 @@
           "command": "gridkitStudio.simulationSettings",
           "when": "view == gridkitStudio.simulation",
           "group": "setup@2"
+        },
+        {
+          "command": "gridkitStudio.selectAllSignals",
+          "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gridkitStudio.clearSignals",
+          "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
+          "group": "navigation@2"
         },
         {
           "command": "gridkitStudio.showOutput",
@@ -1206,6 +1230,10 @@
           "type": "webview"
         },
         {
+          "id": "gridkitStudio.signals",
+          "name": "Monitored Signals"
+        },
+        {
           "id": "gridkitStudio.export",
           "name": "Video Export",
           "type": "webview",
@@ -1231,6 +1259,11 @@
       {
         "view": "gridkitStudio.inspector",
         "contents": "Open a GridKit case to explore its network, controls, and signals.\n[Open Case](command:gridkitStudio.openCase)",
+        "when": "!gridkitStudio.hasCase"
+      },
+      {
+        "view": "gridkitStudio.signals",
+        "contents": "Open a GridKit case to choose what its runs record.",
         "when": "!gridkitStudio.hasCase"
       }
     ],
@@ -2814,7 +2847,7 @@
           {
             "id": "run",
             "title": "Run and plot",
-            "description": "Choose Monitored signals in DynamicSimulation, then Run. The Monitor opens and plots the result automatically.",
+            "description": "Check what to record in Monitored Signals, then Run in DynamicSimulation. The Monitor opens and plots the result automatically.\n[Choose Monitored Signals](command:gridkitStudio.chooseSignals)",
             "media": {
               "markdown": "assets/walkthrough.md"
             },

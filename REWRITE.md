@@ -79,7 +79,7 @@ Measured locally on 2026-10-04 with VS Code 1.135, single runs:
 
 - The rule for the window of a run a view holds, and the worker's window filter, have unit and contract tests; no test drives a run large enough to take that path through the views.
 
-The Signals tree is gone: what a run records is chosen under Monitored signals in the DynamicSimulation panel, which has its own Run, and a signal is plotted from Add plot in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
+What a run records is chosen in Monitored Signals, a native tree view with checkboxes beneath the DynamicSimulation panel, which has its own Run; a signal is plotted from Add plot in the Monitor's header. Parameters that name an element are picked from the case's elements. The Monitor keeps its webview while hidden, as the canvases do.
 
 Not exercised: video export under CI's software GPU. Known and open: the Diagram's layout is latkit's and is superlinear; measured here, 1,338 blocks (ACTIVSg2000) take 18 to 30 s to a first frame and ACTIVSg10k exceeds the layout time limit.
 

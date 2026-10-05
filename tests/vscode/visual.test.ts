@@ -105,22 +105,22 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       }
     })
 
-    test('signal chooser fits a narrow view', async () => {
+    test('DynamicSimulation fits a narrow view', async () => {
       await theme('Default Dark Modern')
       await bench.page.setViewportSize({ width: 1000, height: 720 })
-      await vscode.commands.executeCommand('gridkitStudio.chooseSignals', bench.uri)
-      // Other suites may have expanded sibling views. Normalize the native sidebar before
-      // comparing its narrow layout, without changing the webview's styles or dimensions.
+      await vscode.commands.executeCommand('gridkitStudio.simulation.focus')
+      // Other views of the sidebar may be open. Normalize it before comparing the panel's narrow
+      // layout, without changing the webview's styles or dimensions.
       const expanded = bench.page
         .locator('.pane-header[aria-expanded="true"]')
-        .filter({ hasText: /INSPECTOR|MAPPINGS|VIDEO EXPORT/i })
+        .filter({ hasText: /INSPECTOR|MAPPINGS|MONITORED SIGNALS|VIDEO EXPORT/i })
       while (await expanded.count()) {
         const count = await expanded.count()
         await expanded.first().click()
         await until(async () => (await expanded.count()) < count, 'sibling view collapsed')
       }
       const simulation = await bench.view('simulation')
-      await visible(simulation, '[data-testid="monitor-class-Bus"]')
+      await visible(simulation, '[data-testid="field-tmax"]')
       assert.equal(
         await simulation.evaluate('document.documentElement.scrollWidth <= innerWidth'),
         true,

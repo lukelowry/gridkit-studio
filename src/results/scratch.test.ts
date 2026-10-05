@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, utimes } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -10,7 +10,7 @@ let root = ''
 afterEach(() => rm(root, { recursive: true, force: true }))
 
 describe('runs folders', () => {
-  it("deletes the folders no worker uses, and keeps this worker's and other open windows'", async () => {
+  it("deletes what no worker uses, and keeps this worker's folder and other open windows'", async () => {
     root = await mkdtemp(join(tmpdir(), 'gridkit-scratch-test-'))
     const own = scratchFolder(root)
     // An earlier worker of this extension host, which has stopped.
@@ -19,20 +19,15 @@ describe('runs folders', () => {
     const open = join(root, `${process.ppid}-12345678`)
     // A window that closed: no process has this id.
     const closed = join(root, '2147483646-abcdef01')
-    // Runs of the old layout, one recent and one a day old, and a folder Studio did not name.
-    const recent = join(root, 'run-recent')
-    const old = join(root, 'run-old')
-    const other = join(root, 'notes')
-    for (const folder of [own, earlier, open, closed, recent, old, other])
+    // Anything else under the root is no worker's.
+    const stray = join(root, 'run-1')
+    for (const folder of [own, earlier, open, closed, stray])
       await mkdir(join(folder, 'run-1'), { recursive: true })
-    const day = (Date.now() - 25 * 60 * 60 * 1000) / 1000
-    await utimes(old, day, day)
+    await writeFile(join(root, 'stray.csv'), '')
 
     await sweep(root, own)
 
-    expect((await readdir(root)).sort()).toEqual(
-      [basename(own), basename(open), 'notes', 'run-recent'].sort(),
-    )
+    expect((await readdir(root)).sort()).toEqual([basename(own), basename(open)].sort())
   })
   it('does nothing when no run was ever kept', async () => {
     root = join(tmpdir(), 'gridkit-scratch-missing')

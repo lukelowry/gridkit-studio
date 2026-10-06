@@ -100,10 +100,12 @@ export class MCP implements vscode.Disposable {
       }),
       vscode.lm.registerMcpServerDefinitionProvider('gridkitStudio.mcp', {
         onDidChangeMcpServerDefinitions: this.#changed.event,
-        provideMcpServerDefinitions: () =>
-          context.workspaceState.get('mcp.vscode', false)
-            ? [new vscode.McpStdioServerDefinition('GridKit Studio', process.execPath)]
-            : [],
+        provideMcpServerDefinitions: () => {
+          if (!context.workspaceState.get('mcp.vscode', false)) return []
+          const definition = new vscode.McpStdioServerDefinition('GridKit Studio', process.execPath)
+          definition.version = context.extension.packageJSON.version
+          return [definition]
+        },
         resolveMcpServerDefinition: async (definition, token) => {
           if (token.isCancellationRequested) return undefined
           const launch = await this.start(true)

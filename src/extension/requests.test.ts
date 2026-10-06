@@ -1,10 +1,15 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { expect, it, vi } from 'vitest'
 
 import { Requests } from './requests.js'
+
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, rename: vi.fn(fs.rename) }
+})
 
 it('deduplicates concurrent retries, survives reload and rejects a changed payload', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gridkit-requests-'))
@@ -28,6 +33,32 @@ it('deduplicates concurrent retries, survives reload and rejects a changed paylo
     ).rejects.toMatchObject({ code: 'request-conflict' })
     expect(execute).toHaveBeenCalledTimes(1)
   } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+it('keeps the original failure and identity when the failure receipt cannot be saved', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gridkit-requests-'))
+  try {
+    vi.mocked(rename).mockRejectedValueOnce(new Error('Disk full'))
+    const execute = vi.fn(async () => {
+      throw Object.assign(new Error('Simulation already active'), { code: 'simulation-active' })
+    })
+    const requests = new Requests(directory)
+    const input = { requestId: 'save-failure' }
+    await expect(requests.perform('simulation', input, execute)).rejects.toMatchObject({
+      code: 'simulation-active',
+      message: 'Simulation already active',
+      requestId: input.requestId,
+      simulationId: expect.any(String),
+    })
+    expect((await readdir(directory)).some((name) => name.endsWith('.tmp'))).toBe(false)
+    expect(await requests.perform('simulation', input, execute)).toMatchObject({
+      status: 'unknown',
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+  } finally {
+    vi.mocked(rename).mockReset()
     await rm(directory, { recursive: true, force: true })
   }
 })

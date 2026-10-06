@@ -120,11 +120,10 @@ export class Client {
         this.#pending.delete(message.id)
         if (message.kind === 'error')
           pending.reject(
-            Object.assign(new Error(message.message), {
+            Object.assign(new Error(message.problem.message), {
+              ...message.problem,
               offset: message.offset,
-              code: message.code,
               length: message.length,
-              issues: message.issues,
               ...(message.defect && { defect: true, detail: message.detail }),
             }),
           )

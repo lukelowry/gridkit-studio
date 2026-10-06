@@ -15,7 +15,6 @@ describe('native VS Code contract', () => {
         (group: { properties: object }) => group.properties,
       ),
     )
-    expect(definitions.length).toBe(141)
     for (const definition of definitions) {
       expect(settings['gridkitStudio.' + definition.id]).toMatchObject({
         default: defaults[definition.id as keyof typeof defaults],

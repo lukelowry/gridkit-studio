@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { problem } from '../shared/ai.js'
+import { problem, type ToolFailure, toolProblem } from '../shared/ai.js'
 
 export interface Receipt {
   format: 1
@@ -14,7 +14,7 @@ export interface Receipt {
   beforeRevision?: string
   afterRevision?: string
   result?: Record<string, unknown>
-  error?: { code: string; message: string }
+  error?: ToolFailure
 }
 
 /** Canonical JSON: property order never makes a retry a different request. */
@@ -42,8 +42,12 @@ export class Requests {
   async #save(key: string, receipt: Receipt) {
     const path = join(this.directory, key + '.json')
     const temporary = path + '.' + randomUUID() + '.tmp'
-    await writeFile(temporary, JSON.stringify(receipt), { mode: 0o600 })
-    await rename(temporary, path)
+    try {
+      await writeFile(temporary, JSON.stringify(receipt), { mode: 0o600 })
+      await rename(temporary, path)
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {})
+    }
   }
 
   perform<T extends { requestId: string }>(
@@ -95,11 +99,15 @@ export class Requests {
           // Once applying/acceptance begins, failure to receive an answer is not proof of failure.
           receipt.state = receipt.state === 'reserved' ? 'failed' : 'unknown'
           receipt.error = {
-            code: (error as { code?: string }).code ?? 'operation-failed',
-            message: error instanceof Error ? error.message : String(error),
+            ...toolProblem(error),
+            requestId: receipt.requestId,
+            ...(kind === 'simulation'
+              ? { simulationId: receipt.resourceId }
+              : { changeId: receipt.resourceId }),
           }
-          await save()
-          throw error
+          // The reservation remains authoritative even if recording the failure also fails.
+          await save().catch(() => {})
+          throw problem(receipt.error.code, receipt.error.message, receipt.error)
         }
       }
       if (receipt.payloadHash !== payloadHash)
@@ -111,6 +119,13 @@ export class Requests {
         throw problem(
           receipt.error?.code ?? 'operation-failed',
           receipt.error?.message ?? 'The request failed.',
+          {
+            ...receipt.error,
+            requestId: receipt.requestId,
+            ...(kind === 'simulation'
+              ? { simulationId: receipt.resourceId }
+              : { changeId: receipt.resourceId }),
+          },
         )
       return {
         requestId: receipt.requestId,

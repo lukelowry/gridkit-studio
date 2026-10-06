@@ -18,6 +18,7 @@ it('pages immutable analysis across disk blocks after the source result is relea
       signal,
     )
     rows.length = 0
+    expect(await evidence.published(id, signal)).toBe(true)
     const page = await evidence.read(id, { offset: 250, limit: 20 }, signal)
     expect(page).toMatchObject({
       total: 600,
@@ -30,6 +31,7 @@ it('pages immutable analysis across disk blocks after the source result is relea
       rows: [{ id: 599, name: '東京' }],
     })
     await evidence.forget('case')
+    expect(await evidence.published(id, signal)).toBe(false)
     await expect(evidence.read(id, {}, signal)).rejects.toThrow(/no longer available/)
   } finally {
     await rm(directory, { recursive: true, force: true })
@@ -43,7 +45,7 @@ it('bounds findings on disk, preserves the newest page and reports evicted findi
     const signal = new AbortController().signal
     const first = await findings.put('case', { rows: [{ id: 'Bus/1' }] }, signal)
     const second = await findings.put('case', { rows: [{ id: 'Bus/2' }] }, signal)
-    await findings.evict(0, second)
+    await findings.evict(0, new Set([second]))
     const restored = new Evidence(directory)
     await expect(restored.read(first, {}, signal)).rejects.toMatchObject({
       code: 'findings-evicted',

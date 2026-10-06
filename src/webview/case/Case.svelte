@@ -44,6 +44,8 @@
   let controller: AbortController | undefined
   /** The selected row the panel scrolls to once it is drawn. */
   let revealing: string | undefined
+  /** The last element selected here, which is in sight already. */
+  let own: string | undefined
   const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
     view.summary?.schema.types[type]?.fields ?? {},
   )
@@ -224,7 +226,9 @@
     scroll.scrollTop = 0
   }
   function select(id: string | null, field?: string) {
-    if (id) bridge.send({ kind: 'select', element: { id, ...(field ? { field } : {}) } })
+    if (!id) return
+    own = id
+    bridge.send({ kind: 'select', element: { id, ...(field ? { field } : {}) } })
   }
   function edit(id: string | null, field: string, value: unknown) {
     if (!id || view.stale || !view.writable || !view.summary?.editable[type]?.includes(field))
@@ -332,8 +336,11 @@
           }
           persist()
         }
-        if (view.selection?.id && view.selection.id !== before && view.summary && !view.stale)
-          void reveal(view.selection.id)
+        // A selection made in another view is brought into sight; one made here already is.
+        const selected = view.selection?.id
+        if (selected && selected !== before && selected !== own && view.summary && !view.stale)
+          void reveal(selected)
+        if (selected !== own) own = undefined
       } else if (message.kind === 'action') {
         const value = message.value as Record<string, unknown> | undefined
         if (message.command === 'columns' && Array.isArray(message.value))

@@ -8,7 +8,7 @@ import { suite, suiteSetup, test } from 'mocha'
 import type { Frame, Locator } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until, visible } from './harness.js'
+import { idle, type TestHost, testHost, until, visible } from './harness.js'
 
 /** What the Network shows selected, and its camera, as `gridkitSelection()` reports them. */
 type Shown = { ids: string[]; camera: unknown }
@@ -96,7 +96,8 @@ suite('Links', () => {
 
   test('offers each thing its own menu', async () => {
     // A bus in the Network, the one just framed: where else it shows, and what to do with the
-    // whole element.
+    // whole element. The camera rests first, so the bus is where it was found.
+    await idle(network)
     const [x, y] = await point(bench.session.selection!.id)
     await network.locator('canvas').click({ button: 'right', position: { x, y } })
     for (const item of [

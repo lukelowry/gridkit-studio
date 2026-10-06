@@ -32,7 +32,7 @@ export type {
 } from './simulation.js'
 export { PROGRAMS } from './simulation.js'
 
-import type { MonitoredSignals } from './ai.js'
+import type { MonitoredSignals, ToolFailure } from './ai.js'
 import type { Bindings } from './bindings.js'
 import type { AggregateQuery, CaseQuery, EvidencePage, NeighborhoodQuery } from './inspection.js'
 import type { SettingsValues } from './preferences.js'
@@ -136,6 +136,7 @@ export interface Requests {
     }
   }
   evidence: { input: { evidence: string; offset?: number; limit?: number }; output: EvidencePage }
+  findingsPublished: { input: { analysisId: string }; output: boolean }
   runs: { input: { uri: string }; output: SimulationInfo[] }
   preflight: {
     input: SimulationRequest
@@ -249,11 +250,9 @@ export type FromWorker =
   | {
       kind: 'error'
       id: number
-      message: string
-      code?: string
+      problem: ToolFailure
       offset?: number
       length?: number
-      issues?: unknown
       /** Whether the error is a defect in Studio; `detail` is its stack. */
       defect?: boolean
       detail?: string

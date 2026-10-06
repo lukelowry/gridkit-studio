@@ -87,4 +87,26 @@ suite('Network', () => {
     assert.equal(await frames(network), hidden)
     transport.pause()
   })
+
+  test('lays out a case without coordinates, and offers the globe once its buses have them', async () => {
+    network = await bench.open('network')
+    const globe = () => network.getByRole('button', { name: 'Globe', exact: true })
+    await until(() => globe().isDisabled(), 'no globe without coordinates')
+    const source = JSON.parse(bench.text)
+    source.buses.forEach((bus: { extension?: unknown }, i: number) => {
+      bus.extension = { longitude: -100 + (i % 8) * 2, latitude: 30 + Math.floor(i / 8) * 2 }
+    })
+    await bench.replace(JSON.stringify(source))
+    await bench.settled()
+    network = await bench.open('network')
+    await until(() => globe().isEnabled(), 'the globe offered')
+    await globe().click()
+    await until(
+      async () =>
+        (await network.evaluate<{ camera: { projection?: string } } | null>('gridkitSelection()'))
+          ?.camera.projection === 'globe',
+      'the network on the globe',
+    )
+    await bench.capture('network-globe')
+  })
 })

@@ -36,6 +36,26 @@ interface Launch {
   failed(error: unknown): void
 }
 
+/** Subscribe before scheduling: VS Code can end a task before executeTask resolves. */
+export async function executeTracked(task: vscode.Task, onEnd: () => void) {
+  let own: vscode.TaskExecution | undefined
+  const early = new Set<vscode.TaskExecution>()
+  const subscription = vscode.tasks.onDidEndTask(({ execution }) => {
+    if (!own) early.add(execution)
+    else if (execution === own) onEnd()
+  })
+  try {
+    own = await vscode.tasks.executeTask(task)
+    if (early.has(own)) onEnd()
+    return subscription
+  } catch (error) {
+    subscription.dispose()
+    throw error
+  } finally {
+    early.clear()
+  }
+}
+
 export function registerTasks(studio: Sessions) {
   /** The runs being started, by case. */
   const launches = new Map<string, Launch>()
@@ -210,22 +230,23 @@ export function registerTasks(studio: Sessions) {
       if (!request.simulationId) throw new Error('Prepare the simulation before scheduling it.')
       if (launches.has(request.uri)) throw new Error('A simulation is already being scheduled.')
       const { launch, done } = track(request.uri)
-      const ended = vscode.tasks.onDidEndTask(({ execution }) => {
-        if (runs(execution, request.uri)) {
-          void studio.client
-            .call('stopSimulation', { simulationId: request.simulationId! })
-            .catch(() => {})
-          launch.begun()
-        }
-      })
-      void done.catch((error) => studio.report(error)).finally(() => ended.dispose())
+      let ended: vscode.Disposable | undefined
+      const settled = done.catch((error) => studio.report(error))
       try {
-        await vscode.tasks.executeTask(
+        ended = await executeTracked(
           make(vscode.Uri.parse(request.uri), undefined, structuredClone(request)),
+          () => {
+            void studio.client
+              .call('stopSimulation', { simulationId: request.simulationId! })
+              .catch((error) => studio.report(error))
+            launch.begun()
+          },
         )
       } catch (error) {
         launch.failed(error)
         throw error
+      } finally {
+        void settled.finally(() => ended?.dispose())
       }
     },
     /** Run the case at `uri`; resolves once GridKit's run begins, and rejects with why it could
@@ -237,17 +258,18 @@ export function registerTasks(studio: Sessions) {
         if (captured.uri !== uri) throw new Error('Simulation targets a different case.')
       }
       const { launch, done } = track(uri)
-      // A task that ends without opening its terminal never began.
-      const ended = vscode.tasks.onDidEndTask(({ execution }) => {
-        if (runs(execution, uri)) launch.begun()
+      const ended = executeTracked(
+        make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)),
+        () => launch.begun(),
+      ).catch((error) => {
+        launch.failed(error)
+        return undefined
       })
-      vscode.tasks
-        .executeTask(make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)))
-        .then(undefined, (error) => launch.failed(error))
       try {
         await done
       } finally {
-        ended.dispose()
+        const subscription = await ended
+        subscription?.dispose()
       }
     },
     /** Stop the case's run, or a run of it still starting. */

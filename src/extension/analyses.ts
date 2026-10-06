@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -19,7 +19,10 @@ interface Job {
 /** One identity from acceptance through immutable paged findings, including after reload. */
 export class Analyses {
   readonly #jobs = new Map<string, Job>()
-  constructor(readonly directory: string) {}
+  constructor(
+    readonly directory: string,
+    readonly published: (id: string, signal: AbortSignal) => Promise<boolean> = async () => false,
+  ) {}
   #path(id: string) {
     if (!/^[\da-f-]{36}$/i.test(id))
       throw problem('analysis-not-found', 'Invalid analysis identifier.')
@@ -29,8 +32,12 @@ export class Analyses {
     await mkdir(this.directory, { recursive: true })
     const path = this.#path(value.analysisId)
     const temporary = path + '.' + randomUUID() + '.tmp'
-    await writeFile(temporary, JSON.stringify(value))
-    await rename(temporary, path)
+    try {
+      await writeFile(temporary, JSON.stringify(value))
+      await rename(temporary, path)
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {})
+    }
   }
   async start(calculate: (analysisId: string, signal: AbortSignal) => Promise<unknown>) {
     const analysisId = randomUUID()
@@ -43,10 +50,15 @@ export class Analyses {
       .then(() => calculate(analysisId, controller.signal))
       .then(
         () => {
-          value.status = controller.signal.aborted ? 'cancelled' : 'complete'
+          // Publication wins over a cancellation that arrives after calculation completes.
+          value.status = 'complete'
         },
         (error) => {
-          value.status = controller.signal.aborted ? 'cancelled' : 'failed'
+          value.status = controller.signal.aborted
+            ? controller.signal.reason?.code === 'interrupted'
+              ? 'interrupted'
+              : 'cancelled'
+            : 'failed'
           value.error = toolProblem(error, controller.signal.aborted)
         },
       )
@@ -72,7 +84,15 @@ export class Analyses {
       }
     }
     signal.throwIfAborted()
-    if (job) return { ...job.value }
+    if (job) {
+      // A cancelled IPC wait can lose the reply after the worker has committed its findings.
+      if (
+        !['running', 'cancelling', 'complete'].includes(job.value.status) &&
+        (await this.published(input.analysisId, signal))
+      )
+        return { analysisId: input.analysisId, status: 'complete' }
+      return { ...job.value }
+    }
     let value: Status
     try {
       value = JSON.parse(await readFile(this.#path(input.analysisId), 'utf8')) as Status
@@ -81,9 +101,14 @@ export class Analyses {
         throw problem('analysis-not-found', 'Unknown analysis.', { analysisId: input.analysisId })
       throw error
     }
+    if (value.status !== 'complete' && (await this.published(input.analysisId, signal)))
+      return { analysisId: input.analysisId, status: 'complete' }
     if (value.status === 'running' || value.status === 'cancelling') {
-      value.status = 'interrupted'
-      await this.#save(value)
+      throw problem(
+        'analysis-owner-unavailable',
+        'This extension instance cannot control this analysis. Its originating window may still be working.',
+        { analysisId: input.analysisId },
+      )
     }
     return value
   }
@@ -96,7 +121,8 @@ export class Analyses {
     return this.read({ analysisId }, signal)
   }
   async dispose() {
-    for (const job of this.#jobs.values()) job.controller.abort(new Error('GridKit closed.'))
+    for (const job of this.#jobs.values())
+      job.controller.abort(problem('interrupted', 'GridKit closed.'))
     await Promise.allSettled([...this.#jobs.values()].map((job) => job.done))
   }
 }

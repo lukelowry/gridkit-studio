@@ -22,7 +22,9 @@ export type { ToolHandler } from './context.js'
 export function createTools(studio: Sessions, tasks: Tasks) {
   const directory = (studio.context.storageUri ?? studio.context.globalStorageUri).fsPath
   const requests = new Requests(join(directory, 'requests'))
-  const analyses = new Analyses(join(directory, 'analyses'))
+  const analyses = new Analyses(join(directory, 'analyses'), (analysisId, signal) =>
+    studio.client.call('findingsPublished', { analysisId }, signal),
+  )
   studio.disposables.push(analyses)
   const simulations = new Simulations(studio, tasks, requests)
   const handlers: ToolHandler[] = []

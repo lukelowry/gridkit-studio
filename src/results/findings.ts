@@ -21,6 +21,7 @@ export class Evidence {
   readonly #readers = new Readers<object>()
   readonly #entries = new Map<string, Entry>()
   readonly #writing = new Set<string>()
+  readonly #sizes = new Map<string, number>()
   constructor(readonly directory: string) {}
   #remember(id: string, entry: Entry) {
     this.#entries.delete(id)
@@ -40,6 +41,7 @@ export class Evidence {
     await mkdir(this.directory, { recursive: true })
     const path = join(this.directory, id + '.jsonl')
     const file = await open(path, 'wx')
+    const index = join(this.directory, id + '.json')
     this.#writing.add(id)
     const offsets = [0]
     try {
@@ -60,9 +62,10 @@ export class Evidence {
         created: Date.now(),
         owner: process.pid,
       }
-      const index = join(this.directory, id + '.json')
-      await writeFile(index + '.tmp', JSON.stringify({ ...entry, path: undefined }))
+      const metadata = JSON.stringify({ ...entry, path: undefined })
+      await writeFile(index + '.tmp', metadata)
       await rename(index + '.tmp', index)
+      this.#sizes.set(id, offsets.at(-1)! + Buffer.byteLength(metadata))
       this.#remember(id, entry)
       return id
     } catch (error) {
@@ -72,6 +75,23 @@ export class Evidence {
     } finally {
       await file.close()
       this.#writing.delete(id)
+      await rm(index + '.tmp', { force: true }).catch(() => {})
+    }
+  }
+  /** Check publication without loading rows or changing another instance's analysis status. */
+  async published(id: string, signal: AbortSignal): Promise<boolean> {
+    if (!/^[\da-f-]{36}$/i.test(id)) throw new Error('Invalid analysis identifier.')
+    signal.throwIfAborted()
+    try {
+      const entry = JSON.parse(
+        await readFile(join(this.directory, id + '.json'), { encoding: 'utf8', signal }),
+      ) as Entry
+      const data = await stat(join(this.directory, id + '.jsonl'))
+      signal.throwIfAborted()
+      return data.isFile() && data.size === entry.offsets.at(-1)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw error
     }
   }
   async read(
@@ -94,7 +114,7 @@ export class Evidence {
           throw error
         }),
       ) as Entry
-      entry = { ...saved, path: join(this.directory, id + '.jsonl') }
+      entry = this.#entries.get(id) ?? { ...saved, path: join(this.directory, id + '.jsonl') }
     }
     this.#remember(id, entry)
     const found = entry
@@ -136,24 +156,31 @@ export class Evidence {
     })
   }
   /** Old findings have their own bounded share of storage; active readers always keep their files. */
-  async evict(budget: number, protectedId?: string): Promise<number> {
+  async evict(budget: number, protectedIds: ReadonlySet<string> = new Set()): Promise<number> {
     const files = await readdir(this.directory).catch(() => [])
-    const entries = await Promise.all(
-      files
-        .filter((name) => /^[\da-f-]{36}\.json$/i.test(name))
-        .map(async (name) => {
+    const names = files.filter((name) => /^[\da-f-]{36}\.json$/i.test(name))
+    const entries: { id: string; entry: Entry; path: string; bytes: number }[] = []
+    let cursor = 0
+    await Promise.all(
+      Array.from({ length: Math.min(4, names.length) }, async () => {
+        while (cursor < names.length) {
+          const name = names[cursor++]!
           const id = name.slice(0, -5)
           const path = join(this.directory, id + '.jsonl')
           try {
             const entry =
               this.#entries.get(id) ??
               (JSON.parse(await readFile(join(this.directory, name), 'utf8')) as Entry)
-            const bytes = (await stat(path)).size + (await stat(join(this.directory, name))).size
-            return { id, entry, path, bytes }
+            const bytes =
+              this.#sizes.get(id) ??
+              (await stat(path)).size + (await stat(join(this.directory, name))).size
+            this.#sizes.set(id, bytes)
+            entries.push({ id, entry, path, bytes })
           } catch {
-            return undefined
+            this.#sizes.delete(id)
           }
-        }),
+        }
+      }),
     )
     const retained = entries
       .filter((item) => item !== undefined)
@@ -161,11 +188,12 @@ export class Evidence {
     let bytes = retained.reduce((sum, item) => sum + item.bytes, 0)
     for (const item of retained) {
       if (bytes <= budget) break
-      if (item.id === protectedId || this.#writing.has(item.id) || this.#readers.busy(item.entry))
+      if (protectedIds.has(item.id) || this.#writing.has(item.id) || this.#readers.busy(item.entry))
         continue
       if (item.entry.owner !== process.pid && alive(item.entry.owner)) continue
       await this.#readers.retire(item.entry)
       this.#entries.delete(item.id)
+      this.#sizes.delete(item.id)
       await rm(item.path, { force: true })
       await rm(join(this.directory, item.id + '.json'), { force: true })
       bytes -= item.bytes
@@ -175,7 +203,10 @@ export class Evidence {
   /** Retire readers before removing their files, including on Windows. */
   async forget(uri: string) {
     const entries = [...this.#entries].filter(([, entry]) => entry.uri === uri)
-    for (const [id] of entries) this.#entries.delete(id)
+    for (const [id] of entries) {
+      this.#entries.delete(id)
+      this.#sizes.delete(id)
+    }
     await Promise.all(
       entries.map(async ([id, entry]) => {
         await this.#readers.retire(entry)

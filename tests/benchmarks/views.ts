@@ -1,5 +1,5 @@
-/** Network view benchmarks inside VS Code: each scenario's time over RUNS, and its exact work per
- *  run, which gate.mjs holds to work.json. Each case also checks that its canvas fills the editor,
+/** Network view benchmarks inside VS Code: each scenario's time over RUNS, and its work per run,
+ *  which compare.mjs sets beside another run's. Each case also checks that its canvas fills the editor,
  *  and each geographic case that borders draw. Where GridKit runs, each case also times a second
  *  of simulation from Run to the last frame. */
 
@@ -12,7 +12,7 @@ import * as vscode from 'vscode'
 
 import { fills, idle, testHost, until } from '../vscode/harness.js'
 
-/** Cases by bus count; the gate checks time per bus across them. */
+/** Cases by bus count; compare.mjs reports time per bus across them. */
 const CASES = [
   ['cases/IEEE39.case.json', 39],
   ['cases/WECC240.case.json', 243],

@@ -10,10 +10,6 @@ on:
         description: Publish release
         type: boolean
         default: false
-      baselines:
-        description: Redraw the pixel baselines
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -57,7 +53,6 @@ jobs:
       VSCODE_VERSION: ${{ matrix.vscode }}
       GRIDKIT_TEST_REQUIRED: '1'
       GRIDKIT_TEST_SOFTWARE_GPU: '1'
-      GRIDKIT_UPDATE_BASELINES: ${{ inputs.baselines && '1' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,11 +73,6 @@ jobs:
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
       - run: dbus-run-session -- xvfb-run -a pnpm test:ai
       - run: dbus-run-session -- xvfb-run -a pnpm test:trust
-      - uses: actions/upload-artifact@v7
-        if: inputs.baselines
-        with:
-          name: baselines-${{ matrix.vscode }}
-          path: tests/vscode/baselines
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

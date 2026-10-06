@@ -36,6 +36,7 @@ import { Readers } from './results/readers.js'
 import { querySignals } from './results/signals.js'
 import { ResultStorage } from './results/storage.js'
 import { rank, sibling } from './results/study.js'
+import { toolProblem } from './shared/ai.js'
 import type { ResultsTarget } from './shared/analysis.js'
 import { defect, detail, message } from './shared/format.js'
 import type {
@@ -97,7 +98,6 @@ async function discard(run: Results) {
 const cache = new ResultCache()
 const scratch = workerData.scratch as string
 const storage = new ResultStorage(workerData.storage ?? join(scratch, 'retained'))
-const ready = storage.initialize()
 const snapshots = new CaseSnapshots()
 const simulations = new Simulations()
 const loading = new Map<
@@ -105,16 +105,24 @@ const loading = new Map<
   { controller: AbortController; done: Promise<Results>; users: number }
 >()
 let eviction = Promise.resolve()
+let queuedEviction: Promise<void> | undefined
+const protectedRecordings = new Set<string>()
+const protectedFindings = new Set<string>()
 function trimRecordings(protect?: string, findingsId?: string) {
-  eviction = eviction
-    .catch(() => {})
+  if (protect) protectedRecordings.add(protect)
+  if (findingsId) protectedFindings.add(findingsId)
+  if (queuedEviction) return queuedEviction
+  const next = eviction
     .then(async () => {
+      queuedEviction = undefined
       const budget = workerData.storageBytes ?? 4096 * (1 << 20)
-      const findingsBytes = await evidence.evict(budget / 8, findingsId)
+      const findingsBytes = await evidence.evict(budget / 8, protectedFindings)
       return storage.evict(
         Math.max(0, budget - findingsBytes),
-        new Set([...simulations.entries.keys(), ...loading.keys(), ...(protect ? [protect] : [])]),
+        new Set([...simulations.entries.keys(), ...loading.keys(), ...protectedRecordings]),
         async (id) => {
+          if (protectedRecordings.has(id) || simulations.entries.has(id) || loading.has(id))
+            return false
           const loaded = [...histories.values()]
             .flat()
             .filter((result) => (result.info.contingency?.study ?? result.info.id) === id)
@@ -130,9 +138,24 @@ function trimRecordings(protect?: string, findingsId?: string) {
         },
       )
     })
-  return eviction
+    .catch((error) => {
+      send({
+        kind: 'log',
+        level: 'warn',
+        message: `Result cleanup will be retried: ${message(error)}`,
+      })
+    })
+  eviction = queuedEviction = next
+  void next.then(() => {
+    if (eviction === next) {
+      protectedRecordings.clear()
+      protectedFindings.clear()
+    }
+  })
+  return next
 }
 const evidence = new Evidence(join(storage.directory, 'findings'))
+const ready = storage.initialize().then(() => trimRecordings())
 async function saveFindings(
   uri: string,
   result: { rows: unknown[] },
@@ -318,7 +341,6 @@ async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) 
     await storage.create(info, request, kase)
   } catch (error) {
     simulations.entries.delete(id)
-    storage.records.delete(id)
     if (input.snapshotId) snapshots.release(input.snapshotId)
     throw error
   }
@@ -576,6 +598,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       await Promise.all([...simulations.entries.keys()].map((id) => stopSimulation(id, true)))
       for (const load of loading.values()) load.controller.abort(new Error('GridKit closed.'))
       await Promise.allSettled([...loading.values()].map((load) => load.done))
+      await eviction
       await storage.flush()
       return null
     case 'aggregate':
@@ -605,6 +628,8 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     }
     case 'evidence':
       return evidence.read(request.input.evidence, request.input, signal)
+    case 'findingsPublished':
+      return evidence.published(request.input.analysisId, signal)
     case 'runs':
       return (histories.get(request.input.uri) ?? []).map((run) => run.info)
     case 'preflight': {
@@ -892,37 +917,46 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       }
       const originalPath = info.path
       info.path = join(storage.path(info.id), 'results.' + format)
-      await storage.create(
-        info,
-        { ...request.input, values: {}, outputs, gridkit: { path: '', image: '', cli: '' } },
-        kase,
-      )
-      await copyFile(originalPath, info.path)
-      // Results that fail to read take no run's place: the import fails, and the case's runs stay.
-      const result = new Results(
-        info,
-        kase,
-        selections(kase, outputs),
-        cache,
-        storage.path(info.id),
-      )
+      let result: Results | undefined
       try {
-        await readers.use([ownerOf(result)], signal, (s) =>
-          result.ingest(
+        await storage.create(
+          info,
+          { ...request.input, values: {}, outputs, gridkit: { path: '', image: '', cli: '' } },
+          kase,
+        )
+        await copyFile(originalPath, info.path)
+        signal.throwIfAborted()
+        const imported = (result = new Results(
+          info,
+          kase,
+          selections(kase, outputs),
+          cache,
+          storage.path(info.id),
+        ))
+        await readers.use([ownerOf(imported)], signal, (s) =>
+          imported.ingest(
             s,
             () => true,
             async () => {},
           ),
         )
+        info.state = 'complete'
+        await storage.save(info.id)
+        await retain(request.input.uri, imported)
       } catch (error) {
         info.state = signal.aborted ? 'cancelled' : 'failed'
         info.message = message(error)
-        await discard(result)
+        if (result) await discard(result)
+        else
+          await storage.removeRecording(info.id).catch((cleanupError) => {
+            send({
+              kind: 'log',
+              level: 'warn',
+              message: `Import cleanup will be retried: ${message(cleanupError)}`,
+            })
+          })
         throw error
       }
-      info.state = 'complete'
-      await storage.save(info.id)
-      await retain(request.input.uri, result)
       await trimRecordings(info.id)
       send({ kind: 'run', info })
       return info
@@ -981,14 +1015,9 @@ port.on('message', (request: ToWorker) => {
     send({
       kind: 'error',
       id: request.id,
-      message: message(error),
-      code:
-        typeof (error as { code?: unknown } | null)?.code === 'string'
-          ? (error as { code: string }).code
-          : undefined,
+      problem: toolProblem(error, controller.signal.aborted),
       offset: (error as { offset?: number } | null)?.offset,
       length: (error as { length?: number } | null)?.length,
-      issues: (error as { issues?: unknown } | null)?.issues,
       ...(defect(error) && { defect: true, detail: detail(error) }),
     })
   void handle(request, controller.signal)

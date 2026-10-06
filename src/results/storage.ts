@@ -11,6 +11,7 @@ interface Manifest {
   owner: { pid: number; instance: string }
   info: SimulationInfo
   request: SimulationRequest
+  cleanupPending?: boolean
 }
 
 /** Completed recordings belong to workspace storage, never the worker's temporary folder. */
@@ -18,6 +19,7 @@ export class ResultStorage {
   readonly instance = randomUUID()
   readonly records = new Map<string, Manifest>()
   readonly #writes = new Map<string, Promise<void>>()
+  readonly #sizes = new Map<string, number>()
   constructor(readonly directory: string) {}
   path(id: string) {
     if (!/^[\da-f-]{36}$/i.test(id)) throw new Error('Invalid simulation identifier.')
@@ -39,6 +41,8 @@ export class ResultStorage {
         if (child.startsWith('..') || isAbsolute(child) || resolve(path) === resolve(this.path(id)))
           continue
         record.info.path = path
+        // Older evicted manifests may still own files after a failed deletion.
+        if (record.info.evicted) record.cleanupPending = true
         let interrupted = false
         if (
           (record.info.state === 'running' || record.info.state === 'preparing') &&
@@ -54,53 +58,62 @@ export class ResultStorage {
         /* An incomplete manifest is not a successfully retained result. */
       }
     }
+    for (const [id, record] of this.records)
+      if (record.cleanupPending && this.#owned(record))
+        await this.removeRecording(id).catch(() => {})
   }
   async create(info: SimulationInfo, request: SimulationRequest, kase: Case) {
     const directory = this.path(info.id)
-    await mkdir(directory, { recursive: true })
-    // Keep the original source separate from the solver's staged case.json. All large files
-    // share the recording's lifetime, so retention includes snapshots without orphan storage.
-    for (const [name, bytes] of [
-      ['source.case.json', kase.file],
-      ['catalog.json', kase.catalog.text],
-    ] as const) {
-      const path = join(directory, name)
-      const temporary = path + '.' + randomUUID() + '.tmp'
-      try {
-        await writeFile(temporary, bytes, { flag: 'wx' })
-        await rename(temporary, path)
-      } finally {
-        await rm(temporary, { force: true })
-      }
-    }
-    this.records.set(info.id, {
-      format: 1,
-      owner: { pid: process.pid, instance: this.instance },
-      info,
-      request,
-    })
-    await this.save(info.id)
-  }
-  save(id: string): Promise<void> {
-    const previous = this.#writes.get(id) ?? Promise.resolve()
-    const write = previous
-      .catch(() => {})
-      .then(async () => {
-        const record = this.records.get(id)
-        if (!record) return
-        const file = join(this.path(id), 'manifest.json')
-        const temporary = file + '.' + randomUUID() + '.tmp'
-        const saved = {
-          ...record,
-          info: { ...record.info, path: relative(this.path(id), record.info.path) },
-        }
+    await mkdir(join(this.directory, 'simulations'), { recursive: true })
+    // Exclusive creation makes rollback safe: this call owns every file in the directory.
+    await mkdir(directory)
+    try {
+      // Keep the original source separate from the solver's staged case.json. All large files
+      // share the recording's lifetime, so retention includes snapshots without orphan storage.
+      for (const [name, bytes] of [
+        ['source.case.json', kase.file],
+        ['catalog.json', kase.catalog.text],
+      ] as const) {
+        const path = join(directory, name)
+        const temporary = path + '.' + randomUUID() + '.tmp'
         try {
-          await writeFile(temporary, JSON.stringify(saved))
-          await rename(temporary, file)
+          await writeFile(temporary, bytes, { flag: 'wx' })
+          await rename(temporary, path)
         } finally {
           await rm(temporary, { force: true })
         }
+      }
+      this.records.set(info.id, {
+        format: 1,
+        owner: { pid: process.pid, instance: this.instance },
+        info,
+        request,
       })
+      await this.save(info.id)
+    } catch (error) {
+      this.records.delete(info.id)
+      this.#sizes.delete(info.id)
+      try {
+        await rm(directory, { recursive: true, force: true })
+      } catch {
+        info.state = 'failed'
+        info.message = 'Recording creation failed; cleanup will be retried.'
+        info.evicted = true
+        this.records.set(info.id, {
+          format: 1,
+          owner: { pid: process.pid, instance: this.instance },
+          info,
+          request,
+          cleanupPending: true,
+        })
+        await this.save(info.id).catch(() => {})
+      }
+      throw error
+    }
+  }
+  #enqueue(id: string, action: () => Promise<void>): Promise<void> {
+    const previous = this.#writes.get(id) ?? Promise.resolve()
+    const write = previous.catch(() => {}).then(action)
     this.#writes.set(id, write)
     void write
       .finally(() => {
@@ -108,6 +121,26 @@ export class ResultStorage {
       })
       .catch(() => {})
     return write
+  }
+  async #write(id: string) {
+    this.#sizes.delete(id)
+    const record = this.records.get(id)
+    if (!record) return
+    const file = join(this.path(id), 'manifest.json')
+    const temporary = file + '.' + randomUUID() + '.tmp'
+    const saved = {
+      ...record,
+      info: { ...record.info, path: relative(this.path(id), record.info.path) },
+    }
+    try {
+      await writeFile(temporary, JSON.stringify(saved))
+      await rename(temporary, file)
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+  save(id: string): Promise<void> {
+    return this.#enqueue(id, () => this.#write(id))
   }
   async source(id: string) {
     const record = this.records.get(id)
@@ -134,14 +167,44 @@ export class ResultStorage {
     await Promise.all([...this.#writes.values()])
   }
   async removeRecording(id: string) {
-    const record = this.records.get(id)
-    if (!record) return
-    record.info.evicted = true
-    await this.save(id)
+    return this.#enqueue(id, async () => {
+      const record = this.records.get(id)
+      if (!record) return
+      record.info.evicted = true
+      record.cleanupPending = true
+      await this.#write(id)
+      const files = await readdir(this.path(id), { withFileTypes: true })
+      for (const file of files)
+        if (file.isFile() && file.name !== 'manifest.json')
+          await rm(join(this.path(id), file.name), { force: true })
+      delete record.cleanupPending
+      await this.#write(id)
+    })
+  }
+  #owned(record: Manifest) {
+    return (
+      record.owner.instance === this.instance ||
+      record.owner.pid === process.pid ||
+      !alive(record.owner.pid)
+    )
+  }
+  async #size(id: string, record: Manifest) {
+    const active = ['running', 'preparing'].includes(record.info.state)
+    const cached = this.#sizes.get(id)
+    if (cached !== undefined && !active) return cached
     const files = await readdir(this.path(id), { withFileTypes: true })
+    let bytes = 0
     for (const file of files)
-      if (file.isFile() && file.name !== 'manifest.json')
-        await rm(join(this.path(id), file.name), { force: true })
+      if (file.isFile())
+        bytes += await stat(join(this.path(id), file.name)).then(
+          (s) => s.size,
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === 'ENOENT') return 0
+            throw error
+          },
+        )
+    if (!active) this.#sizes.set(id, bytes)
+    return bytes
   }
   async evict(
     budget: number,
@@ -149,17 +212,24 @@ export class ResultStorage {
     beforeDelete: (id: string) => Promise<boolean>,
   ) {
     if (!Number.isFinite(budget) || budget < 0) throw new Error('Invalid result storage budget.')
-    const sizes = await Promise.all(
-      [...this.records].map(async ([id, record]) => {
-        const files = await readdir(this.path(id), { withFileTypes: true }).catch(() => [])
-        let bytes = 0
-        for (const file of files)
-          if (file.isFile())
-            bytes += await stat(join(this.path(id), file.name)).then(
-              (s) => s.size,
-              () => 0,
-            )
-        return { id, record, files, bytes }
+    const failures: unknown[] = []
+    // Cleanup already committed by a previous pass is independent of the current budget.
+    for (const [id, record] of this.records) {
+      if (!record.cleanupPending || protectedIds.has(id) || !this.#owned(record)) continue
+      if (['running', 'preparing'].includes(record.info.state) || !(await beforeDelete(id)))
+        continue
+      await this.removeRecording(id).catch((error) => failures.push(error))
+    }
+    const entries = [...this.records]
+    const sizes: { id: string; record: Manifest; bytes: number }[] = []
+    // Bound filesystem concurrency; immutable recordings are measured only once between saves.
+    let cursor = 0
+    await Promise.all(
+      Array.from({ length: Math.min(4, entries.length) }, async () => {
+        while (cursor < entries.length) {
+          const [id, record] = entries[cursor++]!
+          sizes.push({ id, record, bytes: await this.#size(id, record) })
+        }
       }),
     )
     let bytes = sizes.reduce((sum, item) => sum + item.bytes, 0)
@@ -172,15 +242,16 @@ export class ResultStorage {
         ['running', 'preparing'].includes(item.record.info.state)
       )
         continue
-      if (
-        item.record.owner.instance !== this.instance &&
-        item.record.owner.pid !== process.pid &&
-        alive(item.record.owner.pid)
-      )
-        continue
+      if (!this.#owned(item.record)) continue
       if (!(await beforeDelete(item.id))) continue
-      await this.removeRecording(item.id)
-      bytes -= item.bytes
+      if (item.record.info.retained) continue
+      try {
+        await this.removeRecording(item.id)
+        bytes -= item.bytes - (await this.#size(item.id, item.record))
+      } catch (error) {
+        failures.push(error)
+      }
     }
+    if (failures.length) throw new AggregateError(failures, 'Recording cleanup will be retried.')
   }
 }

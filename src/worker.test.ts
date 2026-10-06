@@ -22,9 +22,36 @@ beforeAll(async () => {
 })
 /** A worker on a scratch directory of its own, every batch it sends kept. A batch is acknowledged
  *  as it arrives only while `acknowledge` is on. */
-async function start(storage?: string) {
+async function start(storage?: string, fault?: 'copy' | 'cleanup') {
   const scratch = await mkdtemp(join(tmpdir(), 'gridkit-worker-test-'))
-  const worker = new Worker(entry, { workerData: { scratch, storage } })
+  const worker = new Worker(
+    fault
+      ? `
+    const { workerData } = require('node:worker_threads')
+    const fs = require('node:fs/promises')
+    if (workerData.fault === 'copy') {
+      fs.copyFile = async () => { throw Object.assign(new Error('Import copy refused'), { code: 'EACCES' }) }
+    } else {
+      const remove = fs.rm
+      fs.rm = async (path, options) => {
+        if (String(path).endsWith('results.csv')) throw Object.assign(new Error('Recording is busy'), { code: 'EBUSY' })
+        return remove(path, options)
+      }
+    }
+    require(workerData.entry)
+  `
+      : entry,
+    {
+      eval: !!fault,
+      workerData: {
+        scratch,
+        storage,
+        fault,
+        entry,
+        ...(fault === 'cleanup' ? { storageBytes: 0 } : {}),
+      },
+    },
+  )
   let next = 0
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
   const batches: Extract<FromWorker, { kind: 'batch' }>[] = []
@@ -60,12 +87,52 @@ async function start(storage?: string) {
       const operation = pending.get(message.id)
       pending.delete(message.id)
       if (message.kind === 'result') operation?.resolve(message.value)
-      else operation?.reject(new Error(message.message))
+      else operation?.reject(Object.assign(new Error(message.problem.message), message.problem))
     }
   })
   return rig
 }
 describe('real worker protocol', () => {
+  it.each(['copy', 'cleanup'] as const)(
+    'preserves import and analysis state after %s failure',
+    async (fault) => {
+      const rig = await start(undefined, fault)
+      try {
+        const revision = { uri: 'file:///failure.case.json', version: 1 }
+        await rig.call('parse', {
+          ...revision,
+          text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+        }).done
+        const path = join(rig.scratch, 'original.csv')
+        const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
+        await writeFile(path, source)
+        const input = { ...revision, path, cacheBytes: 16 << 20 }
+        if (fault === 'copy') {
+          await expect(rig.call('import', input).done).rejects.toMatchObject({ code: 'EACCES' })
+          expect(await rig.call('listSimulations', {}).done).toMatchObject([
+            { state: 'failed', evicted: true },
+          ])
+        } else {
+          await rig.call('import', input).done
+          const info = await rig.call('import', input).done
+          expect(info.state).toBe('complete')
+          const findings = await rig.call('analyze', {
+            uri: revision.uri,
+            run: info.id,
+            from: 'Bus',
+            field: 'Vm',
+          }).done
+          expect(findings.rows[0]?.min?.value).toBe(0.8)
+          expect(await rig.call('findingsPublished', { analysisId: findings.evidence! }).done).toBe(
+            true,
+          )
+        }
+        expect(await readFile(path, 'utf8')).toBe(source)
+      } finally {
+        await rig.stop()
+      }
+    },
+  )
   it('keeps captured cases through editor detach and rejects a released lease', async () => {
     const rig = await start()
     try {
@@ -107,6 +174,9 @@ describe('real worker protocol', () => {
       const info = await rig.call('import', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
       const input = { uri: revision.uri, run: info.id, from: 'Bus', field: 'Vm' }
       const measured = await rig.call('analyze', input).done
+      expect(await rig.call('findingsPublished', { analysisId: measured.evidence! }).done).toBe(
+        true,
+      )
       await rig.call('release', { uri: revision.uri }).done
       expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
       await rig.stop()
@@ -116,6 +186,14 @@ describe('real worker protocol', () => {
       expect((await rig.call('evidence', { evidence: measured.evidence! }).done).rows).toEqual(
         measured.rows,
       )
+      expect(await rig.call('findingsPublished', { analysisId: measured.evidence! }).done).toBe(
+        true,
+      )
+      await rig.call('clear', { uri: revision.uri }).done
+      await expect(rig.call('analyze', input).done).rejects.toMatchObject({
+        code: 'results-evicted',
+        simulationId: info.id,
+      })
     } finally {
       await rig.stop()
       await rm(storage, { recursive: true, force: true })

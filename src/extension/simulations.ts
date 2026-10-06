@@ -97,12 +97,14 @@ export class Simulations {
         await save()
         // After this boundary, a disconnected client cannot cancel accepted work.
         const info = await this.studio.client.call('prepareSimulation', request)
-        receipt.state = 'accepted'
-        await save()
         try {
+          receipt.state = 'accepted'
+          await save()
           await this.tasks.start(request)
         } catch (error) {
-          await this.studio.client.call('stopSimulation', { simulationId: info.id })
+          await this.studio.client
+            .call('stopSimulation', { simulationId: info.id })
+            .catch((cleanupError) => this.studio.report(cleanupError))
           throw error
         }
         return {

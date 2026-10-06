@@ -30,9 +30,14 @@ suite('Appearance', () => {
   })
 
   test('holds its views in a compact window', async () => {
-    await bench.page.setViewportSize({ width: 1280, height: 800 })
+    await bench.page.setViewportSize({ width: 1000, height: 720 })
     try {
       await visible(simulation, '[data-testid="simulation-start"]')
+      // The form fits the narrow side bar: nothing scrolls sideways.
+      assert.equal(
+        await simulation.evaluate('document.documentElement.scrollWidth <= innerWidth'),
+        true,
+      )
       await bench.capture('compact-vscode')
     } finally {
       await bench.page.setViewportSize(VIEWPORT)
@@ -43,7 +48,7 @@ suite('Appearance', () => {
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
     assert.deepEqual(
       tools.map((tool) => tool.name).sort(),
-      toolDefinitions.map((tool) => 'gridkit_' + tool.name).sort(),
+      toolDefinitions.map((tool) => tool.name).sort(),
     )
     const listed = await vscode.lm.invokeTool('gridkit_list_cases', {
       input: {},

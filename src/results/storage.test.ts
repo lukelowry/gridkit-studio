@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
 import type { SimulationInfo } from '../shared/simulation.js'
 import { ResultStorage } from './storage.js'
+
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, rm: vi.fn(fs.rm), stat: vi.fn(fs.stat), writeFile: vi.fn(fs.writeFile) }
+})
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'gridkit-storage-'))
@@ -110,6 +115,68 @@ it('rejects a retained manifest that points outside its simulation directory', a
     expect(reloaded.records.size).toBe(0)
     expect(() => reloaded.path('../outside')).toThrow(/Invalid simulation/)
   } finally {
+    await f.close()
+  }
+})
+
+it('retries a partially deleted recording even when the budget is no longer exceeded', async () => {
+  const f = await fixture()
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  try {
+    const info = await f.create()
+    vi.mocked(rm).mockImplementation(async (...args) => {
+      if (args[0] === info.path) throw Object.assign(new Error('File is busy'), { code: 'EBUSY' })
+      return fs.rm(...args)
+    })
+    await expect(f.storage.evict(0, new Set(), async () => true)).rejects.toThrow(/retried/)
+    const manifest = join(f.storage.path(info.id), 'manifest.json')
+    expect(JSON.parse(await readFile(manifest, 'utf8'))).toMatchObject({ cleanupPending: true })
+    expect(await f.storage.available(info.id)).toBe(false)
+    vi.mocked(rm).mockReset()
+    await f.storage.evict(Number.MAX_SAFE_INTEGER, new Set(), async () => true)
+    expect(await readdir(f.storage.path(info.id))).toEqual(['manifest.json'])
+    expect(JSON.parse(await readFile(manifest, 'utf8')).cleanupPending).toBeUndefined()
+  } finally {
+    vi.mocked(rm).mockReset()
+    await f.close()
+  }
+})
+
+it('repairs legacy evicted files on startup and caches finalized recording sizes', async () => {
+  const f = await fixture()
+  try {
+    const old = await f.create()
+    const kept = await f.create()
+    old.evicted = true
+    await f.storage.save(old.id)
+    const restored = new ResultStorage(f.directory)
+    await restored.initialize()
+    expect(await readdir(restored.path(old.id))).toEqual(['manifest.json'])
+    await restored.evict(Number.MAX_SAFE_INTEGER, new Set(), async () => true)
+    vi.mocked(stat).mockClear()
+    await restored.evict(Number.MAX_SAFE_INTEGER, new Set(), async () => true)
+    expect(stat).not.toHaveBeenCalled()
+    expect(await restored.available(kept.id)).toBe(true)
+  } finally {
+    await f.close()
+  }
+})
+
+it('rolls back failed creation without changing an existing recording', async () => {
+  const f = await fixture()
+  const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  try {
+    const kept = await f.create()
+    vi.mocked(writeFile).mockImplementation(async (...args) => {
+      if (String(args[0]).includes('catalog.json.')) throw new Error('Snapshot write failed')
+      return fs.writeFile(...args)
+    })
+    await expect(f.create()).rejects.toThrow('Snapshot write failed')
+    expect(await readdir(join(f.directory, 'simulations'))).toEqual([kept.id])
+    expect(f.storage.records.size).toBe(1)
+    expect(await f.storage.available(kept.id)).toBe(true)
+  } finally {
+    vi.mocked(writeFile).mockReset()
     await f.close()
   }
 })

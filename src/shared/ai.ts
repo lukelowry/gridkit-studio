@@ -68,8 +68,14 @@ export function problem(code: string, message: string, details: Record<string, u
   return Object.assign(new Error(message), { code, ...details })
 }
 
+export interface ToolFailure {
+  code: string
+  message: string
+  [detail: string]: unknown
+}
+
 /** Domain errors survive both adapters without leaking an implementation stack. */
-export function toolProblem(error: unknown, aborted = false): Record<string, unknown> {
+export function toolProblem(error: unknown, aborted = false): ToolFailure {
   const value = error as Record<string, unknown> | null
   return {
     code: typeof value?.code === 'string' ? value.code : aborted ? 'cancelled' : 'operation-failed',
@@ -84,6 +90,7 @@ export function toolProblem(error: unknown, aborted = false): Record<string, unk
         'simulationId',
         'analysisId',
         'requestId',
+        'changeId',
       ]
         .filter((key) => value?.[key] !== undefined)
         .map((key) => [key, value![key]]),

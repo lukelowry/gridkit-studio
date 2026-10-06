@@ -6,6 +6,7 @@ import {
   type Arguments,
   blockBuffers,
   type DataBatch,
+  failure,
   type Parameters,
   type QueryBlock,
   read,
@@ -357,7 +358,7 @@ async function emit(id: number, batches: readonly DataBatch[], signal: AbortSign
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup()
-      reject(new Error('View stopped consuming data.'))
+      reject(failure('timeout', 'View stopped consuming data.'))
     }, 30000)
     const cleanup = () => {
       clearTimeout(timeout)

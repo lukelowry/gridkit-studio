@@ -415,7 +415,6 @@ function boot() {
         else paint()
       }
     },
-    error,
     (begin) => drawable(begin, state),
   )
   bridge.on((message) => {

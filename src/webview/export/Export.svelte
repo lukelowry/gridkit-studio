@@ -5,6 +5,7 @@
   import { onMount } from 'svelte'
 
   import type { VideoView, ViewState } from '../../shared/messages.js'
+  import { currentStream } from '../../shared/streams.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { receive } from '../stream.js'
@@ -165,7 +166,7 @@
           samples = data
           if (begin.presentation) presentation = begin.presentation
         },
-        (reason) => stop?.abort(reason instanceof Error ? reason : new Error(String(reason))),
+        (begin) => currentStream(begin, view),
       ),
     ]
     bridge.send({ kind: 'ready' })

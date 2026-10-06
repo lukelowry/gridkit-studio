@@ -6,6 +6,8 @@ GridKit Studio bundles the software below, and its repository holds GridKit's ex
 
 Copyright (c) 2026 Luke Lowery. MIT License.
 
+Studio applies the version-locked `patches/@latkit__monitor@0.15.0.patch` through pnpm. It adds value-based coloring during composition so normalization and palette changes reuse cached trace coverage, for both Monitor and video export.
+
 ## GridKit Server
 
 The catalog compiler, parser, staging and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.

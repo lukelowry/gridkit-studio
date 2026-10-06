@@ -5,6 +5,7 @@ import { type DataBatch, type Domain, type FieldSelection, staticFields } from '
 import * as vscode from 'vscode'
 
 import { recordedWhole } from '../shared/bindings.js'
+import { retryable } from '../shared/errors.js'
 import { cancelled, defect, detail, message } from '../shared/format.js'
 import {
   type FromView,
@@ -20,6 +21,7 @@ import type { SettingsValues } from '../shared/preferences.js'
 import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
 import { type Held, holdFor } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
+import { StreamDelivery } from './stream.js'
 import { VideoFile } from './video.js'
 
 /** The run samples a view holds whole; past it the view holds the times around what it shows,
@@ -133,15 +135,16 @@ class View {
   #disposed = false
   #stream = 0
   #controller?: AbortController
-  #ack?: { stream: number; sequence: number; resolve(): void; reject(error: Error): void }
+  readonly #delivery = new StreamDelivery((message) => this.send(message))
   /** What the view holds: its rows, its samples, and how far into the run they reach. */
   #base?: string
   #samples = ''
   #pages = 0
   #frames = 0
   #held?: Held
-  /** The last demand that failed; it is not retried until it changes. */
+  /** Invalid data waits for a changed demand; transient failures retry after a quiet interval. */
   #failed = ''
+  #retry?: { key: string; timer: ReturnType<typeof setTimeout> }
   #failure = ''
   /** Whether another update is due, and the update in progress. */
   #again = false
@@ -193,6 +196,7 @@ class View {
         // A reload asks again for what last failed to stream.
         if (action.command === 'retryMonitor' || action.command === 'reloadView') {
           this.#failed = ''
+          this.clearRetry()
           void this.update().catch(report)
         }
       }),
@@ -236,8 +240,7 @@ class View {
       this.#requests.clear()
     }
     this.#controller?.abort()
-    this.#ack?.reject(new Error('View hidden or replaced'))
-    this.#ack = undefined
+    this.clearRetry()
   }
   async receive(message: FromView) {
     if (!message || typeof message !== 'object' || this.#disposed) return
@@ -257,8 +260,8 @@ class View {
         await this.update()
         return
       case 'ack':
-        if (this.#ack?.stream === message.stream && this.#ack.sequence === message.sequence)
-          this.#ack.resolve()
+      case 'commit':
+        this.#delivery.receive(message)
         return
       case 'select':
         if (message.element === null || typeof message.element?.id === 'string')
@@ -485,7 +488,13 @@ class View {
     if (append && (demand.run?.frames ?? 0) === this.#frames) return
     const key = demand.base + '\n' + demand.samples
     if (key === this.#failed) return
+    if (key === this.#retry?.key) return
+    this.clearRetry()
     await this.#streamed(state.summary, demand, base, append, key)
+  }
+  private clearRetry() {
+    clearTimeout(this.#retry?.timer)
+    this.#retry = undefined
   }
   /** The rows the view draws, and the samples it binds or plots: the whole run while it is small,
    *  a window of it past that. */
@@ -601,83 +610,96 @@ class View {
     const { studio, uri } = this
     const revision = { uri, version: summary.version, attachmentId: summary.attachmentId }
     const controller = (this.#controller = new AbortController())
-    const stream = ++this.#stream
     this.#failure = ''
-    try {
-      await this.send({
-        kind: 'begin',
-        fields: [...demand.statics, ...demand.sampled],
-        simulationId: demand.run?.id,
-        stream,
-        schema: summary.schema,
-        revision,
-        base,
-        append,
-        ...(demand.held && { held: demand.held }),
-        sampled: demand.sampled,
-        ...(base &&
-          this.#draws('diagram') && {
-            presentation: await studio.client.call('presentation', revision, controller.signal),
-          }),
-      })
-      let sequence = 0
-      // Backpressure: the next batch waits for the view to ack this one.
-      const consume = async (batches: readonly DataBatch[]) => {
-        controller.signal.throwIfAborted()
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            this.#ack = undefined
-            reject(new Error('View consumption timed out'))
-          }, 10000)
-          this.#ack = {
-            stream,
-            sequence: ++sequence,
-            resolve: () => {
-              clearTimeout(timer)
-              this.#ack = undefined
-              resolve()
-            },
-            reject: (error) => {
-              clearTimeout(timer)
-              reject(error)
-            },
-          }
-          void this.send({ kind: 'batch', stream, sequence, batches }).then((posted) => {
-            if (!posted) this.#ack?.reject(new Error('View closed'))
-          })
-        })
-      }
-      const { held, run } = demand
-      const { pages } = await studio.client.call(
-        'batches',
-        {
-          ...revision,
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const stream = ++this.#stream
+      try {
+        await this.send({
+          kind: 'begin',
           fields: [...demand.statics, ...demand.sampled],
-          includeStatic: base,
-          ...(run && {
-            run: run.id,
-            fromPage: append ? this.#pages : 0,
-            ...(held && { window: [held.from, held.to ?? Infinity] as const }),
-          }),
-        },
-        controller.signal,
-        consume,
-      )
-      controller.signal.throwIfAborted()
-      await this.send({ kind: 'end', stream })
-      this.#base = demand.base
-      this.#samples = demand.samples
-      this.#pages = pages
-      this.#frames = run?.frames ?? 0
-      this.#held = held
-    } catch (error) {
-      if (controller.signal.aborted || this.#disposed) return
-      // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
-      if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
-      if (!demand.run && studio.state(uri).summary?.version !== revision.version) return
-      this.#failed = key
-      this.#failure = message(error)
-      studio.report(error)
+          simulationId: demand.run?.id,
+          stream,
+          schema: summary.schema,
+          revision,
+          base,
+          append,
+          ...(demand.held && { held: demand.held }),
+          sampled: demand.sampled,
+          ...(base &&
+            this.#draws('diagram') && {
+              presentation: await studio.client.call('presentation', revision, controller.signal),
+            }),
+        })
+        let sequence = 0
+        // Backpressure: the next batch waits for the view to ack this one.
+        const consume = async (batches: readonly DataBatch[]) => {
+          await this.#delivery.post(
+            { kind: 'batch', stream, sequence: ++sequence, batches },
+            controller.signal,
+          )
+        }
+        const { held, run } = demand
+        const { pages } = await studio.client.call(
+          'batches',
+          {
+            ...revision,
+            fields: [...demand.statics, ...demand.sampled],
+            includeStatic: base,
+            ...(run && {
+              run: run.id,
+              fromPage: append ? this.#pages : 0,
+              ...(held && { window: [held.from, held.to ?? Infinity] as const }),
+            }),
+          },
+          controller.signal,
+          consume,
+        )
+        controller.signal.throwIfAborted()
+        await this.#delivery.post({ kind: 'end', stream }, controller.signal)
+        controller.signal.throwIfAborted()
+        this.#base = demand.base
+        this.#samples = demand.samples
+        this.#pages = pages
+        this.#frames = run?.frames ?? 0
+        this.#held = held
+        this.#failed = this.#failure = ''
+        return
+      } catch (error) {
+        if (controller.signal.aborted || this.#disposed) return
+        // Even an obsolete transaction may have committed before its receipt was lost.
+        this.#base = undefined
+        // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
+        if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
+        if (!demand.run && studio.state(uri).summary?.version !== revision.version) return
+        // The view may have committed before its acknowledgment was lost. Never resend an
+        // uncertain append: replace from a fresh base so samples cannot be duplicated.
+        base = true
+        append = false
+        if ((error as { code?: string })?.code === 'superseded') {
+          this.#again = true
+          return
+        }
+        if (retryable(error) && attempt < 2) {
+          try {
+            await delay(250 * 4 ** attempt, undefined, { signal: controller.signal })
+          } catch {
+            return
+          }
+          continue
+        }
+        if (retryable(error)) {
+          this.#retry = {
+            key,
+            timer: setTimeout(() => {
+              this.#retry = undefined
+              void this.update().catch((reason) => studio.error(reason))
+            }, 10_000),
+          }
+        } else this.#failed = key
+        this.#failure = message(error)
+        studio.report(error)
+        return
+      }
     }
   }
   /** Whether its page is on screen and still loading: replacing it now breaks VS Code's loader. */

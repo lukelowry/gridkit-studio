@@ -22,10 +22,10 @@
     axisLabel,
     holds,
     PLOT_LIMITS,
+    plotBindings,
     plotOptions,
     sameWindow,
     traceSelection,
-    tracesOf,
   } from './plot.js'
 
   let {
@@ -107,8 +107,8 @@
       ? { kind: 'ids' as const, ids: [plot.id] }
       : recordedRows(view.run?.outputs ?? [], { type: plot.from, field: plot.field }),
   )
-  const traces = $derived(
-    tracesOf(
+  const bindings = $derived(
+    plotBindings(
       settings,
       { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
       view.bindings,
@@ -130,7 +130,7 @@
   let windowUpdate = 0
   let previousFit: boolean | undefined
   /** The plot's whole config, besides its canvas, time, and camera. */
-  const config = $derived(source && { ...style, source, traces, limits: PLOT_LIMITS })
+  const config = $derived(source && { ...style, source, ...bindings, limits: PLOT_LIMITS })
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
@@ -208,6 +208,7 @@
     inspected.gridkitPlot = () => ({
       camera: made.camera,
       traces: made.config.traces,
+      valueColor: made.config.valueColor,
       at: presentedAt,
       lastFrame,
       paused: made.config.paused,

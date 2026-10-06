@@ -45,6 +45,8 @@ export async function run() {
       frames: number
       visible: boolean
       historyBytes: number
+      historyDrawCalls: number
+      refining: boolean
       at?: number
       lastFrame: number
       paused: boolean
@@ -64,7 +66,7 @@ export async function run() {
     transport.play()
     const started = performance.now()
     const samples = []
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < Number(process.env.GRIDKIT_PLAYBACK_SECONDS ?? 30) * 2; i++) {
       await pause(500)
       samples.push(await sample())
     }
@@ -121,16 +123,191 @@ export async function run() {
     }
     for (const t of [1.8, 0.1, 1.2, 0.5]) await seek(t)
     // A color mapping keeps the whole-run normalization during seeks and resizing.
+    const unmappedDraws = (await sample())[0]!.historyDrawCalls
     bench.studio.bind(bench.key, VM, ['vertexColor'])
     await until(
-      async () =>
-        monitor.evaluate(`!!document.querySelector('canvas').gridkitPlot().traces.plotted.color`),
+      async () => monitor.evaluate(`!!document.querySelector('canvas').gridkitPlot().valueColor`),
       'mapping applied',
     )
     const domain = () =>
-      monitor.evaluate(`document.querySelector('canvas').gridkitPlot().traces.plotted.color.domain`)
+      monitor.evaluate(`document.querySelector('canvas').gridkitPlot().valueColor.domain`)
     const range = await domain()
     assert.deepEqual(range, bench.session.run!.domains?.Bus?.Vm)
+    // Config changes precede presentation. Let the one-time switch to coverage finish.
+    await until(async () => {
+      const plot = (await sample())[0]!
+      return plot.historyDrawCalls > unmappedDraws && !plot.refining
+    }, 'mapped history finishes')
+    const normalized = (await sample())[0]!
+    const originalRun = bench.session.run!
+    const originalPixels = await monitor.locator('canvas').first().screenshot()
+    for (let i = 1; i <= 12; i++) {
+      const next = [0.4 - i * 0.01, 1.6 + i * 0.01]
+      bench.session.run = {
+        ...originalRun,
+        domains: {
+          ...originalRun.domains,
+          Bus: { ...originalRun.domains?.Bus, Vm: next as [number, number] },
+        },
+      }
+      bench.studio.changed.fire(bench.key)
+      await until(
+        async () =>
+          JSON.stringify(await domain()) === JSON.stringify(next) &&
+          (await sample())[0]!.frames > normalized.frames,
+        'global live range recolors cached history',
+      )
+      await pause(80)
+      const current = (await sample())[0]!
+      assert.equal(
+        current.historyDrawCalls,
+        normalized.historyDrawCalls,
+        'Normalization performs zero history draws',
+      )
+      assert.equal(
+        current.gpu.queries,
+        normalized.gpu.queries,
+        'Normalization performs zero model queries',
+      )
+      assert.deepEqual(
+        current.camera.x,
+        normalized.camera.x,
+        'Normalization keeps the configured interval',
+      )
+    }
+    const recoloredPixels = await monitor.locator('canvas').first().screenshot()
+    assert.notDeepEqual(recoloredPixels, originalPixels, 'Cached history visibly recolors')
+    bench.session.run = originalRun
+    bench.studio.changed.fire(bench.key)
+    await until(
+      async () => JSON.stringify(await domain()) === JSON.stringify(range),
+      'original global range restored',
+    )
+    const oldPalette = await monitor.evaluate(
+      `JSON.stringify(document.querySelector('canvas').gridkitPlot().valueColor.colormap)`,
+    )
+    await vscode.workspace
+      .getConfiguration('gridkitStudio')
+      .update('network.colormap', 'batlow', vscode.ConfigurationTarget.Global)
+    await until(
+      () =>
+        monitor.evaluate<boolean>(
+          `JSON.stringify(document.querySelector('canvas').gridkitPlot().valueColor.colormap) !== ${JSON.stringify(oldPalette)}`,
+        ),
+      'new colormap applied',
+    )
+    await pause(250)
+    assert.equal(
+      (await sample())[0]!.historyDrawCalls,
+      normalized.historyDrawCalls,
+      'Palette changes reuse history too',
+    )
+
+    // Corrupt one received batch. The view must reject the commit; the host must resend
+    // a full base automatically even though this completed run has no new frames.
+    await monitor.evaluate(`(() => {
+      window.streamAttempts = [];
+      window.streamEnds = [];
+      let corrupt = true;
+      window.streamFault = event => {
+        const m = event.data;
+        if (m?.kind === 'begin') window.streamAttempts.push({ stream: m.stream, base: m.base, append: m.append });
+        if (m?.kind === 'end') window.streamEnds.push(m.stream);
+        if (m?.kind === 'batch' && corrupt) {
+          corrupt = false;
+          // An extra stale-sequence batch poisons assembly without preventing the real
+          // batch's receipt. This specifically tests commit rejection, not batch timeout.
+          window.dispatchEvent(new MessageEvent('message', { data: { ...m, sequence: 0 } }));
+        }
+      };
+      window.addEventListener('message', window.streamFault, true);
+    })()`)
+    const allPlots = bench.session.plots
+    bench.session.plots = allPlots.filter((p) => p.field !== 'Va')
+    bench.studio.changed.fire(bench.key)
+    await until(
+      () =>
+        monitor.evaluate<boolean>(
+          `window.streamAttempts.length >= 2 && window.streamEnds.includes(window.streamAttempts.at(-1).stream) && document.querySelector('canvas').gridkitPlot()?.visible && !document.querySelector('canvas').gridkitPlot()?.refining`,
+        ),
+      async () =>
+        'rejected commit retries: ' +
+        JSON.stringify({
+          attempts: await monitor.evaluate('window.streamAttempts'),
+          plots: await sample(),
+          errors: bench.studio.errors,
+        }),
+    )
+    const attempts =
+      await monitor.evaluate<{ base: boolean; append: boolean }[]>('window.streamAttempts')
+    assert.equal(attempts[1]!.base, true, 'Retry replaces the uncertain snapshot')
+    assert.equal(attempts[1]!.append, false, 'Retry cannot duplicate an uncertain append')
+    await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
+    // Fail after every batch was acknowledged but before final commit. The completed run
+    // must still be retried. Lost commit receipts themselves are covered by StreamDelivery.
+    await monitor.evaluate(`(() => {
+      window.streamAttempts = [];
+      window.streamEnds = [];
+      window.streamFault = event => {
+        const m = event.data;
+        if (m?.kind === 'begin') {
+          window.streamAttempts.push({ stream: m.stream, base: m.base, append: m.append });
+        }
+        if (m?.kind === 'end') window.streamEnds.push(m.stream);
+      };
+      window.addEventListener('message', window.streamFault, true);
+    })()`)
+    const originalCall = bench.studio.client.call
+    let failBeforeCommit = true
+    bench.studio.client.call = (async (...args: Parameters<typeof originalCall>) => {
+      const result = await originalCall.apply(bench.studio.client, args)
+      if (args[0] === 'batches' && failBeforeCommit) {
+        failBeforeCommit = false
+        throw Object.assign(new Error('Injected pre-commit timeout'), { code: 'timeout' })
+      }
+      return result
+    }) as typeof originalCall
+    try {
+      bench.session.plots = allPlots
+      bench.studio.changed.fire(bench.key)
+      await until(
+        async () =>
+          (await monitor.evaluate<boolean>(
+            'window.streamAttempts.length >= 2 && window.streamEnds.includes(window.streamAttempts.at(-1).stream)',
+          )) &&
+          (await sample()).filter((p) => p.visible).every((p) => p.historyBytes > 0 && !p.refining),
+        async () =>
+          'pre-commit timeout recovery: ' +
+          JSON.stringify({
+            attempts: await monitor.evaluate('window.streamAttempts'),
+            plots: (await sample()).map((p) => ({
+              frames: p.frames,
+              visible: p.visible,
+              refining: p.refining,
+            })),
+            errors: bench.studio.errors,
+          }),
+      )
+    } finally {
+      bench.studio.client.call = originalCall
+    }
+    const timedOut =
+      await monitor.evaluate<{ base: boolean; append: boolean }[]>('window.streamAttempts')
+    assert.equal(timedOut[1]!.base, true)
+    assert.equal(timedOut[1]!.append, false)
+    await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
+    assert.deepEqual(
+      bench.studio.errors,
+      [],
+      'Transient stream rejection is recovered without a terminal error',
+    )
+    bench.report.normalization = {
+      changes: 12,
+      historyDraws: 0,
+      modelQueries: 0,
+      commitAttempts: attempts,
+      timeoutAttempts: timedOut,
+    }
     await seek(1.5)
     await bench.page.setViewportSize({ width: 1200, height: 800 })
     await seek(0.4)

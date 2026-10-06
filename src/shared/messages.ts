@@ -318,6 +318,8 @@ export interface ViewRequests {
 export type FromView =
   | { kind: 'ready' }
   | { kind: 'ack'; stream: number; sequence: number }
+  /** Data was assembled and accepted, or rejected without changing the committed snapshot. */
+  | { kind: 'commit'; stream: number; error?: Failure }
   | { kind: 'cancel'; id: number }
   | { kind: 'request'; id: number; method: keyof ViewRequests; input: unknown }
   | { kind: 'command'; command: string; value?: unknown }

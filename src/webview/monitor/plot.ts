@@ -69,32 +69,33 @@ export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolea
 
 /** The trace of `plotted`: a line for each row of its type, or for the one row it names. A field the
  *  network colors is colored the same way: its colormap, over the same range. */
-export function tracesOf(
+export function plotBindings(
   settings: SettingsReader,
   { type, field, id }: Plotted,
   bindings: Bindings = {},
   rows?: FieldSelection['rows'],
   run?: SimulationInfo,
-): MonitorConfig['traces'] {
+): Pick<MonitorConfig, 'traces' | 'valueColor'> {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
   )
+  const domain = mapped?.domain ?? run?.domains?.[type]?.[field]
+  const colormap = colormaps[settings.get('network.colormap')]
+  // Same-value color is applied to cached coverage. Explicit global ranges never become
+  // trace bindings, so new live extrema cannot invalidate the history or append fast path.
   return {
-    [TRACE]: {
-      from: type,
-      y: field,
-      interpolation: settings.get('monitor.interpolation'),
-      ...(id !== undefined ? { rows: { kind: 'ids' as const, ids: [id] } } : rows ? { rows } : {}),
-      ...(mapped && {
-        color: {
-          field,
-          colormap: colormaps[settings.get('network.colormap')],
-          domain:
-            mapped.domain ??
-            run?.domains?.[type]?.[field] ??
-            (run ? { window: { kind: 'range', between: run.span ?? run.domain } } : 'auto'),
-        },
-      }),
+    valueColor: mapped && domain ? { domain, colormap } : null,
+    traces: {
+      [TRACE]: {
+        from: type,
+        y: field,
+        interpolation: settings.get('monitor.interpolation'),
+        ...(id !== undefined
+          ? { rows: { kind: 'ids' as const, ids: [id] } }
+          : rows
+            ? { rows }
+            : {}),
+      },
     },
   }
 }

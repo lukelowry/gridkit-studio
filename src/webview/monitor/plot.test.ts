@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
 import type { SimulationInfo } from '../../shared/simulation.js'
-import { axisLabel, axisName, holds, monitorWindow, plotOptions, tracesOf } from './plot.js'
+import { axisLabel, axisName, holds, monitorWindow, plotBindings, plotOptions } from './plot.js'
 
 describe('the window a plot shows', () => {
   it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {
@@ -24,15 +24,24 @@ it('uses the global recorded range for mapped traces, including a single selecte
   const run = { domains: { Bus: { Vm: [0.5, 1.5] } } } as unknown as SimulationInfo
   const binding = { type: 'Bus', field: 'Vm' }
   for (const id of [undefined, 'Bus/1']) {
-    const [trace] = Object.values(
-      tracesOf(reader(), { ...binding, id }, { vertexColor: binding }, undefined, run),
+    const config = plotBindings(
+      reader(),
+      { ...binding, id },
+      { vertexColor: binding },
+      undefined,
+      run,
     )
-    expect(trace!.color).toMatchObject({ domain: [0.5, 1.5] })
+    expect(config.valueColor).toMatchObject({ domain: [0.5, 1.5] })
+    expect(config.traces.plotted).not.toHaveProperty('color')
   }
-  const [trace] = Object.values(
-    tracesOf(reader(), binding, { vertexColor: { ...binding, domain: [0, 2] } }, undefined, run),
+  const config = plotBindings(
+    reader(),
+    binding,
+    { vertexColor: { ...binding, domain: [0, 2] } },
+    undefined,
+    run,
   )
-  expect(trace!.color).toMatchObject({ domain: [0, 2] })
+  expect(config.valueColor).toMatchObject({ domain: [0, 2] })
 })
 
 it('waits for the samples a plot draws: its field, for its row or for every row', () => {
@@ -45,10 +54,24 @@ it('waits for the samples a plot draws: its field, for its row or for every row'
   expect(holds([every], { type: 'Bus', field: 'Va' })).toBe(false)
 })
 
+it('keeps trace bindings equal when live extrema or the colormap change', () => {
+  const field = { type: 'Bus', field: 'Vm' }
+  const bindings = { vertexColor: field }
+  const config = (range: [number, number], palette: 'batlow' | 'viridis') =>
+    plotBindings(reader({ 'network.colormap': palette }), field, bindings, undefined, {
+      domains: { Bus: { Vm: range } },
+    } as unknown as SimulationInfo)
+  const before = config([1, 1], 'batlow')
+  const after = config([0.2, 1.8], 'viridis')
+  expect(after.traces).toEqual(before.traces)
+  expect(after.valueColor).not.toEqual(before.valueColor)
+  expect(plotBindings(reader(), field, {}, undefined).valueColor).toBeNull()
+})
+
 it('replaces the plotted field in place, under one trace', () => {
-  const traces = tracesOf(reader(), { type: 'Hub', field: 'level' })
+  const { traces } = plotBindings(reader(), { type: 'Hub', field: 'level' })
   expect(Object.keys(traces)).toEqual(
-    Object.keys(tracesOf(reader(), { type: 'Line', field: 'flow' })),
+    Object.keys(plotBindings(reader(), { type: 'Line', field: 'flow' }).traces),
   )
   expect(Object.values(traces)[0]).toMatchObject({ from: 'Hub', y: 'level' })
   expect(Object.values(traces)[0]).not.toHaveProperty('color')
@@ -57,13 +80,12 @@ it('replaces the plotted field in place, under one trace', () => {
 it('colors a field as the network colors it: its colormap, over the same range', () => {
   const s = reader({ 'network.colormap': 'batlow' })
   const vertexColor = { type: 'Hub', field: 'level', domain: [0.5, 1.5] as const }
-  const [trace] = Object.values(tracesOf(s, { type: 'Hub', field: 'level' }, { vertexColor }))
-  expect(trace!.color).toMatchObject({ field: 'level', domain: [0.5, 1.5] })
-  expect(trace!.color).toMatchObject({ colormap: colormaps.batlow })
+  const config = plotBindings(s, { type: 'Hub', field: 'level' }, { vertexColor })
+  expect(config.valueColor).toMatchObject({ domain: [0.5, 1.5], colormap: colormaps.batlow })
   const height = { vertexHeight: vertexColor }
-  expect(Object.values(tracesOf(s, { type: 'Hub', field: 'level' }, height))[0]).not.toHaveProperty(
-    'color',
-  )
+  expect(
+    Object.values(plotBindings(s, { type: 'Hub', field: 'level' }, height).traces)[0],
+  ).not.toHaveProperty('color')
 })
 
 it('names the time axis in sentence case, and leaves the values to the signal menu', () => {

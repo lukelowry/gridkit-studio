@@ -5,6 +5,7 @@
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
+  import { currentStream } from '../../shared/streams.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
@@ -92,11 +93,10 @@
       }),
       receive(
         (data, begin) => {
-          if (begin.simulationId !== view.run?.id) return
           source = data
           sampled = begin.sampled
         },
-        (reason) => bridge.report(reason),
+        (begin) => currentStream(begin, view),
       ),
       watchTheme(() => (theme = { palette: palette(), font: font() })),
     ]

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
 import type { Begin, Summary, ViewState } from './messages.js'
-import { drawable, holdFor } from './streams.js'
+import { currentStream, drawable, holdFor } from './streams.js'
 
 describe('mapping readiness', () => {
   const revision = { uri: 'file:///case', version: 1, attachmentId: 'first' }
@@ -55,6 +55,13 @@ describe('mapping readiness', () => {
       }),
     ).toBe(true)
     expect(drawable(begin, { ...state, bindings: {} })).toBe(true)
+  })
+
+  it('accepts a rows-only snapshot before samples, and rejects samples from a replaced run', () => {
+    const showing = { ...state, run: { id: 'new', frames: 0 } } as ViewState
+    expect(currentStream(begin, showing)).toBe(true)
+    expect(currentStream({ ...begin, simulationId: 'old' }, showing)).toBe(false)
+    expect(currentStream({ ...begin, simulationId: 'new' }, showing)).toBe(true)
   })
 })
 

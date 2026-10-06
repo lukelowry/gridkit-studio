@@ -5,18 +5,25 @@ import type { Domain } from '@latkit/model'
 import { recordedWhole } from './bindings.js'
 import type { Begin, ViewState } from './messages.js'
 
-/** State may precede its data. Keep the last frame until this revision's mapping fields arrive. */
-export function drawable(begin: Begin | undefined, state: ViewState): boolean {
+/** Accept only this revision and run; a rows-only stream has no simulation ID. */
+export function currentStream(begin: Begin | undefined, state: ViewState): boolean {
   const summary = state.summary
   if (
     !begin ||
     !summary ||
-    state.stale ||
     begin.revision.uri !== summary.uri ||
     begin.revision.version !== summary.version ||
-    begin.revision.attachmentId !== summary.attachmentId
+    begin.revision.attachmentId !== summary.attachmentId ||
+    (begin.simulationId !== undefined && begin.simulationId !== state.run?.id)
   )
     return false
+  return true
+}
+
+/** State may precede its data. Keep the last frame until this revision's mapping fields arrive. */
+export function drawable(begin: Begin | undefined, state: ViewState): boolean {
+  if (!begin || !currentStream(begin, state) || state.stale) return false
+  const summary = state.summary!
   return Object.values(state.bindings ?? {}).every(({ type, field }) => {
     const definition = summary.schema.types[type]?.fields[field]
     if (!definition) return true

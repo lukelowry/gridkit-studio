@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest'
 
 import type { SimulationInfo, Summary, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
-import { tracesOf } from '../monitor/plot.js'
+import { plotBindings } from '../monitor/plot.js'
 import { networkConfig } from './style.js'
 
 vi.mock('./borders.js', () => ({ BORDERS: [] }))
@@ -75,9 +75,9 @@ it('uses the same global normalization in Network and Monitor at every resident 
       const config = networkConfig(kase.data, samples, view, false, null)
       for (const channel of ['color', 'z', 'radiusPx'] as const)
         expect(config.vertices.Bus![channel]).toMatchObject({ domain: [0.5, 2] })
-      expect(
-        Object.values(tracesOf(reader(), field, view.bindings, undefined, run))[0]!.color,
-      ).toMatchObject({ domain: [0.5, 2] })
+      expect(plotBindings(reader(), field, view.bindings, undefined, run).valueColor).toMatchObject(
+        { domain: [0.5, 2] },
+      )
       const fixed = networkConfig(
         kase.data,
         samples,

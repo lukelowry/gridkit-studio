@@ -14,7 +14,7 @@ import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
-import { axisLabel, PLOT_LIMITS, plotOptions, tracesOf } from '../monitor/plot.js'
+import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions } from '../monitor/plot.js'
 import { loadBorders } from '../network/borders.js'
 import { isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
@@ -171,7 +171,7 @@ export async function exportVideo(
                 canvas: null,
                 input: 'none',
                 source: samples,
-                traces: tracesOf(
+                ...plotBindings(
                   preferences,
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,

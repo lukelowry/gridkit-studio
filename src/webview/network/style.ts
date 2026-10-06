@@ -27,22 +27,21 @@ function routed(source: Data, type: string, field: string): boolean {
 }
 
 /** The network config for `source`: vertices at the positions the case gives them, the network
- *  laying out those without. Sampled fields read `samples`, colored over the `whole` run or the
- *  frame on show; labels wait for `labelled`. */
+ *  laying out those without. Sampled fields share the run's global ranges; labels wait for
+ *  `labelled`. */
 export function networkConfig(
   source: Data,
   samples: Data,
   state: ViewState,
   geographic: boolean,
   borders: Data | null,
-  whole: boolean,
   labelled = true,
 ): Omit<NetworkConfig, 'canvas' | 'camera'> {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
   const options = networkOptions(s, palette(), font(), geographic)
   const colormap = colormaps[s.get('network.colormap')]
-  const sampled = sampledFrom(samples, state, whole)
+  const sampled = sampledFrom(samples, state)
   const bindings = state.bindings ?? {}
   const located = isLocated(source)
   const labels = (type: string, enabled: boolean) => {
@@ -105,11 +104,11 @@ export function networkConfig(
 }
 
 /** Where a bound field's values come from: undefined for the case's own data, the run for a field
- *  it recorded for every row, else null. Over the `whole` run, colors span all it recorded. */
+ *  it recorded for every row, else null. Colors span all recorded times, including when only
+ *  a window of samples is resident in the view. */
 function sampledFrom(
   source: Data,
   { run, summary }: ViewState,
-  whole: boolean,
 ): (field: FieldRef) => Sampled | null | undefined {
   return ({ type, field }) => {
     // A binding can arrive before the stream carrying its field; it draws once the field does.
@@ -125,10 +124,9 @@ function sampledFrom(
       return null
     return {
       source,
-      domain:
-        whole && run.domain[1] > run.domain[0]
-          ? { window: { kind: 'range', between: run.domain } }
-          : 'auto',
+      domain: run.domains?.[type]?.[field] ?? {
+        window: { kind: 'range', between: run.span ?? run.domain },
+      },
     }
   }
 }

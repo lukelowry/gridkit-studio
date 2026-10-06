@@ -251,6 +251,7 @@ export class Sessions {
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
+      caseFiltered: !!(session?.table.filter || session?.table.equal),
     }
     for (const [key, value] of Object.entries(values))
       if (this.contexts.get(key) !== value) {

@@ -51,9 +51,15 @@ function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 
+/** A field's unit, unless its own name already says it, as `kv` says kV. */
+export function unitOf(definition: FieldDefinition | undefined, field: string): string {
+  const unit = definition?.unit ?? ''
+  return unit.toLowerCase() === field.slice(field.indexOf('.') + 1).toLowerCase() ? '' : unit
+}
+
 /** A field's label, or its key, with its unit. */
 export function fieldName(definition: FieldDefinition | undefined, field: string): string {
-  return withUnit(definition?.label ?? field, definition?.unit)
+  return withUnit(definition?.label ?? field, unitOf(definition, field))
 }
 
 export function isReference(definition: FieldDefinition | undefined): boolean {

@@ -53,6 +53,7 @@ function boot() {
   /** The case's rows alone, and with the shown run's samples. */
   let rows: Data | undefined
   let data: Data | undefined
+  let received: Begin | undefined
   let view: Network | Diagram | undefined
   let state: ViewState = {}
   /** The times of the run the case holds; undefined when it holds all of them. */
@@ -71,6 +72,9 @@ function boot() {
   let borderRequest: Promise<void> | undefined
   /** Labels, like borders, wait for the first frame so text layout never delays it. */
   let labelled = false
+  /** Topology is unchanged by sampled frames. Do not rescan coordinates on every update. */
+  let locatedRows: Data | undefined
+  let styling = 0
   /** The shown selection and what stands for it, and the last one this view made, which it does
    *  not reveal. */
   let selectionKey = ''
@@ -159,16 +163,7 @@ function boot() {
     }
   }
   const networkConfig = () =>
-    networkStyles!.networkConfig(
-      rows!,
-      data!,
-      state,
-      geographic,
-      borders,
-      // Colors span the whole run once all of it is held and no more is coming.
-      held === undefined && state.run?.state !== 'running',
-      labelled,
-    )
+    networkStyles!.networkConfig(rows!, data!, state, geographic, borders, labelled)
   const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, presented)
   const orbit = () => {
     if (kind !== 'network' || !view || state.settings?.['accessibility.motion'] === 'reduce') return
@@ -197,7 +192,17 @@ function boot() {
   /** Give the view its whole config; it keeps what it has read, scaled, laid out, and uploaded
    *  for every value that did not change, and resets what the config leaves out. */
   function paint() {
+    if (styling || closed) return
+    styling = requestAnimationFrame(() => {
+      styling = 0
+      paintNow()
+    })
+  }
+  function paintNow() {
     if (!view || !rows || !data || closed) return
+    // State arrives before the matching row stream. Keep the last valid frame until both
+    // refer to the same revision, rather than applying new row selections to old tables.
+    if (received?.revision.version !== state.summary?.version) return
     appearance(state.settings)
     try {
       if (kind === 'diagram') (view as Diagram).set(diagramConfig(), { replace: true })
@@ -331,7 +336,10 @@ function boot() {
       if (kind === 'network') {
         if (!networkModule || !networkStyles) return
         mark('canvas:module')
-        geographic = networkModule.isGeographic(rows)
+        if (locatedRows !== rows) {
+          geographic = networkModule.isGeographic(rows)
+          locatedRows = rows
+        }
         if (!view) {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
@@ -400,11 +408,16 @@ function boot() {
   receive((next, begin, base) => {
     mark('canvas:data')
     data = next
+    received = begin
+    const changedRows = rows !== base
     rows = base
     held = begin.held
     asked = false
     if (begin.presentation) presented = begin.presentation
-    if (begin.revision.version === state.summary?.version) void render().catch(error)
+    if (begin.revision.version === state.summary?.version) {
+      if (!view || changedRows) void render().catch(error)
+      else paint()
+    }
   }, error)
   bridge.on((message) => {
     if (message.kind === 'begin') mark('canvas:begin')
@@ -465,6 +478,7 @@ function boot() {
   )
   window.addEventListener('pagehide', () => {
     closed = true
+    cancelAnimationFrame(styling)
     clearTimeout(saving)
     unwatch()
     clock.stop()

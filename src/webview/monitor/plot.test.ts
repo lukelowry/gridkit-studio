@@ -2,16 +2,37 @@ import { colormaps } from '@latkit/gpu'
 import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
-import { axisLabel, axisName, plotOptions, tracesOf, windowOf } from './plot.js'
+import type { SimulationInfo } from '../../shared/simulation.js'
+import { axisLabel, axisName, monitorWindow, plotOptions, tracesOf } from './plot.js'
 
 describe('the window a plot shows', () => {
-  it('rounds a growing run’s end up to a power of two of its span, and fits a run that ended', () => {
-    expect(windowOf([0, 3], true)).toEqual([0, 4])
-    expect(windowOf([0, 9.99], true)).toEqual([0, 16])
-    expect(windowOf([2, 2.5], true)).toEqual([2, 2.5])
-    expect(windowOf([0, 9.99], false)).toEqual([0, 9.99])
-    expect(windowOf([5, 5], true)).toEqual([5, 5])
+  it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {
+    for (const state of ['running', 'complete', 'cancelled'] as const)
+      for (const end of [0, 0.1, 3, 9.99, 10]) {
+        const run = { state, span: [0, 10] as const, domain: [0, end] as const }
+        expect(monitorWindow(run)).toEqual([0, 10])
+        expect(monitorWindow(run, [2, 4])).toEqual([2, 4])
+      }
   })
+  it('uses recorded bounds for imports and a nonzero initial axis', () => {
+    expect(monitorWindow({ domain: [2, 7] })).toEqual([2, 7])
+    expect(monitorWindow()).toEqual([0, 1])
+  })
+})
+
+it('uses the global recorded range for mapped traces, including a single selected trace', () => {
+  const run = { domains: { Bus: { Vm: [0.5, 1.5] } } } as unknown as SimulationInfo
+  const binding = { type: 'Bus', field: 'Vm' }
+  for (const id of [undefined, 'Bus/1']) {
+    const [trace] = Object.values(
+      tracesOf(reader(), { ...binding, id }, { vertexColor: binding }, undefined, run),
+    )
+    expect(trace!.color).toMatchObject({ domain: [0.5, 1.5] })
+  }
+  const [trace] = Object.values(
+    tracesOf(reader(), binding, { vertexColor: { ...binding, domain: [0, 2] } }, undefined, run),
+  )
+  expect(trace!.color).toMatchObject({ domain: [0, 2] })
 })
 
 it('replaces the plotted field in place, under one trace', () => {

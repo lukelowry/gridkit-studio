@@ -112,6 +112,7 @@ describe('native results and ownership', () => {
       )
       expect(info.frames).toBe(200)
       expect(results.pages.length).toBe(4)
+      expect(info.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
       expect(cache.bytes).toBeLessThanOrEqual(1500)
       const data = await results.data([0, 0.1], new AbortController().signal)
       const blocks = []
@@ -128,6 +129,8 @@ describe('native results and ownership', () => {
         blocks.push(block)
       expect(blocks.length).toBeGreaterThan(0)
       expect(blocks[0]!.columns.Vm!.values[0]).toBe(1)
+      // Eviction and reloading an early window never shrink whole-run normalization.
+      expect(info.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

@@ -10,7 +10,6 @@ import {
   type FromView,
   type SimulationInfo,
   type Summary,
-  TAIL,
   type ToView,
   type VideoView,
   type ViewKind,
@@ -18,7 +17,7 @@ import {
   type ViewState,
 } from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
-import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
+import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
 import { type Held, holdFor } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
 import { VideoFile } from './video.js'
@@ -34,12 +33,32 @@ const DRAWN: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor', '
 const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
   'plot',
+  'addPlot',
   'removePlot',
   'startSimulation',
   'stopSimulation',
   'chooseSignals',
   'showContingency',
 ])
+/** How many rows the Case panel's filters leave, by case. */
+const shownRows = new Map<string, number>()
+
+/** What a panel's title says after its name: the case, and what the panel shows of it. The Case
+ *  panel's type and filtered count, and the Monitor's run, live here rather than in the panels. */
+function describe(studio: Sessions, kind: ViewKind, uri: string): string {
+  const { summary, table, run } = studio.state(uri)
+  const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
+  if (kind === 'case' && summary && table?.type) {
+    parts.push(typeName(summary.schema, table.type))
+    const count = summary.counts[table.type]
+    const shown = shownRows.get(uri)
+    if ((table.filter || table.equal) && count !== undefined && shown !== undefined)
+      parts.push(`${shown.toLocaleString()} of ${count.toLocaleString()}`)
+  }
+  if (kind === 'monitor' && run) parts.push(run.state, `${run.frames.toLocaleString()} samples`)
+  return parts.join(' · ')
+}
+
 /** The state each non-drawing view shows; it is sent state only when this changes. */
 const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
   case: ({ version, stale, error, writable, selection, bindings, table }) => [
@@ -267,11 +286,11 @@ class View {
       case 'tableState':
         if (!session) return
         session.table = message.table
+        shownRows.set(this.uri, message.shown)
         this.studio.persist(session)
         this.studio.updateContexts()
         if ('description' in this.panel)
-          this.panel.description =
-            (this.studio.state(this.uri).summary?.name ?? '') + ' · ' + (message.table.type ?? '')
+          this.panel.description = describe(this.studio, this.kind, this.uri)
         return
       case 'busy':
         this.busy = message.busy === true
@@ -303,7 +322,13 @@ class View {
     const request = new AbortController()
     this.#requests.set(id, request)
     try {
-      const value = await this.handle(method, input, request.signal)
+      const work = this.handle(method, input, request.signal)
+      // The Case panel's rows load under VS Code's own progress bar on the view.
+      if (this.kind === 'case' && method === 'query')
+        void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.case' } }, () =>
+          work.catch(() => {}),
+        )
+      const value = await work
       if (!request.signal.aborted) await this.send({ kind: 'reply', id, value })
     } catch (error) {
       if (!request.signal.aborted)
@@ -542,10 +567,12 @@ class View {
     const t = transport.currentT()
     const need: Domain =
       this.kind === 'monitor'
-        ? (session.window ?? [Math.max(start, end - TAIL), end])
+        ? (session.window ?? run.span ?? [start, end])
         : (this.#need ?? [t - 1, t + 4])
+    // The default Monitor interval is fixed. Finishing a run must not replace its entire
+    // history merely to close the stream's upper bound.
     const open =
-      transport.live && (this.kind === 'monitor' ? !session.window : transport.state.follow)
+      this.kind === 'monitor' ? !session.window : transport.live && transport.state.follow
     return holdFor(this.#held, need, open, this.kind === 'monitor' ? need[1] - need[0] : 0)
   }
   async #streamed(summary: Summary, demand: Demand, base: boolean, append: boolean, key: string) {
@@ -623,6 +650,7 @@ class View {
       if (controller.signal.aborted || this.#disposed) return
       // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
       if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
+      if (!demand.run && studio.state(uri).summary?.version !== revision.version) return
       this.#failed = key
       this.#failure = message(error)
       studio.report(error)
@@ -685,13 +713,11 @@ export function registerViews(studio: Sessions) {
             let waiting = false
             const update = () => {
               const uri = studio.active
-              const name = (uri: string) =>
-                studio.state(uri).summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)
               if (
                 content &&
                 (uri === content.uri || (content.busy && studio.all.has(content.uri)))
               ) {
-                panel.description = name(content.uri)
+                panel.description = describe(studio, kind, content.uri)
                 return
               }
               // Another case waits for this one's page to load before taking its place.
@@ -713,7 +739,7 @@ export function registerViews(studio: Sessions) {
                   ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.run))
               ) {
                 content = new View(studio, panel, uri, kind, hidden)
-                panel.description = name(uri)
+                panel.description = describe(studio, kind, uri)
               } else {
                 panel.webview.html =
                   '<!doctype html><html lang="en"><body style="font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground);padding:12px">' +

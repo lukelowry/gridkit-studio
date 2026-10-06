@@ -5,6 +5,7 @@ import { setTimeout } from 'node:timers/promises'
 
 import {
   appendData,
+  bitAt,
   blockByteLength,
   type Data,
   type Domain,
@@ -124,7 +125,10 @@ export class Results {
     readonly fields: readonly Field[],
     readonly cache: ResultCache,
     readonly ownedDirectory?: string,
-  ) {}
+  ) {
+    // A sibling contingency copies metadata, but must measure its own recording.
+    this.info.domains = {}
+  }
 
   async times(page: Page, signal: AbortSignal): Promise<number[]> {
     return timesOf(await this.#decode(page.start, page.end, page.first, signal))
@@ -378,6 +382,25 @@ export class Results {
     const count = coordinates.length
     const page = { start, end, first: this.info.frames, count, domain: [low, high] as Domain }
     const owned = this.cache.put(this.#key(this.pages.length), batches)
+    // Measure once on ingestion, before eviction or view windowing. Every view uses these
+    // same ranges; scrubbing never rescans history or normalizes an individual frame.
+    const domains = (this.info.domains ??= {})
+    for (const batch of batches) {
+      const fields = (domains[batch.index.type] ??= {})
+      const rows = batch.rows.kind === 'range' ? batch.rows.count : batch.rows.values.length
+      for (const [name, column] of Object.entries(batch.columns)) {
+        let [min, max] = fields[name] ?? [Infinity, -Infinity]
+        for (let frame = 0; frame < batch.coordinates.length; frame++)
+          for (let row = 0; row < rows; row++) {
+            const at = column.offset + frame * column.frameStride + row * column.rowStride
+            const value = column.values[at]!
+            if (!bitAt(column.validity, at) || !Number.isFinite(value)) continue
+            min = Math.min(min, value)
+            max = Math.max(max, value)
+          }
+        if (min <= max) fields[name] = [min, max]
+      }
+    }
     this.pages.push(page)
     this.info.frames += count
     this.info.domain = [this.pages[0]!.domain[0], high]

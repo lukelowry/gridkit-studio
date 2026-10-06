@@ -1,20 +1,18 @@
-<!-- One lane per plotted signal of the run on show, under the case's playback controls. -->
+<!-- One lane per plotted signal of the run on show. Plots are added from the view's title bar,
+  which also names the run, and played from the status bar. -->
 <script lang="ts">
   import type { Data, Domain } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import { type Begin, type Plot as Plotted, TAIL, type ViewState } from '../../shared/messages.js'
-  import { fieldName, typeName } from '../../shared/schema.js'
+  import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { CanvasGpu, RECOVER_MS } from '../gpu.js'
   import { receive } from '../stream.js'
   import { appearance, font, palette, watchTheme } from '../theme.js'
-  import Select from '../ui/Select.svelte'
-  import { sameWindow, windowOf } from './plot.js'
+  import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
-  import Transport from './Transport.svelte'
 
   /** How long a window the user chose must rest before the extension hears of it. */
   const WINDOW_MS = 120
@@ -22,11 +20,8 @@
   let view = $state.raw<ViewState>({})
   /** The case with the run's frames so far. */
   let source = $state.raw<Data | undefined>()
-  /** The times `source` holds; absent when it holds the whole run. */
-  let held = $state.raw<Begin['held']>()
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
-  let live = $state(false)
   /** The playhead, updated every frame while playing. */
   let t = $state(0)
   let theme = $state.raw({ palette: palette(), font: font() })
@@ -55,32 +50,12 @@
     })
   const clock = createClock(
     (now) => (t = now),
-    () => {
-      tick = clock.state
-      live = clock.live
-    },
+    () => (tick = clock.state),
   )
 
   const run = $derived(view.run)
   const plots = $derived(view.plots ?? [])
-  const running = $derived(run?.state === 'running')
-  /** The window every plot shows: the user's, else the run's. A growing run's widens by doubling;
-   *  a run held only in part shows its tail. */
-  const shown = $derived.by((): Domain => {
-    const window = chosen ?? view.window
-    if (window) return window
-    if (!run || !(run.domain[1] > run.domain[0]))
-      return [run?.domain[0] ?? 0, (run?.domain[0] ?? 0) + 1]
-    if (held) return [Math.max(run.domain[0], run.domain[1] - TAIL), run.domain[1]]
-    // A running run with a known span shows all of it from its first frame.
-    return running && run.span ? run.span : windowOf(run.domain, running)
-  })
-  /** The run in one line: name, state and sample count. */
-  const about = $derived(
-    run
-      ? `${run.name} · ${run.state} · ${run.frames.toLocaleString()} samples`
-      : (view.summary?.name ?? ''),
-  )
+  const shown = $derived(monitorWindow(run, chosen ?? view.window))
   const warning = $derived(
     view.stale
       ? 'Source is updating or invalid. Results keep the case revision they were recorded for.'
@@ -88,18 +63,6 @@
         ? 'These results belong to an earlier case revision.'
         : null,
   )
-  /** The signals the run on show records, else those the next run will. */
-  const signals = $derived.by(() => {
-    const schema = view.summary?.schema
-    if (!schema) return []
-    return (run?.outputs ?? view.outputs ?? []).flatMap(({ from, select }) =>
-      select.map((field) => ({
-        value: { type: from, field },
-        label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
-        group: typeName(schema, from),
-      })),
-    )
-  })
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
   /** Every plot follows `bounds` at once; the extension hears once they rest. */
@@ -121,6 +84,7 @@
           appearance(view.settings)
           // Another run resets the window; one the extension set replaces the user's.
           if (view.run?.id !== before.run?.id) {
+            clearTimeout(telling)
             chosen = told = undefined
             source = undefined
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
@@ -138,7 +102,6 @@
         (data, begin) => {
           if (begin.simulationId !== view.run?.id) return
           source = data
-          held = begin.held
         },
         (reason) => bridge.report(reason),
       ),
@@ -158,56 +121,6 @@
 </script>
 
 <div class="monitor">
-  <div class="monitor__head">
-    <div class="monitor__signal">
-      <Select
-        label="Plots"
-        options={signals}
-        key={({ type, field }) => `${type}/${field}`}
-        placeholder="Add plot"
-        compact
-        hideLabel
-        disabled={signals.length === 0}
-        data-testid="monitor-signal"
-        bind:value={
-          (): { type: string; field: string } | null => null,
-          (signal) => {
-            if (signal !== null && view.summary)
-              bridge.command('plot', {
-                uri: view.summary.uri,
-                version: view.summary.version,
-                origin: 'monitor',
-                ...signal,
-              })
-          }
-        }
-      />
-    </div>
-    <p class="monitor__run" title={about}>{about}</p>
-    {#if tick.status !== 'idle' && live && !tick.follow}
-      <button
-        type="button"
-        class="c-btn"
-        data-testid="monitor-go-live"
-        onclick={() => clock.act({ action: 'goLive' })}
-      >
-        Go live
-      </button>
-    {/if}
-    {#if run && tick.status !== 'idle'}
-      <div class="monitor__playback">
-        <Transport
-          {clock}
-          {tick}
-          {t}
-          {live}
-          frames={run.frames}
-          recorded={run.domain}
-          axis={view.summary?.schema.axis}
-        />
-      </div>
-    {/if}
-  </div>
   {#if warning}
     <p class="c-note c-note--warn" role="status">{warning}</p>
   {/if}
@@ -220,7 +133,11 @@
             ? 'Start a simulation or import results to plot recorded signals.'
             : 'Choose a signal to plot it.'}
       </p>
-      {#if view.summary}
+      {#if view.summary && run}
+        <button class="c-btn" data-testid="monitor-add" onclick={() => bridge.command('addPlot')}>
+          Add Plot…
+        </button>
+      {:else if view.summary}
         <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
           Choose monitored signals
         </button>
@@ -259,38 +176,6 @@
     container: monitor / inline-size;
   }
 
-  /* Styled as a panel header: the plot picker, the run as its title, then playback. */
-  .monitor__head {
-    display: flex;
-    flex-wrap: wrap;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 0 var(--spacing-sm);
-    min-block-size: var(--spacing-header-h);
-    padding-inline: var(--spacing-md);
-    border-block-end: 1px solid var(--color-border);
-  }
-
-  .monitor__signal {
-    flex: 0 1 12rem;
-    min-inline-size: 5rem;
-  }
-
-  .monitor__run {
-    flex: 1 1 6rem;
-    min-inline-size: 0;
-    margin-inline-end: auto;
-    overflow: hidden;
-    color: var(--color-text-2);
-    font-size: var(--text-xs);
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .monitor__playback {
-    min-inline-size: 0;
-  }
-
   .monitor__empty {
     flex: 1;
   }
@@ -305,17 +190,5 @@
     min-block-size: 0;
     overflow: auto;
     background: var(--color-border);
-  }
-
-  /* Too narrow for one row: playback wraps to its own row. */
-  @container monitor (max-width: 36rem) {
-    .monitor__playback {
-      order: 1;
-      flex-basis: 100%;
-    }
-
-    .monitor__playback :global(.playback) {
-      justify-content: flex-start;
-    }
   }
 </style>

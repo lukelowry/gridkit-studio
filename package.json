@@ -352,7 +352,7 @@
       },
       {
         "command": "gridkitStudio.followTime",
-        "title": "Go Live",
+        "title": "Go to End",
         "category": "GridKit Studio",
         "icon": "$(arrow-right)",
         "enablement": "gridkitStudio.hasSamples"
@@ -418,6 +418,27 @@
         "title": "Select Overlapping…",
         "category": "GridKit Studio",
         "icon": "$(list-selection)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.chooseType",
+        "title": "Choose Type…",
+        "category": "GridKit Studio",
+        "icon": "$(symbol-class)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.filterRows",
+        "title": "Filter Rows…",
+        "category": "GridKit Studio",
+        "icon": "$(filter)",
+        "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.addPlot",
+        "title": "Add Plot…",
+        "category": "GridKit Studio",
+        "icon": "$(add)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -745,19 +766,34 @@
       ],
       "view/title": [
         {
+          "command": "gridkitStudio.chooseType",
+          "when": "view == gridkitStudio.case && gridkitStudio.caseReady",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gridkitStudio.filterRows",
+          "when": "view == gridkitStudio.case && gridkitStudio.caseReady",
+          "group": "navigation@2"
+        },
+        {
+          "command": "gridkitStudio.clearFilter",
+          "when": "view == gridkitStudio.case && gridkitStudio.caseFiltered",
+          "group": "navigation@3"
+        },
+        {
           "command": "gridkitStudio.chooseColumns",
           "when": "view == gridkitStudio.case && gridkitStudio.caseReady",
-          "group": "columns@1"
+          "group": "navigation@4"
         },
         {
           "command": "gridkitStudio.resetColumns",
           "when": "view == gridkitStudio.case && gridkitStudio.caseReady",
-          "group": "columns@2"
+          "group": "1_columns@1"
         },
         {
           "command": "gridkitStudio.showSource",
           "when": "view == gridkitStudio.case && gridkitStudio.hasCase",
-          "group": "source@1"
+          "group": "2_source@1"
         },
         {
           "command": "gridkitStudio.simulationSettings",
@@ -778,6 +814,11 @@
           "command": "gridkitStudio.showOutput",
           "when": "view == gridkitStudio.simulation",
           "group": "output@1"
+        },
+        {
+          "command": "gridkitStudio.addPlot",
+          "when": "view == gridkitStudio.monitor && gridkitStudio.hasCase",
+          "group": "navigation@1"
         },
         {
           "command": "gridkitStudio.monitorWindow",
@@ -1231,7 +1272,7 @@
         },
         {
           "command": "gridkitStudio.clearFilter",
-          "when": "false"
+          "when": "gridkitStudio.caseFiltered"
         },
         {
           "command": "gridkitStudio.hideColumn",
@@ -1240,6 +1281,18 @@
         {
           "command": "gridkitStudio.copyFieldPath",
           "when": "false"
+        },
+        {
+          "command": "gridkitStudio.chooseType",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.filterRows",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.addPlot",
+          "when": "gridkitStudio.hasCase"
         }
       ]
     },
@@ -1516,7 +1569,7 @@
             "type": "boolean"
           },
           "gridkitStudio.network.vertices.labels": {
-            "default": true,
+            "default": false,
             "scope": "resource",
             "markdownDescription": "Labels — Vertex labels. Name each vertex beside its marker.",
             "type": "boolean"

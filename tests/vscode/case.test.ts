@@ -42,16 +42,20 @@ suite('Case', () => {
     await bench.capture('case-vscode')
   })
 
-  test('switches type from its own picker', async () => {
-    await view.locator('[data-testid="case-type"]').click()
-    await view.locator('[role="option"][data-value="Genrou"]').click()
+  test('switches type from its title bar, which says what shows', async () => {
+    const choose = async (type: RegExp) => {
+      await bench.panelAction('Choose Type').click()
+      await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: type }).click()
+    }
+    await choose(/^GENROU/i)
     await until(
       async () => /genrou/i.test(await view.locator('tbody th[scope="row"]').first().innerText()),
       'generators listed',
     )
-    await view.locator('[data-testid="case-type"]').click()
-    await view.locator('[role="option"][data-value="Bus"]').click()
+    await choose(/^Bus/)
     await visible(view, `thead th[data-vscode-context*='"field":"params.kv"']`)
+    // The unit kv already says goes unsaid.
+    assert.equal((await header('params.kv').innerText()).trim(), 'kv')
   })
 
   test('maps a column onto the network from its menu, and removes it there', async () => {

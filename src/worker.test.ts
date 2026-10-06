@@ -93,6 +93,39 @@ async function start(storage?: string, fault?: 'copy' | 'cleanup') {
   return rig
 }
 describe('real worker protocol', () => {
+  it('streams many immutable result pages in bounded batches instead of one round trip per page', async () => {
+    const rig = await start()
+    rig.acknowledge = true
+    try {
+      const revision = { uri: 'file:///batching.case.json', version: 1 }
+      await rig.call('parse', {
+        ...revision,
+        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+      }).done
+      const path = join(rig.scratch, 'many.csv')
+      await writeFile(
+        path,
+        'time,Bus_one_Vm\n' + Array.from({ length: 4096 }, (_, i) => `${i},${i % 3}\n`).join(''),
+      )
+      const run = await rig.call('import', { ...revision, path, cacheBytes: 16 << 20 }).done
+      expect(run.domains).toEqual({ Bus: { Vm: [0, 2] } })
+      rig.batches.length = 0
+      const result = await rig.call('batches', {
+        ...revision,
+        run: run.id,
+        fields: [{ from: 'Bus', select: ['Vm'] }],
+        includeStatic: false,
+      }).done
+      expect(result.pages).toBe(64)
+      expect(rig.batches.length).toBe(1)
+      const samples = rig.batches
+        .flatMap((message) => message.batches)
+        .filter((batch) => batch.kind === 'samples')
+      expect(samples.reduce((sum, batch) => sum + batch.coordinates.length, 0)).toBe(4096)
+    } finally {
+      await rig.stop()
+    }
+  })
   it.each(['copy', 'cleanup'] as const)(
     'preserves import and analysis state after %s failure',
     async (fault) => {

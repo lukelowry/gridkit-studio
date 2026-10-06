@@ -195,7 +195,7 @@ export const SETTINGS = [
       bool('network.shadows', 'Shadows', false, 'Lift markers off the lines with a soft shadow.'),
     ]),
     group('Labels', [
-      bool('network.vertices.labels', 'Vertex labels', true, 'Name each vertex beside its marker.'),
+      bool('network.vertices.labels', 'Vertex labels', false, 'Name each vertex beside its marker.'),
       bool('network.edges.labels', 'Edge labels', false, 'Name each edge along its line.'),
       num('network.fontSizePx', 'Size', 10, [6, 32, 1]),
       num('network.labels.maxCount', 'Most labels', 200, [0, 8192, 1],

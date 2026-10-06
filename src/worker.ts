@@ -5,6 +5,7 @@ import { parentPort, workerData } from 'node:worker_threads'
 import {
   type Arguments,
   blockBuffers,
+  blockByteLength,
   type DataBatch,
   type Parameters,
   type QueryBlock,
@@ -779,11 +780,16 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       // Pages are immutable once published: a view that holds the first of them asks for the rest.
       let pages = request.input.fromPage ?? 0
       if (run) {
+        // A stream is a snapshot, not a subscription: a fast solver must not keep its end
+        // marker (and thus the view's first paint) chasing new pages indefinitely.
+        const endPage = run.pages.length
         const sampled = fields.filter((f) =>
           f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
         )
         const window = request.input.window
-        for (; pages < run.pages.length; pages++) {
+        let pending: DataBatch[] = []
+        let pendingBytes = 0
+        for (; pages < endPage; pages++) {
           const page = run.pages[pages]!
           if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
           const data = await run.pageData(pages, signal)
@@ -792,8 +798,18 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             maxBlockBytes: BLOCK_BYTES,
             buffers: 'owned',
           }))
-            if (batch.kind === 'samples') await emit(request.id, [batch], signal)
+            if (batch.kind === 'samples') {
+              const bytes = blockByteLength([batch])
+              if (pending.length && pendingBytes + bytes > BLOCK_BYTES) {
+                await emit(request.id, pending, signal)
+                pending = []
+                pendingBytes = 0
+              }
+              pending.push(batch)
+              pendingBytes += bytes
+            }
         }
+        if (pending.length) await emit(request.id, pending, signal)
       }
       return { pages }
     }

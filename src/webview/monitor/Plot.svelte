@@ -94,10 +94,12 @@
       { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
       view.bindings,
       rows,
+      view.run,
     ),
   )
 
   let monitor = $state.raw<Monitor | null>(null)
+  let windowUpdate = 0
   /** The plot's whole config, besides its canvas, time, and camera. */
   const config = $derived(source && { ...style, source, traces, limits: PLOT_LIMITS })
 
@@ -139,7 +141,7 @@
       ),
       // A camera off the shared window was moved by the user.
       made.on('camera', (camera) => {
-        if (!sameWindow(camera.x, shown)) onwindow([camera.x[0], camera.x[1]])
+        if (!windowUpdate && !sameWindow(camera.x, shown)) onwindow([camera.x[0], camera.x[1]])
       }),
     ]
     // Hover seeks the clock at once; views coalesce their redraws into their own frame.
@@ -153,7 +155,14 @@
     canvas.addEventListener('pointermove', seek)
     canvas.addEventListener('contextmenu', stop)
     monitor = made
+    const inspected = canvas as HTMLCanvasElement & { gridkitPlot?: () => unknown }
+    inspected.gridkitPlot = () => ({
+      camera: made.camera,
+      traces: made.config.traces,
+      ...made.stats(),
+    })
     return () => {
+      delete inspected.gridkitPlot
       canvas.removeEventListener('pointermove', seek)
       canvas.removeEventListener('contextmenu', stop)
       for (const off of offs) off()
@@ -173,8 +182,12 @@
     monitor?.set({ camera: { fit: settings.get('monitor.camera.fit') } })
   })
   $effect(() => {
-    if (monitor && !sameWindow(monitor.camera.x, shown))
+    if (monitor && !sameWindow(monitor.camera.x, shown)) {
+      // Camera events arrive in a microtask. A programmatic update is not a user's pan.
+      windowUpdate++
       monitor.set({ camera: { x: [shown[0], shown[1]] } }, { animate: false })
+      queueMicrotask(() => windowUpdate--)
+    }
   })
   // Highlight the selected element's trace when it is of the plotted type.
   $effect(() => {

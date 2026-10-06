@@ -283,9 +283,6 @@ export interface TableState {
   equal?: { field: string; value: string | number | boolean }
 }
 
-/** Seconds of a run's tail a view holds when the whole run is too large. */
-export const TAIL = 10
-
 export interface ViewState {
   uri?: string
   version?: number
@@ -390,7 +387,8 @@ export type FromView =
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   | { kind: 'values'; uri: string; values: Record<string, unknown> }
-  | { kind: 'tableState'; table: TableState }
+  /** What the Case panel shows, and how many rows its filters leave. */
+  | { kind: 'tableState'; table: TableState; shown: number }
   | { kind: 'busy'; busy: boolean }
   /** Why something in the view failed, which the extension tells the user. */
   | { kind: 'error'; message: string; detail?: string; defect?: boolean }

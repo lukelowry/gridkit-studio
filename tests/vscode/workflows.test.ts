@@ -61,7 +61,10 @@ suite('Workflows', function () {
   })
 
   test('finds a bus by name and sees it selected on the Network', async () => {
-    await table.locator('[data-testid="case-filter"]').fill(bus.name)
+    // VS Code's own input box, from the Case panel's title bar, filters as it is typed in.
+    await bench.panelAction('Filter Rows').click()
+    await bench.page.locator('.quick-input-widget input').fill(bus.name)
+    await bench.page.locator('.quick-input-widget input').press('Enter')
     await until(
       async () =>
         (await table.locator('tbody th[scope="row"]').count()) === 1 && (await row().count()) === 1,
@@ -137,7 +140,10 @@ suite('Workflows', function () {
   })
 
   test("colors the Network by the plotted voltage from the Monitor's menu, then removes it", async () => {
-    const monitor = await bench.view('monitor')
+    // Undo showed the case's source; the Network comes back in front of it.
+    network = await bench.open('network')
+    const monitor = await bench.show('monitor')
+    await visible(monitor, 'canvas[data-rendered=true]')
     const before = await frames(network)
     await menu(monitor.locator('canvas').first(), 'Map To')
     await picker().locator('.monaco-list-row', { hasText: 'Vertex Color' }).click()

@@ -1,4 +1,5 @@
-/** The Monitor: plotting in the bottom panel, the case's one clock, and its native menu. */
+/** The Monitor: plotting in the bottom panel, the case's one clock played from the status bar,
+ *  and its native menu. */
 
 import assert from 'node:assert/strict'
 
@@ -20,9 +21,9 @@ suite('Monitor', () => {
     await visible(monitor, 'canvas[data-rendered=true]')
   })
 
-  test('plots the chosen signal in the bottom panel', async () => {
-    await visible(monitor, '[data-testid="transport"]')
-    await visible(monitor, '[data-testid="monitor-signal"]')
+  test('plots the chosen signal in the bottom panel, played from the status bar', async () => {
+    await bench.playback('Play').waitFor()
+    await bench.panelAction('Add Plot').waitFor()
     assert.match((await monitor.locator('.lane__name').first().textContent()) ?? '', /Bus · /)
     const panel = await bench.page.locator('.part.panel').boundingBox()
     const plot = await monitor.locator('canvas').boundingBox()
@@ -35,22 +36,28 @@ suite('Monitor', () => {
     await vscode.commands.executeCommand('gridkitStudio.seekTime', 0.5)
     assert.equal(transport().currentT(), 0.5)
     await until(
-      async () =>
-        (await monitor.locator('[data-testid="transport-time"]').textContent())?.includes('0.50'),
-      'the playhead reaches the view',
+      async () => (await bench.playback('Time').innerText()).includes('0.50'),
+      'the status bar reads the playhead',
     )
   })
 
-  test('changes that clock from its own controls', async () => {
-    await monitor.locator('[data-testid="transport-play"]').click()
-    await until(() => transport().state.status === 'playing', 'playback from the view')
+  test('changes that clock from the status bar', async () => {
+    await bench.playback('Play').click()
+    await until(() => transport().state.status === 'playing', 'playback from the status bar')
     await vscode.commands.executeCommand('gridkitStudio.toggleTimeline')
     assert.equal(transport().state.status, 'paused')
-    await monitor.locator('[data-testid="transport-loop"]').click()
-    await until(() => transport().state.loop === 'wrap', 'repeat from the view')
     const paused = transport().currentT()
-    await monitor.locator('[data-testid="transport-step-forward"]').click()
-    await until(() => transport().currentT() > paused, 'a frame step from the view')
+    await bench.playback('Next sample').click()
+    await until(() => transport().currentT() > paused, 'a frame step from the status bar')
+    await bench.playback('Speed').click()
+    await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: /^2$/ }).click()
+    await until(() => transport().state.rate === 2, 'a faster speed')
+    await until(
+      async () => (await bench.playback('Speed').innerText()).includes('2×'),
+      'it says so',
+    )
+    await bench.playback('Go to end').click()
+    await until(() => transport().currentT() === transport().state.span[1], 'the run ends')
   })
 
   test('opens its settings from the native context menu', async () => {

@@ -14,6 +14,7 @@ import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
+import type { SimulationInfo } from '../../shared/simulation.js'
 import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
@@ -62,6 +63,7 @@ export function tracesOf(
   { type, field, id }: Plotted,
   bindings: Bindings = {},
   rows?: FieldSelection['rows'],
+  run?: SimulationInfo,
 ): MonitorConfig['traces'] {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
@@ -76,18 +78,25 @@ export function tracesOf(
         color: {
           field,
           colormap: colormaps[settings.get('network.colormap')],
-          ...(mapped.domain && { domain: mapped.domain }),
+          domain:
+            mapped.domain ??
+            run?.domains?.[type]?.[field] ??
+            (run ? { window: { kind: 'range', between: run.span ?? run.domain } } : 'auto'),
         },
       }),
     },
   }
 }
 
-/** The window for a run's recorded `range`. While it grows, the end rounds up to a power of two of
- *  the span, so the window, and the history redraw it costs, changes only a few times a run. */
-export function windowOf(range: Domain, growing: boolean): Domain {
-  const span = range[1] - range[0]
-  return growing && span > 0 ? [range[0], range[0] + 2 ** Math.ceil(Math.log2(span))] : range
+/** A simulation's configured interval stays fixed, including before its first sample and
+ * after cancellation. Imported recordings use their recorded interval. */
+export function monitorWindow(
+  run?: Pick<SimulationInfo, 'span' | 'domain'>,
+  chosen?: Domain,
+): Domain {
+  if (chosen) return chosen
+  const range = run?.span ?? run?.domain
+  return range && range[1] > range[0] ? range : [range?.[0] ?? 0, (range?.[0] ?? 0) + 1]
 }
 
 /** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. */

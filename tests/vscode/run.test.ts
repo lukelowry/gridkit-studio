@@ -115,11 +115,8 @@ suite('Run', function () {
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     await until(
-      async () =>
-        (await monitor.locator('[data-testid="transport-time"]').textContent())
-          ?.replace(/\s+/g, ' ')
-          .includes(end.toFixed(2) + ' /'),
-      'the Monitor rests at the end of the run',
+      async () => (await bench.playback('Time').innerText()).startsWith(end.toFixed(2) + ' /'),
+      'the status bar rests at the end of the run',
     )
   })
 
@@ -133,21 +130,15 @@ suite('Run', function () {
     await bench.capture('run-vscode')
   })
 
-  test('steps, replays and pauses native results from the Monitor controls', async () => {
+  test('steps, replays and pauses native results from the status bar', async () => {
     const t = bench.session.transport.currentT()
-    await monitor.locator('[data-testid="transport-step-forward"]').click()
+    await bench.playback('Next sample').click()
     await until(() => bench.session.transport.currentT() > t, 'step one recorded sample')
     await vscode.commands.executeCommand('gridkitStudio.seekTime', end)
-    await until(
-      async () =>
-        (await monitor.locator('[data-testid="transport-play"]').getAttribute('aria-label')) ===
-        'Replay',
-      'replay offered at end',
-    )
-    await monitor.locator('[data-testid="transport-play"]').click()
+    await bench.playback('Replay').click()
     await until(() => bench.session.transport.state.status === 'playing', 'replay starts')
-    await monitor.locator('[data-testid="transport-play"]').click()
-    await until(() => bench.session.transport.state.status === 'paused', 'pause from Monitor')
+    await bench.playback('Pause').click()
+    await until(() => bench.session.transport.state.status === 'paused', 'pause from the bar')
   })
 
   test('keeps existing plots when the next run selects different fields', async () => {
@@ -217,7 +208,12 @@ suite('Run', function () {
     assert.deepEqual((await bench.current()).issues, [])
     const previous = bench.session.run!.id
     simulation = await bench.show('simulation')
-    await bench.toggleSignal('Bus', 'Vm')
+    if (
+      !bench.session.outputs?.some(
+        (output) => output.from === 'Bus' && output.select.includes('Vm'),
+      )
+    )
+      await bench.toggleSignal('Bus', 'Vm')
     await until(
       () => bench.session.outputs?.some((output) => output.select.includes('Vm')),
       'voltage recorded',
@@ -250,15 +246,28 @@ suite('Run', function () {
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     bench.session.transport.seek(0)
-    await visible(monitor, '[data-testid="monitor-go-live"]')
-    await monitor.locator('[data-testid="monitor-go-live"]').click()
+    const intervals = () =>
+      monitor.evaluate<number[][]>(
+        'Array.from(document.querySelectorAll("canvas")).map(canvas => canvas.gridkitPlot().camera.x)',
+      )
+    await until(
+      async () => (await intervals()).every(([start, end]) => start === 0 && end === 1000),
+      'all live plots keep the configured interval',
+    )
+    assert.match(await bench.playback('Time').innerText(), /\/ 1000\.00/)
+    await bench.playback('Go live').click()
     await until(() => bench.session.transport.state.follow, 'follow live again')
     await simulation.locator('[data-testid="study-stop"]').click()
     await until(() => bench.session.run?.state === 'cancelled', 'native task cancelled')
     assert.ok(bench.session.run!.frames > 0)
     assert.ok(bench.session.run!.domain[1] < 1000)
     await visible(monitor, 'canvas[data-rendered=true]')
-    await monitor.locator('[data-testid="transport-step-back"]').click()
+    assert.ok(
+      (await intervals()).every(([start, end]) => start === 0 && end === 1000),
+      'cancellation keeps the configured plot interval',
+    )
+    assert.match(await bench.playback('Time').innerText(), /\/ 1000\.00/)
+    await bench.playback('Previous sample').click()
     await until(
       () => bench.session.transport.currentT() < bench.session.run!.domain[1],
       'partial results remain playable',

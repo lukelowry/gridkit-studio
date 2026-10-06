@@ -14,7 +14,14 @@ import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
 import type { Element, Plot, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
-import { elementType, networkOf, placementOf, typeName } from '../shared/schema.js'
+import {
+  elementType,
+  fieldName,
+  networkOf,
+  placementOf,
+  typeName,
+  unitOf,
+} from '../shared/schema.js'
 import type { LoopMode } from '../shared/transport.js'
 import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
@@ -172,7 +179,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
             .filter(([, field]) => counts[type] && field.sampled)
             .map(([field, spec]) => ({
               label: type + '.' + field,
-              description: spec.unit,
+              description: unitOf(spec, field),
               detail: spec.description,
               type,
               field,
@@ -332,7 +339,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
       value = choice === 'true'
     } else {
       const text = await vscode.window.showInputBox({
-        title: field + (spec.unit ? ' [' + spec.unit + ']' : ''),
+        title: fieldName({ ...spec, label: field }, field),
         value: spec.type === 'text' ? String(current ?? '') : JSON.stringify(current ?? null),
         validateInput: (input) => {
           if (spec.type === 'text') return
@@ -382,6 +389,23 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     await showPlot(studio, context.session, plot, context.element)
   }
   command('plot', plot)
+  // From the Monitor's title: a signal the run on show records, else the next run will, of every
+  // element.
+  command('addPlot', async (context) => {
+    const { schema } = context.summary
+    const { session } = context
+    const choice = await vscode.window.showQuickPick(
+      (session.run?.outputs ?? session.outputs ?? []).flatMap(({ from, select }) =>
+        select.map((field) => ({
+          label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
+          from,
+          field,
+        })),
+      ),
+      { title: 'Add plot', placeHolder: 'A recorded signal, of every element' },
+    )
+    if (choice) await showPlot(studio, session, { from: choice.from, field: choice.field })
+  })
   command('removePlot', async (context) => {
     const { session } = context
     const selected = context.target?.plot ?? (await pickPlot(session, 'Remove plot'))
@@ -438,7 +462,12 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     studio.output.show()
   })
   command('toggleTimeline', ({ session }) => session.transport.playPause())
-  command('followTime', ({ session }) => session.transport.goLive())
+  // To the head while frames arrive, else to the run's last sample.
+  command('followTime', ({ session }) => {
+    const { transport } = session
+    if (transport.live) transport.goLive()
+    else transport.seek(transport.state.span[1])
+  })
   command('seekTime', async ({ session }, value) => {
     const { transport } = session
     if (transport.state.status === 'idle') return
@@ -530,7 +559,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
         label: leaf(field),
         description: [
           field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
-          definitions[field]!.unit,
+          unitOf(definitions[field], field),
         ]
           .filter(Boolean)
           .join(' · '),
@@ -571,8 +600,55 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
       throw new Error(leaf(field) + ' holds no single value to filter by.')
     action(context, 'filter', { field, value }, 'case')
   })
-  command('clearFilter', (context) => action(context, 'filter', undefined, 'case'))
+  command('clearFilter', (context) => action(context, 'clearFilters', undefined, 'case'))
   command('copyFieldPath', (context) => vscode.env.clipboard.writeText(context.field ?? ''))
+  // The Case panel's type and name filter, from its title bar: VS Code's own pickers in place of
+  // controls inside the panel.
+  command('chooseType', (context) => {
+    const { schema, counts } = context.summary
+    type Item = vscode.QuickPickItem & { type?: string }
+    const items: Item[] = []
+    let group: string | undefined
+    for (const [type, count] of Object.entries(counts)) {
+      if (!count) continue
+      const description = schema.types[type]?.description ?? ''
+      if (description !== group)
+        items.push({ label: (group = description), kind: vscode.QuickPickItemKind.Separator })
+      items.push({ label: typeName(schema, type), description: count.toLocaleString(), type })
+    }
+    const picker = vscode.window.createQuickPick<Item>()
+    picker.title = 'Show in Case'
+    picker.placeholder = 'Element type'
+    picker.items = items
+    picker.activeItems = items.filter((item) => item.type === context.session.table.type)
+    picker.onDidAccept(() => {
+      const type = picker.selectedItems[0]?.type
+      if (type) action(context, 'type', type, 'case')
+      picker.hide()
+    })
+    picker.onDidHide(() => picker.dispose())
+    picker.show()
+  })
+  // Live, as a filter box is: each keystroke filters, and Escape puts the old text back.
+  command('filterRows', (context) => {
+    const { table } = context.session
+    const before = table.filter ?? ''
+    let kept = false
+    const input = vscode.window.createInputBox()
+    input.title = 'Filter ' + typeName(context.summary.schema, table.type ?? '')
+    input.prompt = 'Rows whose name contains'
+    input.value = before
+    input.onDidChangeValue((text) => action(context, 'filterText', text, 'case'))
+    input.onDidAccept(() => {
+      kept = true
+      input.hide()
+    })
+    input.onDidHide(() => {
+      if (!kept) action(context, 'filterText', before, 'case')
+      input.dispose()
+    })
+    input.show()
+  })
   for (const [id, side] of [
     ['fromEndpoint', 0],
     ['toEndpoint', 1],

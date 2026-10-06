@@ -33,7 +33,13 @@ const WORK = [
 const SIZE = ['drawCalls', 'segments', 'geometryBytes', 'pickingBytes'] as const
 type Stats = Record<(typeof WORK)[number] | (typeof SIZE)[number] | 'frames', number>
 /** Work must not depend on timing: no hover search, easing, or motion. */
-const STILL = { 'network.hover': 'off', 'network.animationMs': 0, 'accessibility.motion': 'reduce' }
+const STILL = {
+  'network.hover': 'off',
+  'network.animationMs': 0,
+  'accessibility.motion': 'reduce',
+  // Pin the workload across changes to application defaults.
+  'network.vertices.labels': true,
+}
 
 export async function run() {
   const bench = await testHost()
@@ -105,7 +111,7 @@ export async function run() {
       await measure('labels', (i) =>
         settings.update('network.vertices.labels', i % 2 === 1, global),
       )
-      await settings.update('network.vertices.labels', undefined, global)
+      await settings.update('network.vertices.labels', true, global)
 
       // Borders draw only on Earth, after the first frame.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {

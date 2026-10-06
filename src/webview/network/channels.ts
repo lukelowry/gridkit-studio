@@ -5,8 +5,7 @@ import type { Data, FieldInput } from '@latkit/model'
 
 import { type Bindings, CHANNELS, channelsFor, type FieldRef } from '../../shared/bindings.js'
 
-/** A sampled field's run: its frames, and the domain the renderer measures its values over (a
- *  window of the run, or `auto` for the frame on show). */
+/** A sampled field's run and shared normalization range, independent of the displayed frame. */
 export interface Sampled {
   readonly source: Data
   readonly domain: ScaleDomain

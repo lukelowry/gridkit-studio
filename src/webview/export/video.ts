@@ -139,7 +139,7 @@ export async function exportVideo(
         signal.throwIfAborted()
         const network = keep(
           createNetwork(gpu, {
-            ...networkConfig(rows, samples, state, geographic, borders, true),
+            ...networkConfig(rows, samples, state, geographic, borders),
             ...still,
             canvas: null,
             camera: (cameras.network as never) ?? {
@@ -176,6 +176,7 @@ export async function exportVideo(
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,
                   recordedRows(state.run?.outputs ?? [], { type: plot.from, field: plot.field }),
+                  state.run,
                 ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,

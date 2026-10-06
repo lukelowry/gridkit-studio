@@ -69,7 +69,7 @@ describe('native VS Code contract', () => {
         (view: { id: string }) => view.id === 'gridkitStudio.simulation',
       ).name,
     ).toBe('Simulation')
-    // Playback and camera commands live in the views, not the title bars.
+    // Playback lives in the status bar and camera commands in the views, not the title bars.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
       manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
     )

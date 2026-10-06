@@ -134,15 +134,14 @@ suite('Links', () => {
       async () => (await header('params.kv').getAttribute('aria-sort')) === 'none',
       'unsorted',
     )
-    // One name: the rows holding it, until the filter is cleared.
+    // One name: the rows holding it, until the title bar's Clear Filter.
     const name = (await cells('name').first().innerText()).trim()
     await menu(cells('name').first(), 'Filter to This Value')
-    await visible(table, '[data-testid="case-equal"]')
     await until(async () => {
       const names = (await cells('name').allInnerTexts()).map((text) => text.trim())
       return names.length > 0 && names.every((text) => text === name)
     }, 'only rows of that name')
-    await table.locator('[data-testid="case-equal"]').click()
+    await bench.panelAction('Clear Filter').click()
     await until(
       async () => (await cells('name').count()) === bench.source.buses.length,
       'every row again',

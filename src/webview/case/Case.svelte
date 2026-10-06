@@ -1,5 +1,6 @@
 <!-- The Case panel: one type's elements as rows, its fields as columns under the record key they
-  sit in. A column's menu maps it onto the network. -->
+  sit in. Its type and filters are chosen from the view's title bar, which also says what shows; a
+  column's menu maps it onto the network. -->
 <script lang="ts">
   import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
@@ -8,11 +9,9 @@
   import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
   import type { TableState, ViewState } from '../../shared/messages.js'
-  import { elementType, isReference, typeName } from '../../shared/schema.js'
+  import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
-  import Icon from '../ui/Icon.svelte'
-  import Select from '../ui/Select.svelte'
 
   /** The heading each record key's columns sit under. */
   const GROUPS: Readonly<Record<string, string>> = {
@@ -55,15 +54,11 @@
   const allFields = $derived(
     Object.keys(definitions).filter((field) => !definitions[field]?.sampled && field !== identity),
   )
-  const types = $derived(
-    Object.entries(view.summary?.counts ?? {})
-      .filter(([, count]) => count > 0)
-      .map(([value, count]) => ({
-        value,
-        label: `${typeName(view.summary!.schema, value)} · ${count.toLocaleString()}`,
-        group: view.summary!.schema.types[value]?.description ?? '',
-      })),
-  )
+  /** A cell as text: a number to six significant digits, which hover and editing show whole. */
+  const text = (value: unknown) =>
+    typeof value === 'number'
+      ? String(Number(value.toPrecision(6)))
+      : display(value, { native: true })
   /** The channels each mapped column drives. */
   const mapped = $derived(
     new Map(
@@ -90,7 +85,7 @@
           ),
           // The panel's own view of its rows, for the items that change it.
           gridkitSort: field && order?.field === field ? order.direction : '',
-          gridkitFiltered: !!equal,
+          gridkitFiltered: !!(filter || equal),
         })
       : '{}'
   const persist = () =>
@@ -102,6 +97,7 @@
         filter,
         ...(equal && { equal: $state.snapshot(equal) }),
       },
+      shown: total,
     })
   /** Show `next` as the type's columns, and keep them for it. */
   function show(next: string[]) {
@@ -176,6 +172,8 @@
       if (generation !== current) return
       rows = rowsOf(blocks, references)
       total = blocks[0]?.total ?? rows.length
+      // The view's title says how many rows the filters leave.
+      persist()
       await tick()
       scrolled()
     } catch (reason) {
@@ -323,12 +321,13 @@
           const saved = view.table
           const wanted = view.selection ? elementType(view.selection.id) : saved?.type
           columns = saved?.columns ?? {}
+          const counts = view.summary.counts
           changeType(
-            wanted && view.summary.counts[wanted]
+            wanted && counts[wanted]
               ? wanted
-              : view.summary.counts[type]
+              : counts[type]
                 ? type
-                : (types[0]?.value ?? 'Bus'),
+                : (Object.keys(counts).find((each) => counts[each]! > 0) ?? 'Bus'),
           )
           if (type === saved?.type) {
             filter = saved.filter ?? ''
@@ -357,11 +356,19 @@
             order = undefined
             offset = 0
           }
-        } else if (message.command === 'filter') {
-          equal =
-            value && typeof value.field === 'string' ? (value as TableState['equal']) : undefined
+        } else if (message.command === 'type' && typeof message.value === 'string') {
+          if (message.value !== type) changeType(message.value)
+        } else if (message.command === 'filter' || message.command === 'filterText') {
+          if (message.command === 'filter')
+            equal =
+              value && typeof value.field === 'string' ? (value as TableState['equal']) : undefined
+          else filter = typeof message.value === 'string' ? message.value : ''
           offset = 0
           if (scroll) scroll.scrollTop = 0
+        } else if (message.command === 'clearFilters') {
+          filter = ''
+          equal = undefined
+          offset = 0
         }
         persist()
       }
@@ -384,50 +391,6 @@
       Showing the last valid revision until the source is fixed. Editing waits for it.
     </p>
   {/if}
-  {#if view.summary}
-    <div class="case__bar">
-      <div class="case__type">
-        <Select
-          label="Type"
-          hideLabel
-          compact
-          options={types}
-          data-testid="case-type"
-          bind:value={() => type, (next) => next && next !== type && changeType(next)}
-        />
-      </div>
-      <input
-        class="c-input case__filter"
-        type="search"
-        placeholder={'Filter ' + typeName(view.summary.schema, type)}
-        aria-label="Filter elements"
-        data-testid="case-filter"
-        bind:value={
-          () => filter,
-          (next) => {
-            filter = next
-            offset = 0
-            persist()
-          }
-        }
-      />
-      {#if equal}
-        <button
-          class="c-btn c-btn--sm case__equal"
-          title="Clear filter"
-          aria-label={'Clear filter ' + leaf(equal.field) + ' = ' + display(equal.value)}
-          data-testid="case-equal"
-          onclick={() => {
-            equal = undefined
-            offset = 0
-            persist()
-          }}
-        >
-          {leaf(equal.field)} = {display(equal.value)}<Icon name="close" />
-        </button>
-      {/if}
-    </div>
-  {/if}
   <div
     class="case__scroll"
     bind:this={scroll}
@@ -443,17 +406,19 @@
           {#each bands(fields) as { group, span }, i (i)}
             <th colspan={span} scope="colgroup">{GROUPS[group] ?? group}</th>
           {/each}
+          <th rowspan="2" class="case__fill" aria-hidden="true"></th>
         </tr>
         <tr>
           {#each fields as field (field)}
+            {@const unit = unitOf(definitions[field], field)}
             <th
               scope="col"
               aria-sort={order?.field === field ? order.direction : 'none'}
               data-vscode-context={context(null, field)}
             >
               <button onclick={() => sort(field)} title={field}>
-                {leaf(field)}{#if definitions[field]?.unit}<span class="case__unit">
-                    {definitions[field]!.unit}
+                {leaf(field)}{#if unit}<span class="case__unit">
+                    {unit}
                   </span>{/if}{#if mapped.has(field)}<span class="case__mapped">
                     {mapped.get(field)}
                   </span>{/if}{#if order?.field === field}<span
@@ -470,7 +435,7 @@
       <tbody>
         {#if offset > 0}<tr aria-hidden="true">
             <td
-              colspan={fields.length + 1}
+              colspan={fields.length + 2}
               style:height={offset * height + 'px'}
               class="spacer"
             ></td>
@@ -520,18 +485,23 @@
                         edit(row.id, field, row.values[field])
                       } else void move(event, offset + rowIndex, columnIndex)
                     }}
-                    title={'Double-click or press F2 to edit ' + leaf(field)}
+                    title={(typeof row.values[field] === 'number'
+                      ? String(row.values[field]) + '. '
+                      : '') +
+                      'Double-click or press F2 to edit ' +
+                      leaf(field)}
                   >
-                    {display(row.values[field], { native: true })}
+                    {text(row.values[field])}
                   </button>
                 {/if}
               </td>
             {/each}
+            <td class="case__fill" aria-hidden="true"></td>
           </tr>
         {/each}
         {#if total > offset + rows.length}<tr aria-hidden="true">
             <td
-              colspan={fields.length + 1}
+              colspan={fields.length + 2}
               style:height={(total - offset - rows.length) * height + 'px'}
               class="spacer"
             ></td>
@@ -544,11 +514,6 @@
       </div>
     {/if}
   </div>
-  <div class="case__status" aria-live="polite">
-    {total.toLocaleString()} elements · revision {view.summary?.version ?? '…'}{loading
-      ? ' · Loading rows…'
-      : ''}
-  </div>
 </main>
 
 <style>
@@ -557,40 +522,17 @@
     flex-direction: column;
     block-size: 100%;
   }
-  .case__bar {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-2xs) var(--spacing-sm);
-    border-bottom: 1px solid var(--color-border);
-  }
-  .case__type {
-    flex: 0 1 16rem;
-    min-inline-size: 6rem;
-  }
-  .case__filter {
-    flex: 0 1 14rem;
-    min-inline-size: 6rem;
-  }
-  /* The value a cell's menu filtered the rows to; pressing it clears the filter. */
-  .case__equal {
-    flex: 0 1 auto;
-    min-inline-size: 0;
-    background: var(--color-selected);
-    color: var(--color-text-1);
-    font-family: var(--font-mono);
-    font-weight: normal;
-  }
   .case__scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
   }
+  /* Columns as wide as what they hold; the last, empty one takes what is left of the panel. */
   table {
     border-collapse: separate;
     border-spacing: 0;
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
     font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -684,6 +626,10 @@
     padding: 0;
     border: 0;
   }
+  .case__fill {
+    width: 100%;
+    padding: 0;
+  }
   tbody th {
     position: sticky;
     left: 0;
@@ -697,12 +643,5 @@
   .cell:focus-visible {
     outline-offset: calc(-1 * var(--focus-width));
     background: var(--vscode-list-focusBackground, var(--color-row-hover));
-  }
-  .case__status {
-    flex: none;
-    padding: var(--spacing-2xs) var(--spacing-md);
-    border-top: 1px solid var(--color-border);
-    color: var(--color-text-2);
-    font-size: var(--text-xs);
   }
 </style>

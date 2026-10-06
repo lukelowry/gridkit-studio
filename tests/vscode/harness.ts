@@ -265,6 +265,22 @@ export class TestHost {
       .click()
   }
 
+  /** A playback item of the status bar by the start of its name: Previous sample, Play, Pause,
+   *  Replay, Next sample, Time, Speed, Go to end or Go live. */
+  playback(name: string): Locator {
+    return this.page
+      .locator('.part.statusbar')
+      .getByRole('button', { name: new RegExp('^' + name) })
+  }
+
+  /** A title-bar action of the bottom panel's view on show, by the start of its name. */
+  panelAction(name: string): Locator {
+    return this.page
+      .locator('.part.panel')
+      .getByRole('button', { name: new RegExp('^' + name) })
+      .first()
+  }
+
   /** Wait for a native menu to offer `item`. */
   async offered(item: string): Promise<void> {
     await this.page

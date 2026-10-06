@@ -43,6 +43,8 @@ export interface SimulationInfo {
   domain: Domain
   /** The times the run will cover, once its command says. */
   span?: Domain
+  /** Finite value ranges over every ingested sample, shared by all views and time windows. */
+  domains?: Record<string, Record<string, Domain>>
   message?: string
   /** Bounded solver evidence, retained even when a failed run has no result file. */
   evidence?: string[]

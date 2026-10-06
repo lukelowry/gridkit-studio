@@ -3,6 +3,7 @@ import type { ExtensionContext } from 'vscode'
 import { registerAI } from './ai/index.js'
 import { registerCommands } from './commands.js'
 import { registerNavigation } from './navigation.js'
+import { registerPlayback } from './playback.js'
 import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
 import { registerTasks } from './tasks.js'
@@ -21,6 +22,7 @@ export function activate(context: ExtensionContext) {
     ...registerCommands(studio, tasks),
     ...registerSignals(studio),
     ...registerNavigation(studio),
+    ...registerPlayback(studio),
   )
   studio.output.info(
     `Activated in ${(performance.now() - started).toFixed(1)} ms; data worker starts on demand.`,

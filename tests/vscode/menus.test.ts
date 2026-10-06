@@ -234,9 +234,7 @@ suite('Network menus', () => {
   test('fits from the editor title bar, and turns from its own toolbar', async () => {
     // This test exercises motion; the host's accessibility preference may disable orbit.
     await bench.page.emulateMedia({ reducedMotion: 'no-preference' })
-    const fit = bench.page
-      .locator('.part.editor .title-actions')
-      .getByRole('button', { name: /^Fit All/ })
+    const fit = bench.page.locator('.part.editor').getByRole('button', { name: /^Fit All/ })
     try {
       await fit.click()
       await idle(network)

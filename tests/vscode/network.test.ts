@@ -38,7 +38,7 @@ suite('Network', () => {
     await visible(network, '[data-testid="view-toolbar"]')
     assert.equal(await network.locator('.toolbar button').count(), 4)
     await bench.page
-      .locator('.part.editor .title-actions')
+      .locator('.part.editor')
       .getByRole('button', { name: /^Fit All/ })
       .waitFor()
     await until(

@@ -14,6 +14,7 @@ interface Entry {
   document: vscode.TextDocument
   summary?: Summary
   pending?: Promise<Summary>
+  validation?: Promise<Summary>
   controller?: AbortController
   timer?: ReturnType<typeof setTimeout>
   /** The version the worker's source mirror holds. */
@@ -103,6 +104,7 @@ export class Documents {
       this.entries.set(uri, entry)
     }
     entry.controller?.abort()
+    entry.validation = undefined
     clearTimeout(entry.timer)
     const controller = (entry.controller = new AbortController())
     const version = document.version
@@ -142,25 +144,16 @@ export class Documents {
           current.summary = summary
           current.stale = false
           current.error = undefined
-          current.diagnosticsVersion = version
-          this.diagnostics.set(
-            document.uri,
-            summary.issues.map((issue) => {
-              const diagnostic = new vscode.Diagnostic(
-                new vscode.Range(
-                  document.positionAt(issue.offset),
-                  document.positionAt(issue.offset + issue.length),
-                ),
-                issue.message,
-                issue.severity === 'error'
-                  ? vscode.DiagnosticSeverity.Error
-                  : vscode.DiagnosticSeverity.Warning,
-              )
-              diagnostic.source = 'GridKit'
-              return diagnostic
-            }),
-          )
+          this.diagnostics.delete(document.uri)
           this.changed.fire(uri)
+          // The view can request topology immediately. Diagnostics decode remaining columns
+          // cooperatively and share this document revision's cancellation signal.
+          void this.validate(document).catch((error) => {
+            if (!controller.signal.aborted && this.entries.get(uri) === current) {
+              current.error = error.message
+              this.changed.fire(uri)
+            }
+          })
           return summary
         },
         (error) => {
@@ -187,6 +180,50 @@ export class Documents {
         if (current.pending === pending) current.pending = undefined
       })
     entry.pending = pending
+    return pending
+  }
+  async validate(document: vscode.TextDocument): Promise<Summary> {
+    const summary = await this.ensure(document)
+    const uri = document.uri.toString()
+    const entry = this.entries.get(uri)
+    if (!entry || entry.stale || entry.summary !== summary || document.version !== summary.version)
+      throw new Error('Superseded revision')
+    if (summary.validation === 'complete') return summary
+    if (entry.validation) return entry.validation
+    const signal = entry.controller!.signal
+    const pending = this.client
+      .call('validate', { uri, version: summary.version, attachmentId: entry.attachmentId }, signal)
+      .then((issues) => {
+        signal.throwIfAborted()
+        if (this.entries.get(uri) !== entry || document.version !== summary.version)
+          throw new Error('Superseded revision')
+        const validated: Summary = { ...summary, issues, validation: 'complete' }
+        entry.summary = validated
+        entry.diagnosticsVersion = summary.version
+        this.diagnostics.set(
+          document.uri,
+          issues.map((issue) => {
+            const diagnostic = new vscode.Diagnostic(
+              new vscode.Range(
+                document.positionAt(issue.offset),
+                document.positionAt(issue.offset + issue.length),
+              ),
+              issue.message,
+              issue.severity === 'error'
+                ? vscode.DiagnosticSeverity.Error
+                : vscode.DiagnosticSeverity.Warning,
+            )
+            diagnostic.source = 'GridKit'
+            return diagnostic
+          }),
+        )
+        this.changed.fire(uri)
+        return validated
+      })
+      .finally(() => {
+        if (entry.validation === pending) entry.validation = undefined
+      })
+    entry.validation = pending
     return pending
   }
   edit(uri: string, expected: number, element: Element & { field: string }, value: Value) {

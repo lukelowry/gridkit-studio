@@ -303,7 +303,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     studio.documents.reveal(context.session.uri, context.element),
   )
   command('validateCase', async (context) => {
-    await studio.documents.ensure(studio.documents.entries.get(context.session.uri)!.document)
+    await studio.documents.validate(studio.documents.entries.get(context.session.uri)!.document)
     await vscode.commands.executeCommand('workbench.actions.view.problems')
   })
   command('followReference', async (context) => {

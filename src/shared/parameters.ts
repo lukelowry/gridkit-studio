@@ -11,11 +11,14 @@ export type Entry = readonly [name: string, parameter: Parameter]
 
 export const labelOf = (name: string, parameter: Parameter): string => parameter.label ?? name
 
-/** `text` parsed for `parameter`; undefined when blank. */
+/** `text` parsed for `parameter`; undefined when blank. Text that is not a number stays as typed,
+ *  so the extension, which hears values as JSON, says it is not a number rather than missing. */
 export function valueOf(parameter: Parameter, text: string): InputValue | undefined {
   const trimmed = text.trim()
   if (trimmed === '') return undefined
-  return parameter.type === 'number' ? Number(trimmed) : trimmed
+  if (parameter.type !== 'number') return trimmed
+  const number = Number(trimmed)
+  return Number.isFinite(number) ? number : trimmed
 }
 
 /** The text a field shows for `value`. */

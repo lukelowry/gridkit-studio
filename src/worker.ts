@@ -5,7 +5,6 @@ import { parentPort, workerData } from 'node:worker_threads'
 import {
   type Arguments,
   blockBuffers,
-  blockByteLength,
   type DataBatch,
   type Parameters,
   type QueryBlock,
@@ -15,6 +14,7 @@ import {
 } from '@latkit/model'
 
 import { catalogOf } from './gridkit/definition.js'
+import { diagnoseAsync } from './gridkit/edits.js'
 import {
   applyChanges,
   available,
@@ -47,13 +47,15 @@ import type {
   ToWorker,
 } from './shared/messages.js'
 import { nameFieldOf } from './shared/schema.js'
-import { summarize } from './worker/cases.js'
+import { packets } from './worker/batches.js'
+import { CaseCache, summarize } from './worker/cases.js'
 import { Simulations } from './worker/simulations.js'
 
 const port = parentPort!
 const BLOCK_BYTES = 256 << 10
-const cases = new Map<string, { kase: Case; summary: Summary }>()
-const parses = new Map<string, number>()
+const cases = new Map<string, { kase: Case; summary: Summary; generation: object }>()
+const sources = new CaseCache()
+const parses = new Map<string, object>()
 const attachments = new Map<string, string | undefined>()
 const mirrors = new Map<string, { version: number; text: string }>()
 const operations = new Map<number, AbortController>()
@@ -147,7 +149,13 @@ function trimRecordings(protect?: string) {
   })
   return next
 }
-const ready = storage.initialize().then(() => trimRecordings())
+let recordingsReady: Promise<void> | undefined
+function ensureRecordingsReady(): Promise<void> {
+  return (recordingsReady ??= storage.initialize().catch((error) => {
+    recordingsReady = undefined
+    throw error
+  }))
+}
 const cacheLimit = (value: number) => {
   if (!Number.isFinite(value) || value < 16 << 20 || value > 2048 * (1 << 20))
     throw new Error('Result cache must be between 16 and 2048 MiB.')
@@ -164,7 +172,7 @@ const get = (revision: Revision) => {
   if (
     !entry ||
     entry.summary.version !== revision.version ||
-    parses.get(revision.uri) !== revision.version ||
+    parses.get(revision.uri) !== entry.generation ||
     (revision.attachmentId !== undefined && attachments.get(revision.uri) !== revision.attachmentId)
   )
     throw new Error('The document changed. Wait for the current revision.')
@@ -185,6 +193,7 @@ const findRun = (id: string, uri?: string, allowStudy = false) => {
 }
 
 async function loadResult(id: string, signal: AbortSignal): Promise<Results> {
+  await ensureRecordingsReady()
   signal.throwIfAborted()
   try {
     return findRun(id, undefined, true)
@@ -253,6 +262,7 @@ async function loadResult(id: string, signal: AbortSignal): Promise<Results> {
 }
 
 async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) {
+  await ensureRecordingsReady()
   if (input.simulationId && storage.records.has(input.simulationId)) {
     const existing = simulations.entries.get(input.simulationId)
     if (!existing || existing.request.uri !== input.uri)
@@ -260,6 +270,8 @@ async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) 
     return existing.info
   }
   const { kase } = get(input)
+  await diagnoseAsync(kase, signal)
+  if (get(input).kase !== kase) throw new Error('The document changed. Refresh before running.')
   const checked = preflight(kase, input.values, input.outputs)
   await available(input.gridkit, checked.command.program)
   signal.throwIfAborted()
@@ -306,6 +318,7 @@ async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) 
 }
 
 async function stopSimulation(id: string, interrupted = false) {
+  await ensureRecordingsReady()
   const simulation = simulations.entries.get(id)
   if (!simulation) {
     const record = storage.records.get(id)
@@ -482,18 +495,25 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     case 'prepareSimulation':
       return prepareSimulation(request.input, signal)
     case 'getSimulation': {
+      await ensureRecordingsReady()
       const info = storage.records.get(request.input.simulationId)?.info
       if (info) return info
       return findRun(request.input.simulationId, undefined, true).info
     }
     case 'describeSimulation': {
       const result = await loadResult(request.input.simulationId, signal)
-      return summarize(result.kase, result.info.revision)
+      return summarize(
+        result.kase,
+        result.info.revision,
+        0,
+        await diagnoseAsync(result.kase, signal),
+      )
     }
     case 'stopSimulation':
       await stopSimulation(request.input.simulationId)
       return null
     case 'shutdown':
+      await recordingsReady
       await Promise.all([...simulations.entries.keys()].map((id) => stopSimulation(id, true)))
       for (const load of loading.values()) load.controller.abort(new Error('GridKit closed.'))
       await Promise.allSettled([...loading.values()].map((load) => load.done))
@@ -517,16 +537,24 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           ? request.input.text
           : applyChanges(previous!.text, request.input.changes)
       mirrors.set(uri, { version, text })
-      parses.set(uri, version)
+      const generation = {}
+      parses.set(uri, generation)
       attachments.set(uri, attachmentId)
       const started = performance.now()
-      const kase = await Case.parse(text, catalog, uri.split('/').at(-1), signal)
+      const kase = await sources.parse(text, catalog, uri.split('/').at(-1) ?? 'Case', signal)
       signal.throwIfAborted()
-      if (parses.get(uri) !== version || attachments.get(uri) !== attachmentId)
+      if (parses.get(uri) !== generation || attachments.get(uri) !== attachmentId)
         throw new Error('Superseded document revision.')
       const summary = summarize(kase, { uri, version, attachmentId }, performance.now() - started)
-      cases.set(uri, { kase, summary })
+      cases.set(uri, { kase, summary, generation })
       return summary
+    }
+    case 'validate': {
+      const entry = get(request.input)
+      const issues = await diagnoseAsync(entry.kase, signal)
+      if (get(request.input) !== entry) throw new Error('Superseded document revision.')
+      entry.summary = { ...entry.summary, issues, validation: 'complete' }
+      return issues
     }
     case 'query': {
       const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
@@ -548,6 +576,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return blocks
     }
     case 'batches': {
+      const input = request.input
       const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
       const kase = run?.kase ?? get(request.input).kase
       const fields = request.input.fields ?? staticFields(kase.schema)
@@ -557,25 +586,22 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           select: f.select.filter((name) => !kase.schema.types[f.from]!.fields[name]!.sampled),
         }))
         .filter((f) => f.select.length > 0)
-      if (request.input.includeStatic !== false)
-        for await (const batch of selectBatches(kase.data, statics, {
-          signal,
-          maxBlockBytes: BLOCK_BYTES,
-          buffers: 'owned',
-        }))
-          await emit(request.id, [batch], signal)
-      // Pages are immutable once published: a view that holds the first of them asks for the rest.
+      // One bounded stream for both rows and samples. Freeze its end before yielding to
+      // the solver so a growing recording cannot postpone the view's commit indefinitely.
+      const endPage = run?.pages.length ?? 0
       let pages = request.input.fromPage ?? 0
-      if (run) {
-        // A stream is a snapshot, not a subscription: a fast solver must not keep its end
-        // marker (and thus the view's first paint) chasing new pages indefinitely.
-        const endPage = run.pages.length
+      async function* selected(): AsyncGenerator<DataBatch> {
+        if (input.includeStatic !== false)
+          yield* selectBatches(kase.data, statics, {
+            signal,
+            maxBlockBytes: BLOCK_BYTES,
+            buffers: 'owned',
+          })
+        if (!run) return
         const sampled = fields.filter((f) =>
           f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
         )
-        const window = request.input.window
-        let pending: DataBatch[] = []
-        let pendingBytes = 0
+        const window = input.window
         for (; pages < endPage; pages++) {
           const page = run.pages[pages]!
           if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
@@ -585,19 +611,11 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             maxBlockBytes: BLOCK_BYTES,
             buffers: 'owned',
           }))
-            if (batch.kind === 'samples') {
-              const bytes = blockByteLength([batch])
-              if (pending.length && pendingBytes + bytes > BLOCK_BYTES) {
-                await emit(request.id, pending, signal)
-                pending = []
-                pendingBytes = 0
-              }
-              pending.push(batch)
-              pendingBytes += bytes
-            }
+            if (batch.kind === 'samples') yield batch
         }
-        if (pending.length) await emit(request.id, pending, signal)
       }
+      for await (const packet of packets(selected(), signal, 1 << 20))
+        await emit(request.id, packet, signal)
       return { pages }
     }
     case 'elements': {
@@ -683,6 +701,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return null
     }
     case 'clear': {
+      await ensureRecordingsReady()
       const uri = request.input.uri
       const active = simulations.active(uri)
       if (active) await stopSimulation(active.info.id)
@@ -701,6 +720,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return null
     }
     case 'import': {
+      await ensureRecordingsReady()
       const { kase } = get(request.input)
       cache.limit = cacheLimit(request.input.cacheBytes)
       const format = request.input.path.endsWith('.csv') ? 'csv' : 'arrow'
@@ -781,7 +801,6 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
 }
 
 async function handle(request: Request, signal: AbortSignal) {
-  await ready
   const input = request.input
   if ('run' in input && typeof input.run === 'string') await loadResult(input.run, signal)
   const targets =

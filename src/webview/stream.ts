@@ -18,39 +18,52 @@ import { bridge } from './bridge.js'
 export function receive(
   held: (data: Data, begin: Begin, rows: Data) => void,
   failed: (reason: unknown) => void,
+  accept: (begin: Begin) => boolean = () => true,
 ): () => void {
   let begin: Begin | undefined
   /** The rows alone, which replacing samples start from. */
   let base: Data | undefined
   let data: Data | undefined
   let batches: DataBatch[] = []
+  let latest = -1
   /** Reused while its content is unchanged: each stream carries a copy, and the renderers keep
    *  their cached work only for the same schema object. */
   let schema: { readonly value: Schema; readonly text: string } | undefined
   return bridge.on((message) => {
     if (message.kind === 'begin') {
+      if (message.stream <= latest) return
+      latest = message.stream
       begin = message
       batches = []
     } else if (message.kind === 'batch') {
       if (message.stream === begin?.stream) batches.push(...message.batches)
       bridge.send({ kind: 'ack', stream: message.stream, sequence: message.sequence })
     } else if (message.kind === 'end' && message.stream === begin?.stream) {
+      const complete = begin
+      begin = undefined
+      const pending = batches
+      batches = []
+      if (!accept(complete)) return
       try {
-        if (begin.base) {
-          const text = JSON.stringify(begin.schema)
-          if (schema?.text !== text) schema = { value: begin.schema, text }
-          base = createData(
-            schema.value,
-            batches.filter((batch): batch is RowBatch => batch.kind === 'rows'),
+        let nextBase = base
+        let nextSchema = schema
+        if (complete.base) {
+          const text = JSON.stringify(complete.schema)
+          if (nextSchema?.text !== text) nextSchema = { value: complete.schema, text }
+          nextBase = createData(
+            nextSchema.value,
+            pending.filter((batch): batch is RowBatch => batch.kind === 'rows'),
           )
         }
-        if (!base) return
-        data = appendData(
-          begin.append && data ? data : base,
-          batches.filter((batch): batch is SampleBatch => batch.kind === 'samples'),
+        if (!nextBase) return
+        const nextData = appendData(
+          complete.append && !complete.base && data ? data : nextBase,
+          pending.filter((batch): batch is SampleBatch => batch.kind === 'samples'),
         )
-        batches = []
-        held(data, begin, base)
+        base = nextBase
+        data = nextData
+        schema = nextSchema
+        held(data, complete, base)
       } catch (reason) {
         failed(reason)
       }

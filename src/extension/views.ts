@@ -523,7 +523,12 @@ class View {
     // A run's results are readable only once it reports frames; until then only the case streams.
     const run = shown?.frames && (this.#draws('monitor') || current) ? shown : undefined
     const base =
-      (kind === 'monitor' && run ? run.fingerprint : summary.fingerprint) +
+      JSON.stringify([
+        summary.uri,
+        summary.attachmentId,
+        summary.version,
+        kind === 'monitor' && run ? run.fingerprint : summary.fingerprint,
+      ]) +
       ':' +
       JSON.stringify(statics)
     const fields = new Map<string, { from: string; select: string[]; ids?: string[] }>()
@@ -594,13 +599,14 @@ class View {
   }
   async #streamed(summary: Summary, demand: Demand, base: boolean, append: boolean, key: string) {
     const { studio, uri } = this
-    const revision = { uri, version: summary.version }
+    const revision = { uri, version: summary.version, attachmentId: summary.attachmentId }
     const controller = (this.#controller = new AbortController())
     const stream = ++this.#stream
     this.#failure = ''
     try {
       await this.send({
         kind: 'begin',
+        fields: [...demand.statics, ...demand.sampled],
         simulationId: demand.run?.id,
         stream,
         schema: summary.schema,

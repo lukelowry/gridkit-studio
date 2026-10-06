@@ -18,6 +18,19 @@ import { failure } from '@latkit/model'
 
 export type { Chunk }
 
+/** Decode once on first use, and release the decoder's source spans afterward. */
+export function deferred<T>(decode: () => T): () => T {
+  let pending: (() => T) | undefined = decode
+  let value: T
+  return () => {
+    if (pending) {
+      value = pending()
+      pending = undefined
+    }
+    return value
+  }
+}
+
 /** Rows per parsed column chunk. */
 export const CHUNK_ROWS = 65_536
 
@@ -28,6 +41,8 @@ export interface Column {
   readonly starts: Uint32Array
   /** A reference column's target, kept here so an empty column has it too. */
   readonly index?: Index
+  /** Present, non-null JSON, including values rejected by the typed decoder. */
+  readonly supplied?: (row: number) => boolean
 }
 
 const ARRAYS = {

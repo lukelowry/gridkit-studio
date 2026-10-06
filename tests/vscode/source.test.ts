@@ -22,6 +22,8 @@ suite('Case source', () => {
   test('leaves the last valid case on show while it is invalid, and Problems says why', async () => {
     const { document, text } = bench
     const table = await bench.show('case')
+    // Establish the frame this test expects to retain, even when this suite runs alone.
+    await visible(table, 'tbody .cell')
     const invalid = new vscode.WorkspaceEdit()
     invalid.insert(bench.uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)

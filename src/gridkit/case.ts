@@ -28,6 +28,7 @@ import {
   chunkAt,
   chunkOf,
   type Column,
+  deferred,
   hash,
   isValid,
   radixOrder,
@@ -48,6 +49,7 @@ import {
 import {
   ARRAYS,
   type Found,
+  type IndexedChunk,
   type Layout,
   type Member,
   Members,
@@ -167,8 +169,7 @@ export class Case {
     readonly found: readonly FoundField[],
   ) {}
 
-  /** Every static field and row ID, as a host reads them. Built on first read, once the parse's
-   *  buffers are free, to keep peak memory down. */
+  /** One immutable Data facade. Each field and row-ID column decodes on its first read. */
   get data(): Data {
     return (this.#data ??= dataOf(this.schema, this.tables))
   }
@@ -297,8 +298,8 @@ function joined(
 ): Case {
   const chunks = shapes.map((shape) => ({
     ids: [] as Chunk[],
-    fields: shape.fields.map((): Chunk[] => []),
-    ports: shape.ports.map((): Chunk[] => []),
+    fields: shape.fields.map((): IndexedChunk[] => []),
+    ports: shape.ports.map((): IndexedChunk[] => []),
   }))
   const records = shapes.map((): number[] => [])
   const found: (Found & { readonly first: number })[] = []
@@ -321,6 +322,7 @@ function joined(
   const index = (type: string): Index => ({ source: version, type, version })
   shapes.forEach((shape, code) => {
     const { ids, fields } = chunks[code]!
+    const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
     const starts = startsOf(ids)
     const column = (type: DataType, list: readonly Chunk[]): Column => ({
       type,
@@ -333,7 +335,20 @@ function joined(
       starts,
       ids: column(shape.identity.type, ids),
       fields: new Map(
-        shape.fields.map((field, i) => [field.name, column(field.definition.type, fields[i]!)]),
+        shape.fields.map((field, i) => [
+          field.name,
+          {
+            type: field.definition.type,
+            starts,
+            get chunks() {
+              return decoded[i]!()
+            },
+            supplied: (row: number) => {
+              const chunk = chunkAt(starts, row)
+              return fields[i]![chunk]!.supplied(row - starts[chunk]!)
+            },
+          },
+        ]),
       ),
       records: Uint32Array.from(records[code]!),
     })
@@ -389,7 +404,9 @@ function foundColumns(
     let fields = byCode.get(member.code)
     if (!fields) byCode.set(member.code, (fields = new Map()))
     const name = member.path.join('.')
-    fields.set(name, [...(fields.get(name) ?? []), member])
+    let members = fields.get(name)
+    if (!members) fields.set(name, (members = []))
+    members.push(member)
   }
   const firsts: FoundField[] = []
   for (const [code, fields] of byCode) {
@@ -399,14 +416,24 @@ function foundColumns(
     const plans: FieldPlan[] = []
     const columns = new Map(table.fields)
     for (const [name, members] of fields) {
-      const values = new Map<number, unknown>()
-      for (const member of members)
-        values.set(
-          rows.get(member.first + member.record)!,
-          JSON.parse(utf8(file, member.value, member.end)),
-        )
-      const kinds = new Set([...values.values()].map((value) => typeof value))
-      const scalar = kinds.size === 1 && ['number', 'boolean', 'string'].includes([...kinds][0]!)
+      const locations = new Map(
+        members.map((member) => [rows.get(member.first + member.record)!, member]),
+      )
+      // JSON syntax is already checked. Its first byte determines the scalar type without
+      // allocating strings or parsing unrelated extension objects on the opening path.
+      const kinds = new Set(
+        members.map(({ value }) => {
+          const first = file[value]!
+          return first === 0x22
+            ? 'string'
+            : first === 0x74 || first === 0x66
+              ? 'boolean'
+              : first === 0x2d || (first >= 0x30 && first <= 0x39)
+                ? 'number'
+                : 'object'
+        }),
+      )
+      const scalar = kinds.size === 1 && !kinds.has('object')
       const type: DataType = !scalar
         ? 'text'
         : kinds.has('number')
@@ -414,21 +441,28 @@ function foundColumns(
           : kinds.has('boolean')
             ? 'boolean'
             : 'text'
-      const cell = (row: number) => {
-        const value = values.get(row)
-        return value === undefined || value === null ? null : scalar ? value : JSON.stringify(value)
-      }
-      columns.set(name, {
-        type,
-        starts: table.starts,
-        chunks: Array.from({ length: table.starts.length - 1 }, (_, i) =>
+      const decode = deferred(() => {
+        const cell = (row: number): Value => {
+          const member = locations.get(row)
+          if (!member) return null
+          const value = JSON.parse(utf8(file, member.value, member.end))
+          return value === null ? null : scalar ? value : JSON.stringify(value)
+        }
+        return Array.from({ length: table.starts.length - 1 }, (_, i) =>
           chunkOf(
             type,
             Array.from({ length: table.starts[i + 1]! - table.starts[i]! }, (_, at) =>
               cell(table.starts[i]! + at),
-            ) as Value[],
+            ),
           ),
-        ),
+        )
+      })
+      columns.set(name, {
+        type,
+        starts: table.starts,
+        get chunks() {
+          return decode()
+        },
       })
       plans.push({
         name,
@@ -439,7 +473,11 @@ function foundColumns(
           description: "Not in GridKit Studio's catalog; kept as written.",
         },
       })
-      firsts.push({ type: shape.type, field: name, row: Math.min(...values.keys()) })
+      firsts.push({
+        type: shape.type,
+        field: name,
+        row: rows.get(members[0]!.first + members[0]!.record)!,
+      })
     }
     tables.set(shape.type, { ...table, shape: withFound(table.shape, plans), fields: columns })
   }
@@ -509,14 +547,11 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
 }
 
 /** A port's native numbers as rows of `target`; a number no row holds is null. */
-function references(native: readonly Chunk[], starts: Uint32Array, target: Table): Column {
+function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
   const ids = native.length === 0 ? undefined : numberIds(target.ids)
-  return {
-    type: { kind: 'reference', to: target.index.type },
-    index: target.index,
-    starts,
-    chunks: native.map((source): ReferenceColumn => {
-      const port = source as NumericColumn
+  const decode = deferred(() =>
+    native.map((source): ReferenceColumn => {
+      const port = source.read() as NumericColumn
       const values = new Uint32Array(port.length)
       let validity: Uint8Array | undefined
       for (let at = 0; at < port.length; at++) {
@@ -536,6 +571,18 @@ function references(native: readonly Chunk[], starts: Uint32Array, target: Table
         ...(validity && { validity }),
       }
     }),
+  )
+  return {
+    type: { kind: 'reference', to: target.index.type },
+    index: target.index,
+    starts,
+    get chunks() {
+      return decode()
+    },
+    supplied(row) {
+      const chunk = chunkAt(starts, row)
+      return native[chunk]!.supplied(row - starts[chunk]!)
+    },
   }
 }
 
@@ -543,65 +590,68 @@ function references(native: readonly Chunk[], starts: Uint32Array, target: Table
  *  columns. Row IDs are built on first read, so a view of fields alone never pays for them. */
 function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
   const batches: RowBatch[] = []
-  for (const [type, table] of tables) {
-    const statics = Object.entries(schema.types[type]!.fields).flatMap(([name, definition]) =>
-      definition.sampled
-        ? []
-        : [
-            [
-              name,
-              name === table.shape.identity.name ? table.ids : table.fields.get(name)!,
-            ] as const,
-          ],
-    )
-    const count = table.starts.length - 1
-    if (count === 0)
-      batches.push({
-        kind: 'rows',
-        index: table.index,
-        rows: { kind: 'range', offset: 0, count: 0 },
-        columns: Object.fromEntries(
-          statics.map(([name, column]) => [name, builder(column.type, column.index).finish()]),
-        ),
-      })
-    for (let i = 0; i < count; i++)
-      batches.push({
-        kind: 'rows',
-        index: table.index,
-        rows: {
-          kind: 'range',
-          offset: table.starts[i]!,
-          count: table.starts[i + 1]! - table.starts[i]!,
-        },
-        columns: Object.fromEntries(statics.map(([name, column]) => [name, column.chunks[i]!])),
-      })
-  }
-  const data = createData(schema, batches)
+  for (const table of tables.values())
+    batches.push({
+      kind: 'rows',
+      index: table.index,
+      rows: { kind: 'range', offset: 0, count: rowCount(table.starts) },
+      columns: {},
+    })
+  const base = createData(schema, batches)
   return {
     schema,
     tables: Object.fromEntries(
-      Object.entries(data.tables).map(([type, fields]) => {
+      Object.entries(base.tables).map(([type, empty]) => {
         const table = tables.get(type)!
-        const prefix = UTF8.encode(`${type}/`)
-        let ids: ColumnPages | undefined
+        const fields: Record<string, ColumnPages> = { ...empty.fields }
+        const pages = (name: string, column: Column): ColumnPages =>
+          createData(
+            schema,
+            column.chunks.length === 0
+              ? [
+                  {
+                    kind: 'rows',
+                    index: table.index,
+                    rows: empty.rows,
+                    columns: { [name]: builder(column.type, column.index).finish() },
+                  },
+                ]
+              : column.chunks.map((chunk, i): RowBatch => ({
+                  kind: 'rows',
+                  index: table.index,
+                  rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
+                  columns: { [name]: chunk },
+                })),
+          ).tables[type]!.fields[name]!
+        for (const [name, definition] of Object.entries(schema.types[type]!.fields)) {
+          if (definition.sampled) continue
+          const column = name === table.shape.identity.name ? table.ids : table.fields.get(name)!
+          Object.defineProperty(fields, name, {
+            enumerable: true,
+            get: deferred(() => pages(name, column)),
+          })
+        }
+        const ids = deferred(() => {
+          if (!table.ids.chunks.length) return empty.ids
+          const prefix = UTF8.encode(`${type}/`)
+          return createData(
+            schema,
+            table.ids.chunks.map((chunk, i): RowBatch => ({
+              kind: 'rows',
+              index: table.index,
+              rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
+              columns: {},
+              ids: idColumn(prefix, chunk),
+            })),
+          ).tables[type]!.ids
+        })
         return [
           type,
           {
-            ...fields,
+            ...empty,
+            fields,
             get ids() {
-              return (ids ??=
-                table.ids.chunks.length === 0
-                  ? fields.ids
-                  : createData(
-                      schema,
-                      table.ids.chunks.map((chunk, i): RowBatch => ({
-                        kind: 'rows',
-                        index: table.index,
-                        rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
-                        columns: {},
-                        ids: idColumn(prefix, chunk),
-                      })),
-                    ).tables[type]!.ids)
+              return ids()
             },
           },
         ]

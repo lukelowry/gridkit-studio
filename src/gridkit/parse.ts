@@ -1,5 +1,5 @@
-/** A case's JSON bytes: members and records found in one pass over strings and brackets, then
- *  records parsed straight into columns. A member the catalog does not know, or a device class, is
+/** A case's JSON bytes: members and records indexed once, then columns decoded on demand.
+ *  A member the catalog does not know, or a device class, is
  *  found and kept for its own column or table; invalid values become null. */
 
 import type { DataType, Problem } from '@latkit/model'
@@ -10,6 +10,7 @@ import {
   builder,
   type Chunk,
   CHUNK_ROWS,
+  deferred,
   hash,
   type ListBuilder,
   NumericBuilder,
@@ -206,10 +207,15 @@ export interface Range {
   readonly starts: Uint32Array
 }
 
+export interface IndexedChunk {
+  read(): Chunk
+  supplied(row: number): boolean
+}
+
 interface ParsedTable {
   readonly ids: readonly Chunk[]
-  readonly fields: readonly (readonly Chunk[])[]
-  readonly ports: readonly (readonly Chunk[])[]
+  readonly fields: readonly (readonly IndexedChunk[])[]
+  readonly ports: readonly (readonly IndexedChunk[])[]
 }
 
 /** A member the catalog does not know: the record it is in, its path there, and its value. */
@@ -287,7 +293,7 @@ const RECORD_KEYS: Record<ArrayName, Keys> = {
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
 const OWN = new Keys(['diagram'])
 
-/** One table's builders over a range, cut into chunks of at most CHUNK_ROWS rows. */
+/** One table's identities and value spans, cut into chunks of at most CHUNK_ROWS rows. */
 class Rows {
   readonly types: readonly DataType[]
   readonly params: Keys
@@ -300,12 +306,16 @@ class Rows {
   readonly extensionField: Int32Array
   readonly named: number
   ids!: Builder
-  fields!: Builder[]
-  ports!: NumericBuilder[]
+  #spans!: Int32Array
+  readonly #width: number
   #count = 0
-  readonly #chunks: { ids: Chunk[]; fields: Chunk[][]; ports: Chunk[][] }
+  readonly #chunks: { ids: Chunk[]; fields: IndexedChunk[][]; ports: IndexedChunk[][] }
 
-  constructor(readonly shape: Shape) {
+  constructor(
+    readonly shape: Shape,
+    readonly bytes: Uint8Array,
+  ) {
+    this.#width = 2 * (shape.fields.length + shape.ports.length)
     this.types = shape.fields.map((field) => field.definition.type)
     const keys = { parameter: [] as string[], initial: [] as string[], extension: [] as string[] }
     const fields = { parameter: [] as number[], initial: [] as number[], extension: [] as number[] }
@@ -333,6 +343,21 @@ class Rows {
   next(): void {
     if (this.#count === CHUNK_ROWS) this.#flush()
     this.#count++
+    if (this.#count * this.#width > this.#spans.length) {
+      const next = new Int32Array(this.#spans.length * 2)
+      next.set(this.#spans)
+      this.#spans = next
+    }
+  }
+
+  /** Keep locations, not decoded values. Identity is the only eager column. */
+  stage(fields: Int32Array, ports: Int32Array): void {
+    const offset = (this.#count - 1) * this.#width
+    this.#spans.set(fields.subarray(0, 2 * this.shape.fields.length), offset)
+    this.#spans.set(
+      ports.subarray(0, 2 * this.shape.ports.length),
+      offset + 2 * this.shape.fields.length,
+    )
   }
 
   finish(): ParsedTable {
@@ -343,16 +368,43 @@ class Rows {
   #flush(): void {
     if (this.#count === 0) return
     this.#chunks.ids.push(this.ids.finish())
-    this.fields.forEach((field, i) => this.#chunks.fields[i]!.push(field.finish()))
-    this.ports.forEach((port, i) => this.#chunks.ports[i]!.push(port.finish()))
+    const spans = this.#spans.slice(0, this.#count * this.#width)
+    const { bytes } = this
+    const width = this.#width
+    const column = (type: DataType, slot: number, port = false): IndexedChunk => {
+      const decode = deferred(() => {
+        const target = builder(type)
+        const supplied = new Uint8Array(Math.ceil(spans.length / width / 8))
+        for (let at = 2 * slot; at < spans.length; at += width) {
+          const value = spans[at]!
+          const end = spans[at + 1]!
+          const row = (at - 2 * slot) / width
+          if (value >= 0 && bytes[value] !== 0x6e) supplied[row >>> 3]! |= 1 << (row & 7)
+          if (port) {
+            const number = value < 0 ? NaN : parseNumber(bytes, value, end)
+            if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
+              (target as NumericBuilder).pushNumber(number)
+            else target.push(null)
+          } else if (value < 0 || !into(bytes, target, type, value, end)) target.push(null)
+        }
+        return { chunk: target.finish(), supplied }
+      })
+      return {
+        read: () => decode().chunk,
+        supplied: (row) => (decode().supplied[row >>> 3]! & (1 << (row & 7))) !== 0,
+      }
+    }
+    this.types.forEach((type, i) => this.#chunks.fields[i]!.push(column(type, i)))
+    this.shape.ports.forEach((_, i) =>
+      this.#chunks.ports[i]!.push(column('uint32', this.types.length + i, true)),
+    )
     this.#count = 0
     this.#fresh()
   }
 
   #fresh(): void {
     this.ids = builder(this.shape.identity.type)
-    this.fields = this.types.map((type) => builder(type))
-    this.ports = this.shape.ports.map(() => new NumericBuilder('uint32'))
+    this.#spans = new Int32Array(256 * this.#width)
   }
 }
 
@@ -420,7 +472,7 @@ export class Parser {
     const code =
       this.#array === 'buses' ? 0 : this.#array === 'signals' ? 1 : this.#classOf(count, record)
     if (code === NONE) return NONE
-    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!))
+    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!, bytes))
     this.#stage(rows)
     const keys = RECORD_KEYS[this.#array]
     const names = RECORD[this.#array]
@@ -521,19 +573,7 @@ export class Parser {
   #commit(rows: Rows, record: number): void {
     rows.next()
     this.#identity(rows, record)
-    for (let i = 0; i < rows.fields.length; i++) {
-      const target = rows.fields[i]!
-      const value = this.#fields[2 * i]!
-      if (value < 0 || !this.#into(target, rows.types[i]!, value, this.#fields[2 * i + 1]!))
-        target.push(null)
-    }
-    for (let i = 0; i < rows.ports.length; i++) {
-      const value = this.#ports[2 * i]!
-      const number = value < 0 ? NaN : parseNumber(this.#bytes, value, this.#ports[2 * i + 1]!)
-      if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
-        rows.ports[i]!.pushNumber(number)
-      else rows.ports[i]!.pushNull()
-    }
+    rows.stage(this.#fields, this.#ports)
   }
 
   #identity(rows: Rows, record: number): void {
@@ -543,7 +583,7 @@ export class Parser {
       return rows.ids.push(null)
     }
     if (type === 'text') {
-      if (this.#text(rows.ids as TextBuilder, this.#id, this.#idEnd)) return
+      if (textInto(this.#bytes, rows.ids as TextBuilder, this.#id, this.#idEnd)) return
       this.#problem(record, `A ${rows.shape.type} record's id is not text.`)
       return rows.ids.push(null)
     }
@@ -554,67 +594,6 @@ export class Parser {
     rows.ids.push(null)
   }
 
-  /** The value at [value, end) into `target`, if it has the field's type. */
-  #into(target: Builder, type: DataType, value: number, end: number): boolean {
-    const bytes = this.#bytes
-    if (type === 'float64' || type === 'int32') {
-      const number = parseNumber(bytes, value, end)
-      if (!Number.isFinite(number)) return false
-      if (type === 'int32' && (!Number.isInteger(number) || Math.abs(number) > 0x7fffffff))
-        return false
-      ;(target as NumericBuilder).pushNumber(number)
-      return true
-    }
-    if (type === 'boolean') {
-      const text = end - value <= 5 ? String.fromCharCode(...bytes.subarray(value, end)) : ''
-      if (text !== 'true' && text !== 'false') return false
-      target.push(text === 'true')
-      return true
-    }
-    if (type === 'text') return this.#text(target as TextBuilder, value, end)
-    if (typeof type !== 'object' || type.kind !== 'list') return false
-    // A route: points of two finite numbers, each list checked whole before any of it is kept.
-    const list = target as ListBuilder
-    const lanes: number[] = []
-    const point = (at: number): number => {
-      lanes.length = 0
-      const close = eachItem(bytes, at, (lane) => {
-        let stop = lane
-        while (
-          stop < end &&
-          bytes[stop] !== COMMA &&
-          bytes[stop] !== CLOSE_ARRAY &&
-          bytes[stop]! > 0x20
-        )
-          stop++
-        lanes.push(parseNumber(bytes, lane, stop))
-        return stop
-      })
-      return close < 0 || lanes.length !== 2 || !lanes.every(Number.isFinite) ? -1 : close
-    }
-    if (eachItem(bytes, value, point) < 0) return false
-    eachItem(bytes, value, (at) => {
-      const close = point(at)
-      ;(list.items as VectorBuilder).push(lanes)
-      return close
-    })
-    list.commit()
-    return true
-  }
-
-  /** A JSON string's text into `target`: its bytes as they are, unless it has escapes to decode. */
-  #text(target: TextBuilder, value: number, end: number): boolean {
-    const bytes = this.#bytes
-    if (bytes[value] !== QUOTE) return false
-    for (let i = value + 1; i < end - 1; i++)
-      if (bytes[i] === BACKSLASH) {
-        target.push(JSON.parse(Buffer.from(bytes.subarray(value, end)).toString('utf8')) as string)
-        return true
-      }
-    target.pushUtf8(bytes, value + 1, end - 1)
-    return true
-  }
-
   #problem(record: number, message: string): void {
     if (this.#problems.length < PROBLEMS)
       this.#problems.push({
@@ -623,6 +602,71 @@ export class Parser {
         target: { kind: 'path', path: [this.#array, this.#first + record] },
       })
   }
+}
+
+/** The value at [value, end) into `target`, if it has the field's type. */
+function into(
+  bytes: Uint8Array,
+  target: Builder,
+  type: DataType,
+  value: number,
+  end: number,
+): boolean {
+  if (type === 'float64' || type === 'int32') {
+    const number = parseNumber(bytes, value, end)
+    if (!Number.isFinite(number)) return false
+    if (type === 'int32' && (!Number.isInteger(number) || Math.abs(number) > 0x7fffffff))
+      return false
+    ;(target as NumericBuilder).pushNumber(number)
+    return true
+  }
+  if (type === 'boolean') {
+    const text = end - value <= 5 ? String.fromCharCode(...bytes.subarray(value, end)) : ''
+    if (text !== 'true' && text !== 'false') return false
+    target.push(text === 'true')
+    return true
+  }
+  if (type === 'text') return textInto(bytes, target as TextBuilder, value, end)
+  if (typeof type !== 'object' || type.kind !== 'list') return false
+  // A route: points of two finite numbers, each list checked whole before any of it is kept.
+  const list = target as ListBuilder
+  const lanes: number[] = []
+  const point = (at: number): number => {
+    lanes.length = 0
+    const close = eachItem(bytes, at, (lane) => {
+      let stop = lane
+      while (
+        stop < end &&
+        bytes[stop] !== COMMA &&
+        bytes[stop] !== CLOSE_ARRAY &&
+        bytes[stop]! > 0x20
+      )
+        stop++
+      lanes.push(parseNumber(bytes, lane, stop))
+      return stop
+    })
+    return close < 0 || lanes.length !== 2 || !lanes.every(Number.isFinite) ? -1 : close
+  }
+  if (eachItem(bytes, value, point) < 0) return false
+  eachItem(bytes, value, (at) => {
+    const close = point(at)
+    ;(list.items as VectorBuilder).push(lanes)
+    return close
+  })
+  list.commit()
+  return true
+}
+
+/** A JSON string's text into `target`: its bytes as they are, unless it has escapes to decode. */
+function textInto(bytes: Uint8Array, target: TextBuilder, value: number, end: number): boolean {
+  if (bytes[value] !== QUOTE) return false
+  for (let i = value + 1; i < end - 1; i++)
+    if (bytes[i] === BACKSLASH) {
+      target.push(JSON.parse(Buffer.from(bytes.subarray(value, end)).toString('utf8')) as string)
+      return true
+    }
+  target.pushUtf8(bytes, value + 1, end - 1)
+  return true
 }
 
 function stage(spans: Int32Array, at: number, value: number, end: number): void {

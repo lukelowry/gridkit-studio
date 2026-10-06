@@ -9,6 +9,7 @@ import { type Data, type Item, itemId } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
 import type { Begin, Element, ViewState } from '../shared/messages.js'
+import { drawable } from '../shared/streams.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu, RECOVER_MS } from './gpu.js'
@@ -195,7 +196,7 @@ function boot() {
     if (!view || !rows || !data || closed) return
     // State arrives before the matching row stream. Keep the last valid frame until both
     // refer to the same revision, rather than applying new row selections to old tables.
-    if (received?.revision.version !== state.summary?.version) return
+    if (!drawable(received, state)) return
     appearance(state.settings)
     try {
       if (kind === 'diagram') (view as Diagram).set(diagramConfig(), { replace: true })
@@ -217,7 +218,7 @@ function boot() {
     }
   }
   function selection(force = false) {
-    if (!view) return
+    if (!view || !drawable(received, state)) return
     const key = keyOf(state.selection)
     const anchors = state.anchors?.join('\n') ?? ''
     const moved = key !== selectionKey || anchors !== anchorKey
@@ -322,7 +323,7 @@ function boot() {
     try {
       const [gpu] = await Promise.all([owner.get(lost), rendererReady])
       mark('canvas:gpu')
-      if (closed) return
+      if (closed || !drawable(received, state)) return
       if (kind === 'network') {
         if (!networkModule || !networkStyles) return
         mark('canvas:module')
@@ -395,20 +396,24 @@ function boot() {
     asked = true
     bridge.send({ kind: 'window', bounds: [t - 1, t + 4] })
   })
-  receive((next, begin, base) => {
-    mark('canvas:data')
-    data = next
-    received = begin
-    const changedRows = rows !== base
-    rows = base
-    held = begin.held
-    asked = false
-    if (begin.presentation) presented = begin.presentation
-    if (begin.revision.version === state.summary?.version) {
-      if (!view || changedRows) void render().catch(error)
-      else paint()
-    }
-  }, error)
+  receive(
+    (next, begin, base) => {
+      mark('canvas:data')
+      data = next
+      received = begin
+      const changedRows = rows !== base
+      rows = base
+      held = begin.held
+      asked = false
+      if (begin.presentation) presented = begin.presentation
+      if (drawable(begin, state)) {
+        if (!view || changedRows) void render().catch(error)
+        else paint()
+      }
+    },
+    error,
+    (begin) => drawable(begin, state),
+  )
   bridge.on((message) => {
     if (message.kind === 'begin') mark('canvas:begin')
     else if (message.kind === 'state') {

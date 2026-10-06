@@ -12,7 +12,11 @@ describe('run parameters', () => {
     expect(valueOf(duration, ' 2.5 ')).toBe(2.5)
     expect(valueOf(duration, '')).toBeUndefined()
     expect(valueOf(method, 'fast')).toBe('fast')
-    expect(Number.isNaN(valueOf(duration, 'soon'))).toBe(true)
+    // Not a number: kept as typed, which the checks then call not a number.
+    expect(valueOf(duration, 'soon')).toBe('soon')
+    expect(problemOf(duration, 'Duration', valueOf(duration, 'soon'))).toBe(
+      'Duration must be a number.',
+    )
   })
 
   it('writes a value back as text', () => {

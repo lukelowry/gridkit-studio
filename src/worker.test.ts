@@ -93,6 +93,31 @@ async function start(storage?: string, fault?: 'copy' | 'cleanup') {
   return rig
 }
 describe('real worker protocol', () => {
+  it('opens, draws and validates without reading saved-result storage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'gridkit-storage-unavailable-'))
+    const storage = join(root, 'not-a-directory')
+    await writeFile(storage, 'unavailable storage')
+    const rig = await start(storage)
+    rig.acknowledge = true
+    try {
+      const revision = { uri: 'file:///independent.case.json', version: 1, attachmentId: 'one' }
+      const summary = await rig.call('parse', {
+        ...revision,
+        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+      }).done
+      expect(summary.validation).toBe('pending')
+      await rig.call('batches', { ...revision, fields: [{ from: 'Bus', select: ['name'] }] }).done
+      expect(rig.batches).toHaveLength(1)
+      expect(await rig.call('validate', revision).done).toEqual([])
+      await expect(rig.call('validate', { ...revision, attachmentId: 'old' }).done).rejects.toThrow(
+        /document changed/,
+      )
+    } finally {
+      await rig.stop()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('streams many immutable result pages in bounded batches instead of one round trip per page', async () => {
     const rig = await start()
     rig.acknowledge = true

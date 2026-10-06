@@ -1,3 +1,5 @@
+import { setImmediate } from 'node:timers/promises'
+
 import { failure, type Value } from '@latkit/model'
 import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-parser'
 
@@ -171,7 +173,41 @@ export function editField(
 
 /** Each value present but invalid or required but missing, any signal with two drivers, and, as
  *  warnings, each class and field the catalog does not know. */
+const diagnoses = new WeakMap<Case, Issue[]>()
+
+/** All callers share validation of the same immutable source. */
 export function diagnose(kase: Case): Issue[] {
+  const cached = diagnoses.get(kase)
+  if (cached) return cached
+  const work = diagnostics(kase)
+  let next = work.next()
+  while (!next.done) next = work.next()
+  diagnoses.set(kase, next.value)
+  return next.value
+}
+
+/** Background validation yields to topology queries and can be cancelled between slices. */
+export async function diagnoseAsync(kase: Case, signal: AbortSignal): Promise<Issue[]> {
+  signal.throwIfAborted()
+  const cached = diagnoses.get(kase)
+  if (cached) return cached
+  const work = diagnostics(kase)
+  let deadline = performance.now() + 4
+  for (;;) {
+    signal.throwIfAborted()
+    const next = work.next()
+    if (next.done) {
+      diagnoses.set(kase, next.value)
+      return next.value
+    }
+    if (performance.now() >= deadline) {
+      await setImmediate(undefined, { signal })
+      deadline = performance.now() + 4
+    }
+  }
+}
+
+function* diagnostics(kase: Case): Generator<void, Issue[]> {
   const issues: Issue[] = []
   for (const table of kase.tables.values())
     if (!kase.catalog.shapes.has(table.shape.type) && table.records.length) {
@@ -184,6 +220,7 @@ export function diagnose(kase: Case): Issue[] {
       })
     }
   for (const { type, field, row } of kase.found) {
+    yield
     const id = kase.id(kase.table(type), row)
     issues.push({
       ...sourceRange(kase, id, field),
@@ -195,22 +232,34 @@ export function diagnose(kase: Case): Issue[] {
   }
   for (const table of kase.tables.values()) {
     for (let row = 0; row < table.records.length && issues.length < 100; row++) {
+      yield
       let record: ReturnType<typeof recordOf> | undefined
       let tree: ReturnType<typeof parseTree>
       for (const plan of table.shape.plan.values()) {
+        if (row === 0) yield
         if (
           plan.definition.sampled ||
           plan.source.kind === 'identity' ||
           kase.cell(table, plan.name, row) !== null
         )
           continue
-        const id = kase.id(table, row)
-        if (!record) {
-          record = recordOf(kase, id)
-          tree = parseTree(record.text)
+        const supplied = table.fields.get(plan.name)?.supplied
+        let invalid: boolean
+        if (supplied) invalid = plan.required === true || supplied(row)
+        else {
+          // Ordinary records use presence bits instead of reparsing absent optional values.
+          if (!record) {
+            record = recordOf(kase, kase.id(table, row))
+            tree = parseTree(record.text)
+          }
+          const node = tree && findNodeAtLocation(tree, nativePath(plan))
+          invalid = !!(
+            (node && node.value !== null) ||
+            (plan.required && (!node || node.value === null))
+          )
         }
-        const node = tree && findNodeAtLocation(tree, nativePath(plan))
-        if ((node && node.value !== null) || (plan.required && (!node || node.value === null))) {
+        if (invalid) {
+          const id = kase.id(table, row)
           const type = plan.definition.type
           issues.push({
             ...sourceRange(kase, id, plan.name),

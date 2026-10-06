@@ -78,6 +78,8 @@ export interface Summary extends Revision {
   counts: Record<string, number>
   parameters: Parameters
   issues: Issue[]
+  /** Pending diagnostics never mean that the model has passed validation. */
+  validation: 'pending' | 'complete'
   parseMs: number
 }
 
@@ -111,6 +113,7 @@ export interface Requests {
       ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
     output: Summary
   }
+  validate: { input: Revision; output: Issue[] }
   complete: { input: { text: string; offset: number }; output: SourceContext['completions'] }
   context: { input: Revision & { offset: number }; output: SourceContext }
   symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
@@ -247,6 +250,8 @@ export interface Cameras {
 
 /** Opens a stream of rows and samples, which an `end` of the same `stream` closes. */
 export interface Begin {
+  /** Fields actually carried by this topology/sample projection. */
+  fields: readonly FieldSelection[]
   simulationId?: string
   kind: 'begin'
   stream: number

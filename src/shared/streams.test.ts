@@ -1,6 +1,62 @@
 import { describe, expect, it } from 'vitest'
 
-import { holdFor } from './streams.js'
+import { catalog } from '../gridkit/definition.js'
+import type { Begin, Summary, ViewState } from './messages.js'
+import { drawable, holdFor } from './streams.js'
+
+describe('mapping readiness', () => {
+  const revision = { uri: 'file:///case', version: 1, attachmentId: 'first' }
+  const summary: Summary = {
+    ...revision,
+    name: 'Case',
+    fingerprint: 'one',
+    schema: catalog.schema,
+    editable: {},
+    identities: {},
+    counts: { Bus: 2 },
+    parameters: {},
+    issues: [],
+    validation: 'pending',
+    parseMs: 0,
+  }
+  const begin: Begin = {
+    kind: 'begin',
+    stream: 1,
+    revision,
+    schema: catalog.schema,
+    fields: [{ from: 'Bus', select: ['name', 'params.kv'] }],
+    sampled: [],
+    base: true,
+    append: false,
+  }
+  const state: ViewState = {
+    summary,
+    bindings: { vertexColor: { type: 'Bus', field: 'params.kv' } },
+  }
+
+  it('keeps the old frame until the current attachment and mapping fields are ready', () => {
+    expect(drawable(begin, state)).toBe(true)
+    expect(drawable(begin, { ...state, stale: true })).toBe(false)
+    expect(drawable(begin, { ...state, summary: { ...summary, attachmentId: 'reopened' } })).toBe(
+      false,
+    )
+    expect(drawable(begin, { ...state, summary: { ...summary, uri: 'file:///other' } })).toBe(false)
+    expect(drawable(begin, { ...state, summary: { ...summary, version: 2 } })).toBe(false)
+    expect(drawable({ ...begin, fields: [{ from: 'Bus', select: ['name'] }] }, state)).toBe(false)
+  })
+
+  it('restyles an already held field without a data reload when its normalization changes', () => {
+    expect(
+      drawable(begin, {
+        ...state,
+        bindings: {
+          vertexColor: { type: 'Bus', field: 'params.kv', domain: [100, 500] },
+        },
+      }),
+    ).toBe(true)
+    expect(drawable(begin, { ...state, bindings: {} })).toBe(true)
+  })
+})
 
 describe('the window of a run a view holds', () => {
   it('holds the times it needs with a margin either side', () => {

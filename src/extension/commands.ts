@@ -13,6 +13,7 @@ import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
 import type { Element, Plot, Summary } from '../shared/messages.js'
+import { problemsOf, type Values } from '../shared/parameters.js'
 import { definitions } from '../shared/preferences.js'
 import {
   elementType,
@@ -25,7 +26,7 @@ import {
 import type { LoopMode } from '../shared/transport.js'
 import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
-import type { Session, Sessions } from './sessions.js'
+import { notice, type Session, type Sessions } from './sessions.js'
 import { cacheBytesOf, type Tasks } from './tasks.js'
 
 /** What a command acts on: its case, and the element and field it was invoked on. */
@@ -362,10 +363,31 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  // A second press while the first run starts, as a double click makes, asks for the same run.
-  command('startSimulation', ({ session }) =>
-    tasks.active(session.uri) ? undefined : tasks.simulate(session.uri),
-  )
+  // Start says, in one notification, what keeps a run from starting. A second press while the first
+  // run starts, as a double click makes, asks for the same run.
+  register('startSimulation', async (value, supplied) => {
+    const { uri } = targetOf(value, supplied)
+    if (tasks.active(uri)) return
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
+    const session = studio.all.get(uri) ?? (await studio.open(document))
+    const summary = await studio.documents.ensure(document).catch(() => undefined)
+    if (!summary)
+      throw notice(
+        `${document.uri.path.split('/').at(-1)} has problems to fix before it can run.`,
+        {
+          title: 'Show Problems',
+          command: 'workbench.actions.view.problems',
+        },
+      )
+    if (!session.outputs?.length)
+      throw notice('Choose at least one signal to record before starting.', {
+        title: 'Choose Signals',
+        command: 'gridkitStudio.chooseSignals',
+      })
+    const [problem] = Object.values(problemsOf(summary.parameters, session.values as Values))
+    if (problem) throw new Error(problem)
+    await tasks.simulate(uri)
+  })
   register('stopSimulation', (value, supplied) => tasks.stop(targetOf(value, supplied).uri))
   command('showContingency', async ({ session }, value) => {
     if (session.run?.contingency && typeof value === 'number')
@@ -512,10 +534,19 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     })
     if (rate) session.transport.setRate(Number(rate))
   })
-  for (const id of ['fit', 'orbit', 'retryMonitor'] as const)
+  for (const id of ['orbit', 'retryMonitor'] as const)
     command(id, (context) =>
       action(context, id, undefined, id === 'retryMonitor' ? 'monitor' : undefined),
     )
+  // From the editor's title bar, the canvas in front; from a menu, the one it was opened on.
+  command('fit', (context) => {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+    const front =
+      input instanceof vscode.TabInputCustom
+        ? input.viewType.slice('gridkitStudio.'.length)
+        : undefined
+    action(context, 'fit', undefined, context.target?.origin ?? front)
+  })
   // A neighborhood shows in a canvas, so from the Case panel the Network frames it.
   command('neighborhood', (context) => {
     if (!context.element) return

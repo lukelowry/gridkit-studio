@@ -292,16 +292,23 @@ export class TestHost {
     return header.getByRole('button', { name: new RegExp('^' + name) })
   }
 
-  /** Whether the Simulation view's title bar would start a run. */
-  async startable(): Promise<boolean> {
+  /** Press Start in the Simulation view's title bar, once no run holds it. What keeps a run from
+   *  starting is said in a notification. */
+  async start(): Promise<void> {
     const start = await this.viewAction(/^Simulation/, 'Start Simulation')
-    return !(await start.isDisabled({ timeout: 1000 }).catch(() => true))
+    await until(
+      async () => !(await start.isDisabled({ timeout: 1000 }).catch(() => true)),
+      'Start Simulation enabled',
+    )
+    await (await this.viewAction(/^Simulation/, 'Start Simulation')).click()
   }
 
-  /** Start a run from the Simulation view's title bar, once it can. */
-  async start(): Promise<void> {
-    await until(() => this.startable(), 'Start Simulation enabled')
-    await (await this.viewAction(/^Simulation/, 'Start Simulation')).click()
+  /** The notification on show that says `text`. */
+  notification(text: RegExp): Locator {
+    return this.page
+      .locator('.notifications-toasts .notification-list-item')
+      .filter({ hasText: text })
+      .first()
   }
 
   /** Stop the run from the Simulation view's title bar. */

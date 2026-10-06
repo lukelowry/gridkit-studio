@@ -24,7 +24,7 @@ suite('Simulation', () => {
 
   test('shows its typed fields, and Start in its title bar', async () => {
     await visible(simulation, '[data-testid="field-tmax"]')
-    await until(() => bench.startable(), 'Start ready')
+    await (await bench.viewAction(/^Simulation/, 'Start Simulation')).waitFor()
     // Its title bar starts the run; the form has no Start of its own.
     assert.equal(await simulation.getByRole('button', { name: /^Start/ }).count(), 0)
     await bench.capture('simulation-vscode')
@@ -66,23 +66,32 @@ suite('Simulation', () => {
     await until(() => bused() === 0, 'Bus recorded not at all')
   })
 
-  test('says Start needs a signal and valid values, and opens Monitored Signals from there', async () => {
+  test('says in a notification what keeps Start from running, and nothing in the form', async () => {
     await vscode.commands.executeCommand('gridkitStudio.clearSignals')
     await until(() => !bench.session.outputs?.length, 'nothing recorded')
-    await until(async () => !(await bench.startable()), 'Start waits for a signal')
-    await simulation.locator('[data-testid="study-signals"]').click()
+    await bench.start()
+    // Nothing recorded: the notification offers Monitored Signals.
+    await bench
+      .notification(/Choose at least one signal/)
+      .getByRole('button', { name: 'Choose Signals' })
+      .click()
     await bench.signals({ reveal: false })
     await vscode.commands.executeCommand('gridkitStudio.selectAllSignals')
     await until(recorded, 'every signal recorded')
+    // A value that cannot run is outlined in the form, and said by Start.
     simulation = await bench.show('simulation')
-    await until(() => bench.startable(), 'Start ready')
-    // A value that cannot run holds Start back until it is fixed.
     const tmax = simulation.locator('[data-testid="field-tmax"]')
     const before = await tmax.inputValue()
     await tmax.fill('soon')
-    await until(async () => !(await bench.startable()), 'Start waits for a numeric end time')
+    await until(async () => (await tmax.getAttribute('aria-invalid')) === 'true', 'outlined')
+    assert.equal(await simulation.locator('.c-note').count(), 0)
+    await bench.start()
+    await bench.notification(/End time must be a number\./).waitFor()
+    assert.equal(bench.session.launching, false)
+    assert.equal(bench.studio.errors.splice(0).length, 2)
+    await vscode.commands.executeCommand('notifications.clearAll')
     await tmax.fill(before)
-    await until(() => bench.startable(), 'Start ready again')
+    await until(async () => (await tmax.getAttribute('aria-invalid')) === 'false', 'fixed')
   })
 
   test('says once why a run from the Tasks menu could not start, as Run does', async () => {

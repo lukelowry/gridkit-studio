@@ -231,17 +231,20 @@ suite('Network menus', () => {
     await until(() => !bench.session.selection, 'the selection let go')
   })
 
-  test('zooms, fits and turns from its own toolbar', async () => {
+  test('fits from the editor title bar, and turns from its own toolbar', async () => {
     // This test exercises motion; the host's accessibility preference may disable orbit.
     await bench.page.emulateMedia({ reducedMotion: 'no-preference' })
+    const fit = bench.page
+      .locator('.part.editor .title-actions')
+      .getByRole('button', { name: /^Fit All/ })
     try {
-      await network.getByRole('button', { name: 'Fit view' }).click()
+      await fit.click()
       await idle(network)
       const fitted = await camera()
       await network.locator('canvas').hover()
       await bench.page.mouse.wheel(0, -800)
       await until(async () => !near(await camera(), fitted), 'zoomed in')
-      await network.getByRole('button', { name: 'Fit view' }).click()
+      await fit.click()
       await until(async () => near(await camera(), fitted), 'fitted again')
       const turn = network.getByRole('button', { name: 'Auto-rotate' })
       await turn.click()

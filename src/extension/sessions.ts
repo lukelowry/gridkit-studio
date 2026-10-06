@@ -8,7 +8,7 @@ import {
   channelsFor,
   type FieldRef,
 } from '../shared/bindings.js'
-import { cancelled, defect, detail, message } from '../shared/format.js'
+import { cancelled, defect, detail, formatNumber, message } from '../shared/format.js'
 import type {
   Cameras,
   Element,
@@ -18,7 +18,6 @@ import type {
   TableState,
   ViewState,
 } from '../shared/messages.js'
-import { problemsOf, type Values } from '../shared/parameters.js'
 import {
   defaults,
   definitions,
@@ -26,6 +25,7 @@ import {
   validateSettings,
 } from '../shared/preferences.js'
 import { elementType, networkOf, placementOf } from '../shared/schema.js'
+import { PROGRAMS } from '../shared/simulation.js'
 import { Transport } from '../shared/transport.js'
 import { Client } from './client.js'
 import { Documents, isWritable } from './documents.js'
@@ -84,6 +84,35 @@ export function defaultOutputs({ schema, counts }: Summary): FieldSelection[] {
   })
 }
 
+/** A choice a notification offers: its label, and the command it runs. */
+export interface Offer {
+  title: string
+  command: string
+}
+/** The log, where every failed run and every defect points. */
+export const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudio.showOutput' }
+
+/** An error to report as `text`, offering `offers`. */
+export const notice = (text: string, ...offers: Offer[]) =>
+  Object.assign(new Error(text), { offers })
+
+/** How a run starts, for the log: the case, the program, its times, and a simulation's faults. */
+function opening(info: SimulationInfo): string[] {
+  const program = info.configuration?.program ?? 'DynamicSimulation'
+  const times = info.span
+    ? ` · ${formatNumber(info.span[0])} to ${formatNumber(info.span[1])} s`
+    : ''
+  return [
+    `▶ ${info.name} · ${PROGRAMS[program]}${times}`,
+    ...(program === 'DynamicSimulation'
+      ? (info.configuration?.addedFaults ?? []).map(
+          ({ bus, start, duration }) =>
+            `  Fault at Bus ${bus} from ${formatNumber(start)} s for ${formatNumber(duration)} s`,
+        )
+      : []),
+  ]
+}
+
 /** The plots `run` can draw: those it recorded, else its first recorded signal. */
 export function plotsFor(run: SimulationInfo, plots: readonly Plot[]): Plot[] {
   const kept = plots.filter((plot) =>
@@ -137,16 +166,17 @@ export class Sessions {
       if (this.#logged.has(reason)) return
       this.#logged.add(reason)
     }
-    const text = detail(reason)
+    // A defect's stack is for whoever fixes it; anything else is said as it was told.
+    const text = defect(reason) || !(reason instanceof Error) ? detail(reason) : reason.message
     this.output.error(text)
     if (this.errors.push(text) > 100) this.errors.shift()
   }
   /** The errors already reported, and the notifications on show, by their text. */
   readonly #reported = new WeakSet<object>()
   readonly #showing = new Set<string>()
-  /** Tell the user why something failed. This is the one place Studio shows an error: views show
-   *  state, never errors. A defect points to the log, a cancellation says nothing, and an error
-   *  already on show is not shown again. */
+  /** Tell the user why something failed. This, and the log behind it, is the one place Studio
+   *  says so: views show state, never failures. A defect points to the log, a notice offers its
+   *  own choices, a cancellation says nothing, and an error already on show is not shown again. */
   report(reason: unknown) {
     if (cancelled(reason)) return
     if (reason instanceof Object) {
@@ -157,16 +187,58 @@ export class Sessions {
     const text = message(reason)
     if (this.#showing.has(text)) return
     this.#showing.add(text)
-    const shown = defect(reason)
-      ? vscode.window.showErrorMessage(text, 'Show Log')
-      : vscode.window.showErrorMessage(text)
-    void shown.then(
+    const offers =
+      (reason as { offers?: Offer[] } | null)?.offers ?? (defect(reason) ? [SHOW_OUTPUT] : [])
+    void vscode.window.showErrorMessage(text, ...offers.map(({ title }) => title)).then(
       (choice) => {
         this.#showing.delete(text)
-        if (choice) this.output.show()
+        const offer = offers.find(({ title }) => title === choice)
+        if (offer) void vscode.commands.executeCommand(offer.command)
       },
       () => this.#showing.delete(text),
     )
+  }
+  /** The runs whose start the log has told, so it tells how each ends. */
+  readonly #told = new Set<string>()
+  /** The failed runs already said, so each is said once. */
+  readonly #failures = new Set<string>()
+  /** Tell the log how a run starts and ends, and the user, once, why one failed. */
+  #narrate(info: SimulationInfo) {
+    if (info.state === 'preparing') return
+    if (info.state === 'running') {
+      if (!this.#told.has(info.id)) {
+        this.#told.add(info.id)
+        for (const line of opening(info)) this.output.info(line)
+      }
+      return
+    }
+    const told = this.#told.delete(info.id)
+    if (info.state === 'failed') {
+      if (this.#failures.has(info.id)) return
+      this.#failures.add(info.id)
+      const at = info.failedAt === undefined ? '' : ` at t = ${formatNumber(info.failedAt)} s`
+      const why = info.message ?? 'GridKit stopped'
+      this.report(
+        notice(`${info.name} failed${at}: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
+      )
+      return
+    }
+    if (!told) return
+    const samples = `${info.frames.toLocaleString()} samples`
+    const study = info.contingency
+    if (info.state === 'complete' && study?.failed.length)
+      this.report(
+        notice(
+          `${info.name}: ${study.failed.length} of ${study.buses.length} contingencies failed, ` +
+            `at bus ${study.failed.map((n) => study.buses[n]).join(', ')}.`,
+          SHOW_OUTPUT,
+        ),
+      )
+    else if (info.state === 'complete') this.output.info(`■ ${info.name} finished · ${samples}`)
+    else
+      this.output.info(
+        `■ ${info.name} stopped at t = ${formatNumber(info.domain[1])} s · ${samples}`,
+      )
   }
   /** Register command `id`, reporting why it fails. */
   command(id: string, run: (...args: unknown[]) => unknown): vscode.Disposable {
@@ -200,7 +272,11 @@ export class Sessions {
       }),
       this.client.event.event((event) => {
         if (event.kind === 'log') {
-          if (event.level === 'error') this.error(event.message)
+          // A line of a case's run at its own level, and as GridKit printed it only at Trace.
+          if (event.uri) {
+            this.output[event.level ?? 'info'](event.message)
+            if (event.raw) this.output.trace(event.raw)
+          } else if (event.level === 'error') this.error(event.message)
           else if (event.level === 'warn') this.output.warn(event.message)
           else this.output.appendLine(event.message)
           return
@@ -208,12 +284,9 @@ export class Sessions {
         const { info } = event
         const session = this.all.get(info.revision.uri)
         if (!session) return
-        const before = session.run
         this.show(session, info)
         this.changed.fire(session.uri)
-        // A run that fails says why once, where every error is said.
-        if (info.state === 'failed' && !(before?.id === info.id && before.state === 'failed'))
-          this.report(new Error(info.message ?? 'The simulation failed.'))
+        this.#narrate(info)
       }),
       // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
       vscode.workspace.onDidRenameFiles(({ files }) => {
@@ -244,21 +317,12 @@ export class Sessions {
   updateContexts() {
     const session = this.active ? this.all.get(this.active) : undefined
     const entry = this.active ? this.documents.entries.get(this.active) : undefined
-    const ready = !!entry?.summary && !entry.stale
-    const running = session?.run?.state === 'running' || !!session?.launching
     const values = {
       hasCase: !!session,
       diagramEditing: !!session?.diagramEditing,
-      ready,
+      ready: !!entry?.summary && !entry.stale,
       editable: !!entry && !entry.stale && isWritable(entry.document),
-      running,
-      // A run starts from valid values that record something, as the Simulation view checks them.
-      startable:
-        !!entry?.summary &&
-        !entry.stale &&
-        !running &&
-        !!session?.outputs?.length &&
-        !Object.keys(problemsOf(entry.summary.parameters, session.values as Values)).length,
+      running: session?.run?.state === 'running' || !!session?.launching,
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,

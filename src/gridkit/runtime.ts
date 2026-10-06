@@ -11,6 +11,7 @@ import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/format.js'
 import type { GridKit, Program, RuntimeProcess } from '../shared/messages.js'
+import { readSolverLine, solverError, type SolverLine } from './solver.js'
 /** Where a container sees the run's folder. */
 const MOUNT = '/simulation'
 /** The label that names the machine a run's container was started from. */
@@ -309,7 +310,8 @@ export async function launch(
   if (child.pid) lifecycle(owned)
   let ended = false
   const tail: string[] = []
-  let nativeError: string | undefined
+  /** The first error GridKit printed: what stopped the run, and when. */
+  let nativeError: SolverLine | undefined
   /** The faults whose contingencies failed, by ID. */
   const failed = new Set<string>()
   let cleanup: Promise<void> | undefined
@@ -328,7 +330,7 @@ export async function launch(
       if (study) failed.add(study[1]!)
       // A contingency's solver errors are its own, not the run's.
       else if (/\[ERROR\]/i.test(text) && (program === 'DynamicSimulation' || /failed:/.test(text)))
-        nativeError ??= text
+        nativeError ??= readSolverLine(text)
       log(text)
     })
   const done = new Promise<void>((resolve, reject) => {
@@ -338,7 +340,7 @@ export async function launch(
       // A container that never ran says why last: no engine, no image, no access.
       const said = container ? tail.findLast((line) => line.trim()) : undefined
       if (signal.aborted) reject(signal.reason)
-      else if (nativeError) reject(new Error(nativeError))
+      else if (nativeError) reject(solverError(nativeError))
       // ContingencyAnalysis exits 1 when a contingency failed; the study still finished.
       else if (code !== 0 && !(program === 'ContingencyAnalysis' && failed.size))
         reject(new Error(`${program} exited with code ${code}.${said ? ' ' + said : ''}`))

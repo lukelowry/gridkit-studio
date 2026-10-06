@@ -34,9 +34,13 @@ suite('Network', () => {
     await bench.capture('network-vscode')
   })
 
-  test('carries its own controls: three projections, rotation and fit', async () => {
+  test('carries its projections and rotation, and Fit in the editor title bar', async () => {
     await visible(network, '[data-testid="view-toolbar"]')
-    assert.equal(await network.locator('.toolbar button').count(), 5)
+    assert.equal(await network.locator('.toolbar button').count(), 4)
+    await bench.page
+      .locator('.part.editor .title-actions')
+      .getByRole('button', { name: /^Fit All/ })
+      .waitFor()
     await until(
       async () => (await network.locator('.toolbar button[aria-pressed="true"]').count()) === 1,
       'the projection on show is pressed',
@@ -72,7 +76,6 @@ suite('Network', () => {
     // Frame after frame while the clock plays, with no message from the extension.
     await until(async () => (await frames(network)) > still + 10, 'the network paints the playhead')
     transport.pause()
-    assert.equal(await network.locator('.canvas-host__notice:not([hidden])').count(), 0)
     await bench.capture('network-mapped-signal')
   })
 

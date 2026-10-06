@@ -30,6 +30,7 @@ import {
   transaction,
 } from './gridkit/index.js'
 import { anchors } from './gridkit/inspection.js'
+import { solverLine } from './gridkit/solver.js'
 import { importedFields, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
 import { ResultStorage } from './results/storage.js'
@@ -402,6 +403,8 @@ async function runCase(input: SimulationRequest) {
     let logWindow = 0
     let logCount = 0
     let dropped = 0
+    /** Whether GridKit has said why the run stops; the errors after restate it as it unwinds. */
+    let said = false
     let retained = false
     try {
       send({ kind: 'run', info })
@@ -421,20 +424,25 @@ async function runCase(input: SimulationRequest) {
             lastProgress = performance.now()
           }
         },
-        // At most 100 lines a second; the rest are counted, and the count sent.
+        // Each line in plain words at its level, at most 100 a second; the rest are counted, and the
+        // count sent.
         log: (entry) => {
+          const line = solverLine(entry.message, input.values.program, said)
+          if (!line) return
+          said ||= line.level === 'error'
           if (Date.now() - logWindow > 1000) {
             if (dropped)
               send({
                 kind: 'log',
                 uri: input.uri,
-                message: `${dropped} solver log lines omitted.`,
+                level: 'info',
+                message: `${dropped} solver lines omitted.`,
               })
             dropped = 0
             logWindow = Date.now()
             logCount = 0
           }
-          if (++logCount <= 100) send({ kind: 'log', uri: input.uri, message: entry.message })
+          if (++logCount <= 100) send({ kind: 'log', uri: input.uri, ...line })
           else dropped++
         },
       })
@@ -446,6 +454,8 @@ async function runCase(input: SimulationRequest) {
           : 'cancelled'
         : 'failed'
       info.message = message(error)
+      const at = (error as { at?: unknown } | null)?.at
+      if (typeof at === 'number') info.failedAt = at
       if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
     } finally {
       // The run's last state goes out whatever its cleanup meets, so it never stays running.

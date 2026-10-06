@@ -19,14 +19,17 @@ suite('Case source', () => {
     bench = await testHost()
   })
 
-  test('leaves the last valid case on show, marked, while it is invalid', async () => {
+  test('leaves the last valid case on show while it is invalid, and Problems says why', async () => {
     const { document, text } = bench
     const table = await bench.show('case')
     const invalid = new vscode.WorkspaceEdit()
     invalid.insert(bench.uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)
     await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
-    await visible(table, '.c-note--warn, .c-note--error')
+    await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
+    // The rows stay, and nothing in the panel speaks of the problem.
+    await visible(table, 'tbody .cell')
+    assert.equal(await table.locator('.c-note').count(), 0)
     await vscode.commands.executeCommand('gridkitStudio.showSource', bench.uri)
     await vscode.commands.executeCommand('gridkitStudio.stopSimulation', bench.uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
@@ -80,17 +83,20 @@ suite('Case source', () => {
     await bench.document.save()
   })
 
-  test('points an unreadable case to Problems, and recovers when the source is repaired', async () => {
+  test('lists why an unreadable case cannot draw in Problems alone, and draws once repaired', async () => {
     const uri = vscode.Uri.joinPath(bench.uri, '..', 'invalid.case.json')
     await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode('{'))
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await bench.view('network')
-    await visible(network, '.canvas-host__notice[role="status"]:not([hidden])')
-    assert.match(await network.locator('.canvas-host__notice').innerText(), /Problems/)
-    assert.equal(await network.locator('.canvas-host__fallback').isVisible(), false)
-    assert.ok(bench.studio.state(uri.toString()).error)
+    await until(() => bench.studio.state(uri.toString()).error, 'the parse error noticed')
     assert.ok(vscode.languages.getDiagnostics(uri).length > 0, 'Problems lists why')
+    // The view stops waiting, and says nothing of the problem.
+    await until(
+      async () => !(await network.locator('.canvas-host__fallback').isVisible()),
+      'the view stops waiting',
+    )
+    assert.equal(await network.locator('main').innerText(), '')
     const document = await vscode.workspace.openTextDocument(uri)
     const edit = new vscode.WorkspaceEdit()
     edit.replace(uri, new vscode.Range(0, 0, document.lineCount, 0), bench.text)

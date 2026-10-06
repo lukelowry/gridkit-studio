@@ -170,7 +170,7 @@ export async function run() {
     wide.session.transport.seek(0.15)
     await project(wide, 'Tilt')
     // Fit the case, then close in over the fault, with the network it pulls down rising behind it.
-    await wide.network.getByRole('button', { name: 'Fit view', exact: true }).click()
+    await vscode.commands.executeCommand('gridkitStudio.fit')
     await idle(wide.network)
     const canvas = (await wide.network.locator('canvas').boundingBox())!
     const [x, y] = await wide.network.evaluate(

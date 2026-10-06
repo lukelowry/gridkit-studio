@@ -182,8 +182,15 @@ export type FromWorker =
     }
   | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
   | { kind: 'run'; info: SimulationInfo }
-  /** A solver line of the case's run, or, with a level, a line for Studio's log alone. */
-  | { kind: 'log'; uri?: string; message: string; level?: 'warn' | 'error' }
+  /** With `uri`, a line of that case's run in plain words, and `raw`, the line as GridKit printed
+   *  it where they differ. Without, a line of Studio's own. */
+  | {
+      kind: 'log'
+      uri?: string
+      message: string
+      level?: 'error' | 'warn' | 'info' | 'debug'
+      raw?: string
+    }
 
 export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'simulation' | 'export'
 

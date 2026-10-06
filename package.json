@@ -244,7 +244,7 @@
         "title": "Start Simulation",
         "category": "GridKit Studio",
         "icon": "$(play)",
-        "enablement": "gridkitStudio.startable && isWorkspaceTrusted"
+        "enablement": "gridkitStudio.hasCase && isWorkspaceTrusted && !gridkitStudio.running"
       },
       {
         "command": "gridkitStudio.stopSimulation",
@@ -417,14 +417,14 @@
         "command": "gridkitStudio.chooseType",
         "title": "Choose Type…",
         "category": "GridKit Studio",
-        "icon": "$(symbol-class)",
+        "icon": "$(filter)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
         "command": "gridkitStudio.filterRows",
         "title": "Filter Rows…",
         "category": "GridKit Studio",
-        "icon": "$(filter)",
+        "icon": "$(search)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -438,7 +438,7 @@
         "command": "gridkitStudio.chooseColumns",
         "title": "Choose Columns…",
         "category": "GridKit Studio",
-        "icon": "$(list-selection)",
+        "icon": "$(table)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -631,6 +631,11 @@
     ],
     "menus": {
       "editor/title": [
+        {
+          "command": "gridkitStudio.fit",
+          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "group": "navigation@1"
+        },
         {
           "command": "gridkitStudio.showSource",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",

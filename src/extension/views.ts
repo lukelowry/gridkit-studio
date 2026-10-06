@@ -46,7 +46,7 @@ const shownRows = new Map<string, number>()
 /** What a panel's title says after its name: the case, and what the panel shows of it. The Case
  *  panel's type and filtered count, and the Monitor's run, live here rather than in the panels. */
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
-  const { summary, table, run } = studio.state(uri)
+  const { summary, table, run, launching } = studio.state(uri)
   const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
   if (kind === 'case' && summary && table?.type) {
     parts.push(typeName(summary.schema, table.type))
@@ -55,7 +55,20 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
     if ((table.filter || table.equal) && count !== undefined && shown !== undefined)
       parts.push(`${shown.toLocaleString()} of ${count.toLocaleString()}`)
   }
-  if (kind === 'monitor' && run) parts.push(run.state, `${run.frames.toLocaleString()} samples`)
+  // How far a run has come, or what it left; never how it ended, which only a notification says.
+  if (kind === 'simulation' && launching) parts.push('starting')
+  else if ((kind === 'simulation' || kind === 'monitor') && run) {
+    const study = run.contingency
+    if (run.state === 'running' && kind === 'simulation')
+      parts.push(
+        study
+          ? `${study.done.toLocaleString()} of ${study.buses.length.toLocaleString()} contingencies`
+          : run.span && run.span[1] > run.span[0]
+            ? `${Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))}%`
+            : 'starting',
+      )
+    else if (run.frames) parts.push(`${run.frames.toLocaleString()} samples`)
+  }
   return parts.join(' · ')
 }
 
@@ -281,7 +294,6 @@ class View {
         if (session && message.uri === this.uri && message.values) {
           session.values = message.values
           this.studio.persist(session)
-          this.studio.updateContexts()
         }
         return
       case 'tableState':
@@ -686,6 +698,17 @@ const EMPTY: Record<Exclude<ViewKind, 'network' | 'diagram'>, string> = {
   simulation: 'Open a GridKit case to configure a simulation.',
   export: 'Open a GridKit case to export a video of it.',
 }
+/** The side bar and panel views VS Code has shown, by kind. */
+const resolved = new Map<ViewKind, vscode.WebviewView>()
+
+/** Show view `kind` without taking focus from where the user is. One never shown yet can only be
+ *  shown by focusing it. */
+export async function showView(kind: 'case' | 'monitor' | 'simulation' | 'export') {
+  const view = resolved.get(kind)
+  if (view) view.show(true)
+  else await vscode.commands.executeCommand('gridkitStudio.' + kind + '.focus')
+}
+
 export function registerViews(studio: Sessions) {
   const subscriptions: vscode.Disposable[] = []
   for (const kind of ['network', 'diagram'] as const)
@@ -707,14 +730,15 @@ export function registerViews(studio: Sessions) {
       ),
     )
   for (const kind of ['case', 'monitor', 'simulation', 'export'] as const) {
-    // An export keeps working while its panel is collapsed. Each run's terminal hides the
-    // Monitor, so it is kept idle rather than destroyed.
+    // An export keeps working while its panel is collapsed. The Case panel takes the Monitor's
+    // place in the bottom panel, so the Monitor is kept idle rather than destroyed.
     const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'
     subscriptions.push(
       vscode.window.registerWebviewViewProvider(
         'gridkitStudio.' + kind,
         {
           resolveWebviewView(panel) {
+            resolved.set(kind, panel)
             let content: View | undefined
             let waiting = false
             const update = () => {
@@ -757,6 +781,7 @@ export function registerViews(studio: Sessions) {
             const changed = studio.changed.event(update)
             const visibility = panel.onDidChangeVisibility(update)
             panel.onDidDispose(() => {
+              if (resolved.get(kind) === panel) resolved.delete(kind)
               changed.dispose()
               visibility.dispose()
               content?.dispose()

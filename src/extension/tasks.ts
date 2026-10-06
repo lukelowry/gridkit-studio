@@ -2,9 +2,9 @@ import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import { message } from '../shared/format.js'
-import type { GridKit, SimulationRequest } from '../shared/messages.js'
+import type { GridKit, SimulationInfo, SimulationRequest } from '../shared/messages.js'
 import type { Sessions } from './sessions.js'
+import { showView } from './views.js'
 
 /** The GridKit install the settings name for the case at `uri`; a relative path resolves against
  *  its workspace folder. */
@@ -30,42 +30,25 @@ export function cacheBytesOf(uri: vscode.Uri) {
 
 /** A run being started: settled once GridKit's run begins, rejected with why it could not. */
 interface Launch {
-  /** Whether a task's terminal has taken it up. */
+  /** Whether a run has taken it up: Start's own, or a task's from the Tasks menu. */
   claimed: boolean
+  /** Whether it was stopped before GridKit's run began. */
+  cancelled: boolean
   begun(): void
   failed(error: unknown): void
-}
-
-/** Subscribe before scheduling: VS Code can end a task before executeTask resolves. */
-export async function executeTracked(task: vscode.Task, onEnd: () => void) {
-  let own: vscode.TaskExecution | undefined
-  const early = new Set<vscode.TaskExecution>()
-  const subscription = vscode.tasks.onDidEndTask(({ execution }) => {
-    if (!own) early.add(execution)
-    else if (execution === own) onEnd()
-  })
-  try {
-    own = await vscode.tasks.executeTask(task)
-    if (early.has(own)) onEnd()
-    return subscription
-  } catch (error) {
-    subscription.dispose()
-    throw error
-  } finally {
-    early.clear()
-  }
 }
 
 export function registerTasks(studio: Sessions) {
   /** The runs being started, by case. */
   const launches = new Map<string, Launch>()
-  /** Track a run of the case at `uri` being started: its views say Starting… until GridKit's run
-   *  begins. `done` settles then, or rejects with why the run could not begin. */
+  /** Track a run of the case at `uri` being started: its views say it is starting until GridKit's
+   *  run begins. `done` settles then, or rejects with why the run could not begin. */
   const track = (uri: string) => {
     let launch!: Launch
     const done = new Promise<void>((resolve, reject) => {
       launch = {
         claimed: false,
+        cancelled: false,
         begun: resolve,
         failed: (error) => (error ? reject(error) : resolve()),
       }
@@ -83,14 +66,72 @@ export function registerTasks(studio: Sessions) {
   }
   /** Whether the case at `uri` is running, or a run of it is starting. */
   const active = (uri: string) => launches.has(uri) || studio.all.get(uri)?.run?.state === 'running'
-  const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
-    const definition = {
-      type: 'gridkit',
-      case: uri.toString(),
-      ...(values ? { values } : {}),
+
+  /** Prepare and run the case at `uri` for `launch`, which hears once GridKit's run begins, or why
+   *  it could not. The run's home is the Monitor, shown once as it starts without taking focus,
+   *  and the Simulation view shows VS Code's own progress until it ends; nothing else opens.
+   *  Resolves with how the run ended, or undefined for one that never began. */
+  const execute = async (
+    uri: vscode.Uri,
+    launch: Launch,
+    values?: Record<string, unknown>,
+  ): Promise<SimulationInfo | undefined> => {
+    let request: SimulationRequest | undefined
+    let begun = false
+    let subscription: vscode.Disposable | undefined
+    const ran = (async () => {
+      if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
+      await showView('monitor')
+      const document = await vscode.workspace.openTextDocument(uri)
+      const session = await studio.open(document)
+      const summary = await studio.documents.ensure(document)
+      request = {
+        uri: uri.toString(),
+        version: summary.version,
+        values: structuredClone(values ?? session.values),
+        outputs: structuredClone(session.outputs ?? []),
+        gridkit: gridkitOf(uri),
+        cacheBytes: cacheBytesOf(uri),
+      }
+      request.simulationId = (await studio.client.call('prepareSimulation', request)).id
+      subscription = studio.client.event.event((event) => {
+        if (
+          event.kind === 'run' &&
+          !begun &&
+          event.info.state === 'running' &&
+          event.info.id === request!.simulationId
+        ) {
+          begun = true
+          launch.begun()
+        }
+      })
+      if (launch.cancelled) throw new DOMException('Stopped before it began.', 'AbortError')
+      return studio.client.call('run', request)
+    })()
+    void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.simulation' } }, () =>
+      ran.catch(() => undefined),
+    )
+    try {
+      return await ran
+    } catch (error) {
+      if (request?.simulationId)
+        await studio.client
+          .call('stopSimulation', { simulationId: request.simulationId })
+          .catch(() => {})
+      // A run that never began says why to whoever started it, unless it was stopped.
+      if (!begun) launch.failed(launch.cancelled ? undefined : error)
+      return undefined
+    } finally {
+      subscription?.dispose()
+      launch.begun()
     }
+  }
+
+  /** A run of the case at `uri` from the Tasks menu: the same run Start makes, which says what
+   *  became of it where every run does, so its terminal only points there. */
+  const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
     const task = new vscode.Task(
-      definition,
+      { type: 'gridkit', case: uri.toString(), ...(values ? { values } : {}) },
       vscode.workspace.getWorkspaceFolder(uri) ?? vscode.TaskScope.Workspace,
       'Simulate ' + uri.path.split('/').at(-1),
       'GridKit',
@@ -98,95 +139,32 @@ export function registerTasks(studio: Sessions) {
         const write = new vscode.EventEmitter<string>()
         const close = new vscode.EventEmitter<number>()
         const key = uri.toString()
-        // Run's own launch; a run from the Tasks menu is tracked here, as Run's is. One that starts
-        // while another runs or starts is refused.
-        const found = launches.get(key)
-        const duplicate = !!found?.claimed || (!found && active(key))
-        const launch = duplicate ? undefined : (found ?? track(key).launch)
-        if (launch) launch.claimed = true
-        let subscription: vscode.Disposable | undefined
-        let request: SimulationRequest | undefined
-        let begun = false
-        let cancelled = false
-        const terminal: vscode.Pseudoterminal = {
+        let launch: Launch | undefined
+        return {
           onDidWrite: write.event,
           onDidClose: close.event,
           open() {
-            void (async () => {
-              if (duplicate) throw new Error('A simulation is already active for this case.')
-              if (!vscode.workspace.isTrusted)
-                throw new Error('Trust this workspace to execute GridKit.')
-              if (!request) {
-                const document = await vscode.workspace.openTextDocument(uri)
-                const session = await studio.open(document)
-                const summary = await studio.documents.ensure(document)
-                request = {
-                  uri: uri.toString(),
-                  version: summary.version,
-                  values: structuredClone(values ?? session.values),
-                  outputs: structuredClone(session.outputs ?? []),
-                  gridkit: gridkitOf(uri),
-                  cacheBytes: cacheBytesOf(uri),
-                }
-                const info = await studio.client.call('prepareSimulation', request)
-                request.simulationId = info.id
-              }
-              write.fire(`Simulation ${request.simulationId}, case version ${request.version}.\r\n`)
-              subscription = studio.client.event.event((event) => {
-                if (event.kind === 'log') {
-                  if (!event.level && event.uri === request!.uri)
-                    write.fire(event.message.replace(/\r?\n/g, '\r\n') + '\r\n')
-                } else if (
-                  !begun &&
-                  event.info.state === 'running' &&
-                  event.info.id === request!.simulationId
-                ) {
-                  begun = true
-                  launch?.begun()
-                }
-              })
-              if (cancelled) throw new Error('Task cancelled before launch.')
-              await vscode.commands.executeCommand('gridkitStudio.monitor.focus', {
-                preserveFocus: true,
-              })
-              if (cancelled) throw new Error('Task cancelled before launch.')
-              if (!vscode.workspace.isTrusted)
-                throw new Error('Trust this workspace to execute GridKit.')
-              const result = await studio.client.call('run', request)
-              write.fire(
-                `\r\n${result.state}: ${result.frames} samples${result.message ? ' — ' + result.message : ''}\r\n`,
-              )
-              close.fire(result.state === 'complete' ? 0 : 1)
-            })()
-              .catch(async (error) => {
-                if (request?.simulationId)
-                  await studio.client
-                    .call('stopSimulation', { simulationId: request.simulationId })
-                    .catch(() => {})
-                write.fire(message(error) + '\r\n')
-                // A run that never began says why to whoever started it: Run, or the Tasks menu.
-                if (!begun && !cancelled) {
-                  if (found) launch?.failed(error)
-                  else studio.report(error)
-                }
-                close.fire(1)
-              })
-              .finally(() => {
-                subscription?.dispose()
-                launch?.begun()
-              })
+            write.fire(
+              `GridKit Studio runs ${uri.path.split('/').at(-1)}; its log is in Output › GridKit Studio.\r\n`,
+            )
+            if (active(key)) {
+              studio.report(new Error('A simulation is already active for this case.'))
+              close.fire(1)
+              return
+            }
+            const tracked = track(key)
+            launch = tracked.launch
+            launch.claimed = true
+            tracked.done.catch((error) => studio.report(error))
+            void execute(uri, launch, values).then((info) =>
+              close.fire(info?.state === 'complete' ? 0 : 1),
+            )
           },
           close() {
-            cancelled = true
-            subscription?.dispose()
-            launch?.begun()
-            if (request?.simulationId)
-              void studio.client
-                .call('stopSimulation', { simulationId: request.simulationId })
-                .catch(() => {})
+            if (launch) launch.cancelled = true
+            void studio.client.call('stop', { uri: key }).catch(() => {})
           },
-        }
-        return terminal
+        } satisfies vscode.Pseudoterminal
       }),
       [],
     )
@@ -197,9 +175,6 @@ export function registerTasks(studio: Sessions) {
     }
     return task
   }
-  /** Whether `execution` is the task that runs the case at `uri`. */
-  const runs = (execution: vscode.TaskExecution, uri: string) =>
-    execution.task.definition.type === 'gridkit' && execution.task.definition.case === uri
   const provider = vscode.tasks.registerTaskProvider('gridkit', {
     provideTasks: () => [...studio.all.keys()].map((uri) => make(vscode.Uri.parse(uri))),
     resolveTask: (task) => {
@@ -220,30 +195,23 @@ export function registerTasks(studio: Sessions) {
   return {
     provider,
     active,
-    /** Run the case at `uri`; resolves once GridKit's run begins, and rejects with why it could
-     *  not. The run's own outcome shows in the Simulation view. */
+    /** Run the case at `uri` from Start, with no task or terminal; resolves once GridKit's run
+     *  begins, and rejects with why it could not. */
     async simulate(uri: string) {
       if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
       if (active(uri)) throw new Error('A simulation is already active for this case.')
       const { launch, done } = track(uri)
-      const ended = executeTracked(make(vscode.Uri.parse(uri)), () => launch.begun()).catch(
-        (error) => {
-          launch.failed(error)
-          return undefined
-        },
-      )
-      try {
-        await done
-      } finally {
-        const subscription = await ended
-        subscription?.dispose()
-      }
+      launch.claimed = true
+      void execute(vscode.Uri.parse(uri), launch)
+      await done
     },
     /** Stop the case's run, or a run of it still starting. */
     async stop(uri: string) {
-      if (launches.has(uri))
-        for (const execution of vscode.tasks.taskExecutions)
-          if (runs(execution, uri)) execution.terminate()
+      const launch = launches.get(uri)
+      if (launch) launch.cancelled = true
+      for (const execution of vscode.tasks.taskExecutions)
+        if (execution.task.definition.type === 'gridkit' && execution.task.definition.case === uri)
+          execution.terminate()
       await studio.client.call('stop', { uri })
     },
   }

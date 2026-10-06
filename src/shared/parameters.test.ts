@@ -24,12 +24,12 @@ describe('run parameters', () => {
   it('catches what can never run, bounds included, and leaves the rest to the model', () => {
     expect(problemOf(duration, 'Duration', undefined)).toBe('Duration is required.')
     expect(problemOf({ ...duration, optional: true }, 'Duration', undefined)).toBeNull()
-    expect(problemOf(duration, 'Duration', Number.NaN)).toBe('Enter a number.')
-    expect(problemOf(duration, 'Duration', 0.4)).toBe('Enter a number at least 0.5.')
+    expect(problemOf(duration, 'Duration', Number.NaN)).toBe('Duration must be a number.')
+    expect(problemOf(duration, 'Duration', 0.4)).toBe('Duration must be at least 0.5.')
     expect(problemOf(duration, 'Duration', 0.5)).toBeNull()
     expect(problemOf(duration, 'Duration', 60)).toBeNull()
-    expect(problemOf(duration, 'Duration', 61)).toBe('Enter a number at most 60.')
-    expect(problemOf(steps, 'Steps', 2.5)).toBe('Enter a whole number.')
+    expect(problemOf(duration, 'Duration', 61)).toBe('Duration must be at most 60.')
+    expect(problemOf(steps, 'Steps', 2.5)).toBe('Steps must be a whole number.')
     expect(problemOf(method, 'Method', 'slow')).toBeNull()
   })
 

@@ -58,13 +58,6 @@
   const run = $derived(view.run)
   const plots = $derived(view.plots ?? [])
   const shown = $derived(monitorWindow(run, chosen ?? view.window))
-  const warning = $derived(
-    view.stale
-      ? 'Source is updating or invalid. Results keep the case revision they were recorded for.'
-      : run && view.summary && run.fingerprint !== view.summary.fingerprint
-        ? 'These results belong to an earlier case revision.'
-        : null,
-  )
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
   /** Every plot follows `bounds` at once; the extension hears once they rest. */
@@ -125,9 +118,6 @@
 </script>
 
 <div class="monitor">
-  {#if warning}
-    <p class="c-note c-note--warn" role="status">{warning}</p>
-  {/if}
   {#if plots.length === 0 || !run}
     <div class="c-empty monitor__empty">
       <p class="c-empty__text">

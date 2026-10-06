@@ -36,8 +36,8 @@ export const enteredOf = (
       ? parameter.default
       : undefined
 
-/** Why `value` cannot run, with `label` naming it; null when it can. Exclusive bounds and rules
- *  across parameters are left to the worker. */
+/** Why `value` cannot run, as a sentence naming it by `label`, which Start's notification says;
+ *  null when it can. Exclusive bounds and rules across parameters are left to the worker. */
 export function problemOf(
   parameter: Parameter,
   label: string,
@@ -46,12 +46,13 @@ export function problemOf(
   if (value === undefined || value === null)
     return parameter.optional === true ? null : `${label} is required.`
   if (parameter.type !== 'number') return null
-  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Enter a number.'
-  if (parameter.integer === true && !Number.isSafeInteger(value)) return 'Enter a whole number.'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return `${label} must be a number.`
+  if (parameter.integer === true && !Number.isSafeInteger(value))
+    return `${label} must be a whole number.`
   if (parameter.min !== undefined && value < parameter.min)
-    return `Enter a number at least ${formatNumber(parameter.min)}.`
+    return `${label} must be at least ${formatNumber(parameter.min)}.`
   if (parameter.max !== undefined && value > parameter.max)
-    return `Enter a number at most ${formatNumber(parameter.max)}.`
+    return `${label} must be at most ${formatNumber(parameter.max)}.`
   return null
 }
 

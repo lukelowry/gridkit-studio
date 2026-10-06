@@ -375,15 +375,6 @@
 </script>
 
 <main class="case">
-  {#if !view.summary && view.error}
-    <p class="c-note c-note--warn" role="status">
-      The case shows once the problems listed in Problems are fixed.
-    </p>
-  {:else if view.stale && view.summary}
-    <p class="c-note c-note--warn" role="status">
-      Showing the last valid revision until the source is fixed. Editing waits for it.
-    </p>
-  {/if}
   <div
     class="case__scroll"
     bind:this={scroll}
@@ -496,7 +487,7 @@
           </tr>{/if}
       </tbody>
     </table>
-    {#if !view.summary || (!total && !loading)}
+    {#if (!view.summary && !view.error) || (view.summary && !total && !loading)}
       <div class="c-empty">
         <p class="c-empty__text">{view.summary ? 'No matching elements.' : 'Loading case…'}</p>
       </div>

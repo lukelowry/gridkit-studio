@@ -69,19 +69,16 @@ describe('native VS Code contract', () => {
         (view: { id: string }) => view.id === 'gridkitStudio.simulation',
       ).name,
     ).toBe('Simulation')
-    // Playback lives in the status bar and camera commands in the views, not the title bars.
+    // Playback lives in the status bar and the Network's projections in the Network, not the title
+    // bars; Fit is the canvas editors' own title action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
       manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
     )
-    for (const command of [
-      'toggleTimeline',
-      'nextSample',
-      'loopTime',
-      'fit',
-      'projection',
-      'orbit',
-    ])
+    for (const command of ['toggleTimeline', 'nextSample', 'loopTime', 'projection', 'orbit'])
       expect(titled).not.toContain('gridkitStudio.' + command)
+    expect(manifest.contributes.menus['editor/title']).toContainEqual(
+      expect.objectContaining({ command: 'gridkitStudio.fit', group: 'navigation@1' }),
+    )
     // Every command a menu names is contributed.
     const commands = new Set(
       manifest.contributes.commands.map((command: { command: string }) => command.command),

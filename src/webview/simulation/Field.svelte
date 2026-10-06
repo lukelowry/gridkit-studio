@@ -1,4 +1,5 @@
-<!-- A parameter's text field or dropdown, with its unit and validation note. -->
+<!-- A parameter's text field or dropdown, with its unit. A value that cannot run is outlined, and
+  Start's notification says why; the reason is spoken to screen readers, never shown here. -->
 <script lang="ts">
   import Select from '../ui/Select.svelte'
   import type { Row } from './rows.js'
@@ -68,7 +69,7 @@
   </label>
 {/if}
 {#if error}
-  <p class="c-note c-note--error" id={note} role="alert">{error}</p>
+  <span class="c-sr-only" id={note}>{error}</span>
 {/if}
 
 <style>

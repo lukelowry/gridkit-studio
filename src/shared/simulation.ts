@@ -47,6 +47,8 @@ export interface SimulationInfo {
   /** Finite value ranges over every ingested sample, shared by all views and time windows. */
   domains?: Record<string, Record<string, Domain>>
   message?: string
+  /** The solver time a failed run stopped at, where GridKit says. */
+  failedAt?: number
   started: number
   outputs: readonly FieldSelection[]
   /** Values validated at launch, never the editor's later settings. Absent for legacy imports. */

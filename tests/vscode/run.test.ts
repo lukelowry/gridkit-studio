@@ -52,11 +52,17 @@ suite('Run', function () {
     await signals.getByRole('button', { name: 'Record No Signals' }).click()
     await until(() => !bench.session.outputs?.length, 'all monitored fields cleared')
     simulation = await bench.view('simulation')
-    await until(async () => !(await bench.startable()), 'nothing recorded disables Start')
+    // Start says what keeps it from running, and offers to choose what to record.
+    await bench.start()
+    await bench
+      .notification(/Choose at least one signal/)
+      .getByRole('button', { name: 'Choose Signals' })
+      .click()
+    await bench.signals({ reveal: false })
+    assert.equal(bench.session.launching, false)
+    assert.equal(bench.studio.errors.splice(0).length, 1)
     await bench.toggleSignal('Bus', 'Vm')
     await until(() => bench.session.outputs?.length === 1, 'one selected field')
-    // Start hears of the selection, and the form keeps its values, before any value is typed.
-    await until(() => bench.startable(), 'Start hears of the selection')
     await simulation.locator('[data-testid="field-tmax"]').fill('2')
     await simulation.locator('[data-testid="field-dt_monitor"]').fill('0.01')
     await until(() => bench.session.values.tmax === 2, 'run settings captured')
@@ -65,13 +71,14 @@ suite('Run', function () {
     const shown = session.run?.id
     const before = await frames(network)
     await bench.start()
-    // Run itself reveals the Monitor.
+    // Run itself reveals the Monitor, and nothing else: no terminal takes the panel from it.
     monitor = await bench.view('monitor')
     await until(
       () => session.run && session.run.id !== shown && session.run.frames > 0,
       'frames arrive',
       180_000,
     )
+    assert.equal(await bench.panelShown(), 'Monitor')
     const followed = session.run!.state !== 'running' || session.transport.state.follow
     await until(() => session.run?.state !== 'running', 'the run ends', 300_000)
     assert.equal(session.run?.state, 'complete', session.run?.message)
@@ -120,7 +127,6 @@ suite('Run', function () {
     bench.session.transport.seek(end / 2)
     await until(async () => (await frames(network)) > rested, 'a seek repaints the network')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
-    assert.equal(await network.locator('.canvas-host__notice:not([hidden])').count(), 0)
     await bench.capture('run-vscode')
   })
 
@@ -266,6 +272,33 @@ suite('Run', function () {
       () => bench.session.transport.currentT() < bench.session.run!.domain[1],
       'partial results remain playable',
     )
+  })
+
+  test('says when and why the solver gave up, in one notification, with the Monitor in front', async () => {
+    simulation = await bench.show('simulation')
+    await simulation.locator('[data-testid="field-max_steps"]').fill('1')
+    await until(() => bench.session.values.max_steps === 1, 'one solver step allowed')
+    const previous = bench.session.run!.id
+    await bench.start()
+    await until(
+      () => bench.session.run?.id !== previous && bench.session.run?.state === 'failed',
+      'the solver gives up',
+    )
+    const shown = await until(async () => {
+      const found = await notifications()
+      return found.length ? found : undefined
+    }, 'why the run failed')
+    // Plain words and the time, not the solver's own line.
+    assert.equal(shown.length, 1, shown.join(' | '))
+    assert.match(shown[0]!, /failed at t = \S+ s: the solver reached its step limit\.$/)
+    assert.doesNotMatch(shown[0]!, /\[ERROR\]|rank|idas/)
+    assert.equal(bench.studio.errors.splice(0).length, 1)
+    // The Monitor stays in front, and no view speaks of the failure.
+    assert.equal(await bench.panelShown(), 'Monitor')
+    for (const kind of ['simulation', 'monitor'] as const)
+      assert.doesNotMatch(await (await bench.view(kind)).locator('body').innerText(), /fail/i)
+    await simulation.locator('[data-testid="field-max_steps"]').fill('')
+    await until(() => bench.session.values.max_steps === undefined, 'no step limit')
   })
 
   test('says once why a native run failed, keeps it out of the views, and retries after correction', async () => {

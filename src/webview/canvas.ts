@@ -36,12 +36,11 @@ function boot() {
   const hint =
     (kind === 'network' ? 'Network' : 'Diagram') + ' view. Right-click an element for actions.'
   document.getElementById('app')!.innerHTML =
-    '<main class="canvas-host" aria-busy="true"><div class="canvas-host__notice" role="status" hidden></div><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
+    '<main class="canvas-host" aria-busy="true"><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
   const host = document.querySelector<HTMLElement>('.canvas-host')!
   const canvas = host.querySelector('canvas')!
   const fallback = host.querySelector<HTMLElement>('.canvas-host__fallback')!
   const fallbackText = fallback.firstElementChild!
-  const notice = host.querySelector<HTMLElement>('.canvas-host__notice')!
   canvas.setAttribute('aria-label', hint)
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
 
@@ -88,16 +87,10 @@ function boot() {
   let sync = () => {}
 
   const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
-  /** Say what the view shows when it is not the source being typed: the last valid revision, or,
-   *  before any, nothing until the case's problems are fixed. Errors themselves are said once, by
-   *  the extension. */
+  /** A case that has never read draws nothing and stops waiting; one that stops reading keeps its
+   *  last valid revision. Neither says so here: Problems lists why, as for any file. */
   const say = () => {
-    const unread = !state.summary && !!state.error
-    notice.hidden = !unread && !(state.stale && state.summary)
-    notice.textContent = unread
-      ? 'The case draws once the problems listed in Problems are fixed.'
-      : 'Showing the last valid revision until the source is fixed. Editing waits for it.'
-    if (unread) {
+    if (!state.summary && state.error) {
       fallback.hidden = true
       host.setAttribute('aria-busy', 'false')
     } else if (!canvas.dataset.rendered) {
@@ -243,7 +236,8 @@ function boot() {
       /* A newer document projection can supersede the selection. */
     }
   }
-  /** Add the view controls over its top right; returns the function that syncs their state. */
+  /** Add the Network's projections and rotation over its top right; returns the function that
+   *  syncs their state. Fit is the editor's own title action. */
   function toolbar() {
     const bar = document.createElement('div')
     bar.className = 'toolbar'
@@ -265,24 +259,20 @@ function boot() {
       return control
     }
     const network = () => view as Network
-    const projections =
-      kind === 'network'
-        ? PROJECTIONS.map(({ value, label, icon }) => ({
-            value,
-            control: button(icon, label, () => networkModule!.setProjection(network(), value)),
-          }))
-        : []
-    const orbiting = kind === 'network' ? button('orbit', 'Auto-rotate', orbit) : undefined
-    button('fit', 'Fit view', () => view?.fit(undefined, { animate: true }))
+    const projections = PROJECTIONS.map(({ value, label, icon }) => ({
+      value,
+      control: button(icon, label, () => networkModule!.setProjection(network(), value)),
+    }))
+    const orbiting = button('orbit', 'Auto-rotate', orbit)
     host.append(bar)
     return () => {
-      if (!view || kind !== 'network') return
+      if (!view) return
       const { camera, projections: offered } = network()
       for (const { value, control } of projections) {
         control.setAttribute('aria-pressed', String(camera.projection === value))
         control.disabled = !offered[value] || (value === 'globe' && !geographic)
       }
-      orbiting!.setAttribute('aria-pressed', String(camera.orbit === true))
+      orbiting.setAttribute('aria-pressed', String(camera.orbit === true))
     }
   }
   function connect(mounted: Network | Diagram) {
@@ -295,7 +285,7 @@ function boot() {
         canvas.dataset.rendered = 'true'
         fallback.hidden = true
         host.setAttribute('aria-busy', 'false')
-        if (!host.querySelector('.toolbar')) sync = toolbar()
+        if (kind === 'network' && !host.querySelector('.toolbar')) sync = toolbar()
         sync()
         // The case is on screen: add its labels, and the borders paint asks for.
         labelled = true

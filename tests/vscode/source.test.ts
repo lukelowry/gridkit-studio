@@ -28,7 +28,7 @@ suite('Case source', () => {
     await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
     await visible(table, '.c-note--warn, .c-note--error')
     await vscode.commands.executeCommand('gridkitStudio.showSource', bench.uri)
-    await vscode.commands.executeCommand('gridkitStudio.stop', bench.uri)
+    await vscode.commands.executeCommand('gridkitStudio.stopSimulation', bench.uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
     // Undone from the keyboard, as the user would.

@@ -123,8 +123,7 @@
           if (view.run?.id !== before.run?.id) {
             chosen = told = undefined
             source = undefined
-          }
-          else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
+          } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
           if (incoming.command === 'shown') visible = incoming.value === true
@@ -218,7 +217,7 @@
         {!view.summary
           ? 'Loading case…'
           : !run
-            ? 'Run a simulation or import results to plot recorded signals.'
+            ? 'Start a simulation or import results to plot recorded signals.'
             : 'Choose a signal to plot it.'}
       </p>
       {#if view.summary}

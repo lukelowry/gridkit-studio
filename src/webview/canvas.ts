@@ -3,8 +3,9 @@
 import './styles/index.css'
 import './styles/canvas.css'
 
-import type { Diagram, Positions } from '@latkit/diagram'
-import type { Data } from '@latkit/model'
+import type { Diagram } from '@latkit/diagram'
+import type { Positions } from '@latkit/gpu'
+import { type Data, type Item, itemId } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
 import type { Begin, Element, ViewState } from '../shared/messages.js'
@@ -12,7 +13,6 @@ import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu, RECOVER_MS } from './gpu.js'
 import { loadBorders } from './network/borders.js'
-import { DIAGRAM, NETWORK, patchOf } from './patch.js'
 import { receive } from './stream.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
@@ -54,14 +54,13 @@ function boot() {
   let rows: Data | undefined
   let data: Data | undefined
   let view: Network | Diagram | undefined
-  /** The config the view last received; the next paint sends only the difference. */
-  let drawn: Record<string, unknown> | undefined
   let state: ViewState = {}
   /** The times of the run the case holds; undefined when it holds all of them. */
   let held: Begin['held']
   /** Whether the view has asked for other times of the run and not yet received them. */
   let asked = false
-  let places: Record<string, Positions> = {}
+  /** Where the case saves its diagram blocks. */
+  let presented: Record<string, Positions> = {}
   let closed = false
   /** Whether VS Code shows the view; a hidden view keeps its webview but pauses. */
   let shown = true
@@ -72,8 +71,10 @@ function boot() {
   let borderRequest: Promise<void> | undefined
   /** Labels, like borders, wait for the first frame so text layout never delays it. */
   let labelled = false
-  /** The shown selection, and the last one this view made, which it does not reveal. */
+  /** The shown selection and what stands for it, and the last one this view made, which it does
+   *  not reveal. */
   let selectionKey = ''
+  let anchorKey = ''
   let own = ''
   let preferredProjection: Projection | undefined
   /** The camera to restore after the GPU is lost, and when the GPU was last replaced. */
@@ -108,7 +109,6 @@ function boot() {
   const drop = () => {
     view?.destroy()
     view = undefined
-    drawn = undefined
     labelled = false
     delete canvas.dataset.rendered
   }
@@ -146,11 +146,22 @@ function boot() {
     select(element)
     bridge.command('elementSource')
   }
+  /** The item the view draws for `element`; undefined when it draws none, or not yet. */
+  const drawnItem = (element: Element) => {
+    if (!view) return undefined
+    try {
+      return kind === 'diagram'
+        ? diagramModule!.diagramItem(view as Diagram, element)
+        : networkModule!.networkItem(view as Network, element)
+    } catch {
+      // A newer document projection can supersede the element.
+      return undefined
+    }
+  }
   const networkConfig = () =>
     networkStyles!.networkConfig(
       rows!,
       data!,
-      places,
       state,
       geographic,
       borders,
@@ -158,9 +169,7 @@ function boot() {
       held === undefined && state.run?.state !== 'running',
       labelled,
     )
-  const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, places)
-  const config = (): Record<string, unknown> =>
-    kind === 'diagram' ? diagramConfig() : networkConfig()
+  const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, presented)
   const orbit = () => {
     if (kind !== 'network' || !view || state.settings?.['accessibility.motion'] === 'reduce') return
     const network = view as Network
@@ -185,16 +194,14 @@ function boot() {
       })
       .catch((reason) => bridge.report(reason))
   }
-  /** Send the view only what changed, so it keeps what it has read, scaled, laid out, and
-   *  uploaded. */
+  /** Give the view its whole config; it keeps what it has read, scaled, laid out, and uploaded
+   *  for every value that did not change, and resets what the config leaves out. */
   function paint() {
-    if (!view || !drawn || !rows || !data || closed) return
+    if (!view || !rows || !data || closed) return
     appearance(state.settings)
     try {
-      const next = config()
-      const patch = patchOf(drawn, next, kind === 'network' ? NETWORK : DIAGRAM)
-      if (patch) view.set(patch as never)
-      drawn = next
+      if (kind === 'diagram') (view as Diagram).set(diagramConfig(), { replace: true })
+      else (view as Network).set(networkConfig(), { replace: true })
     } catch (reason) {
       return error(reason)
     }
@@ -214,18 +221,19 @@ function boot() {
   function selection(force = false) {
     if (!view) return
     const key = keyOf(state.selection)
-    const moved = key !== selectionKey
+    const anchors = state.anchors?.join('\n') ?? ''
+    const moved = key !== selectionKey || anchors !== anchorKey
     if (!force && !moved) return
     selectionKey = key
+    anchorKey = anchors
     try {
-      const item = state.selection
-        ? kind === 'diagram'
-          ? diagramModule!.diagramItem(view as Diagram, state.selection)
-          : networkModule!.networkItem(view as Network, state.selection)
-        : undefined
-      view.select((item ? [item] : []) as never)
-      // Reveal only a new selection, not the same one found again in new rows.
-      if (item && moved && state.navigate && key !== own) view.reveal(item as never)
+      const item = state.selection && drawnItem(state.selection)
+      // An element the view does not draw shows as the elements its ports reach.
+      const items = item ? [item] : (state.anchors ?? []).flatMap((id) => drawnItem({ id }) ?? [])
+      view.select(items as never)
+      // Bring a selection made in another view into this one. Only a new selection moves the
+      // camera, and only when it lies outside the view.
+      if (items[0] && moved && key !== own) view.reveal(items[0] as never)
     } catch {
       /* A newer document projection can supersede the selection. */
     }
@@ -323,7 +331,7 @@ function boot() {
       if (kind === 'network') {
         if (!networkModule || !networkStyles) return
         mark('canvas:module')
-        geographic = networkModule.isGeographic(rows, places)
+        geographic = networkModule.isGeographic(rows)
         if (!view) {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
@@ -338,7 +346,6 @@ function boot() {
             select,
             open,
           )
-          drawn = first
           connect(view)
         }
       } else {
@@ -362,7 +369,6 @@ function boot() {
             open,
             bridge.report,
           )
-          drawn = first
           connect(view)
           // A large diagram takes a while to lay out.
           fallbackText.textContent = 'Arranging the diagram…'
@@ -397,8 +403,7 @@ function boot() {
     rows = base
     held = begin.held
     asked = false
-    const placed = kind === 'network' ? begin.placement : begin.presentation
-    if (placed) places = placed
+    if (begin.presentation) presented = begin.presentation
     if (begin.revision.version === state.summary?.version) void render().catch(error)
   }, error)
   bridge.on((message) => {
@@ -431,7 +436,9 @@ function boot() {
         networkModule!.setProjection(view as Network, message.value as Projection)
       else if (message.command === 'orbit') orbit()
       else if (message.command === 'neighborhood') {
-        const item = view.selection[0]
+        // The action names its element: the selection it made may reach the view after it.
+        const item =
+          typeof message.value === 'string' ? drawnItem({ id: message.value }) : view.selection[0]
         if (item) view.fit(view.neighborhood(item as never) as never, { animate: true })
       }
       sync()
@@ -442,6 +449,10 @@ function boot() {
   // benchmarks hold to tests/benchmarks/work.json.
   ;(window as { gridkitStats?: () => unknown }).gridkitStats = () =>
     view && { ...view.stats(), ...owner.gpu?.stats() }
+  // What the view shows selected, and where its camera is, so tests can follow a selection made
+  // in another view.
+  ;(window as { gridkitSelection?: () => unknown }).gridkitSelection = () =>
+    view && { ids: view.selection.map((item) => itemId(item as Item)), camera: view.camera }
   // Where an element drew in the latest frame, so tests can read the color and height its fields
   // map to.
   ;(window as { gridkitLocate?: (id: string) => unknown }).gridkitLocate = (id) => {

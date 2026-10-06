@@ -1,4 +1,5 @@
-import type { DiagramConfig, Positions } from '@latkit/diagram'
+import type { DiagramConfig } from '@latkit/diagram'
+import type { Positions } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
 
 import type { ViewState } from '../../shared/messages.js'
@@ -23,9 +24,6 @@ export function diagramConfig(
   return {
     ...options,
     ...(editing && { detail: 'full' as const }),
-    ...(Object.keys(places).length > 0 && {
-      layout: { ...options.layout, algorithm: 'manual' as const },
-    }),
     input: {
       ...options.input,
       mode: editing && state.writable && !state.stale ? 'edit' : options.input.mode,

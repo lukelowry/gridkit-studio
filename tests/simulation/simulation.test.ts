@@ -20,7 +20,12 @@ import {
   Simulation,
 } from '../../src/gridkit/index.js'
 import { ResultCache } from '../../src/results/index.js'
-import type { GridKit, SimulationInfo, SimulationRequest, RuntimeProcess } from '../../src/shared/messages.js'
+import type {
+  GridKit,
+  RuntimeProcess,
+  SimulationInfo,
+  SimulationRequest,
+} from '../../src/shared/messages.js'
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',

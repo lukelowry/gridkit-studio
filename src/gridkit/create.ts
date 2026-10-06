@@ -57,12 +57,19 @@ export function createRecords(
       const plan = shape.plan.get(field)
       if (!plan || !editable(plan))
         throw failure('invalid-input', `Unknown or non-writable field: ${change.type}.${field}.`)
-      const native = fieldValue(plan, value, options?.resolve ?? ((targetId, type) => {
-        const added = declared.get(targetId)
-        if (added?.type === type) return added.key
-        const target = kase.locate(targetId)
-        return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
-      }))
+      const native = fieldValue(
+        plan,
+        value,
+        options?.resolve ??
+          ((targetId, type) => {
+            const added = declared.get(targetId)
+            if (added?.type === type) return added.key
+            const target = kase.locate(targetId)
+            return target?.table.shape.type === type
+              ? kase.native(target.table, target.row)
+              : undefined
+          }),
+      )
       if (!options && plan.definition.direction === 'out' && value !== null) {
         if (occupied.has(String(value)))
           throw failure('invalid-input', `This signal already has an output driver: ${value}.`)

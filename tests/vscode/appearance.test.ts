@@ -1,11 +1,13 @@
 /** Appearance: high contrast, a compact window, and the case offered to language models. */
 
 import assert from 'node:assert/strict'
+import { basename } from 'node:path'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import { toolDefinitions } from '../../src/shared/tools.js'
 import { type TestHost, testHost, theme, until, VIEWPORT, visible } from './harness.js'
 
 suite('Appearance', () => {
@@ -30,7 +32,7 @@ suite('Appearance', () => {
   test('holds its views in a compact window', async () => {
     await bench.page.setViewportSize({ width: 1280, height: 800 })
     try {
-      await visible(simulation, '[data-testid="study-run"]')
+      await visible(simulation, '[data-testid="simulation-start"]')
       await bench.capture('compact-vscode')
     } finally {
       await bench.page.setViewportSize(VIEWPORT)
@@ -39,17 +41,14 @@ suite('Appearance', () => {
 
   test('offers the case to language models through its tools', async () => {
     const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
-    assert.equal(tools.length, 11)
-    const rows = await vscode.lm.invokeTool('gridkit_query_rows', {
-      input: {
-        uri: bench.document.uri.toString(),
-        version: bench.document.version,
-        from: 'Bus',
-        select: ['name', 'params.kv'],
-        limit: 2,
-      },
+    assert.deepEqual(
+      tools.map((tool) => tool.name).sort(),
+      toolDefinitions.map((tool) => 'gridkit_' + tool.name).sort(),
+    )
+    const listed = await vscode.lm.invokeTool('gridkit_list_cases', {
+      input: {},
       toolInvocationToken: undefined,
     })
-    assert.ok(rows.content.length)
+    assert.match(JSON.stringify(listed.content), new RegExp(basename(bench.document.uri.fsPath)))
   })
 })

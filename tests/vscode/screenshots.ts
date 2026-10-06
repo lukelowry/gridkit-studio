@@ -28,7 +28,7 @@ async function simulate(
   const session = bench.studio.all.get(uri.toString())!
   const previous = session.run?.id
   session.values = values
-  await vscode.commands.executeCommand('gridkitStudio.run', uri)
+  await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
   await until(
     () => session.run?.id !== previous && session.run?.state !== 'running',
     'the run ends',

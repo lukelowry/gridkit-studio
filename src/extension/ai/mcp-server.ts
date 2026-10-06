@@ -30,7 +30,11 @@ export function createAdapter(
       definition,
       handler,
       schema: fromJsonSchema(definition.inputSchema),
-      output: fromJsonSchema((toolDefinitions.find(tool => tool.name === definition.name)?.outputSchema ?? { type: 'object' }) as Parameters<typeof fromJsonSchema>[0]),
+      output: fromJsonSchema(
+        (toolDefinitions.find((tool) => tool.name === definition.name)?.outputSchema ?? {
+          type: 'object',
+        }) as Parameters<typeof fromJsonSchema>[0],
+      ),
     }
   })
   if (

@@ -1,14 +1,14 @@
 /** Render selected views from a fixed run snapshot into a video file. */
 
-import { createDiagram, type Positions } from '@latkit/diagram'
-import { createComposition, type Gpu, type View } from '@latkit/gpu'
+import { createDiagram } from '@latkit/diagram'
+import { createComposition, type Gpu, type Positions, type View } from '@latkit/gpu'
 import type { Data, Domain } from '@latkit/model'
 import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
-import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { recordedRows } from '../../shared/bindings.js'
+import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
@@ -45,13 +45,12 @@ export const DEFAULTS: VideoSettings = {
   quality: 'high',
 }
 
-/** What the export draws: the view state, the case and its run's samples, where its elements
- *  stand, and each view's camera. */
+/** What the export draws: the view state, the case and its run's samples, where the case saves
+ *  its diagram blocks, and each view's camera. */
 interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
   readonly samples: Data
-  readonly placement: Readonly<Record<string, Positions>>
   readonly presentation: Readonly<Record<string, Positions>>
   readonly cameras: Cameras
 }
@@ -85,7 +84,7 @@ export function blockedReason(settings: VideoSettings, state: ViewState): string
     return 'The case can export once the problems listed in Problems are fixed.'
   const range = state.run?.domain
   if (!state.summary || !range || !(range[1] > range[0]))
-    return 'Run a simulation to export its recorded history.'
+    return 'Start a simulation to export its recorded history.'
   if (settings.views.length === 0) return 'Choose at least one view.'
   if (settings.views.includes('monitor') && plotsOf(state).length === 0)
     return 'Choose a signal in Monitor.'
@@ -113,7 +112,7 @@ export function blockedReason(settings: VideoSettings, state: ViewState): string
 export async function exportVideo(
   gpu: Gpu,
   settings: VideoSettings,
-  { state, rows, samples, placement, presentation, cameras }: VideoInputs,
+  { state, rows, samples, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
   signal: AbortSignal,
   onProgress: (progress: VideoProgress) => void,
@@ -132,7 +131,7 @@ export async function exportVideo(
   try {
     for (const view of settings.views) {
       if (view === 'network') {
-        const geographic = isGeographic(rows, placement)
+        const geographic = isGeographic(rows)
         const borders =
           geographic && preferences.get('network.borders')
             ? await loadBorders().catch(() => null)
@@ -140,7 +139,7 @@ export async function exportVideo(
         signal.throwIfAborted()
         const network = keep(
           createNetwork(gpu, {
-            ...networkConfig(rows, samples, placement, state, geographic, borders, true),
+            ...networkConfig(rows, samples, state, geographic, borders, true),
             ...still,
             canvas: null,
             camera: (cameras.network as never) ?? {

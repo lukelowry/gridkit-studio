@@ -1,8 +1,8 @@
-import { createTools } from './tools.js'
-import { MCP } from './mcp.js'
-import { registerNative } from './native.js'
 import type { Sessions } from '../sessions.js'
 import type { Tasks } from '../tasks.js'
+import { MCP } from './mcp.js'
+import { registerNative } from './native.js'
+import { createTools } from './tools.js'
 
 export function registerAI(studio: Sessions, tasks: Tasks) {
   const tools = createTools(studio, tasks)

@@ -126,7 +126,7 @@ export async function run() {
         bench.studio.record(uri.toString(), [{ from: 'Bus', select: ['Vm'] }])
         session.values = { tmax: 1, dt_monitor: 0.01 }
         const start = performance.now()
-        await vscode.commands.executeCommand('gridkitStudio.run', uri)
+        await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
         await until(
           () => session.run?.id !== previous && session.run?.state !== 'running',
           'the run ends',

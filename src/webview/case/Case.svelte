@@ -7,10 +7,11 @@
   import { channelsOf, shortNames } from '../../shared/bindings.js'
   import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import type { ViewState } from '../../shared/messages.js'
+  import type { TableState, ViewState } from '../../shared/messages.js'
   import { elementType, isReference, typeName } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
+  import Icon from '../ui/Icon.svelte'
   import Select from '../ui/Select.svelte'
 
   /** The heading each record key's columns sit under. */
@@ -28,7 +29,10 @@
   let view = $state<ViewState>({})
   let type = $state(bridge.state({ type: 'Bus' }).type)
   let fields = $state<string[]>([])
+  /** The columns chosen for each type, kept as the panel follows a selection between types. */
+  let columns = $state<Record<string, string[]>>({})
   let filter = $state('')
+  let equal = $state<TableState['equal']>()
   let order = $state<{ field: string; direction: 'ascending' | 'descending' } | undefined>()
   let offset = $state(0)
   let total = $state(0)
@@ -38,6 +42,8 @@
   let scroll: HTMLDivElement
   let generation = 0
   let controller: AbortController | undefined
+  /** The selected row the panel scrolls to once it is drawn. */
+  let revealing: string | undefined
   const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
     view.summary?.schema.types[type]?.fields ?? {},
   )
@@ -67,8 +73,8 @@
   )
   const context = (id: string | null, field?: string) =>
     view.summary
-      ? JSON.stringify(
-          menuContext(
+      ? JSON.stringify({
+          ...menuContext(
             view.summary,
             {
               uri: view.summary.uri,
@@ -80,10 +86,27 @@
             },
             view.bindings,
           ),
-        )
+          // The panel's own view of its rows, for the items that change it.
+          gridkitSort: field && order?.field === field ? order.direction : '',
+          gridkitFiltered: !!equal,
+        })
       : '{}'
   const persist = () =>
-    bridge.send({ kind: 'tableState', table: { type, fields: $state.snapshot(fields), filter } })
+    bridge.send({
+      kind: 'tableState',
+      table: {
+        type,
+        columns: $state.snapshot(columns),
+        filter,
+        ...(equal && { equal: $state.snapshot(equal) }),
+      },
+    })
+  /** Show `next` as the type's columns, and keep them for it. */
+  function show(next: string[]) {
+    fields = next.filter((field) => allFields.includes(field))
+    columns[type] = fields
+    persist()
+  }
   async function move(event: KeyboardEvent, row: number, column: number) {
     const key = event.key
     if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return
@@ -114,6 +137,8 @@
         '[data-row="' + nextRow + '"][data-column="' + nextColumn + '"]',
       )
       ?.focus()
+    // The keys move the selection as a click does, so the Network follows.
+    select(rows[nextRow - offset]?.id ?? null, fields[nextColumn])
   }
   async function load() {
     controller?.abort()
@@ -124,6 +149,12 @@
     try {
       // The filter matches a row's name, else its identity.
       const named = allFields.includes('name') ? 'name' : identity
+      const where: NonNullable<RowsQuery['where']>[number][] = [
+        ...(filter && named
+          ? [{ field: named, operator: 'contains', value: filter } as const]
+          : []),
+        ...(equal ? [{ field: equal.field, operator: 'equal', value: equal.value } as const] : []),
+      ]
       const query: RowsQuery = {
         kind: 'rows',
         from: type,
@@ -133,9 +164,7 @@
         count: true,
         ids: true,
         ...(order ? { orderBy: [order] } : {}),
-        ...(filter && named
-          ? { where: [{ field: named, operator: 'contains', value: filter }] }
-          : {}),
+        ...(where.length ? { where } : {}),
       }
       const blocks = await bridge.request('query', $state.snapshot(query), request.signal)
       if (generation !== current) return
@@ -145,6 +174,8 @@
       if (generation !== current) return
       rows = rowsOf(blocks, references)
       total = blocks[0]?.total ?? rows.length
+      await tick()
+      scrolled()
     } catch (reason) {
       if (generation === current && !request.signal.aborted) bridge.report(reason)
     } finally {
@@ -159,6 +190,7 @@
     void offset
     void fields
     void filter
+    void equal
     void order
     const timer = setTimeout(() => {
       void load()
@@ -172,17 +204,21 @@
     type = next
     offset = 0
     filter = ''
+    equal = undefined
     order = undefined
-    fields = allFields.slice(0, COLUMNS)
+    fields =
+      columns[next]?.filter((field) => allFields.includes(field)) ?? allFields.slice(0, COLUMNS)
     persist()
     bridge.save({ type })
     if (scroll) scroll.scrollTop = 0
   }
-  function sort(field: string) {
+  /** Order the rows by `field`: as `direction` says, else the other way from now. */
+  function sort(field: string, direction?: 'ascending' | 'descending') {
     order = {
       field,
       direction:
-        order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending',
+        direction ??
+        (order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending'),
     }
     offset = 0
     scroll.scrollTop = 0
@@ -233,13 +269,26 @@
       bridge.report(reason)
     }
   }
+  /** Scroll the selected row into view once it is drawn; whether it was. */
+  function scrolled(): boolean {
+    const shown = revealing && scroll?.querySelector('tr.selected')
+    if (!shown) return false
+    shown.scrollIntoView({ block: 'nearest' })
+    revealing = undefined
+    return true
+  }
+  /** Show the selected element's row: switch to its type, and scroll the row into view, now or
+   *  once the page holding it loads. */
   async function reveal(id: string) {
     const next = elementType(id)
+    revealing = id
     if (next !== type) changeType(next)
-    else {
-      filter = ''
-      order = undefined
-    }
+    await tick()
+    if (scrolled()) return
+    // A row the filters leave out shows once they go.
+    filter = ''
+    equal = undefined
+    order = undefined
     try {
       const blocks = await bridge.request('query', {
         kind: 'rows',
@@ -265,33 +314,48 @@
         const before = view.selection?.id
         view = merged(view, message.state)
         appearance(view.settings)
-        if (
-          view.selection?.id &&
-          view.selection.id !== before &&
-          view.summary &&
-          !view.stale &&
-          !rows.some((row) => row.id === view.selection!.id)
-        )
-          void reveal(view.selection.id)
         if (first && view.summary) {
+          // Open on the selection's type, else where the panel was left.
           const saved = view.table
+          const wanted = view.selection ? elementType(view.selection.id) : saved?.type
+          columns = saved?.columns ?? {}
           changeType(
-            saved?.type && view.summary.counts[saved.type]
-              ? saved.type
+            wanted && view.summary.counts[wanted]
+              ? wanted
               : view.summary.counts[type]
                 ? type
                 : (types[0]?.value ?? 'Bus'),
           )
-          if (saved?.fields) fields = saved.fields.filter((field) => allFields.includes(field))
-          filter = saved?.filter ?? ''
+          if (type === saved?.type) {
+            filter = saved.filter ?? ''
+            equal = saved.equal
+          }
           persist()
         }
+        if (view.selection?.id && view.selection.id !== before && view.summary && !view.stale)
+          void reveal(view.selection.id)
       } else if (message.kind === 'action') {
+        const value = message.value as Record<string, unknown> | undefined
         if (message.command === 'columns' && Array.isArray(message.value))
-          fields = message.value.filter(
-            (field): field is string => typeof field === 'string' && allFields.includes(field),
-          )
-        if (message.command === 'resetColumns') fields = allFields.slice(0, COLUMNS)
+          show(message.value.filter((field): field is string => typeof field === 'string'))
+        else if (message.command === 'resetColumns') {
+          delete columns[type]
+          fields = allFields.slice(0, COLUMNS)
+        } else if (message.command === 'hideColumn')
+          show(fields.filter((field) => field !== message.value))
+        else if (message.command === 'sort') {
+          if (typeof value?.field === 'string')
+            sort(value.field, value.direction === 'descending' ? 'descending' : 'ascending')
+          else {
+            order = undefined
+            offset = 0
+          }
+        } else if (message.command === 'filter') {
+          equal =
+            value && typeof value.field === 'string' ? (value as TableState['equal']) : undefined
+          offset = 0
+          if (scroll) scroll.scrollTop = 0
+        }
         persist()
       }
     })
@@ -340,6 +404,21 @@
           }
         }
       />
+      {#if equal}
+        <button
+          class="c-btn c-btn--sm case__equal"
+          title="Clear filter"
+          aria-label={'Clear filter ' + leaf(equal.field) + ' = ' + display(equal.value)}
+          data-testid="case-equal"
+          onclick={() => {
+            equal = undefined
+            offset = 0
+            persist()
+          }}
+        >
+          {leaf(equal.field)} = {display(equal.value)}<Icon name="close" />
+        </button>
+      {/if}
     </div>
   {/if}
   <div
@@ -370,6 +449,11 @@
                     {definitions[field]!.unit}
                   </span>{/if}{#if mapped.has(field)}<span class="case__mapped">
                     {mapped.get(field)}
+                  </span>{/if}{#if order?.field === field}<span
+                    class="case__sort"
+                    aria-hidden="true"
+                  >
+                    {order.direction === 'ascending' ? '↑' : '↓'}
                   </span>{/if}
               </button>
             </th>
@@ -482,6 +566,15 @@
     flex: 0 1 14rem;
     min-inline-size: 6rem;
   }
+  /* The value a cell's menu filtered the rows to; pressing it clears the filter. */
+  .case__equal {
+    flex: 0 1 auto;
+    min-inline-size: 0;
+    background: var(--color-selected);
+    color: var(--color-text-1);
+    font-family: var(--font-mono);
+    font-weight: normal;
+  }
   .case__scroll {
     flex: 1;
     min-height: 0;
@@ -539,6 +632,10 @@
   .case__mapped {
     color: var(--color-primary-text);
   }
+  .case__sort {
+    margin-inline-start: var(--spacing-2xs);
+    color: var(--color-text-1);
+  }
   th button,
   .cell {
     display: block;
@@ -554,9 +651,17 @@
   .cell:hover {
     background: var(--color-row-hover);
   }
-  tr.selected,
-  tr.selected th {
+  /* The selected row takes VS Code's list selection, and on its header the accent the Network and
+     Diagram halo the selection in. */
+  tbody tr.selected > * {
     background: var(--color-selected);
+  }
+  .case:focus-within tbody tr.selected > * {
+    background: var(--vscode-list-activeSelectionBackground, var(--color-selected));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
+  tbody tr.selected > th {
+    box-shadow: inset 2px 0 0 var(--color-focus-ring);
   }
   td input {
     width: 100%;

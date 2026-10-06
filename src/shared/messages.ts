@@ -1,6 +1,6 @@
 /** The messages between the extension, its data worker, and its webviews. */
 
-import type { Positions } from '@latkit/diagram'
+import type { Positions } from '@latkit/gpu'
 import type {
   DataBatch,
   Domain,
@@ -23,11 +23,17 @@ import type {
   SignalResult,
 } from './analysis.js'
 import type { Program, RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
+export type {
+  GridKit,
+  Program,
+  RuntimeProcess,
+  SimulationInfo,
+  SimulationRequest,
+} from './simulation.js'
 export { PROGRAMS } from './simulation.js'
-export type { GridKit, Program, RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
 
-import type { Bindings } from './bindings.js'
 import type { MonitoredSignals } from './ai.js'
+import type { Bindings } from './bindings.js'
 import type { AggregateQuery, CaseQuery, EvidencePage, NeighborhoodQuery } from './inspection.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
@@ -104,7 +110,10 @@ export type Mutation =
 export interface Requests {
   captureCase: { input: Revision; output: { snapshotId: string; fingerprint: string } }
   releaseSnapshot: { input: { snapshotId: string }; output: null }
-  resolveRecording: { input: { snapshotId: string; recording: readonly MonitoredSignals[] }; output: FieldSelection[] }
+  resolveRecording: {
+    input: { snapshotId: string; recording: readonly MonitoredSignals[] }
+    output: FieldSelection[]
+  }
   prepareSimulation: { input: SimulationRequest; output: SimulationInfo }
   getSimulation: { input: { simulationId: string }; output: SimulationInfo }
   describeSimulation: { input: { simulationId: string }; output: Summary }
@@ -114,6 +123,8 @@ export interface Requests {
   shutdown: { input: Record<string, never>; output: null }
   aggregate: { input: AggregateQuery; output: Record<string, unknown> }
   neighborhood: { input: NeighborhoodQuery; output: Record<string, unknown> }
+  /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
+  anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
   selection: {
     input: CaseQuery
     output: {
@@ -138,8 +149,15 @@ export interface Requests {
     }
   }
   analyze: { input: ResultsTarget & AnalysisOptions; output: Analysis }
+  validateResults: {
+    input: ResultsTarget & Pick<AnalysisOptions, 'from' | 'field' | 'ids' | 'window'>
+    output: null
+  }
   signals: { input: SignalOptions; output: SignalResult }
-  compare: { input: { before: ResultsTarget; after: ResultsTarget } & AnalysisOptions; output: Comparison }
+  compare: {
+    input: { before: ResultsTarget; after: ResultsTarget } & AnalysisOptions
+    output: Comparison
+  }
   rank: {
     input: ResultsTarget & AnalysisOptions & { contingencies?: number[] }
     output: {
@@ -176,8 +194,6 @@ export interface Requests {
   /** Every element of a type, for a form that picks one. */
   elements: { input: Revision & { type: string }; output: ElementChoice[] }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
-  /** Places for network vertices that have none of their own. */
-  placement: { input: Revision; output: Record<string, Positions> }
   /** Where the diagram's blocks are arranged. */
   presentation: { input: Revision; output: Record<string, Positions> }
   query: {
@@ -258,10 +274,14 @@ export interface Plot {
   id?: string
 }
 
+/** What the Case panel shows: a type, the columns chosen for each type, and its filters. */
 export interface TableState {
   type?: string
-  fields?: string[]
+  columns?: Record<string, string[]>
+  /** Text the shown rows' names contain. */
   filter?: string
+  /** A value of one field every shown row holds. */
+  equal?: { field: string; value: string | number | boolean }
 }
 
 /** Seconds of a run's tail a view holds when the whole run is too large. */
@@ -275,13 +295,14 @@ export interface ViewState {
   values?: Record<string, unknown>
   table?: TableState
   diagramEditing?: boolean
-  navigate?: boolean
   bindings?: Bindings
   summary?: Summary
   stale?: boolean
   /** Why the source fails to parse; `summary` may hold the last valid revision. */
   error?: string
   selection?: Element
+  /** The network elements that stand for a selection the network does not draw. */
+  anchors?: string[]
   run?: SimulationInfo
   /** Whether Run was pressed and GridKit's run has not yet begun. */
   launching?: boolean
@@ -311,8 +332,6 @@ export interface Begin {
   append: boolean
   /** The times whose samples the view holds once the stream ends; absent, the whole run. */
   held?: Held
-  /** Places for network vertices that have none of their own. */
-  placement?: Record<string, Positions>
   /** Where the diagram's blocks are arranged. */
   presentation?: Record<string, Positions>
 }

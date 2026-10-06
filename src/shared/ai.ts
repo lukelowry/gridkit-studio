@@ -75,9 +75,18 @@ export function toolProblem(error: unknown, aborted = false): Record<string, unk
     code: typeof value?.code === 'string' ? value.code : aborted ? 'cancelled' : 'operation-failed',
     message: error instanceof Error ? error.message : String(error),
     ...Object.fromEntries(
-      ['issues', 'componentId', 'field', 'expectedRevision', 'actualRevision', 'simulationId', 'analysisId', 'requestId']
-        .filter(key => value?.[key] !== undefined)
-        .map(key => [key, value![key]]),
+      [
+        'issues',
+        'componentId',
+        'field',
+        'expectedRevision',
+        'actualRevision',
+        'simulationId',
+        'analysisId',
+        'requestId',
+      ]
+        .filter((key) => value?.[key] !== undefined)
+        .map((key) => [key, value![key]]),
     ),
   }
 }

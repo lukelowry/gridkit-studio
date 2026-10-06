@@ -155,26 +155,30 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     })
     return row?.id
   }
-  /** The recorded field in context, or one the user picks. */
+  /** The recorded field in context, or one the user picks: of the element in context, or, from
+   *  the Monitor, of any type. */
   const chooseSignal = async (
     context: Context,
   ): Promise<{ type: string; field: string } | undefined> => {
     const { schema, counts } = context.summary
     if (context.type && context.field && schema.types[context.type]?.fields[context.field]?.sampled)
       return { type: context.type, field: context.field }
+    const own = context.target?.origin !== 'monitor' && context.element ? context.type : undefined
     const choice = await vscode.window.showQuickPick(
-      Object.entries(schema.types).flatMap(([type, definition]) =>
-        Object.entries(definition.fields)
-          .filter(([, field]) => counts[type] && field.sampled)
-          .map(([field, spec]) => ({
-            label: type + '.' + field,
-            description: spec.unit,
-            detail: spec.description,
-            type,
-            field,
-          })),
-      ),
-      { title: 'Plot recorded field' },
+      Object.entries(schema.types)
+        .filter(([type]) => own === undefined || type === own)
+        .flatMap(([type, definition]) =>
+          Object.entries(definition.fields)
+            .filter(([, field]) => counts[type] && field.sampled)
+            .map(([field, spec]) => ({
+              label: type + '.' + field,
+              description: spec.unit,
+              detail: spec.description,
+              type,
+              field,
+            })),
+        ),
+      { title: own && context.element ? 'Plot a signal of ' + context.element.id : 'Plot signal' },
     )
     return choice ? { type: choice.type, field: choice.field } : undefined
   }
@@ -352,13 +356,15 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
       )
   })
   // A second press while the first run starts, as a double click makes, asks for the same run.
-  command('run', ({ session }) => (tasks.active(session.uri) ? undefined : tasks.run(session.uri)))
-  register('stop', (value, supplied) => tasks.stop(targetOf(value, supplied).uri))
+  command('startSimulation', ({ session }) =>
+    tasks.active(session.uri) ? undefined : tasks.simulate(session.uri),
+  )
+  register('stopSimulation', (value, supplied) => tasks.stop(targetOf(value, supplied).uri))
   command('showContingency', async ({ session }, value) => {
     if (session.run?.contingency && typeof value === 'number')
       await studio.client.call('contingency', { run: session.run.id, shown: value })
   })
-  command('clearRun', async ({ session }) => {
+  command('clearResults', async ({ session }) => {
     // The views let go of the runs before they go, and of the run a running run's end reports.
     studio.show(session, undefined)
     changed(session)
@@ -416,7 +422,7 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     await plot(context)
   })
   command('exportCsv', async (context) => {
-    if (!context.session.run) throw new Error('There is no run to export.')
+    if (!context.session.run) throw new Error('There are no results to export.')
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
     if (path)
       await studio.client.call('export', { run: context.session.run.id, path: localPath(path) })
@@ -470,10 +476,21 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     })
     if (rate) session.transport.setRate(Number(rate))
   })
-  for (const id of ['fit', 'neighborhood', 'orbit', 'retryMonitor'] as const)
+  for (const id of ['fit', 'orbit', 'retryMonitor'] as const)
     command(id, (context) =>
       action(context, id, undefined, id === 'retryMonitor' ? 'monitor' : undefined),
     )
+  // A neighborhood shows in a canvas, so from the Case panel the Network frames it.
+  command('neighborhood', (context) => {
+    if (!context.element) return
+    studio.select(context.session.uri, context.element)
+    action(
+      context,
+      'neighborhood',
+      context.element.id,
+      context.target?.origin === 'diagram' ? 'diagram' : 'network',
+    )
+  })
   command('resetMonitorWindow', (context) => {
     context.session.window = undefined
     action(context, 'resetMonitorWindow', undefined, 'monitor')
@@ -501,8 +518,8 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
   })
   command('chooseColumns', async (context) => {
     const { schema, identities } = context.summary
-    const type =
-      context.session.table.type ?? context.type ?? Object.keys(context.summary.counts)[0]
+    const { table } = context.session
+    const type = table.type ?? context.type ?? Object.keys(context.summary.counts)[0]
     const definitions = type ? schema.types[type]?.fields : undefined
     if (!type || !definitions) throw new Error('This case has no elements to show.')
     const fields = Object.keys(definitions).filter(
@@ -518,21 +535,44 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
           .filter(Boolean)
           .join(' · '),
         field,
-        picked: (context.session.table.fields ?? fields.slice(0, 12)).includes(field),
+        picked: (table.columns?.[type] ?? fields.slice(0, 12)).includes(field),
       })),
       { title: typeName(schema, type) + ' columns', canPickMany: true },
     )
     if (selected) {
-      context.session.table.fields = selected.map((item) => item.field)
-      action(context, 'columns', context.session.table.fields, 'case')
+      const columns = selected.map((item) => item.field)
+      table.columns = { ...table.columns, [type]: columns }
+      action(context, 'columns', columns, 'case')
       changed(context.session)
     }
   })
   command('resetColumns', (context) => {
-    context.session.table.fields = undefined
+    const { table } = context.session
+    if (table.columns)
+      table.columns = Object.fromEntries(
+        Object.entries(table.columns).filter(([type]) => type !== table.type),
+      )
     action(context, 'resetColumns', undefined, 'case')
     changed(context.session)
   })
+  // The Case panel's own view of its rows: its order, a value it is filtered to, its columns.
+  for (const [id, direction] of [
+    ['sortAscending', 'ascending'],
+    ['sortDescending', 'descending'],
+  ] as const)
+    command(id, (context) => action(context, 'sort', { field: context.field, direction }, 'case'))
+  command('clearSort', (context) => action(context, 'sort', undefined, 'case'))
+  command('hideColumn', (context) => action(context, 'hideColumn', context.field, 'case'))
+  command('filterValue', async (context) => {
+    const { element, type, field } = context
+    if (!element || !type || !field) return
+    const value = await valueOf(context, type, field, element.id)
+    if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean')
+      throw new Error(leaf(field) + ' holds no single value to filter by.')
+    action(context, 'filter', { field, value }, 'case')
+  })
+  command('clearFilter', (context) => action(context, 'filter', undefined, 'case'))
+  command('copyFieldPath', (context) => vscode.env.clipboard.writeText(context.field ?? ''))
   for (const [id, side] of [
     ['fromEndpoint', 0],
     ['toEndpoint', 1],

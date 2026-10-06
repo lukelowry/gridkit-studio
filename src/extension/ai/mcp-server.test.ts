@@ -55,7 +55,7 @@ async function fixture(
 
 describe('MCP adapter', () => {
   it('publishes a result contract for every native tool', () => {
-    expect(toolDefinitions.map(tool => tool.name).sort()).toEqual(
+    expect(toolDefinitions.map((tool) => tool.name).sort()).toEqual(
       manifest.contributes.languageModelTools.map((tool) => tool.name).sort(),
     )
   })

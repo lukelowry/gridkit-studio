@@ -20,11 +20,11 @@ import { promisify } from 'node:util'
 
 import * as vscode from 'vscode'
 
-import type * as Clients from './clients.js'
-import type { ToolHandler } from './tools.js'
-import type { createAdapter } from './mcp-server.js'
 import type { Sessions } from '../sessions.js'
 import { Access } from './access.js'
+import type * as Clients from './clients.js'
+import type { createAdapter } from './mcp-server.js'
+import type { ToolHandler } from './tools.js'
 
 const execute = promisify(execFile)
 type Connection = { format: 1; address: string; token: string; instance: string; pid: number }
@@ -222,11 +222,12 @@ export class MCP implements vscode.Disposable {
     if (!(await document.save()))
       throw new Error('Save the client configuration to finish connecting.')
     await this.studio.context.workspaceState.update('mcp.enabled', true)
-    await vscode.window.showTextDocument(document, { preview: false })
     const name = client === 'codex' ? 'Codex' : 'Claude Code'
-    void this.studio.inform(
-      `${name} project configuration saved; GridKit relay verified. Reconnect MCP or restart ${name} in this project and accept its project trust prompt. Keep this VS Code workspace open.`,
-    )
+    const message = `${name} configured; GridKit relay verified. Reconnect MCP or restart ${name} in this project and accept its project trust prompt. Keep this VS Code workspace open.`
+    this.studio.inform(message, {
+      label: 'Open Configuration',
+      invoke: () => vscode.window.showTextDocument(document!, { preview: false }),
+    })
   }
 
   /** The workspace directory is stable across reloads; an exact-window launch is opt-in. */
@@ -385,10 +386,13 @@ export class MCP implements vscode.Disposable {
             context.asAbsolutePath('dist/mcp-server.cjs'),
           ) as { createAdapter: typeof createAdapter }
           this.#adapter = module.createAdapter(
-            this.tools.map(tool => ({ ...tool, run: (input, signal) => {
-              this.access.require(tool.capability)
-              return tool.run(input, signal)
-            } })),
+            this.tools.map((tool) => ({
+              ...tool,
+              run: (input, signal) => {
+                this.access.require(tool.capability)
+                return tool.run(input, signal)
+              },
+            })),
             context.extension.packageJSON.contributes.languageModelTools,
             context.extension.packageJSON.version,
             (socket, client) => {

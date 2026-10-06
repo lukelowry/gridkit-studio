@@ -151,7 +151,7 @@
     <div class="c-empty">
       <p class="c-empty__text">
         {view.error
-          ? 'The case can run once the problems listed in Problems are fixed.'
+          ? 'The case can be simulated once the problems listed in Problems are fixed.'
           : 'Loading case…'}
       </p>
     </div>
@@ -164,9 +164,9 @@
             type="button"
             class="c-btn c-btn--sm"
             title="Stop"
-            aria-label="Stop the run"
+            aria-label="Stop the simulation"
             data-testid="study-stop"
-            onclick={() => bridge.command('stop')}
+            onclick={() => bridge.command('stopSimulation')}
           >
             <Icon name="stop" /> Stop
           </button>
@@ -175,18 +175,18 @@
             type="button"
             class="c-btn c-btn--sm"
             title={view.stale
-              ? 'Run waits for a valid revision of the case'
+              ? 'Simulation requires a valid case'
               : invalid
-                ? 'Fix the form to run'
+                ? 'Fix the simulation settings'
                 : selectedCount === 0
-                  ? 'Choose at least one monitored signal to run'
-                  : 'Run'}
-            aria-label={'Run ' + PROGRAMS[program].toLowerCase()}
+                  ? 'Choose at least one monitored signal'
+                  : 'Start Simulation'}
+            aria-label={'Start ' + PROGRAMS[program].toLowerCase()}
             disabled={invalid || view.stale || selectedCount === 0}
-            data-testid="study-run"
-            onclick={() => bridge.command('run')}
+            data-testid="simulation-start"
+            onclick={() => bridge.command('startSimulation')}
           >
-            <Icon name="play" /> Run
+            <Icon name="play" /> Start Simulation
           </button>
         {/if}
       </div>
@@ -208,7 +208,7 @@
         {/if}
       </div>
       {#if view.stale}
-        <p class="c-note c-note--warn" role="status">Run waits for a valid revision of the case.</p>
+        <p class="c-note c-note--warn" role="status">Simulation requires a valid case.</p>
       {/if}
       {#if study && run?.state === 'complete'}
         <Select
@@ -231,7 +231,7 @@
       {/if}
       {#if selectedCount === 0}
         <div class="c-note study__signals" role="status">
-          <span>Choose the signals to record before running.</span>
+          <span>Choose the signals to record before starting.</span>
           <button
             type="button"
             class="c-btn c-btn--sm"

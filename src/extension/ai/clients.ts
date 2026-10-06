@@ -2,7 +2,7 @@
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
-import { type AST, parseForESLint } from 'toml-eslint-parser'
+import { type AST, getStaticTOMLValue, parseForESLint } from 'toml-eslint-parser'
 
 import { message } from '../../shared/format.js'
 
@@ -29,6 +29,30 @@ const keysOf = (key: AST.TOMLKey) =>
 const prefix = (a: readonly unknown[], b: readonly unknown[]) =>
   a.length <= b.length && a.every((key, n) => key === b[n])
 
+/** Connection repair keeps client-owned tool restrictions and timeouts. */
+function configured(previous: unknown, launch: Launch) {
+  const source =
+    previous && typeof previous === 'object' && !Array.isArray(previous)
+      ? (previous as Record<string, unknown>)
+      : {}
+  const kept = Object.fromEntries(
+    Object.entries(source).filter(
+      ([key]) =>
+        ![
+          'url',
+          'headers',
+          'http_headers',
+          'env_http_headers',
+          'bearer_token_env_var',
+          'type',
+        ].includes(key),
+    ),
+  )
+  const env =
+    source.env && typeof source.env === 'object' && !Array.isArray(source.env) ? source.env : {}
+  return { ...kept, ...launch, env: { ...env, ...launch.env } }
+}
+
 /** Replace only GridKit's configuration, preserving other servers, comments and multiline strings. */
 export function clientConfig(client: 'codex' | 'claude', source: string, launch: Launch) {
   if (client === 'claude') {
@@ -50,7 +74,7 @@ export function clientConfig(client: 'codex' | 'claude', source: string, launch:
       modify(
         source || '{}',
         ['mcpServers', 'gridkit'],
-        { type: 'stdio', ...launch },
+        { ...configured(value.mcpServers?.gridkit, launch), type: 'stdio' },
         {
           formattingOptions: {
             insertSpaces: true,
@@ -65,7 +89,8 @@ export function clientConfig(client: 'codex' | 'claude', source: string, launch:
   const target = ['mcp_servers', 'gridkit']
   const edits: { offset: number; length: number; content: string }[] = []
   let inserted = false
-  const value = { ...launch, enabled: true }
+  const previous = getStaticTOMLValue(ast) as { mcp_servers?: { gridkit?: unknown } }
+  const value = { ...configured(previous.mcp_servers?.gridkit, launch), enabled: true }
   const visit = (entry: AST.TOMLKeyValue, parent: (string | number)[]) => {
     const path = [...parent, ...keysOf(entry.key)]
     if (prefix(target, path)) {

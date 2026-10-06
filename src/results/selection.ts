@@ -46,7 +46,7 @@ export async function importedFields(
         outputs.push({
           from: table.shape.type,
           select: [field],
-          rows: { kind: 'ids', ids: rows.map(row => kase.id(table, row)) },
+          rows: { kind: 'ids', ids: rows.map((row) => kase.id(table, row)) },
         })
     }
   }

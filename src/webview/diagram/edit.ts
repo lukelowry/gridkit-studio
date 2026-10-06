@@ -1,7 +1,7 @@
 /** Turn the diagram's editing gestures into transactions on the case document. */
 
-import { arrange, type Diagram, type Positions } from '@latkit/diagram'
-import type { Gpu } from '@latkit/gpu'
+import { arrange, type Diagram } from '@latkit/diagram'
+import type { Gpu, Positions } from '@latkit/gpu'
 import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
 import type { Mutation, ViewState } from '../../shared/messages.js'
@@ -82,20 +82,8 @@ export function editing(
     ).catch(refused)
   })
   diagram.on('move', (proposal) => {
-    const expected = state().summary?.version
-    void (async () => {
-      // The first move in an auto-laid-out diagram also saves where every other block stands.
-      const existing = Object.values(diagram.config.vertices).some((vertex) => vertex.x != null)
-      const all = existing ? [] : moves(diagram, await arrange(gpu, diagram.config, { signal }))
-      const changes = new Map(all.map((change) => ['id' in change ? change.id : '', change]))
-      for (const move of proposal.moves)
-        changes.set(itemId(move.vertex), {
-          kind: 'move',
-          id: itemId(move.vertex),
-          position: move.position,
-        })
-      await commit([...changes.values()], 'Move diagram blocks', expected)
-    })().catch(refused)
+    // Latkit includes the automatically placed neighbors, keeping the drawing stable on accept.
+    void commit(moves(diagram, proposal.positions), 'Move diagram blocks').catch(refused)
   })
   diagram.on('delete', (items) => {
     if (items.length)

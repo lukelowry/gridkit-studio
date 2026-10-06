@@ -189,7 +189,7 @@ describe('recorded result analysis', () => {
     expect(retired).toBe(true)
     await expect(
       readers.use([result], new AbortController().signal, async () => 1),
-    ).rejects.toThrow(/no longer open/)
+    ).rejects.toThrow(/no longer available/)
   })
   it('ranks borrowed study siblings with stable targets and distinguishes failures from missing files', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gridkit-study-'))

@@ -1,4 +1,5 @@
-import type { DiagramConfig, DiagramInput, LayoutOptions } from '@latkit/diagram'
+import type { DiagramConfig, DiagramInput } from '@latkit/diagram'
+import type { LayoutOptions } from '@latkit/gpu'
 
 import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
@@ -62,7 +63,6 @@ export function diagramOptions(s: SettingsReader, palette: Palette, font: string
     detail: s.get('diagram.detail'),
     hover: s.get('diagram.hover'),
     hoverBudgetMs: s.get('diagram.hoverBudgetMs'),
-    animationMaxVertices: s.get('diagram.animationMaxVertices'),
     layout: layoutOf(s),
     input: {
       mode: s.get('diagram.input.mode'),

@@ -53,14 +53,14 @@ suite('Run', function () {
     await until(() => !bench.session.outputs?.length, 'all monitored fields cleared')
     simulation = await bench.view('simulation')
     await until(
-      () => simulation.locator('[data-testid="study-run"]').isDisabled(),
+      () => simulation.locator('[data-testid="simulation-start"]').isDisabled(),
       'empty selection disables Run in the view',
     )
     await bench.toggleSignal('Bus', 'Vm')
     await until(() => bench.session.outputs?.length === 1, 'one selected field')
     // The form hears of the selection, and keeps its values, before any value is typed.
     await until(
-      async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
+      async () => !(await simulation.locator('[data-testid="simulation-start"]').isDisabled()),
       'the view hears of the selection',
     )
     await simulation.locator('[data-testid="field-tmax"]').fill('2')
@@ -70,7 +70,7 @@ suite('Run', function () {
     const { session } = bench
     const shown = session.run?.id
     const before = await frames(network)
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     // Run itself reveals the Monitor.
     monitor = await bench.view('monitor')
     await until(
@@ -161,7 +161,7 @@ suite('Run', function () {
     )
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Vm' }])
     assert.equal(bench.session.run!.outputs[0]!.select[0], 'Vm')
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
       'second run completes',
@@ -183,7 +183,7 @@ suite('Run', function () {
     await simulation.locator('[data-testid="field-fault_start"]').fill('0.1')
     await until(() => bench.session.values.fault_start === 0.1, 'fault timing captured')
     const previous = bench.session.run!.id
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
       'the analysis ends',
@@ -222,7 +222,7 @@ suite('Run', function () {
       () => bench.session.outputs?.some((output) => output.select.includes('Vm')),
       'voltage recorded',
     )
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state !== 'running',
       'TwoArea ends',
@@ -240,7 +240,7 @@ suite('Run', function () {
     await simulation.locator('[data-testid="field-dt_monitor"]').fill('0.001')
     await until(() => bench.session.values.tmax === 1000, 'long run configured')
     const previous = bench.session.run!.id
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.frames! > 64,
       'live samples arrive',
@@ -272,7 +272,7 @@ suite('Run', function () {
     simulation = await bench.show('simulation')
     await simulation.locator('[data-testid="field-tmax"]').fill('0.1')
     const previous = bench.session.run!.id
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'failed',
       'native initialization fails',
@@ -291,7 +291,7 @@ suite('Run', function () {
       assert.equal(await view.locator('.c-note--error, [role="alert"]').count(), 0)
     await bench.replace(good)
     await bench.settled()
-    await simulation.locator('[data-testid="study-run"]').click()
+    await simulation.locator('[data-testid="simulation-start"]').click()
     await until(() => bench.session.run?.state === 'complete', 'corrected TwoArea runs')
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)

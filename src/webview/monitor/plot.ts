@@ -1,7 +1,15 @@
 /** Plot options shared by the Monitor view and video export. */
 
 import { colormaps } from '@latkit/gpu'
-import type { Axis, Domain, FieldSelection } from '@latkit/model'
+import {
+  type Axis,
+  type Data,
+  type Domain,
+  type FieldSelection,
+  type Item,
+  rowAt,
+  selectRows,
+} from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
@@ -15,6 +23,29 @@ export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 
 /** The single trace key, so another field replaces the trace in place. */
 const TRACE = 'plotted'
+
+/** Highlight only a displayed row. The renderer's focus query otherwise overrides trace rows. */
+export function traceSelection(
+  source: Data,
+  selected: string | undefined,
+  type: string,
+  rows?: FieldSelection['rows'],
+): Item[] {
+  if (!selected?.startsWith(type + '/')) return []
+  const table = source.tables[type]
+  if (!table) return []
+  try {
+    const row = rowAt(selectRows(table, { kind: 'ids', ids: [selected] }), 0)
+    const available = selectRows(table, rows)
+    const included =
+      available.kind === 'range'
+        ? row >= available.offset && row < available.offset + available.count
+        : available.values.includes(row)
+    return included ? [{ source, index: table.index, row }] : []
+  } catch {
+    return []
+  }
+}
 
 /** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the
  *  last time label's overhang; the axis labels pad the bottom and left. */
@@ -98,8 +129,8 @@ export function plotOptions(
     hoverBudgetMs: s.get('monitor.hoverBudgetMs'),
     msaa: s.get('monitor.msaa'),
     pickRadiusPx: s.get('monitor.pickRadiusPx'),
-    domainPadding: s.get('monitor.domainPadding'),
     animationMs: s.get('monitor.animationMs'),
+    fitPaddingPx: s.get('monitor.fitPaddingPx'),
     motion: s.get('accessibility.motion') === 'reduce' ? 'reduce' : 'auto',
     selectedWidthPx: s.get('monitor.selectedWidthPx'),
     unselectedAlpha: s.get('monitor.unselectedAlpha'),

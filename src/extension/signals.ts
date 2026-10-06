@@ -125,9 +125,7 @@ export function registerSignals(studio: Sessions) {
     const count = now?.outputs.reduce((n, { select }) => n + select.length, 0) ?? 0
     view.description = now ? `${count} selected` : undefined
     view.message =
-      now && !recordable(now.summary).length
-        ? 'This case has no values a run can record.'
-        : undefined
+      now && !recordable(now.summary).length ? 'This case has no recordable signals.' : undefined
     changed.fire()
   }
   refresh()

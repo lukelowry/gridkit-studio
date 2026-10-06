@@ -2,7 +2,9 @@
 export class Readers<T extends object> {
   readonly #active = new Map<T, Set<{ controller: AbortController; done: Promise<void> }>>()
   readonly #retired = new WeakSet<T>()
-  busy(value: T) { return !!this.#active.get(value)?.size }
+  busy(value: T) {
+    return !!this.#active.get(value)?.size
+  }
 
   async use<R>(
     values: readonly T[],
@@ -11,7 +13,7 @@ export class Readers<T extends object> {
   ): Promise<R> {
     signal.throwIfAborted()
     if (values.some((value) => this.#retired.has(value)))
-      throw new Error('The run is no longer open.')
+      throw new Error('The recording is no longer available.')
     const controller = new AbortController()
     let resolve!: () => void
     const lease = {
@@ -41,7 +43,7 @@ export class Readers<T extends object> {
     this.#retired.add(value)
     const leases = [...(this.#active.get(value) ?? [])]
     for (const lease of leases)
-      lease.controller.abort(new Error('The run was cleared or replaced.'))
+      lease.controller.abort(new Error('The recording was cleared or replaced.'))
     await Promise.all(leases.map((lease) => lease.done))
   }
 }

@@ -24,7 +24,7 @@ import {
   type SettingsValues,
   validateSettings,
 } from '../shared/preferences.js'
-import { networkOf, placementOf } from '../shared/schema.js'
+import { elementType, networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
 import { Client } from './client.js'
 import { Documents, isWritable } from './documents.js'
@@ -34,6 +34,8 @@ export interface Session {
   diagramEditing: boolean
   bindings: Bindings
   selection?: Element
+  /** The network elements that stand for a selection the network does not draw. */
+  anchors?: string[]
   run?: SimulationInfo
   previous?: SimulationInfo
   /** Whether Run was pressed and GridKit's run has not yet begun. */
@@ -53,6 +55,7 @@ export interface Session {
 /** Per-case workspace state; `recording` persists `Session.outputs`. */
 type Saved = Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table'>> & {
   recording?: FieldSelection[]
+  simulationId?: string
 }
 
 /** The display settings for `uri`; an invalid value keeps its default. */
@@ -91,9 +94,19 @@ export function plotsFor(run: SimulationInfo, plots: readonly Plot[]): Plot[] {
 
 export class Sessions {
   /** A requested setup or diagnostic command's result, also kept in the extension log. */
-  inform(text: string) {
+  inform(text: string, action?: { label: string; invoke(): unknown }) {
     this.output.info(text)
-    void vscode.window.showInformationMessage(text)
+    void vscode.window
+      .showInformationMessage(text, ...(action ? [action.label] : []))
+      .then(async (choice) => {
+        if (choice && action) {
+          try {
+            await action.invoke()
+          } catch (error) {
+            this.report(error)
+          }
+        }
+      })
   }
   readonly client: Client
   readonly documents: Documents
@@ -169,15 +182,14 @@ export class Sessions {
     this.documents = new Documents(this.client)
     this.disposables.push(
       this.changed.event(() => this.updateContexts()),
-      // A stopped worker takes every run's results with it: a run it was making fails, and the
-      // others leave the views, which would otherwise ask for results no longer there.
+      // Completed recordings survive worker restarts. Unfinished simulations are interrupted.
       this.client.failure.event((error) => {
         this.report(error)
         for (const session of this.all.values()) {
-          const lost = session.run
-          this.show(session, undefined)
-          if (lost?.state === 'running')
-            session.run = { ...lost, state: 'failed', message: error.message, frames: 0 }
+          if (session.run && ['preparing', 'running'].includes(session.run.state)) {
+            session.run = { ...session.run, state: 'interrupted', message: error.message }
+            session.transport.setLive(false)
+          }
           this.changed.fire(session.uri)
         }
       }),
@@ -263,6 +275,24 @@ export class Sessions {
         cameras: {},
         table: saved.table ?? {},
       })
+      if (saved.simulationId) {
+        const session = this.all.get(uri)!
+        void this.client.call('getSimulation', { simulationId: saved.simulationId }).then(
+          (info) => {
+            if (
+              info.evicted ||
+              session.run ||
+              this.all.get(uri) !== session ||
+              this.context.workspaceState.get<Saved>('case:' + uri)?.simulationId !==
+                saved.simulationId
+            )
+              return
+            this.show(session, info)
+            this.changed.fire(uri)
+          },
+          (error) => this.output.warn('Could not restore simulation: ' + message(error)),
+        )
+      }
     }
     this.changed.fire(uri)
     return this.all.get(uri)!
@@ -288,6 +318,7 @@ export class Sessions {
       plots: session.plots,
       table: session.table,
       recording: session.outputs,
+      simulationId: session.run?.contingency?.study ?? session.run?.id,
     }
     return this.context.workspaceState.update('case:' + session.uri, saved)
   }
@@ -323,9 +354,6 @@ export class Sessions {
       uri,
       version: entry?.document.version,
       writable: !!entry && isWritable(entry.document),
-      navigate: vscode.workspace
-        .getConfiguration('gridkitStudio', vscode.Uri.parse(uri))
-        .get('navigateOnSelection', false),
       diagramEditing: session?.diagramEditing,
       settings: session?.settings,
       bindings: session?.bindings,
@@ -333,6 +361,7 @@ export class Sessions {
       stale: entry?.stale,
       error: entry?.error,
       selection: session?.selection,
+      anchors: session?.anchors,
       run: session?.run,
       launching: session?.launching,
       outputs: session?.outputs,
@@ -345,8 +374,34 @@ export class Sessions {
   select(uri: string, element?: Element) {
     const session = this.all.get(uri) ?? this.activate(uri)
     if (session.selection?.id === element?.id && session.selection?.field === element?.field) return
+    const moved = session.selection?.id !== element?.id
     session.selection = element
+    if (moved) {
+      session.anchors = undefined
+      if (element) void this.#anchor(session, element.id)
+    }
     this.changed.fire(uri)
+  }
+  /** Find what the network draws for the selected element `id`, once the selection holds it. */
+  async #anchor(session: Session, id: string) {
+    const entry = this.documents.entries.get(session.uri)
+    if (!entry?.summary || entry.stale) return
+    const network = networkOf(entry.summary.schema)
+    const drawn = [...network.vertices, ...network.edges.map((edge) => edge.type)]
+    if (drawn.includes(elementType(id))) return
+    try {
+      const anchors = await this.client.call('anchors', {
+        uri: session.uri,
+        version: entry.summary.version,
+        id,
+        drawn,
+      })
+      if (session.selection?.id !== id) return
+      session.anchors = anchors
+      this.changed.fire(session.uri)
+    } catch (error) {
+      this.report(error)
+    }
   }
   /** Put `run` on the session's clock: a new run resets the span, more frames of the same run
    *  extend it, and none clears it. Another contingency of the shown study keeps the time. */
@@ -360,6 +415,7 @@ export class Sessions {
       session.previous = undefined
       session.window = undefined
       transport.clear()
+      void this.persist(session)
       return
     }
     const live = run.state === 'running'
@@ -430,17 +486,12 @@ export class Sessions {
     this.changed.fire(uri)
   }
   async dispose() {
-    await Promise.all(
-      [...this.all.values()]
-        .filter((session) => session.run?.state === 'running')
-        .map((session) => this.client.call('stop', { uri: session.uri }).catch(() => {})),
-    )
     for (const session of this.all.values()) {
       await this.persist(session)
       session.transport.dispose()
     }
     this.documents.dispose()
-    for (const disposable of this.disposables) disposable.dispose()
+    await Promise.allSettled(this.disposables.map((disposable) => disposable.dispose()))
     this.changed.dispose()
     this.clock.dispose()
     this.action.dispose()

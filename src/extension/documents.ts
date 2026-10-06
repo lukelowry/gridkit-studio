@@ -122,7 +122,13 @@ export class Documents {
     const current = entry
     const input =
       entry.workerVersion !== undefined && entry.changes.length
-        ? { uri, version, attachmentId: entry.attachmentId, baseVersion: entry.workerVersion, changes: entry.changes }
+        ? {
+            uri,
+            version,
+            attachmentId: entry.attachmentId,
+            baseVersion: entry.workerVersion,
+            changes: entry.changes,
+          }
         : { uri, version, attachmentId: entry.attachmentId, text: document.getText() }
     entry.changes = []
     entry.workerVersion = version
@@ -205,10 +211,19 @@ export class Documents {
     )
   }
   /** Content-based transactions remain valid when an unchanged document is reopened. */
-  async transactContent(uri: string, fingerprint: string, mutations: readonly Mutation[], edits: readonly SourceEdit[]) {
+  async transactContent(
+    uri: string,
+    fingerprint: string,
+    mutations: readonly Mutation[],
+    edits: readonly SourceEdit[],
+  ) {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
     const summary = await this.ensure(document)
-    if (summary.fingerprint !== fingerprint) throw problem('revision-conflict', 'Case content changed before applying changes.', { expectedRevision: fingerprint, actualRevision: summary.fingerprint })
+    if (summary.fingerprint !== fingerprint)
+      throw problem('revision-conflict', 'Case content changed before applying changes.', {
+        expectedRevision: fingerprint,
+        actualRevision: summary.fingerprint,
+      })
     await this.transact(uri, summary.version, mutations, 'Apply GridKit case changes', edits)
     return document
   }
@@ -234,7 +249,14 @@ export class Documents {
       .catch(() => {})
       .then(async () => {
         check()
-        const edits = prepared ?? await this.client.call('transact', { uri, version: expected, attachmentId: entry.attachmentId, mutations })
+        const edits =
+          prepared ??
+          (await this.client.call('transact', {
+            uri,
+            version: expected,
+            attachmentId: entry.attachmentId,
+            mutations,
+          }))
         check()
         if (!edits.length) return
         const workspaceEdit = new vscode.WorkspaceEdit()

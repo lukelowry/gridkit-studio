@@ -1,24 +1,30 @@
 <!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import { type Data, type Domain, itemId, selectRows } from '@latkit/model'
+  import { type Data, type Domain, itemId } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
-  import { rowsOf } from '../../shared/cells.js'
   import { recordedRows } from '../../shared/bindings.js'
+  import { rowsOf } from '../../shared/cells.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
-  import { elementType, fieldName, typeName } from '../../shared/schema.js'
+  import { fieldName, typeName } from '../../shared/schema.js'
   import { clamp, type ClockState } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
-  import { itemOf, nativeMenu } from '../menu.js'
-  import { MONITOR, patchOf } from '../patch.js'
+  import { nativeMenu } from '../menu.js'
   import type { Palette } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
-  import { axisLabel, PLOT_LIMITS, plotOptions, sameWindow, tracesOf } from './plot.js'
+  import {
+    axisLabel,
+    PLOT_LIMITS,
+    plotOptions,
+    sameWindow,
+    traceSelection,
+    tracesOf,
+  } from './plot.js'
 
   let {
     plot,
@@ -77,36 +83,40 @@
       fieldName(definition, plot.field),
     ),
   )
+  const rows = $derived(
+    plot.id
+      ? { kind: 'ids' as const, ids: [plot.id] }
+      : recordedRows(view.run?.outputs ?? [], { type: plot.from, field: plot.field }),
+  )
   const traces = $derived(
     tracesOf(
       settings,
       { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
       view.bindings,
-      recordedRows(view.run?.outputs ?? [], { type: plot.from, field: plot.field }),
+      rows,
     ),
   )
 
   let monitor = $state.raw<Monitor | null>(null)
-  /** The options last sent to the plot, so an update sends only what changed. */
-  let drawn: Record<string, unknown> = {}
+  /** The plot's whole config, besides its canvas, time, and camera. */
+  const config = $derived(source && { ...style, source, traces, limits: PLOT_LIMITS })
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
-    if (!source) throw new Error('Nothing to plot.')
+    if (!config) throw new Error('Nothing to plot.')
     const device = await gpu()
     signal.throwIfAborted()
     const made = createMonitor(device, {
       canvas,
       at: t,
-      source,
-      camera: { x: [shown[0], shown[1]], fit: settings.get('monitor.camera.fit') },
-      traces,
+      source: config.source,
+      traces: config.traces,
       limits: PLOT_LIMITS,
+      camera: { x: [shown[0], shown[1]], fit: settings.get('monitor.camera.fit') },
     })
-    made.set(style)
-    drawn = { ...style, source, traces }
+    made.set(config, { replace: true })
     const offs = [
-      made.on('error', (error) => bridge.report(new Error(`${name}: ${error.message}; traces=${JSON.stringify(traces)}; simulation=${view.run?.id}; selected=${JSON.stringify(selectRows(source!.tables[plot.from]!, recordedRows(view.run?.outputs ?? [], {type:plot.from,field:plot.field})))}; pages=${JSON.stringify(Array.from(source?.tables[plot.from]?.fields[plot.field] ?? [], p => ({rows: p.rows, samples: p.samples && {firstFrame:p.samples.firstFrame, length:p.samples.coordinates.length}})))}`, { cause: error }))),
+      made.on('error', (error) => bridge.report(error)),
       made.on('frame', () => {
         canvas.dataset.rendered = 'true'
       }),
@@ -155,13 +165,9 @@
    *  trace. */
   const stop = (event: Event) => event.stopPropagation()
 
-  // New frames append; other options are sent only where they changed.
+  // The plot keeps what did not change: new frames append, and equal options rebuild nothing.
   $effect(() => {
-    const next = { ...style, source, traces }
-    if (!monitor || source === undefined) return
-    const patch = patchOf(drawn, next, MONITOR)
-    drawn = next
-    if (patch) monitor.set(patch)
+    if (monitor && config) monitor.set(config, { replace: true })
   })
   $effect(() => {
     monitor?.set({ camera: { fit: settings.get('monitor.camera.fit') } })
@@ -175,15 +181,7 @@
     const selected = view.selection?.id
     void source // Each new snapshot needs the row found again.
     if (!monitor) return
-    try {
-      const item =
-        selected && elementType(selected) === plot.from
-          ? itemOf(monitor.config.source, selected)
-          : undefined
-      monitor.select(item ? [item] : [])
-    } catch {
-      monitor.select([])
-    }
+    monitor.select(traceSelection(monitor.config.source, selected, plot.from, rows))
   })
   $effect(() => {
     monitor?.set({ at: t })
@@ -310,8 +308,8 @@
           {view.run?.state === 'running'
             ? 'Waiting for samples…'
             : view.run
-              ? `This run did not record ${name}.`
-              : `Run a simulation to plot ${name}.`}
+              ? `This simulation did not record ${name}.`
+              : `Start a simulation to plot ${name}.`}
         </p>
       </div>
     {/if}

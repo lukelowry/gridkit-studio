@@ -10,6 +10,20 @@ const launch = {
   env: { ELECTRON_RUN_AS_NODE: '1' },
 }
 describe('project MCP configuration', () => {
+  it('preserves client tool restrictions, timeouts and additional environment values when reconnecting', () => {
+    const source =
+      '[mcp_servers.gridkit]\ncommand="old"\ndisabled_tools=["gridkit_edit_case"]\ntool_timeout_sec=120\nenv={CUSTOM="kept"}\n'
+    const value = getStaticTOMLValue(parseForESLint(clientConfig('codex', source, launch)).ast)
+    expect(value).toMatchObject({
+      mcp_servers: {
+        gridkit: {
+          disabled_tools: ['gridkit_edit_case'],
+          tool_timeout_sec: 120,
+          env: { CUSTOM: 'kept', ELECTRON_RUN_AS_NODE: '1' },
+        },
+      },
+    })
+  })
   it.each([
     '# keep me\nmodel = "a"\n[mcp_servers.other]\ncommand="untouched"\n',
     '# keep me\n[mcp_servers.gridkit]\ncommand="old"\n[mcp_servers.gridkit.env]\nOLD="1"\n[mcp_servers.other]\ncommand="untouched"\n',

@@ -5,12 +5,38 @@ import type { Revision, Summary } from '../shared/messages.js'
 
 export function summarize(kase: Case, revision: Revision, parseMs = 0): Summary {
   return {
-    ...revision, name: kase.name, fingerprint: kase.version, schema: kase.schema,
-    creation: Object.fromEntries([...kase.catalog.shapes].filter(([, shape]) => shape.array).map(([type, shape]) => [type, { keyType: shape.identity.type, required: [...shape.plan.values()].filter(plan => plan.required && plan.source.kind !== 'identity').map(plan => plan.name) }])),
-    editable: Object.fromEntries([...kase.tables].map(([type, { shape }]) => [type, [...shape.plan.values()].filter(editable).map(plan => plan.name)])),
-    identities: Object.fromEntries([...kase.tables].map(([type, { shape }]) => [type, shape.identity.name])),
-    counts: Object.fromEntries([...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!])),
-    parameters: parametersOf(kase.catalog), issues: diagnose(kase), parseMs,
+    ...revision,
+    name: kase.name,
+    fingerprint: kase.version,
+    schema: kase.schema,
+    creation: Object.fromEntries(
+      [...kase.catalog.shapes]
+        .filter(([, shape]) => shape.array)
+        .map(([type, shape]) => [
+          type,
+          {
+            keyType: shape.identity.type,
+            required: [...shape.plan.values()]
+              .filter((plan) => plan.required && plan.source.kind !== 'identity')
+              .map((plan) => plan.name),
+          },
+        ]),
+    ),
+    editable: Object.fromEntries(
+      [...kase.tables].map(([type, { shape }]) => [
+        type,
+        [...shape.plan.values()].filter(editable).map((plan) => plan.name),
+      ]),
+    ),
+    identities: Object.fromEntries(
+      [...kase.tables].map(([type, { shape }]) => [type, shape.identity.name]),
+    ),
+    counts: Object.fromEntries(
+      [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
+    ),
+    parameters: parametersOf(kase.catalog),
+    issues: diagnose(kase),
+    parseMs,
   }
 }
 
@@ -36,7 +62,10 @@ export class CaseSnapshots {
   }
   get(snapshotId: string): CapturedCase {
     const entry = this.#entries.get(snapshotId)
-    if (!entry) throw Object.assign(new Error('The captured case is no longer available.'), { code: 'case-conflict' })
+    if (!entry)
+      throw Object.assign(new Error('The captured case is no longer available.'), {
+        code: 'case-conflict',
+      })
     return entry
   }
   retain(snapshotId: string) {

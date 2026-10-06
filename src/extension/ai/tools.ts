@@ -27,14 +27,18 @@ export function createTools(studio: Sessions, tasks: Tasks) {
   const simulations = new Simulations(studio, tasks, requests)
   const handlers: ToolHandler[] = []
   const register: Register = (name, execute) => {
-    const definition = toolDefinitions.find(tool => tool.name === 'gridkit_' + name)
-    if (!definition || handlers.some(handler => handler.name === definition.name)) throw new Error('Missing or duplicate GridKit tool: ' + name)
+    const definition = toolDefinitions.find((tool) => tool.name === 'gridkit_' + name)
+    if (!definition || handlers.some((handler) => handler.name === definition.name))
+      throw new Error('Missing or duplicate GridKit tool: ' + name)
     handlers.push({
-      name: definition.name, message: definition.displayName, capability: definition.capability,
+      name: definition.name,
+      message: definition.displayName,
+      capability: definition.capability,
       readOnly: definition.capability === 'inspect',
       async run(input, signal) {
         signal.throwIfAborted()
-        if (!vscode.workspace.isTrusted) throw problem('workspace-untrusted', 'Trust this workspace before using GridKit tools.')
+        if (!vscode.workspace.isTrusted)
+          throw problem('workspace-untrusted', 'Trust this workspace before using GridKit tools.')
         validateInput(definition.inputSchema, input)
         return withCaseLeases(studio, () => execute(input as never, signal))
       },
@@ -44,6 +48,7 @@ export function createTools(studio: Sessions, tasks: Tasks) {
   simulationTools(studio, simulations, register)
   resultTools(studio, analyses, register)
   displayTools(studio, register)
-  if (handlers.length !== toolDefinitions.length) throw new Error('GridKit tool contracts and handlers differ.')
+  if (handlers.length !== toolDefinitions.length)
+    throw new Error('GridKit tool contracts and handlers differ.')
   return handlers
 }

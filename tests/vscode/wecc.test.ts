@@ -185,7 +185,7 @@ suite('WECC240 run', function () {
       fault_duration: 0.05,
     }
     const before = await frames(network)
-    await vscode.commands.executeCommand('gridkitStudio.run', uri)
+    await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
     await until(() => (session().run?.frames ?? 0) > 0, 'frames arrive', 180_000)
     await until(async () => (await frames(network)) > before, 'live Va frames repaint the network')
     await until(() => session().run?.state !== 'running', 'the run ends', 300_000)

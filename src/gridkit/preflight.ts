@@ -39,8 +39,7 @@ export function preflight(
   }
   const command = commandOf(kase, values as Arguments<Parameters>)
   const outputs = selections(kase, selected)
-  if (!outputs.length)
-    throw failure('invalid-input', 'Choose at least one monitored signal to run.')
+  if (!outputs.length) throw failure('invalid-input', 'Choose at least one monitored signal.')
   const columns = outputs.reduce((n, field) => n + field.rows.length, 1)
   const faults = faultRecords(kase, command.faults)
   return { values, command, outputs, faults, columns }

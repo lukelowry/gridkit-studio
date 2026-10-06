@@ -13,13 +13,13 @@ import {
   staticFields,
 } from '@latkit/model'
 
+import { catalogOf } from './gridkit/definition.js'
 import {
   applyChanges,
   available,
   Case,
   catalog,
   completionsAt,
-  placement,
   preflight,
   presentation,
   selections,
@@ -28,9 +28,8 @@ import {
   sourceRange,
   transaction,
 } from './gridkit/index.js'
-import { aggregate, neighborhood, selectIds } from './gridkit/inspection.js'
-import { catalogOf } from './gridkit/definition.js'
-import { analysisLimit, analyze, compare, snapshot } from './results/analysis.js'
+import { aggregate, anchors, neighborhood, selectIds } from './gridkit/inspection.js'
+import { analysisLimit, analysisSelection, analyze, compare, snapshot } from './results/analysis.js'
 import { Evidence } from './results/findings.js'
 import { importedFields, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
@@ -101,28 +100,49 @@ const storage = new ResultStorage(workerData.storage ?? join(scratch, 'retained'
 const ready = storage.initialize()
 const snapshots = new CaseSnapshots()
 const simulations = new Simulations()
-const loading = new Map<string, Promise<Results>>()
+const loading = new Map<
+  string,
+  { controller: AbortController; done: Promise<Results>; users: number }
+>()
 let eviction = Promise.resolve()
-function trimRecordings(protect?: string) {
-  eviction = eviction.catch(() => {}).then(() => storage.evict(
-    workerData.storageBytes ?? 4096 * (1 << 20),
-    new Set([...simulations.entries.keys(), ...loading.keys(), ...(protect ? [protect] : [])]),
-    async id => {
-      const loaded = [...histories.values()].flat().filter(result => (result.info.contingency?.study ?? result.info.id) === id)
-      if (loaded.some(result => readers.busy(ownerOf(result)))) return false
-      for (const result of loaded) {
-        const values = histories.get(result.info.revision.uri)!
-        values.splice(values.indexOf(result), 1)
-        await readers.retire(ownerOf(result))
-        result.release()
-        if (result.ownedDirectory) owners.delete(result.ownedDirectory)
-      }
-      return true
-    },
-  ))
+function trimRecordings(protect?: string, findingsId?: string) {
+  eviction = eviction
+    .catch(() => {})
+    .then(async () => {
+      const budget = workerData.storageBytes ?? 4096 * (1 << 20)
+      const findingsBytes = await evidence.evict(budget / 8, findingsId)
+      return storage.evict(
+        Math.max(0, budget - findingsBytes),
+        new Set([...simulations.entries.keys(), ...loading.keys(), ...(protect ? [protect] : [])]),
+        async (id) => {
+          const loaded = [...histories.values()]
+            .flat()
+            .filter((result) => (result.info.contingency?.study ?? result.info.id) === id)
+          if (loaded.some((result) => readers.busy(ownerOf(result)))) return false
+          for (const result of loaded) {
+            const values = histories.get(result.info.revision.uri)!
+            values.splice(values.indexOf(result), 1)
+            await readers.retire(ownerOf(result))
+            result.release()
+            if (result.ownedDirectory) owners.delete(result.ownedDirectory)
+          }
+          return true
+        },
+      )
+    })
   return eviction
 }
 const evidence = new Evidence(join(storage.directory, 'findings'))
+async function saveFindings(
+  uri: string,
+  result: { rows: unknown[] },
+  signal: AbortSignal,
+  id?: string,
+) {
+  const saved = await evidence.put(uri, result, signal, id)
+  await trimRecordings(undefined, saved)
+  return saved
+}
 const selectionsById = new Map<
   string,
   { uri: string; fingerprint: string; from: string; ids: string[] }
@@ -135,7 +155,11 @@ function selected<T extends { selection?: string; ids?: string[]; from: string }
   if (input.ids) throw new Error('Choose a selection or explicit IDs, not both.')
   const value = selectionsById.get(input.selection)
   if (!value || value.fingerprint !== kase.version || value.from !== input.from)
-    throw new Error('Selection does not match this case content and type. Create a new selection.')
+    throw new Error(
+      'Selection expired or does not match this case content and type. Create a new selection.',
+    )
+  selectionsById.delete(input.selection)
+  selectionsById.set(input.selection, value)
   if (!value.ids.length) throw new Error('The selection is empty.')
   return { ...input, ids: value.ids }
 }
@@ -156,7 +180,8 @@ const get = (revision: Revision) => {
   if (
     !entry ||
     entry.summary.version !== revision.version ||
-    parses.get(revision.uri) !== revision.version
+    parses.get(revision.uri) !== revision.version ||
+    (revision.attachmentId !== undefined && attachments.get(revision.uri) !== revision.attachmentId)
   )
     throw new Error('The document changed. Wait for the current revision.')
   return entry
@@ -169,34 +194,85 @@ const findRun = (id: string, uri?: string, allowStudy = false) => {
     )
     if (run) return run
   }
-  throw Object.assign(new Error('No recording is available for this simulation.'), { code: 'results-unavailable', simulationId: id })
+  throw Object.assign(new Error('No recording is available for this simulation.'), {
+    code: 'results-unavailable',
+    simulationId: id,
+  })
 }
 
 async function loadResult(id: string, signal: AbortSignal): Promise<Results> {
-  try { return findRun(id, undefined, true) } catch { /* Load retained recordings on demand. */ }
-  const pending = loading.get(id)
-  if (pending) return pending
-  const load = (async () => {
-    const record = storage.records.get(id)
-    if (!record || !(await storage.available(id)))
-      throw Object.assign(new Error('This simulation has no retained recording.'), { code: record?.info.evicted ? 'results-evicted' : 'results-unavailable', simulationId: id })
-    const kase = await Case.parse(await storage.source(id), catalogOf(await storage.catalog(id)), record.info.name, signal)
-    if (kase.version !== record.info.fingerprint) throw new Error('The retained case fingerprint does not match its recording.')
-    const result = new Results({ ...record.info, frames: 0, domain: [0, 0] }, kase, selections(kase, record.request.outputs), cache, storage.path(id))
-    try {
-      await result.ingest(signal, () => true, async () => {})
-      await retain(record.info.revision.uri, result)
-      return result
-    } catch (error) { result.release(); throw error }
-  })().finally(() => loading.delete(id))
-  loading.set(id, load)
-  return load
+  signal.throwIfAborted()
+  try {
+    return findRun(id, undefined, true)
+  } catch {
+    /* Load retained recordings on demand. */
+  }
+  let pending = loading.get(id)
+  if (!pending) {
+    const controller = new AbortController()
+    const signal = controller.signal
+    const done = (async () => {
+      const record = storage.records.get(id)
+      if (!record || !(await storage.available(id)))
+        throw Object.assign(new Error('This simulation has no retained recording.'), {
+          code: record?.info.evicted ? 'results-evicted' : 'results-unavailable',
+          simulationId: id,
+        })
+      const kase = await Case.parse(
+        await storage.source(id),
+        catalogOf(await storage.catalog(id)),
+        record.info.name,
+        signal,
+      )
+      if (kase.version !== record.info.fingerprint)
+        throw new Error('The retained case fingerprint does not match its recording.')
+      const result = new Results(
+        { ...record.info, frames: 0, domain: [0, 0] },
+        kase,
+        selections(kase, record.request.outputs),
+        cache,
+        storage.path(id),
+      )
+      try {
+        await result.ingest(
+          signal,
+          () => true,
+          async () => {},
+        )
+        await retain(record.info.revision.uri, result)
+        return result
+      } catch (error) {
+        result.release()
+        throw error
+      }
+    })().finally(() => {
+      if (loading.get(id)?.done === done) loading.delete(id)
+    })
+    pending = { controller, done, users: 0 }
+    loading.set(id, pending)
+  }
+  const load = pending
+  load.users++
+  // Each consumer leaves independently; only the last cancelled consumer aborts decoding.
+  let abort!: () => void
+  return new Promise<Results>((resolve, reject) => {
+    abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    load.done.then(resolve, reject)
+  }).finally(() => {
+    signal.removeEventListener('abort', abort)
+    if (--load.users === 0 && loading.get(id) === load) {
+      loading.delete(id)
+      load.controller.abort(new Error('No consumers remain for this recording.'))
+    }
+  })
 }
 
 async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) {
   if (input.simulationId && storage.records.has(input.simulationId)) {
     const existing = simulations.entries.get(input.simulationId)
-    if (!existing || existing.request.uri !== input.uri) throw new Error('Simulation identifier is already in use.')
+    if (!existing || existing.request.uri !== input.uri)
+      throw new Error('Simulation identifier is already in use.')
     return existing.info
   }
   const captured = input.snapshotId ? snapshots.get(input.snapshotId) : get(input)
@@ -204,20 +280,43 @@ async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) 
   const checked = preflight(kase, input.values, input.outputs)
   await available(input.gridkit, checked.command.program)
   signal.throwIfAborted()
-  if (simulations.active(input.uri)) throw Object.assign(new Error('A simulation is already active for this case.'), { code: 'simulation-active' })
+  if (simulations.active(input.uri))
+    throw Object.assign(new Error('A simulation is already active for this case.'), {
+      code: 'simulation-active',
+    })
   const id = input.simulationId ?? crypto.randomUUID()
   const info: SimulationInfo = {
-    id, revision: { uri: input.uri, version: input.version }, fingerprint: kase.version,
-    name: kase.name, state: 'preparing', path: join(storage.path(id), 'results.csv'), format: 'csv',
-    frames: 0, domain: [0, 0], started: Date.now(), outputs: input.outputs,
+    id,
+    revision: { uri: input.uri, version: input.version },
+    fingerprint: kase.version,
+    name: kase.name,
+    state: 'preparing',
+    path: join(storage.path(id), 'results.csv'),
+    format: 'csv',
+    frames: 0,
+    domain: [0, 0],
+    started: Date.now(),
+    outputs: input.outputs,
     span: checked.command.domain,
-    configuration: { values: checked.values, program: checked.command.program, options: checked.command.options.map(({ option, value }) => ({ name: option.id, value })), addedFaults: structuredClone(checked.command.faults) },
+    configuration: {
+      values: checked.values,
+      program: checked.command.program,
+      options: checked.command.options.map(({ option, value }) => ({ name: option.id, value })),
+      addedFaults: structuredClone(checked.command.faults),
+    },
   }
   const request = { ...input, simulationId: id, values: checked.values }
   if (input.snapshotId) snapshots.retain(input.snapshotId)
-  simulations.entries.set(id, { request, kase, info, controller: new AbortController(), snapshotId: input.snapshotId })
-  try { await storage.create(info, request, kase) }
-  catch (error) {
+  simulations.entries.set(id, {
+    request,
+    kase,
+    info,
+    controller: new AbortController(),
+    snapshotId: input.snapshotId,
+  })
+  try {
+    await storage.create(info, request, kase)
+  } catch (error) {
     simulations.entries.delete(id)
     storage.records.delete(id)
     if (input.snapshotId) snapshots.release(input.snapshotId)
@@ -227,16 +326,33 @@ async function prepareSimulation(input: SimulationRequest, signal: AbortSignal) 
   return info
 }
 
-async function stopSimulation(id: string) {
+async function stopSimulation(id: string, interrupted = false) {
   const simulation = simulations.entries.get(id)
   if (!simulation) {
-    if (!storage.records.has(id)) throw Object.assign(new Error('Unknown simulation.'), { code: 'simulation-not-found' })
+    const record = storage.records.get(id)
+    if (!record)
+      throw Object.assign(new Error('Unknown simulation.'), { code: 'simulation-not-found' })
+    if (['preparing', 'running'].includes(record.info.state))
+      throw Object.assign(
+        new Error('This simulation belongs to another VS Code window. Stop it in that window.'),
+        { code: 'simulation-owner-unavailable' },
+      )
     return
   }
-  simulation.controller.abort(new Error('Simulation cancelled.'))
+  simulation.controller.abort(
+    Object.assign(
+      new Error(
+        interrupted
+          ? 'The extension stopped before this simulation completed.'
+          : 'Simulation cancelled.',
+      ),
+      { interrupted },
+    ),
+  )
   if (simulation.completion) await simulation.completion
   else {
-    simulation.info.state = 'cancelled'
+    simulation.info.state = interrupted ? 'interrupted' : 'cancelled'
+    simulation.info.message = simulation.controller.signal.reason.message
     await storage.save(id)
     if (simulation.snapshotId) snapshots.release(simulation.snapshotId)
     simulations.entries.delete(id)
@@ -291,7 +407,13 @@ async function retain(uri: string, run: Results) {
   histories.set(uri, runs)
   const loaded = [...histories.values()].flat().sort((a, b) => a.info.started - b.info.started)
   for (const old of loaded.slice(0, Math.max(0, loaded.length - 8))) {
-    if (old === run || old.info.state === 'running' || readers.busy(ownerOf(old)) || !storage.records.has(old.info.contingency?.study ?? old.info.id)) continue
+    if (
+      old === run ||
+      old.info.state === 'running' ||
+      readers.busy(ownerOf(old)) ||
+      !storage.records.has(old.info.contingency?.study ?? old.info.id)
+    )
+      continue
     const values = histories.get(old.info.revision.uri)!
     values.splice(values.indexOf(old), 1)
     old.release()
@@ -300,7 +422,9 @@ async function retain(uri: string, run: Results) {
 
 async function runCase(input: SimulationRequest) {
   const prepared = input.simulationId ? simulations.entries.get(input.simulationId) : undefined
-  const info = prepared?.info ?? await prepareSimulation(input, new AbortController().signal)
+  const stopped = input.simulationId && storage.records.get(input.simulationId)?.info
+  if (!prepared && stopped && !['preparing', 'running'].includes(stopped.state)) return stopped
+  const info = prepared?.info ?? (await prepareSimulation(input, new AbortController().signal))
   const entry = simulations.get(info.id)
   if (entry.completion) return entry.completion
   const { kase, controller } = entry
@@ -357,7 +481,11 @@ async function runCase(input: SimulationRequest) {
       })
       info.state = 'complete'
     } catch (error) {
-      info.state = controller.signal.aborted ? 'cancelled' : 'failed'
+      info.state = controller.signal.aborted
+        ? controller.signal.reason?.interrupted
+          ? 'interrupted'
+          : 'cancelled'
+        : 'failed'
       info.message = message(error)
       if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
     } finally {
@@ -392,12 +520,24 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return null
     case 'resolveRecording': {
       const { kase } = snapshots.get(request.input.snapshotId)
-      return request.input.recording.map(item => {
-        const resolved = selected({ from: item.componentType, ids: item.componentIds && [...item.componentIds], selection: item.selectionId }, kase)
-        return { from: item.componentType, select: item.fields, ...(resolved.ids ? { rows: { kind: 'ids', ids: resolved.ids } } : {}) }
+      return request.input.recording.map((item) => {
+        const resolved = selected(
+          {
+            from: item.componentType,
+            ids: item.componentIds && [...item.componentIds],
+            selection: item.selectionId,
+          },
+          kase,
+        )
+        return {
+          from: item.componentType,
+          select: item.fields,
+          ...(resolved.ids ? { rows: { kind: 'ids', ids: resolved.ids } } : {}),
+        }
       })
     }
-    case 'prepareSimulation': return prepareSimulation(request.input, signal)
+    case 'prepareSimulation':
+      return prepareSimulation(request.input, signal)
     case 'getSimulation': {
       const info = storage.records.get(request.input.simulationId)?.info
       if (info) return info
@@ -409,9 +549,12 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     }
     case 'listSimulations': {
       const all = new Map([...storage.records].map(([id, record]) => [id, record.info]))
-      for (const results of histories.values()) for (const result of results)
-        if (!all.has(result.info.contingency?.study ?? result.info.id)) all.set(result.info.id, result.info)
-      return [...all.values()].filter(info => !request.input.uri || info.revision.uri === request.input.uri)
+      for (const results of histories.values())
+        for (const result of results)
+          if (!all.has(result.info.contingency?.study ?? result.info.id))
+            all.set(result.info.id, result.info)
+      return [...all.values()]
+        .filter((info) => !request.input.uri || info.revision.uri === request.input.uri)
         .sort((a, b) => b.started - a.started)
     }
     case 'stopSimulation':
@@ -420,18 +563,27 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     case 'retainSimulation': {
       const record = storage.records.get(request.input.simulationId)
       if (!record) throw new Error('Unknown simulation.')
-      record.retained = request.input.retained
+      if (request.input.retained && record.info.evicted)
+        throw Object.assign(
+          new Error('This recording was already evicted; its metadata cannot restore the samples.'),
+          { code: 'results-evicted' },
+        )
+      record.info.retained = request.input.retained
       await storage.save(record.info.id)
       return null
     }
     case 'shutdown':
-      await Promise.all([...simulations.entries.keys()].map(stopSimulation))
+      await Promise.all([...simulations.entries.keys()].map((id) => stopSimulation(id, true)))
+      for (const load of loading.values()) load.controller.abort(new Error('GridKit closed.'))
+      await Promise.allSettled([...loading.values()].map((load) => load.done))
       await storage.flush()
       return null
     case 'aggregate':
       return aggregate(get(request.input).kase, request.input, signal)
     case 'neighborhood':
       return neighborhood(get(request.input).kase, request.input, signal)
+    case 'anchors':
+      return anchors(get(request.input).kase, request.input, signal)
     case 'selection': {
       const { kase } = get(request.input)
       const ids = await selectIds(kase, request.input, signal)
@@ -442,6 +594,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         from: request.input.from,
         ids,
       })
+      while (selectionsById.size > 64) selectionsById.delete(selectionsById.keys().next().value!)
       return {
         selection,
         fingerprint: kase.version,
@@ -475,9 +628,22 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     case 'analyze':
       return withTarget(request.input, signal, async (run) => {
         const result = await analyze(run, selected(request.input, run.kase), signal)
-        result.evidence = await evidence.put(request.input.uri, result, signal, request.input.analysisId)
+        result.evidence = await saveFindings(
+          request.input.uri,
+          result,
+          signal,
+          request.input.analysisId,
+        )
         result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
         return result
+      })
+    case 'validateResults':
+      return withTarget(request.input, signal, async (result) => {
+        const { window } = analysisSelection(result, request.input)
+        if (!result.info.frames) throw new Error('This simulation has no recorded samples yet.')
+        if (window[0] < result.info.domain[0] || window[1] > result.info.domain[1])
+          throw new Error('Choose a time range within the recorded interval.')
+        return null
       })
     case 'signals':
       return withTarget(request.input, signal, (run) => querySignals(run, request.input, signal))
@@ -496,14 +662,14 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             window[0] < Math.max(left.info.domain[0], right.info.domain[0]) ||
             window[1] > Math.min(left.info.domain[1], right.info.domain[1])
           )
-            throw new Error('Comparison needs an interval covered by both runs.')
+            throw new Error('Comparison needs an interval covered by both simulations.')
           const options = { ...input, window: window as readonly [number, number] }
           const result = compare(
             await analyze(before, selected(options, before.kase), signal, left),
             await analyze(after, selected(options, after.kase), signal, right),
             Number.MAX_SAFE_INTEGER,
           )
-          result.evidence = await evidence.put(input.after.uri, result, signal, input.analysisId)
+          result.evidence = await saveFindings(input.after.uri, result, signal, input.analysisId)
           result.rows = result.rows.slice(0, analysisLimit(input.limit))
           return result
         }),
@@ -516,16 +682,22 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         { ...selected(request.input, run.kase), limit: Number.MAX_SAFE_INTEGER },
         signal,
       )
-      result.evidence = await evidence.put(request.input.uri, result, signal, request.input.analysisId)
+      result.evidence = await saveFindings(
+        request.input.uri,
+        result,
+        signal,
+        request.input.analysisId,
+      )
       result.rows = result.rows.slice(0, analysisLimit(request.input.limit))
       return result
     }
-    case 'placement':
-      return placement(get(request.input).kase, signal)
     case 'parse': {
       const { uri, version, attachmentId } = request.input
       const previous = mirrors.get(uri)
-      if (!('text' in request.input) && (previous?.version !== request.input.baseVersion || attachments.get(uri) !== attachmentId))
+      if (
+        !('text' in request.input) &&
+        (previous?.version !== request.input.baseVersion || attachments.get(uri) !== attachmentId)
+      )
         throw new Error('Source mirror is stale.')
       const text =
         'text' in request.input
@@ -537,7 +709,8 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       const started = performance.now()
       const kase = await Case.parse(text, catalog, uri.split('/').at(-1), signal)
       signal.throwIfAborted()
-      if (parses.get(uri) !== version || attachments.get(uri) !== attachmentId) throw new Error('Superseded document revision.')
+      if (parses.get(uri) !== version || attachments.get(uri) !== attachmentId)
+        throw new Error('Superseded document revision.')
       const summary = summarize(kase, { uri, version, attachmentId }, performance.now() - started)
       cases.set(uri, { kase, summary })
       return summary
@@ -656,7 +829,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         const runs = [...histories.values()].find((runs) => runs.includes(current))
         if (s.aborted || !runs) {
           loaded.release()
-          throw new Error('The run was cleared or replaced.')
+          throw new Error('The recording was cleared or replaced.')
         }
         runs[runs.indexOf(current)] = loaded
         return loaded
@@ -667,15 +840,14 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return info
     }
     case 'stop': {
-      const run = running.get(request.input.uri)
-      run?.controller.abort(new Error('Simulation cancelled.'))
-      // A run that could not start has said why to whoever started it.
-      await run?.done.catch(() => {})
+      const active = simulations.active(request.input.uri)
+      if (active) await stopSimulation(active.info.id)
       return null
     }
     case 'release': {
       const uri = request.input.uri
-      if (request.input.attachmentId && attachments.get(uri) !== request.input.attachmentId) return null
+      if (request.input.attachmentId && attachments.get(uri) !== request.input.attachmentId)
+        return null
       cases.delete(uri)
       parses.delete(uri)
       mirrors.delete(uri)
@@ -684,12 +856,20 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
     }
     case 'clear': {
       const uri = request.input.uri
-      const run = running.get(uri)
-      run?.controller.abort(new Error('Case closed.'))
-      await run?.done.catch(() => {})
+      const active = simulations.active(uri)
+      if (active) await stopSimulation(active.info.id)
       const results = histories.get(uri) ?? []
       histories.delete(uri)
       for (const result of results) await discard(result)
+      for (const [id, record] of storage.records) {
+        if (
+          record.info.revision.uri !== uri ||
+          record.info.evicted ||
+          ['preparing', 'running'].includes(record.info.state)
+        )
+          continue
+        await storage.removeRecording(id)
+      }
       return null
     }
     case 'import': {
@@ -712,10 +892,20 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       }
       const originalPath = info.path
       info.path = join(storage.path(info.id), 'results.' + format)
-      await storage.create(info, { ...request.input, values: {}, outputs, gridkit: { path: '', image: '', cli: '' } }, kase)
+      await storage.create(
+        info,
+        { ...request.input, values: {}, outputs, gridkit: { path: '', image: '', cli: '' } },
+        kase,
+      )
       await copyFile(originalPath, info.path)
       // Results that fail to read take no run's place: the import fails, and the case's runs stay.
-      const result = new Results(info, kase, selections(kase, outputs), cache, storage.path(info.id))
+      const result = new Results(
+        info,
+        kase,
+        selections(kase, outputs),
+        cache,
+        storage.path(info.id),
+      )
       try {
         await readers.use([ownerOf(result)], signal, (s) =>
           result.ingest(
@@ -725,12 +915,15 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
           ),
         )
       } catch (error) {
+        info.state = signal.aborted ? 'cancelled' : 'failed'
+        info.message = message(error)
         await discard(result)
         throw error
       }
       info.state = 'complete'
       await storage.save(info.id)
       await retain(request.input.uri, result)
+      await trimRecordings(info.id)
       send({ kind: 'run', info })
       return info
     }
@@ -759,6 +952,7 @@ async function handle(request: Request, signal: AbortSignal) {
   } else if ('run' in input && typeof input.run === 'string') await loadResult(input.run, signal)
   const analysis =
     request.method === 'analyze' ||
+    request.method === 'validateResults' ||
     request.method === 'compare' ||
     request.method === 'rank' ||
     request.method === 'signals'

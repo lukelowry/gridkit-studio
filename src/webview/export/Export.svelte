@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Positions } from '@latkit/diagram'
+  import type { Positions } from '@latkit/gpu'
   import type { Data } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
@@ -37,10 +37,9 @@
   /** The run the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  /** The streamed case, and where its elements stand. */
+  /** The streamed case, and where it saves its diagram blocks. */
   let rows: Data | undefined
   let samples: Data | undefined
-  let placement: Record<string, Positions> = {}
   let presentation: Record<string, Positions> = {}
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
@@ -122,7 +121,7 @@
       await exportVideo(
         gpu,
         chosen,
-        { state, rows, samples, placement, presentation, cameras },
+        { state, rows, samples, presentation, cameras },
         output,
         signal,
         (made) => (progress = made),
@@ -164,7 +163,6 @@
         (data, begin, base) => {
           rows = base
           samples = data
-          if (begin.placement) placement = begin.placement
           if (begin.presentation) presentation = begin.presentation
         },
         (reason) => stop?.abort(reason instanceof Error ? reason : new Error(String(reason))),

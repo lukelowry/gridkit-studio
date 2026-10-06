@@ -1,10 +1,10 @@
-import type { Positions } from '@latkit/diagram'
 import { colormaps } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
 import type { NetworkConfig } from '@latkit/network'
 
 import { type FieldRef, recordedWhole } from '../../shared/bindings.js'
 import type { ViewState } from '../../shared/messages.js'
+import { located as isLocated } from '../../shared/positions.js'
 import { reader } from '../../shared/preferences.js'
 import { nameFieldOf, networkOf, positionOf } from '../../shared/schema.js'
 import { font, palette } from '../theme.js'
@@ -26,12 +26,12 @@ function routed(source: Data, type: string, field: string): boolean {
   return false
 }
 
-/** The network config for `source`, with vertices at `places` when given. Sampled fields read
- *  `samples`, colored over the `whole` run or the frame on show; labels wait for `labelled`. */
+/** The network config for `source`: vertices at the positions the case gives them, the network
+ *  laying out those without. Sampled fields read `samples`, colored over the `whole` run or the
+ *  frame on show; labels wait for `labelled`. */
 export function networkConfig(
   source: Data,
   samples: Data,
-  places: Readonly<Record<string, Positions>>,
   state: ViewState,
   geographic: boolean,
   borders: Data | null,
@@ -44,7 +44,7 @@ export function networkConfig(
   const colormap = colormaps[s.get('network.colormap')]
   const sampled = sampledFrom(samples, state, whole)
   const bindings = state.bindings ?? {}
-  const placed = Object.keys(places).length > 0
+  const located = isLocated(source)
   const labels = (type: string, enabled: boolean) => {
     const field = nameFieldOf(source.schema, type)
     return labelled && enabled && field !== null
@@ -55,7 +55,6 @@ export function networkConfig(
         }
       : null
   }
-  const position = (type: string) => places[type] ?? positionOf(source.schema, type)!
   const [r, g, b, a] = options.pathColor!
   return {
     ...options,
@@ -64,7 +63,8 @@ export function networkConfig(
       drawn.vertices.map((type) => [
         type,
         {
-          ...position(type),
+          // Rows without a position of their own are placed among those with one.
+          ...(located && positionOf(source.schema, type)),
           ...channelsOf(bindings, type, 'vertex', colormap, sampled),
           labels: labels(type, s.get('network.vertices.labels')),
         },
@@ -77,7 +77,7 @@ export function networkConfig(
           ends,
           // A route field splits every line through points that carry no value, and so no color
           // of their ends: pass it only where the case routes lines and places are its own.
-          ...(bends !== undefined && !placed && routed(source, type, bends) && { bends }),
+          ...(bends !== undefined && located && routed(source, type, bends) && { bends }),
           ...channelsOf(bindings, type, 'edge', colormap, sampled),
           // Hides edges only; borders stay drawn.
           ...(!s.get('network.lines') && { visible: false }),

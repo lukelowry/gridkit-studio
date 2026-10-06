@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { type Arguments, type Command, type CommandContext, type Parameters } from '@latkit/model'
 
 import { type ResultCache, Results } from '../results/index.js'
-import type { SimulationInfo, SimulationRequest, RuntimeProcess } from '../shared/messages.js'
+import type { RuntimeProcess, SimulationInfo, SimulationRequest } from '../shared/messages.js'
 import type { Case } from './case.js'
 import { type Field, parametersOf, type SimulationCommand } from './parameters.js'
 import { preflight } from './preflight.js'

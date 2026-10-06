@@ -47,7 +47,13 @@ export async function boundedResult(
     const retained = values.slice(0, Math.floor(values.length / 2))
     result[key] = retained
     result.truncated = true
-    if (key === 'items' || key === 'rows' || key === 'diagnostics' || key === 'types' || key === 'cases') {
+    if (
+      key === 'items' ||
+      key === 'rows' ||
+      key === 'diagnostics' ||
+      key === 'types' ||
+      key === 'cases'
+    ) {
       result.returned = retained.length
       if (typeof result.offset === 'number') result.nextOffset = result.offset + retained.length
     }

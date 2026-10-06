@@ -14,12 +14,17 @@ export interface PreparedSimulation {
 export class Simulations {
   readonly entries = new Map<string, PreparedSimulation>()
   active(uri: string) {
-    return [...this.entries.values()].find(value => value.request.uri === uri &&
-      ['preparing', 'running'].includes(value.info.state))
+    return [...this.entries.values()].find(
+      (value) => value.request.uri === uri && ['preparing', 'running'].includes(value.info.state),
+    )
   }
   get(id: string) {
     const entry = this.entries.get(id)
-    if (!entry) throw Object.assign(new Error('Unknown simulation: ' + id), { code: 'simulation-not-found', simulationId: id })
+    if (!entry)
+      throw Object.assign(new Error('Unknown simulation: ' + id), {
+        code: 'simulation-not-found',
+        simulationId: id,
+      })
     return entry
   }
 }

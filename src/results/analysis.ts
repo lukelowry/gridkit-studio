@@ -29,9 +29,10 @@ export function analysisSelection(
   if (order === 'duration' && !options.metrics?.some((metric) => metric.kind === 'threshold'))
     throw new Error('Duration ordering requires a threshold measurement.')
   const definition = run.kase.schema.types[from]?.fields[field]
-  if (!definition?.sampled) throw new Error('Choose a sampled numeric field from the run outputs.')
+  if (!definition?.sampled)
+    throw new Error('Choose a sampled numeric field from the simulation recording.')
   const recorded = run.fields.find((f) => f.index.type === from && f.name === field)
-  if (!recorded) throw new Error(`${from}.${field} was not recorded by this run.`)
+  if (!recorded) throw new Error(`${from}.${field} was not recorded by this simulation.`)
   const table = run.kase.table(from)
   const axis = ids ? selectRows(run.kase.data.tables[from]!, { kind: 'ids', ids }) : recorded.axis
   const selected = !ids

@@ -35,3 +35,21 @@ it('pages immutable analysis across disk blocks after the source result is relea
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+it('bounds findings on disk, preserves the newest page and reports evicted findings after reload', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'gridkit-findings-'))
+  try {
+    const findings = new Evidence(directory)
+    const signal = new AbortController().signal
+    const first = await findings.put('case', { rows: [{ id: 'Bus/1' }] }, signal)
+    const second = await findings.put('case', { rows: [{ id: 'Bus/2' }] }, signal)
+    await findings.evict(0, second)
+    const restored = new Evidence(directory)
+    await expect(restored.read(first, {}, signal)).rejects.toMatchObject({
+      code: 'findings-evicted',
+    })
+    expect((await restored.read(second, {}, signal)).rows).toEqual([{ id: 'Bus/2' }])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})

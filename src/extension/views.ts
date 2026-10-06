@@ -35,8 +35,8 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
   'plot',
   'removePlot',
-  'run',
-  'stop',
+  'startSimulation',
+  'stopSimulation',
   'chooseSignals',
   'showContingency',
 ])
@@ -407,7 +407,12 @@ class View {
     const state = this.studio.state(this.uri)
     if ((this.kind === 'monitor' || this.kind === 'export') && state.run?.frames) {
       if (this.#resultSummary?.simulationId !== state.run.id)
-        this.#resultSummary = { simulationId: state.run.id, value: await this.studio.client.call('describeSimulation', { simulationId: state.run.id }) }
+        this.#resultSummary = {
+          simulationId: state.run.id,
+          value: await this.studio.client.call('describeSimulation', {
+            simulationId: state.run.id,
+          }),
+        }
       state.summary = this.#resultSummary.value
     }
     const session = this.studio.all.get(this.uri)
@@ -442,7 +447,11 @@ class View {
   }
   /** The rows the view draws, and the samples it binds or plots: the whole run while it is small,
    *  a window of it past that. */
-  #demand(summary: Summary, shown: SimulationInfo | undefined, session: Session): Demand | undefined {
+  #demand(
+    summary: Summary,
+    shown: SimulationInfo | undefined,
+    session: Session,
+  ): Demand | undefined {
     const { kind } = this
     const video = this.#video
     if (kind === 'export' && !video) return undefined
@@ -556,10 +565,6 @@ class View {
         append,
         ...(demand.held && { held: demand.held }),
         ...(base &&
-          this.#draws('network') && {
-            placement: await studio.client.call('placement', revision, controller.signal),
-          }),
-        ...(base &&
           this.#draws('diagram') && {
             presentation: await studio.client.call('presentation', revision, controller.signal),
           }),
@@ -644,7 +649,7 @@ class View {
 const EMPTY: Record<Exclude<ViewKind, 'network' | 'diagram'>, string> = {
   case: 'Open a GridKit case to inspect its fields.',
   monitor: 'Open a GridKit case to inspect its recorded signals.',
-  simulation: 'Open a GridKit case to configure and run a simulation.',
+  simulation: 'Open a GridKit case to configure a simulation.',
   export: 'Open a GridKit case to export a video of it.',
 }
 export function registerViews(studio: Sessions) {
@@ -702,7 +707,11 @@ export function registerViews(studio: Sessions) {
               }
               content?.dispose()
               content = undefined
-              if (uri && (studio.documents.entries.has(uri) || ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.run))) {
+              if (
+                uri &&
+                (studio.documents.entries.has(uri) ||
+                  ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.run))
+              ) {
                 content = new View(studio, panel, uri, kind, hidden)
                 panel.description = name(uri)
               } else {

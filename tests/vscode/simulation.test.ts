@@ -24,7 +24,7 @@ suite('Simulation', () => {
 
   test("shows the study's typed fields and its own Run", async () => {
     await visible(simulation, '[data-testid="field-tmax"]')
-    await visible(simulation, '[data-testid="study-run"]')
+    await visible(simulation, '[data-testid="simulation-start"]')
     await bench.capture('simulation-vscode')
   })
 
@@ -70,7 +70,7 @@ suite('Simulation', () => {
     await vscode.commands.executeCommand('gridkitStudio.clearSignals')
     await until(() => !bench.session.outputs?.length, 'nothing recorded')
     await until(
-      () => simulation.locator('[data-testid="study-run"]').isDisabled(),
+      () => simulation.locator('[data-testid="simulation-start"]').isDisabled(),
       'Run waits for a signal',
     )
     await simulation.locator('[data-testid="study-signals"]').click()
@@ -79,7 +79,7 @@ suite('Simulation', () => {
     await until(recorded, 'every signal recorded')
     simulation = await bench.show('simulation')
     await until(
-      async () => !(await simulation.locator('[data-testid="study-run"]').isDisabled()),
+      async () => !(await simulation.locator('[data-testid="simulation-start"]').isDisabled()),
       'Run ready',
     )
   })

@@ -43,15 +43,12 @@ describe('diagram edit lifetime', () => {
     expect(bridge.request).not.toHaveBeenCalled()
   })
 
-  it('cancels the first move without committing or refusing after closure', async () => {
-    const { events, controller, layout, refuse } = fixture()
-    events.get('move')!({ moves: [] })
-    expect(arrange).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
-      signal: controller.signal,
-    })
+  it('ignores a move after closure without committing or requesting another layout', async () => {
+    const { events, controller, refuse } = fixture()
     controller.abort()
-    layout.resolve({})
+    events.get('move')!({ positions: {} })
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    expect(arrange).not.toHaveBeenCalled()
     expect(bridge.request).not.toHaveBeenCalled()
     expect(refuse).not.toHaveBeenCalled()
   })

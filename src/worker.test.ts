@@ -74,21 +74,34 @@ describe('real worker protocol', () => {
       await rig.call('parse', { ...revision, text }).done
       const captured = await rig.call('captureCase', revision).done
       await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
-      const reopened = await rig.call('parse', { ...revision, attachmentId: 'second', text: text.replace('original', 'changed') }).done
+      const reopened = await rig.call('parse', {
+        ...revision,
+        attachmentId: 'second',
+        text: text.replace('original', 'changed'),
+      }).done
       await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
       const query = { kind: 'rows', from: 'Bus', select: ['name'], ids: true } as const
-      expect(await rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done).toHaveLength(1)
+      expect(
+        await rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done,
+      ).toHaveLength(1)
       expect(await rig.call('query', { ...reopened, query }).done).toHaveLength(1)
       await rig.call('releaseSnapshot', { snapshotId: captured.snapshotId }).done
-      await expect(rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done).rejects.toThrow(/captured case/)
-    } finally { await rig.stop() }
+      await expect(
+        rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done,
+      ).rejects.toThrow(/captured case/)
+    } finally {
+      await rig.stop()
+    }
   })
   it('restores recordings and immutable findings in a fresh worker without a case editor', async () => {
     const storage = await mkdtemp(join(tmpdir(), 'gridkit-persistence-'))
     let rig = await start(storage)
     try {
       const revision = { uri: 'file:///retained.case.json', version: 1 }
-      await rig.call('parse', { ...revision, text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}' }).done
+      await rig.call('parse', {
+        ...revision,
+        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+      }).done
       const csv = join(rig.scratch, 'original.csv')
       await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
       const info = await rig.call('import', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
@@ -100,8 +113,13 @@ describe('real worker protocol', () => {
       rig = await start(storage)
       expect((await rig.call('listSimulations', {}).done)[0]!.id).toBe(info.id)
       expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
-      expect((await rig.call('evidence', { evidence: measured.evidence! }).done).rows).toEqual(measured.rows)
-    } finally { await rig.stop(); await rm(storage, { recursive: true, force: true }) }
+      expect((await rig.call('evidence', { evidence: measured.evidence! }).done).rows).toEqual(
+        measured.rows,
+      )
+    } finally {
+      await rig.stop()
+      await rm(storage, { recursive: true, force: true })
+    }
   })
   it('waits for consumption acknowledgements and cancels an unconsumed stream', async () => {
     const rig = await start()

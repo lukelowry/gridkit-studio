@@ -1,4 +1,5 @@
 import type { Domain, FieldSelection } from '@latkit/model'
+
 import type { Revision } from './messages.js'
 
 /** GridKit's programs a run can start, by the names the Simulation view gives them. */
@@ -35,6 +36,7 @@ export interface SimulationInfo {
   state: 'preparing' | 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
   /** Metadata remains discoverable after retention removes its recording. */
   evicted?: boolean
+  retained?: boolean
   path: string
   format: 'arrow' | 'csv'
   frames: number
@@ -83,4 +85,3 @@ export interface SimulationRequest extends Revision {
   gridkit: GridKit
   cacheBytes: number
 }
-

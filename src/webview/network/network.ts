@@ -1,6 +1,5 @@
 /** Mount the network renderer, find elements in it, and switch its projection. */
 
-import type { Positions } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { type Data, itemId } from '@latkit/model'
 import {
@@ -12,13 +11,14 @@ import {
 } from '@latkit/network'
 
 import type { Element, ViewState } from '../../shared/messages.js'
+import { located } from '../../shared/positions.js'
 import { defaults } from '../../shared/preferences.js'
 import { elementType, networkOf } from '../../shared/schema.js'
 import { itemOf, nativeMenu } from '../menu.js'
 
-/** Whether the case places its vertices in longitude and latitude itself, not by a layout. */
-export function isGeographic(source: Data, places: Readonly<Record<string, Positions>>): boolean {
-  return networkOf(source.schema).geographic && Object.keys(places).length === 0
+/** Whether the case places its vertices in longitude and latitude, so the globe can show it. */
+export function isGeographic(source: Data): boolean {
+  return networkOf(source.schema).geographic && located(source)
 }
 
 /** `preferred`, or flat where the globe cannot show the case. */

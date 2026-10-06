@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        vscode: ['1.135.0', stable]
+        vscode: ['1.140.0', stable]
       fail-fast: false
     env:
       VSCODE_VERSION: ${{ matrix.vscode }}

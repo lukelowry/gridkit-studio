@@ -11,6 +11,9 @@ import {
   placementOf,
 } from './schema.js'
 
+/** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
+export type Scope = 'element' | 'value' | 'column' | 'plot'
+
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
   origin: 'network' | 'diagram' | 'case' | 'monitor'
@@ -42,18 +45,36 @@ export function menuContext(
     )
   const network = type ? placementOf(views.network, type) : null
   const diagram = type ? placementOf(views.diagram, type) : null
+  const scope: Scope = target.plot
+    ? 'plot'
+    : target.origin === 'case' && field
+      ? target.element
+        ? 'value'
+        : 'column'
+      : 'element'
+  const editable = type ? summary.editable[type] : undefined
   return {
     preventDefaultContextMenuItems: true,
     gridkitTarget: target,
     gridkitOrigin: target.origin,
+    gridkitScope: scope,
     gridkitElement: !!target.element,
     gridkitField: !!field,
     gridkitPort: !!definition?.direction,
     gridkitNetwork: !!network,
     gridkitDiagram: !!diagram,
     gridkitEdge: network === 'edge',
-    gridkitEditable: !!(target.element && type && field && summary.editable[type]?.includes(field)),
+    // A whole element edits whichever of its fields the user picks.
+    gridkitEditable:
+      !!target.element && (field ? !!editable?.includes(field) : (editable?.length ?? 0) > 0),
     gridkitReference: isReference(definition),
+    gridkitScalar:
+      NUMERIC.has(definition?.type) ||
+      definition?.type === 'text' ||
+      definition?.type === 'boolean',
+    gridkitSampled: Object.values((type && summary.schema.types[type]?.fields) || {}).some(
+      (spec) => spec.sampled,
+    ),
     gridkitBindable: !!network && NUMERIC.has(definition?.type),
     gridkitBound: Object.values(bindings).some(
       (binding) => binding.type === type && binding.field === field,

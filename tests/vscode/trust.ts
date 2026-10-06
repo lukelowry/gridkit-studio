@@ -21,21 +21,19 @@ export async function run(): Promise<void> {
   )
   const session = await studio.open(document)
   assert.ok(studio.state(session.uri).summary, 'Inspection remains available without trust')
-  await assert.rejects(tasks.run(session.uri), /Trust this workspace/)
-  await assert.rejects(
-    async () =>
-      vscode.lm.invokeTool('gridkit_propose_run', {
-        input: { uri: session.uri, version: document.version },
-        toolInvocationToken: undefined,
-      }),
-    /Trust this workspace/,
-  )
+  await assert.rejects(tasks.simulate(session.uri), /Trust this workspace/)
+  const input = { caseUri: session.uri, requestId: 'trust-test', program: 'DynamicSimulation' }
+  const native = await vscode.lm.invokeTool('gridkit_simulate', {
+    input,
+    toolInvocationToken: undefined,
+  })
+  assert.match(JSON.stringify(native.content), /Trust this workspace/)
   const client = new Client({ name: 'trust-test', version: '1' })
   try {
     await client.connect(new StdioClientTransport({ ...(await mcp.start()), stderr: 'pipe' }))
     const result = await client.callTool({
-      name: 'gridkit_propose_run',
-      arguments: { uri: session.uri, version: document.version },
+      name: 'gridkit_simulate',
+      arguments: input,
     })
     assert.equal(result.isError, true)
     assert.match(JSON.stringify(result), /Trust this workspace/)

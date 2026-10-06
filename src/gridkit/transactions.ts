@@ -1,12 +1,12 @@
-import type { Positions } from '@latkit/diagram'
+import type { Positions } from '@latkit/gpu'
 import { failure, type FieldValues } from '@latkit/model'
 import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf } from '../shared/schema.js'
 import type { Case } from './case.js'
-import { planTransaction } from './plan.js'
 import { apply, recordOf } from './edits.js'
+import { planTransaction } from './plan.js'
 
 const decoder = new TextDecoder()
 const MAX_MUTATIONS = 10000

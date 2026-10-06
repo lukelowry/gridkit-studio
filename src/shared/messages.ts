@@ -328,6 +328,8 @@ export interface Begin {
   append: boolean
   /** The times whose samples the view holds once the stream ends; absent, the whole run. */
   held?: Held
+  /** The sampled fields, and their rows, whose samples follow. */
+  sampled: readonly FieldSelection[]
   /** Where the diagram's blocks are arranged. */
   presentation?: Record<string, Positions>
 }
@@ -339,13 +341,15 @@ export type ToView =
   | Begin
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
   | { kind: 'end'; stream: number }
-  /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack. */
+  /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack,
+   *  and `cancelled` a request let go of, where nothing failed. */
   | {
       kind: 'reply'
       id: number
       value?: unknown
       error?: string
       defect?: boolean
+      cancelled?: boolean
       detail?: string
     }
   | { kind: 'action'; command: string; value?: unknown }

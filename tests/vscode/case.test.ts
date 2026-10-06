@@ -1,5 +1,5 @@
-/** The Case panel: its place in the panel, its type picker and record bands, mapping a column onto
- *  the network from its menu, and edits through the document. */
+/** The Case panel: its place in the panel, its type picker, mapping a column onto the network from
+ *  its menu, and edits through the document. */
 
 import assert from 'node:assert/strict'
 
@@ -27,18 +27,19 @@ suite('Case', () => {
     await visible(view, 'tbody .cell')
   })
 
-  test('sits in the bottom panel, each row known by its own id under record bands', async () => {
+  test('sits in the bottom panel, each row known by its own id under one header row', async () => {
     assert.equal(await view.locator('.toolbar').count(), 0)
     const panel = await bench.page.locator('.part.panel').boundingBox()
     const cell = await view.locator('tbody .cell').first().boundingBox()
     assert.ok(panel && cell && cell.y >= panel.y, 'Case must be in the native bottom panel')
-    // The row's own id, without its type; the type's fields under the record keys they sit in.
+    // The row's own id, without its type; the fields by name alone, with no record key above them.
     assert.equal(
       (await view.locator('tbody th[scope="row"]').first().innerText()).trim(),
       String(bench.source.buses[0]!.number),
     )
     assert.equal(await view.locator('thead th', { hasText: /^Element$/ }).count(), 0)
-    await visible(view, 'thead th[scope="colgroup"]:text("Initial")')
+    assert.equal(await view.locator('thead tr').count(), 1)
+    await visible(view, `thead th[data-vscode-context*='"field":"init.Vr"']`)
     await bench.capture('case-vscode')
   })
 
@@ -140,7 +141,7 @@ suite('Case', () => {
     await vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri)
     await vscode.commands.executeCommand('gridkitStudio.openCasePanel', bench.uri)
     // Each case the panel takes up loads a page of its own, so the page is found again each look.
-    const rows = String(bench.source.buses.length + 2)
+    const rows = String(bench.source.buses.length + 1)
     await until(async () => {
       view = await bench.view('case')
       return (

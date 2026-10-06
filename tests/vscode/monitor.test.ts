@@ -50,7 +50,8 @@ suite('Monitor', () => {
     await bench.playback('Next sample').click()
     await until(() => transport().currentT() > paused, 'a frame step from the status bar')
     await bench.playback('Speed').click()
-    await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: /^2$/ }).click()
+    await bench.page.locator('.quick-input-widget input').fill('2')
+    await bench.page.locator('.quick-input-widget input').press('Enter')
     await until(() => transport().state.rate === 2, 'a faster speed')
     await until(
       async () => (await bench.playback('Speed').innerText()).includes('2×'),

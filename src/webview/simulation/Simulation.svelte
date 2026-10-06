@@ -1,21 +1,20 @@
 <!-- The run form: a DynamicSimulation, or a ContingencyAnalysis that faults every bus in turn.
-  The signals a run records are chosen in the native Monitored Signals view. -->
+  The view's title bar starts and stops the run, and the signals it records are chosen in the
+  native Monitored Signals view. -->
 <script lang="ts">
-  import type { InputValue, Parameter } from '@latkit/model'
+  import type { InputValue } from '@latkit/model'
   import { onMount } from 'svelte'
 
-  import { type Program, PROGRAMS, type ViewState } from '../../shared/messages.js'
+  import { PROGRAMS, type ViewState } from '../../shared/messages.js'
+  import { enteredOf, formOf, problemsOf, valueOf, type Values } from '../../shared/parameters.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
-  import Icon from '../ui/Icon.svelte'
   import Select from '../ui/Select.svelte'
   import Form from './Form.svelte'
-  import { type Choice, labelOf } from './rows.js'
-  import { problemOf, valueOf } from './values.js'
+  import type { Choice } from './rows.js'
 
   let view = $state.raw<ViewState>({})
-  /** Entered values by parameter name; a missing one takes its default. */
-  let values = $state.raw<Readonly<Record<string, InputValue>>>({})
+  let values = $state.raw<Values>({})
   /** Text as typed by parameter name, so formatting a value never rewrites an entry mid-edit. */
   let text = $state.raw<Readonly<Record<string, string>>>({})
   /** Element choices by type, cached per case revision. */
@@ -27,37 +26,12 @@
   /** Whether a run is under way, or Run was pressed and GridKit is starting. */
   const running = $derived(run?.state === 'running' || view.launching === true)
   const study = $derived(run?.contingency)
-  const program = $derived((values.program ?? 'DynamicSimulation') as Program)
-  const entries = $derived(
-    Object.entries(summary?.parameters ?? {}).filter(([name]) => name !== 'program'),
-  )
-  const faulted = $derived(values.fault === true)
   /** A simulation's fault switch and its bus, side by side; an analysis faults every bus. */
-  const toggle = $derived(
-    program === 'DynamicSimulation' ? entries.find(([name]) => name === 'fault') : undefined,
+  const { program, faulted, toggle, bus, fault, others } = $derived(
+    formOf(summary?.parameters ?? {}, values),
   )
-  const bus = $derived(
-    program === 'DynamicSimulation' ? entries.find(([name]) => name === 'fault_bus') : undefined,
-  )
-  /** The fault's timing and impedance: a simulation's while its fault is on, an analysis's always. */
-  const fault = $derived(
-    entries.filter(
-      ([name]) =>
-        name.startsWith('fault_') &&
-        name !== 'fault_bus' &&
-        (program === 'ContingencyAnalysis' || faulted),
-    ),
-  )
-  const others = $derived(
-    entries.filter(([name]) => name !== 'fault' && !name.startsWith('fault_')),
-  )
-  /** Every parameter that counts toward the next run, as the checks read them. */
-  const parameters = $derived([
-    ...(toggle ? [toggle] : []),
-    ...(bus && faulted ? [bus] : []),
-    ...fault,
-    ...others,
-  ])
+  /** Validation messages by parameter name. */
+  const problems = $derived(problemsOf(summary?.parameters ?? {}, values))
   /** The contingencies with results, to show one at a time. */
   const contingencies = $derived(
     study
@@ -66,22 +40,6 @@
         )
       : [],
   )
-  const value = (name: string, parameter: Parameter): InputValue | undefined =>
-    Object.hasOwn(values, name)
-      ? values[name]
-      : 'default' in parameter
-        ? parameter.default
-        : undefined
-  /** Validation messages by parameter name. */
-  const problems = $derived.by(() => {
-    const found: Record<string, string> = {}
-    for (const [name, parameter] of parameters) {
-      const problem = problemOf(parameter, labelOf(name, parameter), value(name, parameter))
-      if (problem !== null) found[name] = problem
-    }
-    return found
-  })
-  const invalid = $derived(Object.keys(problems).length > 0)
   /** Run progress in percent: contingencies finished, or time covered; null until known. */
   const percent = $derived(
     study
@@ -165,14 +123,14 @@
   })
 </script>
 
-{#snippet form(shown: typeof parameters, disabled: boolean, compact = false)}
+{#snippet form(shown: typeof others, disabled: boolean, compact = false)}
   <Form
     parameters={shown}
     {text}
     {problems}
     {disabled}
     {compact}
-    {value}
+    value={(name, parameter) => enteredOf(values, name, parameter)}
     {elements}
     onenter={(name, parameter, entered) => give(name, valueOf(parameter, entered), entered)}
     ontoggle={(name, on) => give(name, on)}
@@ -190,48 +148,16 @@
     </div>
   {:else}
     <div class="study__draft">
-      <div class="study__bar">
-        <div class="study__program">
-          <Select
-            label="Study"
-            hideLabel
-            compact
-            options={Object.entries(PROGRAMS).map(([value, label]) => ({ value, label }))}
-            disabled={running}
-            data-testid="study-program"
-            bind:value={() => program, (chosen) => chosen && give('program', chosen)}
-          />
-        </div>
-        {#if running}
-          <button
-            type="button"
-            class="c-btn c-btn--sm"
-            title="Stop"
-            aria-label="Stop the simulation"
-            data-testid="study-stop"
-            onclick={() => bridge.command('stopSimulation')}
-          >
-            <Icon name="stop" /> Stop
-          </button>
-        {:else}
-          <button
-            type="button"
-            class="c-btn c-btn--sm"
-            title={view.stale
-              ? 'Simulation requires a valid case'
-              : invalid
-                ? 'Fix the simulation settings'
-                : selectedCount === 0
-                  ? 'Choose at least one monitored signal'
-                  : 'Start Simulation'}
-            aria-label={'Start ' + PROGRAMS[program].toLowerCase()}
-            disabled={invalid || view.stale || selectedCount === 0}
-            data-testid="simulation-start"
-            onclick={() => bridge.command('startSimulation')}
-          >
-            <Icon name="play" /> Start
-          </button>
-        {/if}
+      <div class="study__program">
+        <Select
+          label="Program"
+          hideLabel
+          compact
+          options={Object.entries(PROGRAMS).map(([value, label]) => ({ value, label }))}
+          disabled={running}
+          data-testid="study-program"
+          bind:value={() => program, (chosen) => chosen && give('program', chosen)}
+        />
       </div>
       <p class="study__standing" role="status">{standing}</p>
       <div class="study__progress-slot">
@@ -312,17 +238,9 @@
     margin-block-end: var(--spacing-lg);
   }
 
-  /* What to run, and the button that runs it. */
-  .study__bar {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding-block-end: var(--spacing-xs);
-  }
-
+  /* What to run; the view's title bar runs it. */
   .study__program {
-    flex: 1;
-    min-inline-size: 0;
+    padding-block-end: var(--spacing-xs);
   }
 
   /* The fault's switch and its bus share a row until the panel is too narrow for both. */

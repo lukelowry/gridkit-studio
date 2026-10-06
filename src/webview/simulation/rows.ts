@@ -2,6 +2,8 @@
 
 import type { Parameter } from '@latkit/model'
 
+import { labelOf } from '../../shared/parameters.js'
+
 /** A dropdown entry: the text a pick enters, and the label shown for it. */
 export interface Choice {
   readonly value: string
@@ -23,8 +25,6 @@ export interface Row {
   readonly inputmode: 'decimal' | 'numeric'
   readonly choices: readonly Choice[]
 }
-
-export const labelOf = (name: string, parameter: Parameter): string => parameter.label ?? name
 
 /** The row for `parameter`; `elements` are the choices of a reference parameter. */
 export function rowOf(name: string, parameter: Parameter, elements: readonly Choice[]): Row {

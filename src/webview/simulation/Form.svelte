@@ -2,10 +2,10 @@
 <script lang="ts">
   import type { InputValue, Parameter } from '@latkit/model'
 
+  import { labelOf, textOf } from '../../shared/parameters.js'
   import Switch from '../ui/Switch.svelte'
   import Field from './Field.svelte'
-  import { type Choice, labelOf, rowOf } from './rows.js'
-  import { textOf } from './values.js'
+  import { type Choice, rowOf } from './rows.js'
 
   let {
     parameters,

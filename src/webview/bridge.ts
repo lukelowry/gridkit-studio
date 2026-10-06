@@ -81,7 +81,8 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
   if (!message || typeof message !== 'object') return
   if (message.kind === 'reply') {
     const entry = take(message.id)
-    if (message.error)
+    if (message.cancelled) entry?.reject(new DOMException(message.error, 'AbortError'))
+    else if (message.error)
       entry?.reject(
         Object.assign(new Error(message.error), {
           detail: message.detail,

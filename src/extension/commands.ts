@@ -417,7 +417,14 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     changed(session)
   })
   command('signalElements', async (context) => {
-    const plot = context.target?.plot ?? context.session.plots.at(-1)
+    // The session's own plot: a menu's target carries a copy of it.
+    const target = context.target?.plot
+    const plot = target
+      ? context.session.plots.find(
+          ({ from, field, id }) =>
+            from === target.from && field === target.field && id === target.id,
+        )
+      : context.session.plots.at(-1)
     if (!plot) return
     const id = await pickReference(context, plot.from)
     if (id) {

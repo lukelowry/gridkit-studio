@@ -251,7 +251,7 @@
         "title": "Start Simulation",
         "category": "GridKit Studio",
         "icon": "$(play)",
-        "enablement": "gridkitStudio.ready && isWorkspaceTrusted && !gridkitStudio.running"
+        "enablement": "gridkitStudio.startable && isWorkspaceTrusted"
       },
       {
         "command": "gridkitStudio.stopSimulation",
@@ -438,7 +438,7 @@
         "command": "gridkitStudio.addPlot",
         "title": "Add Plot…",
         "category": "GridKit Studio",
-        "icon": "$(add)",
+        "icon": "$(graph-line)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -794,6 +794,16 @@
           "command": "gridkitStudio.showSource",
           "when": "view == gridkitStudio.case && gridkitStudio.hasCase",
           "group": "2_source@1"
+        },
+        {
+          "command": "gridkitStudio.startSimulation",
+          "when": "view == gridkitStudio.simulation && gridkitStudio.hasCase && !gridkitStudio.running",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gridkitStudio.stopSimulation",
+          "when": "view == gridkitStudio.simulation && gridkitStudio.running",
+          "group": "navigation@1"
         },
         {
           "command": "gridkitStudio.simulationSettings",

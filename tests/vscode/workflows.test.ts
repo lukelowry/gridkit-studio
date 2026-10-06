@@ -119,7 +119,7 @@ suite('Workflows', function () {
     await simulation.locator('[data-testid="field-tmax"]').fill('2')
     await until(() => bench.session.values.tmax === 2, 'a two-second run')
     const before = bench.session.run?.id
-    await simulation.locator('[data-testid="simulation-start"]').click()
+    await bench.start()
     await until(
       () =>
         bench.session.run?.id !== before &&

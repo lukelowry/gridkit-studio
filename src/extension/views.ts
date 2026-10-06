@@ -5,7 +5,7 @@ import { type DataBatch, type Domain, type FieldSelection, staticFields } from '
 import * as vscode from 'vscode'
 
 import { recordedWhole } from '../shared/bindings.js'
-import { defect, detail, message } from '../shared/format.js'
+import { cancelled, defect, detail, message } from '../shared/format.js'
 import {
   type FromView,
   type SimulationInfo,
@@ -281,6 +281,7 @@ class View {
         if (session && message.uri === this.uri && message.values) {
           session.values = message.values
           this.studio.persist(session)
+          this.studio.updateContexts()
         }
         return
       case 'tableState':
@@ -338,6 +339,7 @@ class View {
           error: message(error),
           detail: detail(error),
           ...(defect(error) && { defect: true }),
+          ...(cancelled(error) && { cancelled: true }),
         })
     } finally {
       this.#requests.delete(id)
@@ -389,9 +391,12 @@ class View {
       if (this.#failure) throw new Error(this.#failure)
       return studio.all.get(uri)?.cameras ?? {}
     }
+    // A request made while the case is read again, as it is after each edit, waits for that
+    // reading. A case that no longer reads keeps the view on its last revision, which says so, and
+    // the request is let go: Problems says why.
     const entry = studio.documents.entries.get(uri)
-    const summary = entry?.summary
-    if (!summary || entry?.stale) throw new Error('The view is stale. Fix the case document first.')
+    const summary = entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
+    if (!summary) throw new DOMException('The case does not read.', 'AbortError')
     if (method === 'elements') {
       const { type } = input as ViewRequests['elements']['input']
       return studio.client.call('elements', { uri, version: summary.version, type }, signal)
@@ -591,6 +596,7 @@ class View {
         base,
         append,
         ...(demand.held && { held: demand.held }),
+        sampled: demand.sampled,
         ...(base &&
           this.#draws('diagram') && {
             presentation: await studio.client.call('presentation', revision, controller.signal),

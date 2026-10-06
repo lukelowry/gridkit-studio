@@ -1,25 +1,18 @@
-<!-- The Case panel: one type's elements as rows, its fields as columns under the record key they
-  sit in. Its type and filters are chosen from the view's title bar, which also says what shows; a
-  column's menu maps it onto the network. -->
+<!-- The Case panel: one type's elements as rows, its fields as columns. Its type and filters are
+  chosen from the view's title bar, which also says what shows; a column's menu maps it onto the
+  network. -->
 <script lang="ts">
   import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
-  import { bands, display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
+  import { display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
   import type { TableState, ViewState } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
 
-  /** The heading each record key's columns sit under. */
-  const GROUPS: Readonly<Record<string, string>> = {
-    params: 'Parameters',
-    init: 'Initial',
-    ports: 'Ports',
-    extension: 'Extension',
-  }
   /** How many columns a type shows until the user picks them. */
   const COLUMNS = 12
   /** Row height in px for virtual scrolling: the --spacing-row-h token. */
@@ -202,6 +195,8 @@
   })
   function changeType(next: string) {
     type = next
+    // The rows go with their type; its own load in a moment.
+    rows = []
     offset = 0
     filter = ''
     equal = undefined
@@ -300,11 +295,9 @@
         rows: { kind: 'ids', ids: [id] },
         limit: 1,
       })
+      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn.
       const row = rowsOf(blocks)[0]
-      if (row && view.selection?.id === id) {
-        offset = Math.max(0, row.row - 10)
-        if (scroll) scroll.scrollTop = row.row * height
-      }
+      if (row && view.selection?.id === id) offset = Math.max(0, row.row - 10)
     } catch (reason) {
       bridge.report(reason)
     }
@@ -399,16 +392,10 @@
       if (Math.abs(next - offset) >= 10) offset = next
     }}
   >
-    <table aria-label={type + ' fields'} aria-rowcount={total + 2}>
+    <table aria-label={type + ' fields'} aria-rowcount={total + 1}>
       <thead>
-        <tr class="case__bands">
-          <th rowspan="2" scope="col" class="case__identity">{identity ?? ''}</th>
-          {#each bands(fields) as { group, span }, i (i)}
-            <th colspan={span} scope="colgroup">{GROUPS[group] ?? group}</th>
-          {/each}
-          <th rowspan="2" class="case__fill" aria-hidden="true"></th>
-        </tr>
         <tr>
+          <th scope="col">{identity ?? ''}</th>
           {#each fields as field (field)}
             {@const unit = unitOf(definitions[field], field)}
             <th
@@ -430,6 +417,7 @@
               </button>
             </th>
           {/each}
+          <th class="case__fill" aria-hidden="true"></th>
         </tr>
       </thead>
       <tbody>
@@ -443,7 +431,7 @@
         {#each rows as row, rowIndex (row.id)}
           <tr
             class:selected={view.selection?.id === row.id}
-            aria-rowindex={offset + rowIndex + 3}
+            aria-rowindex={offset + rowIndex + 2}
             data-vscode-context={context(row.id)}
           >
             <th scope="row">
@@ -522,10 +510,13 @@
     flex-direction: column;
     block-size: 100%;
   }
+  /* The spacers above and below the page of rows change size as pages load; anchoring the scroll
+     to the rows would move it, and the move would load another page. */
   .case__scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    overflow-anchor: none;
   }
   /* Columns as wide as what they hold; the last, empty one takes what is left of the panel. */
   table {
@@ -554,21 +545,6 @@
   thead th {
     color: var(--color-text-2);
     font-weight: 600;
-  }
-  .case__bands th:not(.case__identity) {
-    height: auto;
-    padding-block: var(--spacing-2xs) 0;
-    border-bottom: 0;
-    font-size: var(--text-xs);
-    font-weight: normal;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .case__bands th:not(:empty):not(.case__identity) {
-    border-inline-start: 1px solid var(--color-border);
-  }
-  .case__identity {
-    vertical-align: bottom;
   }
   .case__unit,
   .case__mapped {

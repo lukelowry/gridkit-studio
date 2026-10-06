@@ -22,9 +22,11 @@ suite('Simulation', () => {
     simulation = await bench.show('simulation')
   })
 
-  test("shows the study's typed fields and its own Run", async () => {
+  test('shows its typed fields, and Start in its title bar', async () => {
     await visible(simulation, '[data-testid="field-tmax"]')
-    await visible(simulation, '[data-testid="simulation-start"]')
+    await until(() => bench.startable(), 'Start ready')
+    // Its title bar starts the run; the form has no Start of its own.
+    assert.equal(await simulation.getByRole('button', { name: /^Start/ }).count(), 0)
     await bench.capture('simulation-vscode')
   })
 
@@ -44,44 +46,43 @@ suite('Simulation', () => {
     // A case records its buses' voltage magnitude and angle until the user chooses otherwise.
     assert.deepEqual(bench.session.outputs, [{ from: 'Bus', select: ['Vm', 'Va'] }])
     const signals = await bench.signals()
-    const bus = signals.getByRole('treeitem', { name: /^Bus,/ }).getByRole('checkbox')
     const bused = () =>
       (bench.session.outputs ?? []).find((output) => output.from === 'Bus')?.select.length ?? 0
-    const whole = (on: boolean) =>
-      until(
-        async () => (await bus.getAttribute('aria-checked')) === String(on),
-        on ? 'Bus checked whole' : 'Bus not checked whole',
-      )
-    await whole(false)
+    // Only fields are checked off; a type says how many of its fields are, and has no box.
+    const bus = signals.getByRole('treeitem', { name: /^Bus,/ })
+    await until(
+      async () => /2 of \d+ recorded/.test((await bus.getAttribute('aria-label')) ?? ''),
+      'Bus counts its fields',
+    )
+    assert.equal(await bus.getByRole('checkbox').count(), 0)
     await bench.toggleSignal('Bus', 'Va')
     await until(() => !recorded(), 'a signal no longer recorded')
     await bench.toggleSignal('Bus', 'Va')
     await until(recorded, 'the signal recorded again')
-    // A type's own box records all of its values, or none.
-    await bus.click()
-    await until(() => bused() === 4, 'every Bus value recorded')
-    await whole(true)
-    await bus.click()
+    // The view's title bar records every field, or none.
+    await (await bench.viewAction(/^Monitored Signals/, 'Record All Signals')).click()
+    await until(() => bused() > 2, 'every Bus value recorded')
+    await (await bench.viewAction(/^Monitored Signals/, 'Record No Signals')).click()
     await until(() => bused() === 0, 'Bus recorded not at all')
-    await whole(false)
   })
 
-  test('says Run needs a signal, and opens Monitored Signals from there', async () => {
+  test('says Start needs a signal and valid values, and opens Monitored Signals from there', async () => {
     await vscode.commands.executeCommand('gridkitStudio.clearSignals')
     await until(() => !bench.session.outputs?.length, 'nothing recorded')
-    await until(
-      () => simulation.locator('[data-testid="simulation-start"]').isDisabled(),
-      'Run waits for a signal',
-    )
+    await until(async () => !(await bench.startable()), 'Start waits for a signal')
     await simulation.locator('[data-testid="study-signals"]').click()
     await bench.signals({ reveal: false })
     await vscode.commands.executeCommand('gridkitStudio.selectAllSignals')
     await until(recorded, 'every signal recorded')
     simulation = await bench.show('simulation')
-    await until(
-      async () => !(await simulation.locator('[data-testid="simulation-start"]').isDisabled()),
-      'Run ready',
-    )
+    await until(() => bench.startable(), 'Start ready')
+    // A value that cannot run holds Start back until it is fixed.
+    const tmax = simulation.locator('[data-testid="field-tmax"]')
+    const before = await tmax.inputValue()
+    await tmax.fill('soon')
+    await until(async () => !(await bench.startable()), 'Start waits for a numeric end time')
+    await tmax.fill(before)
+    await until(() => bench.startable(), 'Start ready again')
   })
 
   test('says once why a run from the Tasks menu could not start, as Run does', async () => {

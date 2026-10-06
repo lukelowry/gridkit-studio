@@ -1,7 +1,7 @@
 <!-- One lane per plotted signal of the run on show. Plots are added from the view's title bar,
   which also names the run, and played from the status bar. -->
 <script lang="ts">
-  import type { Data, Domain } from '@latkit/model'
+  import type { Data, Domain, FieldSelection } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
@@ -20,6 +20,8 @@
   let view = $state.raw<ViewState>({})
   /** The case with the run's frames so far. */
   let source = $state.raw<Data | undefined>()
+  /** The fields, and their rows, whose samples `source` holds. */
+  let sampled = $state.raw<readonly FieldSelection[]>([])
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */
@@ -87,6 +89,7 @@
             clearTimeout(telling)
             chosen = told = undefined
             source = undefined
+            sampled = []
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
@@ -102,6 +105,7 @@
         (data, begin) => {
           if (begin.simulationId !== view.run?.id) return
           source = data
+          sampled = begin.sampled
         },
         (reason) => bridge.report(reason),
       ),
@@ -131,13 +135,9 @@
           ? 'Loading case…'
           : !run
             ? 'Start a simulation or import results to plot recorded signals.'
-            : 'Choose a signal to plot it.'}
+            : 'Add a plot from the title bar to see a recorded signal.'}
       </p>
-      {#if view.summary && run}
-        <button class="c-btn" data-testid="monitor-add" onclick={() => bridge.command('addPlot')}>
-          Add Plot…
-        </button>
-      {:else if view.summary}
+      {#if view.summary && !run}
         <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
           Choose monitored signals
         </button>
@@ -151,6 +151,7 @@
             {plot}
             {view}
             {source}
+            {sampled}
             {t}
             {shown}
             {theme}

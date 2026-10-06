@@ -18,6 +18,7 @@ import type {
   TableState,
   ViewState,
 } from '../shared/messages.js'
+import { problemsOf, type Values } from '../shared/parameters.js'
 import {
   defaults,
   definitions,
@@ -195,6 +196,7 @@ export class Sessions {
       }),
       this.documents.changed.event((uri) => {
         this.changed.fire(uri)
+        void this.#forget(uri)
       }),
       this.client.event.event((event) => {
         if (event.kind === 'log') {
@@ -242,12 +244,21 @@ export class Sessions {
   updateContexts() {
     const session = this.active ? this.all.get(this.active) : undefined
     const entry = this.active ? this.documents.entries.get(this.active) : undefined
+    const ready = !!entry?.summary && !entry.stale
+    const running = session?.run?.state === 'running' || !!session?.launching
     const values = {
       hasCase: !!session,
       diagramEditing: !!session?.diagramEditing,
-      ready: !!entry?.summary && !entry.stale,
+      ready,
       editable: !!entry && !entry.stale && isWritable(entry.document),
-      running: session?.run?.state === 'running' || !!session?.launching,
+      running,
+      // A run starts from valid values that record something, as the Simulation view checks them.
+      startable:
+        !!entry?.summary &&
+        !entry.stale &&
+        !running &&
+        !!session?.outputs?.length &&
+        !Object.keys(problemsOf(entry.summary.parameters, session.values as Values)).length,
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
@@ -382,6 +393,30 @@ export class Sessions {
       if (element) void this.#anchor(session, element.id)
     }
     this.changed.fire(uri)
+  }
+  /** Let go of the selection once the case, read again, no longer holds its element. */
+  async #forget(uri: string) {
+    const session = this.all.get(uri)
+    const entry = this.documents.entries.get(uri)
+    const id = session?.selection?.id
+    if (!id || !entry?.summary || entry.stale) return
+    const { version } = entry.summary
+    try {
+      await this.client.call('query', {
+        uri,
+        version,
+        query: {
+          kind: 'rows',
+          from: elementType(id),
+          select: [],
+          ids: true,
+          rows: { kind: 'ids', ids: [id] },
+          limit: 1,
+        },
+      })
+    } catch {
+      if (session.selection?.id === id && entry.summary?.version === version) this.select(uri)
+    }
   }
   /** Find what the network draws for the selected element `id`, once the selection holds it. */
   async #anchor(session: Session, id: string) {

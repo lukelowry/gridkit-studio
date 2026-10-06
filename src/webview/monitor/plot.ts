@@ -52,6 +52,17 @@ export function traceSelection(
  *  last time label's overhang; the axis labels pad the bottom and left. */
 const MARGIN_PX = [8, 12, 0, 0] as const
 
+/** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
+ *  every row. A plot added to the Monitor waits for the stream that holds them. */
+export function holds(sampled: readonly FieldSelection[], { type, field, id }: Plotted): boolean {
+  return sampled.some(
+    ({ from, select, rows }) =>
+      from === type &&
+      select.includes(field) &&
+      (rows === undefined || (id !== undefined && rows.kind === 'ids' && rows.ids.includes(id))),
+  )
+}
+
 /** Whether two windows are equal; two absent ones are. */
 export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolean =>
   a?.[0] === b?.[0] && a?.[1] === b?.[1]

@@ -32,7 +32,7 @@ suite('Appearance', () => {
   test('holds its views in a compact window', async () => {
     await bench.page.setViewportSize({ width: 1000, height: 720 })
     try {
-      await visible(simulation, '[data-testid="simulation-start"]')
+      await visible(simulation, '[data-testid="study-program"]')
       // The form fits the narrow side bar: nothing scrolls sideways.
       assert.equal(
         await simulation.evaluate('document.documentElement.scrollWidth <= innerWidth'),

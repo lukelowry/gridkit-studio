@@ -73,6 +73,12 @@ export const fills = (frame: Frame) =>
     getComputedStyle(document.body).padding === '0px'
 })()`)
 
+/** VS Code's own file dialog, which a test can type a path into; `undefined` restores the OS's. */
+export const simpleDialog = (on: true | undefined) =>
+  vscode.workspace
+    .getConfiguration()
+    .update('files.simpleDialog.enable', on, vscode.ConfigurationTarget.Global)
+
 /** Set the color theme for the whole profile; `undefined` restores the default. */
 export const theme = (name: string | undefined) =>
   vscode.workspace
@@ -279,6 +285,86 @@ export class TestHost {
       .locator('.part.panel')
       .getByRole('button', { name: new RegExp('^' + name) })
       .first()
+  }
+
+  /** A title-bar action of the side bar view whose header reads `view`, by the start of its name.
+   *  VS Code shows a view's actions while the pointer is over it, so the pointer goes there first. */
+  async viewAction(view: RegExp, name: string): Promise<Locator> {
+    const header = this.page.locator('.pane-header', { hasText: view })
+    await header.hover()
+    return header.getByRole('button', { name: new RegExp('^' + name) })
+  }
+
+  /** Whether the Simulation view's title bar would start a run. */
+  async startable(): Promise<boolean> {
+    const start = await this.viewAction(/^Simulation/, 'Start Simulation')
+    return !(await start.isDisabled({ timeout: 1000 }).catch(() => true))
+  }
+
+  /** Start a run from the Simulation view's title bar, once it can. */
+  async start(): Promise<void> {
+    await until(() => this.startable(), 'Start Simulation enabled')
+    await (await this.viewAction(/^Simulation/, 'Start Simulation')).click()
+  }
+
+  /** Stop the run from the Simulation view's title bar. */
+  async stop(): Promise<void> {
+    await (await this.viewAction(/^Simulation/, 'Stop Simulation')).click()
+  }
+
+  /** Open the "More Actions" menu of the title bar in `area`: the bottom panel, the editor, or a
+   *  side bar view's header. */
+  async more(area: Locator): Promise<void> {
+    const button = area.getByRole('button', { name: /More Actions/ }).first()
+    // A side bar view shows its actions only while the pointer is over its header.
+    if (!(await button.isVisible())) await area.hover()
+    await button.click()
+  }
+
+  /** Run one of Studio's commands from the Command Palette by its whole title, as the user does. */
+  async palette(title: string): Promise<void> {
+    await vscode.commands.executeCommand('workbench.action.showCommands')
+    const named = 'GridKit Studio: ' + title
+    await this.page.locator('.quick-input-widget input').fill('>' + named)
+    const exact = new RegExp('^' + named.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
+    await this.page
+      .locator('.quick-input-widget .monaco-list-row')
+      .filter({ has: this.page.locator('.label-name', { hasText: exact }) })
+      .first()
+      .click()
+  }
+
+  /** Answer the file dialog on show, VS Code's own, with `path`. */
+  async dialog(path: string): Promise<void> {
+    const input = this.page.locator('.quick-input-widget input').first()
+    // The dialog opens on the folder it starts in; a picker still closing holds other text.
+    await until(
+      async () => /[\\/]/.test(await input.inputValue().catch(() => '')),
+      'the file dialog',
+    )
+    await input.fill(path)
+    await input.press('Enter')
+  }
+
+  /** Wait for the Settings editor to search for `query`, then close it. */
+  async settings(query: RegExp): Promise<void> {
+    const search = this.page.locator('.settings-editor .search-container .view-lines')
+    await until(
+      async () => query.test(await search.innerText().catch(() => '')),
+      'Settings searching ' + query,
+    )
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+  }
+
+  /** The name of the bottom panel's view on show. */
+  async panelShown(): Promise<string> {
+    return (
+      await this.page
+        .locator('.part.panel .composite-bar .action-item.checked')
+        .first()
+        .innerText()
+        .catch(() => '')
+    ).trim()
   }
 
   /** Wait for a native menu to offer `item`. */

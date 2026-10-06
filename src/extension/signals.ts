@@ -1,4 +1,5 @@
-/** Monitored Signals: a checkbox tree of what future runs record. */
+/** Monitored Signals: a tree of what future runs record, each type's sampled fields checked off
+ *  one by one. */
 
 import type { FieldSelection } from '@latkit/model'
 import * as vscode from 'vscode'
@@ -69,11 +70,6 @@ export function registerSignals(studio: Sessions) {
           const item = new Signal(type, undefined, name, vscode.TreeItemCollapsibleState.Collapsed)
           item.id = `${uri}\n${type}`
           item.description = `${on}/${fields.length}`
-          item.checkboxState = {
-            state: checked(on === fields.length),
-            tooltip: `Record every ${name} value, or none`,
-            accessibilityInformation: { label: `Record every ${name} value` },
-          }
           item.tooltip = `${on} of ${fields.length} ${name} values recorded`
           item.accessibilityInformation = { label: `${name}, ${on} of ${fields.length} recorded` }
           return item
@@ -105,12 +101,14 @@ export function registerSignals(studio: Sessions) {
     const now = shown()
     if (!now) return
     let { outputs } = now
-    for (const [item, state] of items) {
-      const on = state === vscode.TreeItemCheckboxState.Checked
-      const all = recordable(now.summary).find(({ type }) => type === item.type)?.fields ?? []
-      const rest = selected(outputs, item.type).filter((field) => field !== item.field)
-      const select = item.field === undefined ? (on ? all : []) : on ? [...rest, item.field] : rest
-      outputs = recording(outputs, item.type, select)
+    for (const [{ type, field }, state] of items) {
+      if (field === undefined) continue
+      const rest = selected(outputs, type).filter((each) => each !== field)
+      outputs = recording(
+        outputs,
+        type,
+        state === vscode.TreeItemCheckboxState.Checked ? [...rest, field] : rest,
+      )
     }
     studio.record(now.uri, outputs)
   })

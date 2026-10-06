@@ -1,7 +1,7 @@
 <!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import { type Data, type Domain, itemId } from '@latkit/model'
+  import { type Data, type Domain, type FieldSelection, itemId } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
@@ -19,6 +19,7 @@
   import Icon from '../ui/Icon.svelte'
   import {
     axisLabel,
+    holds,
     PLOT_LIMITS,
     plotOptions,
     sameWindow,
@@ -30,6 +31,7 @@
     plot,
     view,
     source,
+    sampled,
     t,
     shown,
     theme,
@@ -43,6 +45,8 @@
     view: ViewState
     /** The case with the run's frames so far; a new snapshot each time frames arrive. */
     source: Data | undefined
+    /** The fields, and their rows, whose samples `source` holds. */
+    sampled: readonly FieldSelection[]
     /** The playhead. */
     t: number
     /** The window every plot shows. */
@@ -73,7 +77,17 @@
       (output) => output.from === plot.from && output.select.includes(plot.field),
     ) ?? false,
   )
+  /** Whether the samples on hand are the plot's: a plot just added waits for its own. */
+  const streamed = $derived(
+    holds(sampled, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
+  )
   const settings = $derived(reader(view.settings))
+  /** The name runs up the value axis, beside its ticks, over the height the plot draws in: under
+   *  the top padding, and above the time axis's ticks and caption. */
+  const axis = $derived({
+    shown: settings.get('monitor.yAxis.visible'),
+    below: settings.get('monitor.xAxis.visible') ? 3 * settings.get('monitor.fontSizePx') : 0,
+  })
   const style = $derived(
     plotOptions(
       settings,
@@ -287,38 +301,39 @@
 </script>
 
 <section class="lane" aria-labelledby={`${id}-name`}>
-  <header class="lane__head">
-    <h2 class="lane__name" id={`${id}-name`} title={name}>{name}</h2>
-    <button
-      type="button"
-      class="c-icon-btn lane__close"
-      title="Remove plot"
-      aria-label={`Remove ${name}`}
-      onclick={() =>
-        bridge.command('removePlot', {
-          uri: view.summary?.uri,
-          version: view.summary?.version,
-          origin: 'monitor',
-          plot,
-        })}
-    >
-      <Icon name="close" />
-    </button>
-  </header>
+  <h2 class="lane__name" id={`${id}-name`} title={name} style:inset-block-end={axis.below + 'px'}>
+    {name}
+  </h2>
+  <button
+    type="button"
+    class="c-icon-btn lane__close"
+    title="Remove plot"
+    aria-label={`Remove ${name}`}
+    onclick={() =>
+      bridge.command('removePlot', {
+        uri: view.summary?.uri,
+        version: view.summary?.version,
+        origin: 'monitor',
+        plot,
+      })}
+  >
+    <Icon name="close" />
+  </button>
   <!-- svelte-ignore a11y_no_static_element_interactions (The canvas inside takes focus; its keys bubble here.) -->
   <div
     class="lane__surface"
+    class:lane__surface--bare={!axis.shown}
     aria-describedby={`${id}-keys`}
     onkeydown={key}
     onfocusin={() => (inspecting = true)}
     onfocusout={() => (inspecting = false)}
   >
-    {#if recorded && source && view.run?.frames}
+    {#if recorded && source && view.run?.frames && streamed}
       <CanvasHost {mount} label={`${name}. Right-click a trace for actions.`} />
     {:else}
       <div class="c-empty lane__empty">
         <p class="c-empty__text">
-          {view.run?.state === 'running'
+          {view.run?.state === 'running' || (recorded && view.run?.frames)
             ? 'Waiting for samples…'
             : view.run
               ? `This simulation did not record ${name}.`
@@ -347,6 +362,7 @@
 
 <style>
   .lane {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-inline-size: 0;
@@ -354,36 +370,50 @@
     background: var(--color-surface-1);
   }
 
-  /* Styled as a panel header: the signal's name and its close button. */
-  .lane__head {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: var(--spacing-sm);
-    min-block-size: var(--spacing-row-h);
-    padding-inline: var(--spacing-md) var(--spacing-xs);
-  }
-
+  /* The signal's name reads up the value axis at the lane's left edge, in the gutter the plot
+     leaves for its ticks. */
   .lane__name {
-    flex: 1;
-    min-inline-size: 0;
+    position: absolute;
+    z-index: 1;
+    inset-block-start: var(--spacing-sm);
+    inset-inline-start: var(--spacing-2xs);
     overflow: hidden;
     color: var(--color-text-2);
     font-size: var(--text-sm);
     font-weight: 600;
+    line-height: 1.2;
+    text-align: center;
     white-space: nowrap;
     text-overflow: ellipsis;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
   }
 
+  /* Shown while the pointer or focus is on the lane, over the plot's top right corner. */
   .lane__close {
+    position: absolute;
+    z-index: 1;
+    inset-block-start: var(--spacing-2xs);
+    inset-inline-end: var(--spacing-2xs);
     min-width: 1.5rem;
     min-height: 1.5rem;
+    opacity: 0;
+  }
+
+  .lane:hover .lane__close,
+  .lane:focus-within .lane__close {
+    opacity: 1;
   }
 
   .lane__surface {
     position: relative;
     flex: 1;
     min-block-size: 0;
+  }
+
+  /* Without a value axis there is no gutter, so the name takes a column of its own. */
+  .lane__surface--bare {
+    padding-inline-start: calc(var(--text-sm) * 1.2 + var(--spacing-xs));
   }
 
   .lane__empty {

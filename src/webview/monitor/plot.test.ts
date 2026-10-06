@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
 import type { SimulationInfo } from '../../shared/simulation.js'
-import { axisLabel, axisName, monitorWindow, plotOptions, tracesOf } from './plot.js'
+import { axisLabel, axisName, holds, monitorWindow, plotOptions, tracesOf } from './plot.js'
 
 describe('the window a plot shows', () => {
   it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {
@@ -33,6 +33,16 @@ it('uses the global recorded range for mapped traces, including a single selecte
     tracesOf(reader(), binding, { vertexColor: { ...binding, domain: [0, 2] } }, undefined, run),
   )
   expect(trace!.color).toMatchObject({ domain: [0, 2] })
+})
+
+it('waits for the samples a plot draws: its field, for its row or for every row', () => {
+  const one = { from: 'Bus', select: ['Vm'], rows: { kind: 'ids' as const, ids: ['Bus/1'] } }
+  const every = { from: 'Bus', select: ['Vm'] }
+  expect(holds([one], { type: 'Bus', field: 'Vm', id: 'Bus/1' })).toBe(true)
+  // A plot of every bus, added beside one of a single bus, waits for the samples of all of them.
+  expect(holds([one], { type: 'Bus', field: 'Vm' })).toBe(false)
+  expect(holds([every], { type: 'Bus', field: 'Vm' })).toBe(true)
+  expect(holds([every], { type: 'Bus', field: 'Va' })).toBe(false)
 })
 
 it('replaces the plotted field in place, under one trace', () => {

@@ -1,5 +1,6 @@
-/** Playback in the status bar, at its left: step back, play or pause, step forward, the time, the
- *  speed, and the end. They follow the active case's clock while its run has samples. */
+/** Playback in the status bar, right of the problem counts behind a bar: step back, play or pause,
+ *  step forward, the time, the speed, and the end. They follow the active case's clock while its
+ *  run has samples. */
 
 import * as vscode from 'vscode'
 
@@ -8,27 +9,33 @@ import type { Sessions } from './sessions.js'
 
 /** How often the time follows a playing clock. */
 const TICK_MS = 100
+/** The priority of VS Code's problem counts at the left of the status bar. */
+const PROBLEMS = 50
 
 export function registerPlayback(studio: Sessions): vscode.Disposable[] {
   // Higher priorities sit further left, so the items keep the order they are made in.
-  let priority = 100
-  const item = (id: string, name: string, command: string) => {
+  let priority = PROBLEMS
+  const item = (id: string, name: string, command?: string) => {
     const made = vscode.window.createStatusBarItem(
       'gridkitStudio.playback.' + id,
       vscode.StatusBarAlignment.Left,
-      priority--,
+      --priority,
     )
     made.name = 'GridKit ' + name
     made.command = command
     return made
   }
+  const bar = item('bar', 'Playback')
+  bar.text = '│'
+  bar.color = new vscode.ThemeColor('disabledForeground')
+  bar.accessibilityInformation = { label: 'Playback', role: 'separator' }
   const back = item('back', 'Previous Sample', 'gridkitStudio.previousSample')
   const play = item('play', 'Play or Pause', 'gridkitStudio.toggleTimeline')
   const forward = item('forward', 'Next Sample', 'gridkitStudio.nextSample')
   const time = item('time', 'Time', 'gridkitStudio.seekTime')
   const speed = item('speed', 'Playback Speed', 'gridkitStudio.timeSpeed')
   const end = item('end', 'Go to End', 'gridkitStudio.followTime')
-  const items = [back, play, forward, time, speed, end]
+  const items = [bar, back, play, forward, time, speed, end]
   const say = (target: vscode.StatusBarItem, text: string, label: string) => {
     target.text = text
     target.tooltip = label

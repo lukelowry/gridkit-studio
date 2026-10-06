@@ -466,12 +466,14 @@ function boot() {
   // in another view.
   ;(window as { gridkitSelection?: () => unknown }).gridkitSelection = () =>
     view && { ids: view.selection.map((item) => itemId(item as Item)), camera: view.camera }
-  // Where an element drew in the latest frame, so tests can read the color and height its fields
-  // map to.
-  ;(window as { gridkitLocate?: (id: string) => unknown }).gridkitLocate = (id) => {
-    const item =
-      kind === 'network' && view ? networkModule?.networkItem(view as Network, { id }) : undefined
-    return item ? (view as Network).locate(item) : null
+  // Where an element, or one of its ports, drew in the latest frame, so tests can point at it and
+  // read the color and height its fields map to.
+  ;(window as { gridkitLocate?: (id: string, field?: string) => unknown }).gridkitLocate = (
+    id,
+    field,
+  ) => {
+    const item = drawnItem({ id, ...(field && { field }) })
+    return item && view ? view.locate(item as never) : null
   }
   document.addEventListener('visibilitychange', () =>
     view?.set({ paused: !shown || document.hidden }),

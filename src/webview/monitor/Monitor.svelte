@@ -8,7 +8,8 @@
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
-  import { CanvasGpu, RECOVER_MS } from '../gpu.js'
+  import { CanvasGpu } from '../gpu.js'
+  import { Recovery } from '../recovery.js'
   import { receive } from '../stream.js'
   import { appearance, font, palette, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
@@ -27,7 +28,7 @@
   /** The playhead, updated every frame while playing. */
   let t = $state(0)
   let theme = $state.raw({ palette: palette(), font: font() })
-  /** Bumped on GPU loss or retry, so every plot remounts. */
+  /** Bumped on GPU loss or retry; canvases remount while lane state survives. */
   let epoch = $state(0)
   /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
   let visible = $state(true)
@@ -39,21 +40,17 @@
   let telling: ReturnType<typeof setTimeout> | undefined
 
   const owner = new CanvasGpu()
-  /** When the GPU was last replaced: one lost again soon after waits for Reload Monitor. */
-  let recovered = -Infinity
-  const gpu = () =>
-    owner.get(() => {
-      if (performance.now() - recovered < RECOVER_MS) {
-        bridge.report('WebGPU device lost.')
-        return
-      }
-      recovered = performance.now()
-      epoch++
-    })
+  const recovery = new Recovery(() => epoch++, bridge.report)
+  const gpu = () => owner.get((reason) => recovery.fail(reason))
   const clock = createClock(
-    (now) => (t = now),
+    (now) => {
+      if (!paused) t = now
+    },
     () => (tick = clock.state),
   )
+  $effect(() => {
+    if (!paused) t = clock.now()
+  })
 
   const run = $derived(view.run)
   const plots = $derived(view.plots ?? [])
@@ -89,7 +86,6 @@
           if (incoming.command === 'shown') visible = incoming.value === true
           else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
-            recovered = -Infinity
             epoch++
           }
         }
@@ -112,6 +108,7 @@
       clearTimeout(telling)
       for (const stop of stops) stop()
       clock.stop()
+      recovery.dispose()
       owner.dispose()
     }
   })
@@ -136,22 +133,22 @@
   {:else}
     <div class="monitor__lanes" data-testid="monitor-lanes">
       {#each plots as plot (keyOf(plot))}
-        {#key epoch}
-          <Plot
-            {plot}
-            {view}
-            {source}
-            {sampled}
-            {t}
-            {shown}
-            {theme}
-            {clock}
-            {tick}
-            {gpu}
-            {paused}
-            onwindow={turn}
-          />
-        {/key}
+        <Plot
+          {plot}
+          {view}
+          {source}
+          {sampled}
+          {t}
+          {shown}
+          {theme}
+          {clock}
+          {tick}
+          {gpu}
+          {paused}
+          generation={epoch}
+          onframe={() => recovery.presented()}
+          onwindow={turn}
+        />
       {/each}
     </div>
   {/if}

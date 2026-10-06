@@ -19,7 +19,7 @@ import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
 
-/** Caps each plot's history cache; the complete run is held outside the plot. */
+/** Caps each plot's history textures; the complete run is held outside the plot. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 
 /** The single trace key, so another field replaces the trace in place. */
@@ -121,6 +121,7 @@ export function plotOptions(
   const xPrecision = s.get('monitor.xAxis.precision')
   const yPrecision = s.get('monitor.yAxis.precision')
   const family = s.get('monitor.font') || font
+  const motion = s.get('accessibility.motion')
   return {
     fontSizePx: s.get('monitor.fontSizePx'),
     font: family ? { family } : null,
@@ -151,7 +152,7 @@ export function plotOptions(
     pickRadiusPx: s.get('monitor.pickRadiusPx'),
     animationMs: s.get('monitor.animationMs'),
     fitPaddingPx: s.get('monitor.fitPaddingPx'),
-    motion: s.get('accessibility.motion') === 'reduce' ? 'reduce' : 'auto',
+    motion: motion === 'system' ? 'auto' : motion,
     selectedWidthPx: s.get('monitor.selectedWidthPx'),
     unselectedAlpha: s.get('monitor.unselectedAlpha'),
     input: { mode: s.get('monitor.input.mode'), keyboard: s.get('monitor.input.keyboard') },

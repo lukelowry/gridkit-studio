@@ -22,6 +22,7 @@ export function networkOptions(
   geographic: boolean,
 ): NetworkStyle {
   const family = s.get('network.font') || font
+  const motion = s.get('accessibility.motion')
   return {
     markers: s.get('network.markers'),
     poles: s.get('network.poles'),
@@ -53,7 +54,7 @@ export function networkOptions(
     msaa: s.get('network.msaa'),
     hover: s.get('network.hover'),
     hoverBudgetMs: s.get('network.hoverBudgetMs'),
-    motion: s.get('accessibility.motion') === 'reduce' ? 'reduce' : 'auto',
+    motion: motion === 'system' ? 'auto' : motion,
     input: {
       mode: s.get('network.input.mode'),
       wheel: s.get('network.input.wheel'),

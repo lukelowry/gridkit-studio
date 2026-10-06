@@ -28,17 +28,27 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
   /** This view's latest action; the extension's answers carry it back. */
   let seq = 0
   let sending = 0
+  let failed = false
+  const draw = (t: number) => {
+    try {
+      paint(t)
+      failed = false
+    } catch (error) {
+      if (!failed) bridge.report(error)
+      failed = true
+    }
+  }
   const now = () => advance(state, performance.now() - since).t
   const tick = () => {
     frame = 0
     if (state.status !== 'playing') return
-    paint(now())
+    draw(now())
     frame = requestAnimationFrame(tick)
   }
   const set = (next: ClockState) => {
     state = next
     since = performance.now()
-    paint(next.t)
+    draw(next.t)
     if (next.status === 'playing' && !frame) frame = requestAnimationFrame(tick)
   }
   const off = bridge.on((message) => {

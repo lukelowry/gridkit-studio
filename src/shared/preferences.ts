@@ -162,8 +162,8 @@ export const SETTINGS = [
   category('accessibility', 'Accessibility', [
     group('', [
       choice('accessibility.motion', 'Motion', 'system',
-        [['system', 'System'], ['reduce', 'Reduce']],
-        'Reduce camera animation and interface motion. System follows the device.'),
+        [['system', 'System'], ['full', 'Full'], ['reduce', 'Reduce']],
+        'Full enables camera animation and interface motion. Reduce disables them. System follows the device.'),
       choice('accessibility.contrast', 'Contrast', 'system',
         [['system', 'System'], ['high', 'High']],
         'Increase contrast for text, borders and controls. System follows the device.'),

@@ -73,7 +73,7 @@ body[data-kind='export'] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  :root {
+  body:not([data-motion='full']) {
     --motion-fast: 0ms;
     --motion-mid: 0ms;
   }

@@ -64,7 +64,18 @@ function settingsFor(uri: vscode.Uri): SettingsValues {
   const configuration = vscode.workspace.getConfiguration('gridkitStudio', uri)
   const result = { ...defaults }
   for (const { id } of definitions) {
-    const value = configuration.get(id)
+    let value = configuration.get(id)
+    // Older releases called this studio.display.motion. Keep the user's explicit preference
+    // until they choose its replacement; a default in the new schema is not an override.
+    if (id === 'accessibility.motion') {
+      const chosen = configuration.inspect(id)
+      if (
+        [chosen?.globalValue, chosen?.workspaceValue, chosen?.workspaceFolderValue].every(
+          (entry) => entry === undefined,
+        )
+      )
+        value = vscode.workspace.getConfiguration('studio', uri).get('display.motion') ?? value
+    }
     if (value === undefined) continue
     try {
       Object.assign(result, validateSettings({ [id]: value }))
@@ -297,7 +308,10 @@ export class Sessions {
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
         for (const session of this.all.values())
-          if (event.affectsConfiguration('gridkitStudio', vscode.Uri.parse(session.uri))) {
+          if (
+            event.affectsConfiguration('gridkitStudio', vscode.Uri.parse(session.uri)) ||
+            event.affectsConfiguration('studio.display.motion', vscode.Uri.parse(session.uri))
+          ) {
             session.settings = settingsFor(vscode.Uri.parse(session.uri))
             this.changed.fire(session.uri)
           }

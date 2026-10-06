@@ -14,6 +14,7 @@
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
+  import { Recovery } from '../recovery.js'
   import type { Palette } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
@@ -39,6 +40,8 @@
     tick,
     gpu,
     paused,
+    generation,
+    onframe,
     onwindow,
   }: {
     plot: Plot
@@ -57,6 +60,8 @@
     /** The GPU the plots share. */
     gpu: () => Promise<Gpu>
     paused: boolean
+    generation: number
+    onframe: () => void
     /** The user panned or zoomed this plot to `bounds`. */
     onwindow: (bounds: Domain) => void
   } = $props()
@@ -113,7 +118,17 @@
   )
 
   let monitor = $state.raw<Monitor | null>(null)
+  let lane = $state<HTMLElement>()
+  let visible = $state(false)
+  const resting = $derived(paused || !visible)
+  let epoch = $state(0)
+  let camera: Monitor['camera'] | undefined
+  const recovery = new Recovery(() => {
+    camera = monitor?.camera ?? camera
+    epoch++
+  }, bridge.report)
   let windowUpdate = 0
+  let previousFit: boolean | undefined
   /** The plot's whole config, besides its canvas, time, and camera. */
   const config = $derived(source && { ...style, source, traces, limits: PLOT_LIMITS })
 
@@ -125,16 +140,36 @@
     const made = createMonitor(device, {
       canvas,
       at: t,
+      paused: resting,
       source: config.source,
       traces: config.traces,
       limits: PLOT_LIMITS,
-      camera: { x: [shown[0], shown[1]], fit: settings.get('monitor.camera.fit') },
+      camera: {
+        ...camera,
+        x: [shown[0], shown[1]],
+        fit: camera?.fit ?? settings.get('monitor.camera.fit'),
+      },
     })
-    made.set(config, { replace: true })
+    try {
+      made.set(config, { replace: true })
+    } catch (error) {
+      made.destroy()
+      throw error
+    }
+    let lastFrame = performance.now()
+    let presentedAt: number | undefined
+    const failed = (error: unknown) => {
+      // The shared GPU owner replaces every plot together after device loss.
+      if (!device.signal.aborted) recovery.fail(error)
+    }
     const offs = [
-      made.on('error', (error) => bridge.report(error)),
-      made.on('frame', () => {
+      made.on('error', failed),
+      made.on('frame', (frame) => {
+        lastFrame = performance.now()
+        presentedAt = frame.at
         canvas.dataset.rendered = 'true'
+        recovery.presented()
+        onframe()
       }),
       made.on('select', (items) => {
         bridge.send({
@@ -173,9 +208,36 @@
     inspected.gridkitPlot = () => ({
       camera: made.camera,
       traces: made.config.traces,
+      at: presentedAt,
+      lastFrame,
+      paused: made.config.paused,
+      motion: made.config.motion,
+      gpu: device.stats(),
       ...made.stats(),
     })
+    // Detect a wedged renderer from presented frames, not from the independent host clock.
+    // Hidden lanes and idle plots need no frames. Give initialization/refinement time to work.
+    const health = setInterval(() => {
+      if (resting) {
+        lastFrame = performance.now()
+        return
+      }
+      if (
+        (presentedAt === undefined || made.config.at !== presentedAt) &&
+        performance.now() - lastFrame > 10_000
+      ) {
+        lastFrame = performance.now()
+        // A stuck submission occupies the shared GPU's in-flight slots. Replacing only this
+        // renderer would leave its replacement waiting on the same never-settling queue.
+        if (!device.signal.aborted) {
+          bridge.report(new Error('Monitor stopped presenting frames. Restarting graphics.'))
+          device.destroy()
+        }
+      }
+    }, 1000)
     return () => {
+      camera = made.camera
+      clearInterval(health)
       delete inspected.gridkitPlot
       canvas.removeEventListener('pointermove', seek)
       canvas.removeEventListener('contextmenu', stop)
@@ -193,7 +255,11 @@
     if (monitor && config) monitor.set(config, { replace: true })
   })
   $effect(() => {
-    monitor?.set({ camera: { fit: settings.get('monitor.camera.fit') } })
+    const fit = settings.get('monitor.camera.fit')
+    // A recovered plot restores its camera, including a manually chosen value range.
+    // Only a settings change should replace that choice after mounting.
+    if (fit !== previousFit) monitor?.set({ camera: { fit } })
+    previousFit = fit
   })
   $effect(() => {
     if (monitor && !sameWindow(monitor.camera.x, shown)) {
@@ -211,10 +277,10 @@
     monitor.select(traceSelection(monitor.config.source, selected, plot.from, rows))
   })
   $effect(() => {
-    monitor?.set({ at: t })
-  })
-  $effect(() => {
-    monitor?.set({ paused })
+    if (!monitor) return
+    // Do not subscribe offscreen plots to every clock tick; resume at the current playhead.
+    if (resting) monitor.set({ paused: true })
+    else monitor.set({ paused: false, at: t })
   })
 
   /** Whether the plot has focus; while it does, a screen reader hears one trace at the playhead. */
@@ -298,9 +364,19 @@
         monitor?.set({ camera: { y: range } })
     }),
   )
+  onMount(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      visible = !!entry?.isIntersecting && entry.intersectionRatio > 0
+    })
+    if (lane) observer.observe(lane)
+    return () => {
+      observer.disconnect()
+      recovery.dispose()
+    }
+  })
 </script>
 
-<section class="lane" aria-labelledby={`${id}-name`}>
+<section class="lane" aria-labelledby={`${id}-name`} bind:this={lane}>
   <h2 class="lane__name" id={`${id}-name`} title={name} style:inset-block-end={axis.below + 'px'}>
     {name}
   </h2>
@@ -329,7 +405,13 @@
     onfocusout={() => (inspecting = false)}
   >
     {#if recorded && source && view.run?.frames && streamed}
-      <CanvasHost {mount} label={`${name}. Right-click a trace for actions.`} />
+      {#key `${generation}:${epoch}`}
+        <CanvasHost
+          {mount}
+          onerror={(error) => recovery.fail(error)}
+          label={`${name}. Right-click a trace for actions.`}
+        />
+      {/key}
     {:else}
       <div class="c-empty lane__empty">
         <p class="c-empty__text">

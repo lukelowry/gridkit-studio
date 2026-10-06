@@ -1,6 +1,6 @@
 <!-- @component
   Runs a renderer on its canvas and disposes it, even when the mount resolves after teardown. A
-  failed start is reported, and the canvas stays empty.
+  failed start is reported to the owner, which can replace the canvas and retry.
 -->
 <script lang="ts">
   import { untrack } from 'svelte'
@@ -10,11 +10,13 @@
   let {
     mount,
     label,
+    onerror = bridge.report,
   }: {
     /** Starts the renderer on the canvas; resolves to its disposer. */
     readonly mount: (canvas: HTMLCanvasElement, signal: AbortSignal) => Promise<() => void>
     /** The canvas's accessible name. */
     readonly label: string
+    readonly onerror?: (error: unknown) => void
   } = $props()
 
   let canvas = $state<HTMLCanvasElement>()
@@ -37,7 +39,7 @@
       (error: unknown) => {
         if (!live) return
         starting = false
-        bridge.report(error)
+        onerror(error)
       },
     )
     return () => {

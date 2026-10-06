@@ -2,6 +2,8 @@
  *  and its native menu. */
 
 import assert from 'node:assert/strict'
+import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
@@ -72,5 +74,45 @@ suite('Monitor', () => {
     await visible(await bench.show('case'), 'tbody .cell')
     monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
+  })
+
+  test('preserves legacy Full motion and lets an explicit current preference override it', async () => {
+    const path = join(process.env.GRIDKIT_TEST_PROFILE!, 'User', 'settings.json')
+    const original = await readFile(path, 'utf8')
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    try {
+      await writeFile(
+        path,
+        JSON.stringify({ ...JSON.parse(original), 'studio.display.motion': 'full' }),
+      )
+      await until(
+        () => bench.session.settings['accessibility.motion'] === 'full',
+        'legacy Full is respected',
+      )
+      await bench.page.emulateMedia({ reducedMotion: 'reduce' })
+      const motion = () =>
+        monitor.evaluate(`({
+        preference: document.body.dataset.motion,
+        duration: getComputedStyle(document.body).getPropertyValue('--motion-fast').trim(),
+        renderer: document.querySelector('canvas').gridkitPlot().motion
+      })`) as Promise<{ preference: string; duration: string; renderer: string }>
+      await until(async () => (await motion()).renderer === 'full', 'renderer uses Full')
+      assert.equal((await motion()).duration, '80ms', 'Full overrides reduced-motion media')
+      await settings.update('accessibility.motion', 'reduce', vscode.ConfigurationTarget.Global)
+      await until(
+        async () => (await motion()).renderer === 'reduce',
+        'explicit Reduce overrides legacy Full',
+      )
+      assert.equal((await motion()).duration, '0ms')
+      await settings.update('accessibility.motion', 'system', vscode.ConfigurationTarget.Global)
+      await until(async () => (await motion()).renderer === 'auto', 'System follows the device')
+      assert.equal((await motion()).duration, '0ms')
+      await settings.update('accessibility.motion', 'full', vscode.ConfigurationTarget.Global)
+      await until(async () => (await motion()).renderer === 'full', 'explicit Full restored')
+      assert.equal((await motion()).duration, '80ms')
+    } finally {
+      await bench.page.emulateMedia({ reducedMotion: null })
+      await writeFile(path, original)
+    }
   })
 })

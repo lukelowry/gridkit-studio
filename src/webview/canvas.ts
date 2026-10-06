@@ -12,8 +12,9 @@ import type { Begin, Element, ViewState } from '../shared/messages.js'
 import { drawable } from '../shared/streams.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
-import { CanvasGpu, RECOVER_MS } from './gpu.js'
+import { CanvasGpu } from './gpu.js'
 import { loadBorders } from './network/borders.js'
+import { Recovery } from './recovery.js'
 import { receive } from './stream.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
@@ -81,9 +82,8 @@ function boot() {
   let anchorKey = ''
   let own = ''
   let preferredProjection: Projection | undefined
-  /** The camera to restore after the GPU is lost, and when the GPU was last replaced. */
+  /** The camera to restore after a renderer or GPU failure. */
   let restore: unknown
-  let recovered = -Infinity
   let saving: ReturnType<typeof setTimeout> | undefined
   let sync = () => {}
 
@@ -110,13 +110,16 @@ function boot() {
     labelled = false
     delete canvas.dataset.rendered
   }
+  const recovery = new Recovery(() => {
+    restore = view?.camera ?? restore
+    drop()
+    void render().catch((reason) => recovery.fail(reason))
+  }, error)
   /** Replace a lost GPU and redraw where the camera was. */
-  const lost = () => {
+  const lost = (reason: unknown) => {
     restore = view?.camera
     drop()
-    if (performance.now() - recovered < RECOVER_MS) return error('WebGPU device lost.')
-    recovered = performance.now()
-    void render().catch(error)
+    recovery.fail(reason)
   }
   // Load the renderer while the worker prepares the case.
   const rendererReady =
@@ -279,8 +282,9 @@ function boot() {
   function connect(mounted: Network | Diagram) {
     // Both renderers emit these events; the union's `on` overloads are not callable.
     const events = mounted as Network
-    events.on('error', (reason) => bridge.report(reason))
+    events.on('error', (reason) => recovery.fail(reason))
     events.on('frame', () => {
+      recovery.presented()
       if (!canvas.dataset.rendered) {
         mark('canvas:frame')
         canvas.dataset.rendered = 'true'
@@ -479,6 +483,7 @@ function boot() {
     clearTimeout(saving)
     unwatch()
     clock.stop()
+    recovery.dispose()
     view?.destroy()
     view = undefined
     owner.dispose()

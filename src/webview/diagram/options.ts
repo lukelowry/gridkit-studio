@@ -21,10 +21,11 @@ export function layoutOf(s: SettingsReader): LayoutOptions {
 
 /** Diagram settings as renderer options, shared by the live view and video export. */
 export function diagramOptions(s: SettingsReader, palette: Palette, font: string): DiagramStyle {
+  const motion = s.get('accessibility.motion')
   const family = s.get('diagram.font') || font
   const [r, g, b] = palette.text2
   return {
-    motion: s.get('accessibility.motion') === 'reduce' ? 'reduce' : 'auto',
+    motion: motion === 'system' ? 'auto' : motion,
     ...(family && { font: { family } }),
     fontSizePx: s.get('diagram.fontSizePx'),
     background: color(s.get('diagram.background'), palette.background),

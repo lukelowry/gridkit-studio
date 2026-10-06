@@ -13,7 +13,7 @@ import {
 } from '@latkit/model'
 
 import type { Case, Field } from '../gridkit/index.js'
-import type { RunInfo } from '../shared/messages.js'
+import type { SimulationInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
 import { columnName, type Layout, readResults, samplesOf } from './decode.js'
 
@@ -119,7 +119,7 @@ export class Results {
   #at = 0
   #last = -Infinity
   constructor(
-    readonly info: RunInfo,
+    readonly info: SimulationInfo,
     readonly kase: Case,
     readonly fields: readonly Field[],
     readonly cache: ResultCache,

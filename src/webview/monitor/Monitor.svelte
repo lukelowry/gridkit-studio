@@ -120,7 +120,10 @@
           view = merged(view, incoming.state)
           appearance(view.settings)
           // Another run resets the window; one the extension set replaces the user's.
-          if (view.run?.id !== before.run?.id) chosen = told = undefined
+          if (view.run?.id !== before.run?.id) {
+            chosen = told = undefined
+            source = undefined
+          }
           else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
@@ -134,6 +137,7 @@
       }),
       receive(
         (data, begin) => {
+          if (begin.simulationId !== view.run?.id) return
           source = data
           held = begin.held
         },

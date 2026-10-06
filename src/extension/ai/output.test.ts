@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type * as vscode from 'vscode'
 
-import { toolResult } from './ai-output.js'
+import { toolResult } from './output.js'
 
 vi.mock('vscode', () => ({
   CancellationError: class extends Error {},

@@ -18,11 +18,16 @@ import type {
   Analysis,
   AnalysisOptions,
   Comparison,
-  RunTarget,
+  ResultsTarget,
   SignalOptions,
   SignalResult,
 } from './analysis.js'
+import type { Program, RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
+export { PROGRAMS } from './simulation.js'
+export type { GridKit, Program, RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
+
 import type { Bindings } from './bindings.js'
+import type { MonitoredSignals } from './ai.js'
 import type { AggregateQuery, CaseQuery, EvidencePage, NeighborhoodQuery } from './inspection.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
@@ -32,6 +37,8 @@ import type { ClockState, LoopMode } from './transport.js'
 export interface Revision {
   uri: string
   version: number
+  attachmentId?: string
+  snapshotId?: string
 }
 
 export interface SourceRange {
@@ -93,87 +100,18 @@ export type Mutation =
   | { kind: 'move'; id: string; position: readonly [number, number] | null }
   | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
 
-/** GridKit's programs a run can start, by the names the Simulation view gives them. */
-export const PROGRAMS = {
-  DynamicSimulation: 'Dynamic simulation',
-  ContingencyAnalysis: 'Contingency analysis',
-} as const
-export type Program = keyof typeof PROGRAMS
-
-/** Where GridKit runs: installed here, else in a container of an image. */
-export interface GridKit {
-  /** Its install folder, or one of its programs; empty finds GridKit on PATH. */
-  readonly path: string
-  /** An image with GridKit's programs on its PATH, used when GridKit is not installed here; the
-   *  user pulls it, never Studio. Empty for none. */
-  readonly image: string
-  /** The container CLI: docker, podman, or a path to either; empty finds docker, else podman. */
-  readonly cli: string
-}
-
-/** A running simulation, which the extension stops if the data worker cannot. */
-export interface RuntimeProcess {
-  pid: number
-  executable: string
-  /** The container it runs in, which `cli` removes by name. */
-  container?: { cli: string; name: string }
-}
-
-export interface RunInfo {
-  id: string
-  revision: Revision
-  fingerprint: string
-  name: string
-  state: 'running' | 'complete' | 'cancelled' | 'failed'
-  path: string
-  format: 'arrow' | 'csv'
-  frames: number
-  domain: Domain
-  /** The times the run will cover, once its command says. */
-  span?: Domain
-  message?: string
-  /** Bounded solver evidence, retained even when a failed run has no result file. */
-  evidence?: string[]
-  started: number
-  outputs: readonly FieldSelection[]
-  /** Values validated at launch, never the editor's later settings. Absent for legacy imports. */
-  configuration?: {
-    runtime?:
-      | { kind: 'installed'; program: string }
-      | { kind: 'container'; cli: string; podman: boolean; image: string }
-    values: Record<string, unknown>
-    program: Program
-    options: readonly { name: string; value: number | string }[]
-    addedFaults: readonly {
-      bus: number
-      start: number
-      duration: number
-      resistance: number
-      reactance: number
-    }[]
-  }
-  /** A ContingencyAnalysis study: the bus each contingency faults, those that failed, how many
-   *  have finished, and the one shown. Each contingency shown is a run of its own; GridKit numbers
-   *  their files from `offset`, after the case's own faults. */
-  contingency?: {
-    study: string
-    offset: number
-    buses: readonly number[]
-    failed: readonly number[]
-    done: number
-    shown: number
-  }
-}
-
-export interface RunRequest extends Revision {
-  values: Record<string, unknown>
-  outputs: readonly FieldSelection[]
-  gridkit: GridKit
-  cacheBytes: number
-}
-
 /** What the extension asks of the data worker. */
 export interface Requests {
+  captureCase: { input: Revision; output: { snapshotId: string; fingerprint: string } }
+  releaseSnapshot: { input: { snapshotId: string }; output: null }
+  resolveRecording: { input: { snapshotId: string; recording: readonly MonitoredSignals[] }; output: FieldSelection[] }
+  prepareSimulation: { input: SimulationRequest; output: SimulationInfo }
+  getSimulation: { input: { simulationId: string }; output: SimulationInfo }
+  describeSimulation: { input: { simulationId: string }; output: Summary }
+  listSimulations: { input: { uri?: string }; output: SimulationInfo[] }
+  stopSimulation: { input: { simulationId: string }; output: null }
+  retainSimulation: { input: { simulationId: string; retained: boolean }; output: null }
+  shutdown: { input: Record<string, never>; output: null }
   aggregate: { input: AggregateQuery; output: Record<string, unknown> }
   neighborhood: { input: NeighborhoodQuery; output: Record<string, unknown> }
   selection: {
@@ -187,9 +125,9 @@ export interface Requests {
     }
   }
   evidence: { input: { evidence: string; offset?: number; limit?: number }; output: EvidencePage }
-  runs: { input: { uri: string }; output: RunInfo[] }
+  runs: { input: { uri: string }; output: SimulationInfo[] }
   preflight: {
-    input: RunRequest
+    input: SimulationRequest
     output: {
       values: Record<string, unknown>
       program: Program
@@ -199,11 +137,11 @@ export interface Requests {
       runtime: string
     }
   }
-  analyze: { input: RunTarget & AnalysisOptions; output: Analysis }
+  analyze: { input: ResultsTarget & AnalysisOptions; output: Analysis }
   signals: { input: SignalOptions; output: SignalResult }
-  compare: { input: { before: RunTarget; after: RunTarget } & AnalysisOptions; output: Comparison }
+  compare: { input: { before: ResultsTarget; after: ResultsTarget } & AnalysisOptions; output: Comparison }
   rank: {
-    input: RunTarget & AnalysisOptions & { contingencies?: number[] }
+    input: ResultsTarget & AnalysisOptions & { contingencies?: number[] }
     output: {
       study: string
       revision: Revision
@@ -260,15 +198,15 @@ export interface Requests {
   }
   /** The next sample time from `at` in `direction`; the run's first or last time when none. */
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
-  run: { input: RunRequest; output: RunInfo }
+  run: { input: SimulationRequest; output: SimulationInfo }
   /** Shows contingency `shown` of the study `run` belongs to, in its place. */
-  contingency: { input: { run: string; shown: number }; output: RunInfo }
+  contingency: { input: { run: string; shown: number }; output: SimulationInfo }
   stop: { input: { uri: string }; output: null }
   /** Drops the case's runs. */
   clear: { input: { uri: string }; output: null }
   /** Drops the case and its runs. */
-  release: { input: { uri: string }; output: null }
-  import: { input: Revision & { path: string; cacheBytes: number }; output: RunInfo }
+  release: { input: { uri: string; attachmentId?: string }; output: null }
+  import: { input: Revision & { path: string; cacheBytes: number }; output: SimulationInfo }
   export: { input: { run: string; path: string }; output: null }
   stats: {
     input: Record<string, never>
@@ -299,12 +237,13 @@ export type FromWorker =
       code?: string
       offset?: number
       length?: number
+      issues?: unknown
       /** Whether the error is a defect in Studio; `detail` is its stack. */
       defect?: boolean
       detail?: string
     }
   | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
-  | { kind: 'run'; info: RunInfo }
+  | { kind: 'run'; info: SimulationInfo }
   /** A solver line of the case's run, or, with a level, a line for Studio's log alone. */
   | { kind: 'log'; uri?: string; message: string; level?: 'warn' | 'error' }
 
@@ -343,7 +282,7 @@ export interface ViewState {
   /** Why the source fails to parse; `summary` may hold the last valid revision. */
   error?: string
   selection?: Element
-  run?: RunInfo
+  run?: SimulationInfo
   /** Whether Run was pressed and GridKit's run has not yet begun. */
   launching?: boolean
   /** What future runs record. */
@@ -361,6 +300,7 @@ export interface Cameras {
 
 /** Opens a stream of rows and samples, which an `end` of the same `stream` closes. */
 export interface Begin {
+  simulationId?: string
   kind: 'begin'
   stream: number
   schema: Schema

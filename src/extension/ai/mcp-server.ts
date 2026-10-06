@@ -4,10 +4,10 @@ import type { Socket } from 'node:net'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import { serveStdio, StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 
-import { message } from '../shared/format.js'
-import { boundedResult } from './ai-output.js'
-import { outputSchemas } from './ai-schemas.js'
-import type { ToolHandler } from './ai-tools.js'
+import { toolProblem } from '../../shared/ai.js'
+import { toolDefinitions } from '../../shared/tools.js'
+import { boundedResult } from './output.js'
+import type { ToolHandler } from './tools.js'
 
 export interface ToolDefinition {
   name: string
@@ -30,7 +30,7 @@ export function createAdapter(
       definition,
       handler,
       schema: fromJsonSchema(definition.inputSchema),
-      output: fromJsonSchema(outputSchemas[definition.name] ?? { type: 'object' }),
+      output: fromJsonSchema((toolDefinitions.find(tool => tool.name === definition.name)?.outputSchema ?? { type: 'object' }) as Parameters<typeof fromJsonSchema>[0]),
     }
   })
   if (
@@ -55,7 +55,7 @@ export function createAdapter(
           { name: 'gridkit-studio', version },
           {
             instructions:
-              'Inspect open cases first. Use explicit case URIs, document revisions and run IDs. Analyze recorded signals in the worker. Edit and run tools open a preview in VS Code and require the user to act there. A pending preview is not an applied edit or a started run. Check action_status for the outcome. Never automatically retry a mutation after disconnect.',
+              'Start with list_cases and describe_case; editors need not be open. Use explicit caseUri and caseRevision for edits, simulationId for recordings, and analysisId for progress and findings. simulate and edit_case act directly within workspace AI access; there are no proposal tabs. Reuse a requestId only for an identical retry. An uncertain edit outcome must be inspected before new work. ContingencyAnalysis is a bus-fault study. Analyze original recorded samples; envelopes are only for display. Completed recordings and findings survive reload subject to retention.',
           },
         )
         server.server.oninitialized = () => {
@@ -79,13 +79,7 @@ export function createAdapter(
                 const { result, text } = await boundedResult(output, () => signal.throwIfAborted())
                 return { structuredContent: result, content: [{ type: 'text', text }] }
               } catch (error) {
-                const code =
-                  typeof (error as { code?: unknown } | null)?.code === 'string'
-                    ? (error as { code: string }).code
-                    : context.mcpReq.signal.aborted
-                      ? 'cancelled'
-                      : 'operation-failed'
-                const problem = { code, message: message(error) }
+                const problem = toolProblem(error, context.mcpReq.signal.aborted)
                 return {
                   isError: true,
                   structuredContent: { error: problem },

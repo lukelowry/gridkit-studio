@@ -1,14 +1,15 @@
 import type { Domain } from '@latkit/model'
 
-import type { Revision, RunInfo } from './messages.js'
+import type { Revision, SimulationInfo } from './messages.js'
 
 /** A retained run, or a stable study id and zero-based contingency index. */
-export interface RunTarget {
+export interface ResultsTarget {
   uri: string
   run: string
   contingency?: number
 }
 export interface AnalysisOptions {
+  analysisId?: string
   from: string
   field: string
   ids?: string[]
@@ -73,7 +74,7 @@ export interface Analysis {
   contingency?: number
   revision: Revision
   fingerprint: string
-  state: RunInfo['state']
+  state: SimulationInfo['state']
   snapshot: { pages: number; frames: number; domain: Domain }
   window: Domain
   from: string
@@ -110,7 +111,7 @@ export interface Comparison {
   }[]
 }
 
-export interface SignalOptions extends RunTarget {
+export interface SignalOptions extends ResultsTarget {
   from: string
   field: string
   ids: string[]

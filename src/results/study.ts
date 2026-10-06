@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path'
 
 import { contingencyFile } from '../gridkit/simulation.js'
 import type { AnalysisOptions } from '../shared/analysis.js'
-import type { Requests, RunInfo } from '../shared/messages.js'
+import type { Requests, SimulationInfo } from '../shared/messages.js'
 import { analysisLimit, analysisSelection, analyze, compareStats } from './analysis.js'
 import { Results } from './results.js'
 
@@ -14,7 +14,7 @@ export async function sibling(current: Results, shown: number, signal: AbortSign
   if (current.info.state !== 'complete')
     throw new Error('Wait for the contingency study to complete.')
   if (study.failed.includes(shown)) throw new Error('That contingency failed; it has no results.')
-  const info: RunInfo = {
+  const info: SimulationInfo = {
     ...structuredClone(current.info),
     id: crypto.randomUUID(),
     path: join(dirname(current.info.path), contingencyFile(study.offset + shown)),

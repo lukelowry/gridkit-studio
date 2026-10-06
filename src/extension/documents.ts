@@ -1,6 +1,7 @@
 import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
+import { problem } from '../shared/ai.js'
 import type { Element, Mutation, Revision, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
 
@@ -10,6 +11,7 @@ export function isWritable(document: vscode.TextDocument) {
 }
 
 interface Entry {
+  attachmentId: string
   document: vscode.TextDocument
   summary?: Summary
   pending?: Promise<Summary>
@@ -60,13 +62,13 @@ export class Documents {
       vscode.workspace.onDidCloseTextDocument((document) => {
         const uri = document.uri.toString()
         const entry = this.entries.get(uri)
-        if (!entry) return
+        if (!entry || entry.document !== document) return
         entry.controller?.abort()
         clearTimeout(entry.timer)
         this.entries.delete(uri)
         this.changed.fire(uri)
         this.diagnostics.delete(document.uri)
-        void this.client.call('release', { uri }).catch(() => {})
+        void this.client.call('release', { uri, attachmentId: entry.attachmentId }).catch(() => {})
       }),
       // A new worker reads the open cases again, unless the reading may be what stops it.
       this.client.failure.event((error) => {
@@ -110,7 +112,7 @@ export class Documents {
     const uri = document.uri.toString()
     let entry = this.entries.get(uri)
     if (!entry) {
-      entry = { document, stale: true, changes: [] }
+      entry = { document, attachmentId: crypto.randomUUID(), stale: true, changes: [] }
       this.entries.set(uri, entry)
     }
     entry.controller?.abort()
@@ -120,8 +122,8 @@ export class Documents {
     const current = entry
     const input =
       entry.workerVersion !== undefined && entry.changes.length
-        ? { uri, version, baseVersion: entry.workerVersion, changes: entry.changes }
-        : { uri, version, text: document.getText() }
+        ? { uri, version, attachmentId: entry.attachmentId, baseVersion: entry.workerVersion, changes: entry.changes }
+        : { uri, version, attachmentId: entry.attachmentId, text: document.getText() }
     entry.changes = []
     entry.workerVersion = version
     const pending = this.client
@@ -135,7 +137,7 @@ export class Documents {
         )
           return this.client.call(
             'parse',
-            { uri, version, text: document.getText() },
+            { uri, version, attachmentId: current.attachmentId, text: document.getText() },
             controller.signal,
           )
         throw error
@@ -202,6 +204,14 @@ export class Documents {
       'Edit ' + element.field,
     )
   }
+  /** Content-based transactions remain valid when an unchanged document is reopened. */
+  async transactContent(uri: string, fingerprint: string, mutations: readonly Mutation[], edits: readonly SourceEdit[]) {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
+    const summary = await this.ensure(document)
+    if (summary.fingerprint !== fingerprint) throw problem('revision-conflict', 'Case content changed before applying changes.', { expectedRevision: fingerprint, actualRevision: summary.fingerprint })
+    await this.transact(uri, summary.version, mutations, 'Apply GridKit case changes', edits)
+    return document
+  }
   /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
    *  checked against revision `expected`. */
   transact(
@@ -209,6 +219,7 @@ export class Documents {
     expected: number,
     mutations: readonly Mutation[],
     label = 'Edit GridKit case',
+    prepared?: readonly SourceEdit[],
   ): Promise<void> {
     const entry = this.entries.get(uri)
     if (!entry) return Promise.reject(new Error('The case document is closed.'))
@@ -223,7 +234,7 @@ export class Documents {
       .catch(() => {})
       .then(async () => {
         check()
-        const edits = await this.client.call('transact', { uri, version: expected, mutations })
+        const edits = prepared ?? await this.client.call('transact', { uri, version: expected, attachmentId: entry.attachmentId, mutations })
         check()
         if (!edits.length) return
         const workspaceEdit = new vscode.WorkspaceEdit()

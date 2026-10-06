@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { Case, catalog, selections } from '../gridkit/index.js'
-import type { RunInfo } from '../shared/messages.js'
+import type { SimulationInfo } from '../shared/messages.js'
 import { analyze, compare, snapshot } from './analysis.js'
 import { Readers } from './readers.js'
 import { ResultCache, Results } from './results.js'
@@ -31,7 +31,7 @@ describe('recorded result analysis', () => {
               `${n / 100},${n === 120 ? 'NaN' : n === 80 || n === 81 ? 0.5 : 1},${n === 150 ? 1.5 : 1}\n`,
           ).join(''),
       )
-      const info: RunInfo = {
+      const info: SimulationInfo = {
         id: 'one',
         revision: { uri: 'file:///old.case.json', version: 2 },
         fingerprint: kase.version,
@@ -199,7 +199,7 @@ describe('recorded result analysis', () => {
       const path = join(directory, 'results_7.csv')
       await writeFile(path, 'time,Bus_A_Vm\n0,1\n1,0.8\n')
       await writeFile(join(directory, 'results_8.csv'), 'time,Bus_A_Vm\n0,1\n1,0.5\n')
-      const info: RunInfo = {
+      const info: SimulationInfo = {
         id: 'displayed-id',
         revision: { uri: 'file:///case', version: 1 },
         fingerprint: kase.version,

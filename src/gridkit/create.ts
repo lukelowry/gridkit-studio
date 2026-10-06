@@ -11,6 +11,11 @@ import { realText } from './staging.js'
 export function createRecords(
   kase: Case,
   changes: readonly Extract<Mutation, { kind: 'add' }>[],
+  options?: {
+    resolve(id: string, type: string): string | number | undefined
+    removed: ReadonlySet<string>
+    positions: ReadonlyMap<string, readonly [number, number] | null>
+  },
 ): SourceEdit[] {
   const declared = new Map<string, Extract<Mutation, { kind: 'add' }>>()
   for (const change of changes) {
@@ -32,7 +37,7 @@ export function createRecords(
     declared.set(id, change)
   }
   const occupied = new Set<string>()
-  for (const table of kase.tables.values())
+  for (const table of options ? [] : kase.tables.values())
     for (const port of table.shape.ports) {
       if (port.definition.direction !== 'out') continue
       for (let row = 0; row < table.records.length; row++) {
@@ -52,13 +57,13 @@ export function createRecords(
       const plan = shape.plan.get(field)
       if (!plan || !editable(plan))
         throw failure('invalid-input', `Unknown or non-writable field: ${change.type}.${field}.`)
-      const native = fieldValue(plan, value, (targetId, type) => {
+      const native = fieldValue(plan, value, options?.resolve ?? ((targetId, type) => {
         const added = declared.get(targetId)
         if (added?.type === type) return added.key
         const target = kase.locate(targetId)
         return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
-      })
-      if (plan.definition.direction === 'out' && value !== null) {
+      }))
+      if (!options && plan.definition.direction === 'out' && value !== null) {
         if (occupied.has(String(value)))
           throw failure('invalid-input', `This signal already has an output driver: ${value}.`)
         occupied.add(String(value))
@@ -76,6 +81,8 @@ export function createRecords(
         (change.fields[plan.name] === undefined || change.fields[plan.name] === null)
       )
         throw failure('invalid-input', `${id} requires ${plan.name}.`)
+    const position = options?.positions.get(id)
+    if (position) text = withValue(text, ['extension', 'diagram', 'position'], position)
     const list = records.get(shape.array!) ?? []
     list.push(text)
     records.set(shape.array!, list)
@@ -89,7 +96,15 @@ export function createRecords(
       missing.push(JSON.stringify(name) + ': [' + added.join(',') + ']')
       continue
     }
-    const last = array.ends.length - 1
+    let last = array.ends.length - 1
+    if (options?.removed.size) {
+      const removedRows = new Set<number>()
+      for (const id of options.removed) {
+        const found = kase.locate(id)
+        if (found?.table.shape.array === name) removedRows.add(found.table.records[found.row]!)
+      }
+      while (removedRows.has(last)) last--
+    }
     edits.push({
       offset: textOffset(kase, last < 0 ? array.open + 1 : array.ends[last]!),
       length: 0,

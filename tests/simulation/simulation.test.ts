@@ -20,7 +20,7 @@ import {
   Simulation,
 } from '../../src/gridkit/index.js'
 import { ResultCache } from '../../src/results/index.js'
-import type { GridKit, RunInfo, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
+import type { GridKit, SimulationInfo, SimulationRequest, RuntimeProcess } from '../../src/shared/messages.js'
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',
@@ -53,7 +53,7 @@ describe('DynamicSimulation', () => {
    *  hears each block of frames, and may stop the run. */
   async function run(
     name: string,
-    values: RunRequest['values'],
+    values: SimulationRequest['values'],
     signal: AbortSignal,
     {
       publish = () => {},
@@ -70,7 +70,7 @@ describe('DynamicSimulation', () => {
     const directory = join(root, name)
     await mkdir(directory)
     const format = 'csv'
-    const request: RunRequest = {
+    const request: SimulationRequest = {
       uri: 'file:///test.case.json',
       version: 1,
       values,
@@ -78,7 +78,7 @@ describe('DynamicSimulation', () => {
       gridkit: using,
       cacheBytes: 1 << 20,
     }
-    const info: RunInfo = {
+    const info: SimulationInfo = {
       id: name,
       revision: request,
       fingerprint: model.version,

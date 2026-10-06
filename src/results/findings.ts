@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { type EvidencePage, pageOf } from '../shared/inspection.js'
 import { Readers } from './readers.js'
 
 const PAGE = 256
+interface Entry { uri: string; summary: Record<string, unknown>; path: string; offsets: number[]; total: number }
 /** Immutable analysis rows live on disk. Paging them never rescans the result recording. */
 export class Evidence {
   readonly #readers = new Readers<object>()
@@ -20,8 +21,8 @@ export class Evidence {
     }
   >()
   constructor(readonly directory: string) {}
-  async put(uri: string, result: { rows: unknown[] }, signal: AbortSignal) {
-    const id = randomUUID()
+  async put(uri: string, result: { rows: unknown[] }, signal: AbortSignal, id: string = randomUUID()) {
+    if (!/^[\da-f-]{36}$/i.test(id)) throw new Error('Invalid analysis identifier.')
     await mkdir(this.directory, { recursive: true })
     const path = join(this.directory, id + '.jsonl')
     const file = await open(path, 'wx')
@@ -35,7 +36,11 @@ export class Evidence {
       }
       signal.throwIfAborted()
       const { rows: _, ...summary } = result
-      this.#entries.set(id, { uri, summary, path, offsets, total: result.rows.length })
+      const entry = { uri, summary, path, offsets, total: result.rows.length }
+      const index = join(this.directory, id + '.json')
+      await writeFile(index + '.tmp', JSON.stringify({ ...entry, path: undefined }))
+      await rename(index + '.tmp', index)
+      this.#entries.set(id, entry)
       return id
     } catch (error) {
       await file.close()
@@ -50,9 +55,18 @@ export class Evidence {
     input: { offset?: number; limit?: number },
     signal: AbortSignal,
   ): Promise<EvidencePage> {
-    const entry = this.#entries.get(id)
-    if (!entry) throw new Error('Evidence is no longer available. Analyze the retained run again.')
-    return this.#readers.use([entry], signal, async (signal) => {
+    if (!/^[\da-f-]{36}$/i.test(id)) throw new Error('Invalid analysis identifier.')
+    let entry = this.#entries.get(id)
+    if (!entry) {
+      const saved = JSON.parse(await readFile(join(this.directory, id + '.json'), 'utf8').catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('Analysis findings are no longer available. Analyze the retained simulation again.')
+        throw error
+      })) as Entry
+      entry = { ...saved, path: join(this.directory, id + '.jsonl') }
+      this.#entries.set(id, entry)
+    }
+    const found = entry
+    return this.#readers.use([found], signal, async (signal) => {
       const { offset, limit } = pageOf(input)
       const end = Math.min(entry.total, offset + limit)
       const rows: unknown[] = []
@@ -93,9 +107,10 @@ export class Evidence {
     const entries = [...this.#entries].filter(([, entry]) => entry.uri === uri)
     for (const [id] of entries) this.#entries.delete(id)
     await Promise.all(
-      entries.map(async ([, entry]) => {
+      entries.map(async ([id, entry]) => {
         await this.#readers.retire(entry)
         await rm(entry.path, { force: true })
+        await rm(join(this.directory, id + '.json'), { force: true })
       }),
     )
   }

@@ -13,7 +13,7 @@ import {
 
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
-  origin: 'network' | 'diagram' | 'case' | 'monitor' | 'inspector'
+  origin: 'network' | 'diagram' | 'case' | 'monitor'
   element?: Element
   type?: string
   field?: string

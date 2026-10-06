@@ -7,7 +7,7 @@ import { blockBuffers, read, type SampleBatch, selectBatches, staticFields } fro
 import { describe, expect, it } from 'vitest'
 
 import { Case, catalog, selections } from '../gridkit/index.js'
-import type { RunInfo } from '../shared/messages.js'
+import type { SimulationInfo } from '../shared/messages.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultCache, Results } from './results.js'
 
@@ -90,7 +90,7 @@ describe('native results and ownership', () => {
         'time,Bus_A_Vm\n' +
           Array.from({ length: 200 }, (_, i) => `${i / 100},${1 + i / 1000}\n`).join(''),
       )
-      const info: RunInfo = {
+      const info: SimulationInfo = {
         id: 'test',
         revision: { uri: 'file:///case', version: 1 },
         fingerprint: kase.version,

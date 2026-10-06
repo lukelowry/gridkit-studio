@@ -13,7 +13,7 @@ import type {
   Cameras,
   Element,
   Plot,
-  RunInfo,
+  SimulationInfo,
   Summary,
   TableState,
   ViewState,
@@ -34,8 +34,8 @@ export interface Session {
   diagramEditing: boolean
   bindings: Bindings
   selection?: Element
-  run?: RunInfo
-  previous?: RunInfo
+  run?: SimulationInfo
+  previous?: SimulationInfo
   /** Whether Run was pressed and GridKit's run has not yet begun. */
   launching: boolean
   plots: Plot[]
@@ -81,7 +81,7 @@ export function defaultOutputs({ schema, counts }: Summary): FieldSelection[] {
 }
 
 /** The plots `run` can draw: those it recorded, else its first recorded signal. */
-export function plotsFor(run: RunInfo, plots: readonly Plot[]): Plot[] {
+export function plotsFor(run: SimulationInfo, plots: readonly Plot[]): Plot[] {
   const kept = plots.filter((plot) =>
     run.outputs.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
   )
@@ -182,11 +182,6 @@ export class Sessions {
         }
       }),
       this.documents.changed.event((uri) => {
-        if (!this.documents.entries.has(uri)) {
-          this.all.get(uri)?.transport.dispose()
-          this.all.delete(uri)
-          if (this.active === uri) this.active = this.all.keys().next().value
-        }
         this.changed.fire(uri)
       }),
       this.client.event.event((event) => {
@@ -355,7 +350,7 @@ export class Sessions {
   }
   /** Put `run` on the session's clock: a new run resets the span, more frames of the same run
    *  extend it, and none clears it. Another contingency of the shown study keeps the time. */
-  show(session: Session, run: RunInfo | undefined) {
+  show(session: Session, run: SimulationInfo | undefined) {
     const { transport } = session
     const shown = session.run
     const study = !!run?.contingency && shown?.contingency?.study === run.contingency.study

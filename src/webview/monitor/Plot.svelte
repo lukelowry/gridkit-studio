@@ -1,11 +1,12 @@
 <!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import { type Data, type Domain, itemId } from '@latkit/model'
+  import { type Data, type Domain, itemId, selectRows } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
   import { rowsOf } from '../../shared/cells.js'
+  import { recordedRows } from '../../shared/bindings.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
   import { elementType, fieldName, typeName } from '../../shared/schema.js'
@@ -81,6 +82,7 @@
       settings,
       { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
       view.bindings,
+      recordedRows(view.run?.outputs ?? [], { type: plot.from, field: plot.field }),
     ),
   )
 
@@ -104,7 +106,7 @@
     made.set(style)
     drawn = { ...style, source, traces }
     const offs = [
-      made.on('error', (error) => bridge.report(error)),
+      made.on('error', (error) => bridge.report(new Error(`${name}: ${error.message}; traces=${JSON.stringify(traces)}; simulation=${view.run?.id}; selected=${JSON.stringify(selectRows(source!.tables[plot.from]!, recordedRows(view.run?.outputs ?? [], {type:plot.from,field:plot.field})))}; pages=${JSON.stringify(Array.from(source?.tables[plot.from]?.fields[plot.field] ?? [], p => ({rows: p.rows, samples: p.samples && {firstFrame:p.samples.firstFrame, length:p.samples.coordinates.length}})))}`, { cause: error }))),
       made.on('frame', () => {
         canvas.dataset.rendered = 'true'
       }),

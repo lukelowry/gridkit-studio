@@ -1,7 +1,7 @@
 /** Plot options shared by the Monitor view and video export. */
 
 import { colormaps } from '@latkit/gpu'
-import type { Axis, Domain } from '@latkit/model'
+import type { Axis, Domain, FieldSelection } from '@latkit/model'
 import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
@@ -30,6 +30,7 @@ export function tracesOf(
   settings: SettingsReader,
   { type, field, id }: Plotted,
   bindings: Bindings = {},
+  rows?: FieldSelection['rows'],
 ): MonitorConfig['traces'] {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
@@ -39,7 +40,7 @@ export function tracesOf(
       from: type,
       y: field,
       interpolation: settings.get('monitor.interpolation'),
-      ...(id !== undefined && { rows: { kind: 'ids', ids: [id] } }),
+      ...(id !== undefined ? { rows: { kind: 'ids' as const, ids: [id] } } : rows ? { rows } : {}),
       ...(mapped && {
         color: {
           field,

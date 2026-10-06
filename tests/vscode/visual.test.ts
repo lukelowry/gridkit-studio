@@ -112,7 +112,7 @@ if (process.platform === 'linux' && process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1
       // Collapse the sidebar's other views, so the view's size is the same on every run.
       const expanded = bench.page
         .locator('.pane-header[aria-expanded="true"]')
-        .filter({ hasText: /INSPECTOR|MAPPINGS|MONITORED SIGNALS|VIDEO EXPORT/i })
+        .filter({ hasText: /MONITORED SIGNALS|VIDEO EXPORT/i })
       while (await expanded.count()) {
         const count = await expanded.count()
         await expanded.first().click()

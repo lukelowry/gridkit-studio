@@ -2,6 +2,7 @@
 export class Readers<T extends object> {
   readonly #active = new Map<T, Set<{ controller: AbortController; done: Promise<void> }>>()
   readonly #retired = new WeakSet<T>()
+  busy(value: T) { return !!this.#active.get(value)?.size }
 
   async use<R>(
     values: readonly T[],

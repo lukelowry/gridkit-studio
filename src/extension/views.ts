@@ -8,7 +8,7 @@ import { recordedWhole } from '../shared/bindings.js'
 import { defect, detail, message } from '../shared/format.js'
 import {
   type FromView,
-  type RunInfo,
+  type SimulationInfo,
   type Summary,
   TAIL,
   type ToView,
@@ -73,7 +73,7 @@ interface Demand {
   /** Identity of the sampled fields; while it holds, new frames are appended. */
   samples: string
   sampled: FieldSelection[]
-  run?: RunInfo
+  run?: SimulationInfo
   held?: Held
 }
 
@@ -94,6 +94,7 @@ function html(
 class View {
   #requests = new Map<number, AbortController>()
   #summary?: Summary
+  #resultSummary?: { simulationId: string; value: Summary }
   #settings?: SettingsValues
   #shown = ''
   #ready = false
@@ -404,6 +405,11 @@ class View {
   async #once() {
     if (!this.#ready || (!this.panel.visible && this.hidden !== 'working')) return
     const state = this.studio.state(this.uri)
+    if ((this.kind === 'monitor' || this.kind === 'export') && state.run?.frames) {
+      if (this.#resultSummary?.simulationId !== state.run.id)
+        this.#resultSummary = { simulationId: state.run.id, value: await this.studio.client.call('describeSimulation', { simulationId: state.run.id }) }
+      state.summary = this.#resultSummary.value
+    }
     const session = this.studio.all.get(this.uri)
     const shown = SHOWN[this.kind]
     const signature = shown ? JSON.stringify(shown(state)) : undefined
@@ -436,7 +442,7 @@ class View {
   }
   /** The rows the view draws, and the samples it binds or plots: the whole run while it is small,
    *  a window of it past that. */
-  #demand(summary: Summary, shown: RunInfo | undefined, session: Session): Demand | undefined {
+  #demand(summary: Summary, shown: SimulationInfo | undefined, session: Session): Demand | undefined {
     const { kind } = this
     const video = this.#video
     if (kind === 'export' && !video) return undefined
@@ -521,7 +527,7 @@ class View {
   }
   /** The window of `run` to hold: the Monitor's visible times, or a few seconds around the
    *  playhead. A view following the run's head holds an open-ended window. */
-  #window(run: RunInfo, session: Session): Held {
+  #window(run: SimulationInfo, session: Session): Held {
     const { transport } = session
     const [start, end] = run.domain
     const t = transport.currentT()
@@ -542,6 +548,7 @@ class View {
     try {
       await this.send({
         kind: 'begin',
+        simulationId: demand.run?.id,
         stream,
         schema: summary.schema,
         revision,
@@ -695,7 +702,7 @@ export function registerViews(studio: Sessions) {
               }
               content?.dispose()
               content = undefined
-              if (uri && studio.documents.entries.has(uri)) {
+              if (uri && (studio.documents.entries.has(uri) || ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.run))) {
                 content = new View(studio, panel, uri, kind, hidden)
                 panel.description = name(uri)
               } else {

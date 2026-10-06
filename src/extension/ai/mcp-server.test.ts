@@ -5,8 +5,8 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
 import { describe, expect, it, vi } from 'vitest'
 
-import manifest from '../../package.json'
-import { outputSchemas } from './ai-schemas.js'
+import manifest from '../../../package.json'
+import { toolDefinitions } from '../../shared/tools.js'
 import { createAdapter } from './mcp-server.js'
 
 vi.mock('vscode', () => ({}))
@@ -16,7 +16,7 @@ async function fixture(
 ) {
   const handles: { close(): Promise<void> }[] = []
   const attach = createAdapter(
-    [{ name: 'test', message: '', readOnly: true, run }],
+    [{ name: 'test', message: '', readOnly: true, capability: 'inspect', run }],
     [
       {
         name: 'test',
@@ -55,7 +55,7 @@ async function fixture(
 
 describe('MCP adapter', () => {
   it('publishes a result contract for every native tool', () => {
-    expect(Object.keys(outputSchemas).sort()).toEqual(
+    expect(toolDefinitions.map(tool => tool.name).sort()).toEqual(
       manifest.contributes.languageModelTools.map((tool) => tool.name).sort(),
     )
   })

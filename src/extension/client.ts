@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import type { DataBatch } from '@latkit/model'
-import { type CancellationToken, EventEmitter, type ExtensionContext } from 'vscode'
+import { type CancellationToken, EventEmitter, type ExtensionContext, workspace } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
 import { scratchFolder, sweep } from '../results/scratch.js'
@@ -54,7 +54,7 @@ export class Client {
     void sweep(root, scratch)
     const worker = (this.#worker = new Worker(
       join(this.context.extensionPath, 'dist', 'worker.cjs'),
-      { workerData: { scratch } },
+      { workerData: { scratch, storage: join((this.context.storageUri ?? this.context.globalStorageUri).fsPath, 'results'), storageBytes: workspace.getConfiguration('gridkitStudio').get<number>('resultStorageMiB', 4096) * (1 << 20) } },
     ))
     const failed = (error: Error) => {
       if (this.#worker !== worker) return
@@ -113,6 +113,7 @@ export class Client {
               offset: message.offset,
               code: message.code,
               length: message.length,
+              issues: message.issues,
               ...(message.defect && { defect: true, detail: message.detail }),
             }),
           )
@@ -151,6 +152,7 @@ export class Client {
     })
   }
   async dispose() {
+    if (this.#worker) await this.call('shutdown', {}).catch(() => {})
     this.#disposed = true
     const worker = this.#worker
     this.#worker = undefined

@@ -8,6 +8,7 @@ import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
+import { recordedRows } from '../../shared/bindings.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
@@ -175,6 +176,7 @@ export async function exportVideo(
                   preferences,
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,
+                  recordedRows(state.run?.outputs ?? [], { type: plot.from, field: plot.field }),
                 ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,

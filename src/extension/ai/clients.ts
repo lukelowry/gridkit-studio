@@ -4,7 +4,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import { type AST, parseForESLint } from 'toml-eslint-parser'
 
-import { message } from '../shared/format.js'
+import { message } from '../../shared/format.js'
 
 export interface Launch {
   command: string
@@ -141,7 +141,7 @@ export async function testConnection(launch: Launch, signal: AbortSignal) {
     signal.throwIfAborted()
     const tools = await client.listTools({}, { signal })
     const result = await client.callTool(
-      { name: 'gridkit_inspect_case', arguments: {} },
+      { name: 'gridkit_list_cases', arguments: { limit: 1 } },
       { signal },
     )
     if (result.isError) throw new Error('The relay connected but GridKit could not inspect cases.')

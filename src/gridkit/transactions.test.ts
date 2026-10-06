@@ -8,6 +8,35 @@ const text =
   '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"BusFault","id":"load","ports":{"bus":7}},{"class":"BusFault","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)
 describe('document transactions', () => {
+  it('creates forward references, redirects an existing port, removes the old bus and edits values atomically', async () => {
+    const kase = await parse()
+    const next = applyChanges(text, [transaction(kase, [
+      { kind: 'add', type: 'Branch', key: 'tie', fields: { 'ports.bus1': 'Bus/8', 'ports.bus2': 'Bus/9', 'params.X': 0.1 } },
+      { kind: 'add', type: 'Bus', key: 8, fields: { 'params.kv': 230 } },
+      { kind: 'add', type: 'Bus', key: 9, fields: {} },
+      { kind: 'set', id: 'BusFault/load', field: 'ports.bus', value: 'Bus/8' },
+      { kind: 'set', id: 'BusFault/unused', field: 'ports.bus', value: 'Bus/9' },
+      { kind: 'remove', ids: ['Bus/7'] },
+      { kind: 'set', id: 'Branch/tie', field: 'params.X', value: 0.2 },
+      { kind: 'move', id: 'BusFault/load', position: [10, 20] },
+    ])])
+    const final = await parse(next)
+    expect(final.locate('Bus/7')).toBeNull()
+    expect(final.locate('Branch/tie')).toBeDefined()
+    expect(JSON.parse(next).buses.map((bus: { number: number }) => bus.number)).toEqual([8, 9])
+    expect(next).toContain('"value":1.000')
+  })
+  it('permits a new signal driver after removing the old one in the same batch', async () => {
+    const kase = await parse()
+    const next = applyChanges(text, [transaction(kase, [
+      { kind: 'add', type: 'ConstantSignalSource', key: 'replacement', fields: { 'ports.sr': 'Signal/3' } },
+      { kind: 'remove', ids: ['ConstantSignalSource/source'] },
+      { kind: 'connect', from: { id: 'BusFault/load', field: 'ports.control_signal' }, to: { id: 'ConstantSignalSource/replacement', field: 'ports.sr' } },
+    ])])
+    const final = await parse(next)
+    expect(() => final.checkSignals()).not.toThrow()
+    expect(JSON.parse(next).devices.find((device: { id: string }) => device.id === 'load').ports.control_signal).toBe(3)
+  })
   it('places unlocated networks in the worker and respects authored geographic positions', async () => {
     const kase = await parse()
     const placed = await placement(kase, new AbortController().signal)

@@ -22,9 +22,9 @@ beforeAll(async () => {
 })
 /** A worker on a scratch directory of its own, every batch it sends kept. A batch is acknowledged
  *  as it arrives only while `acknowledge` is on. */
-async function start() {
+async function start(storage?: string) {
   const scratch = await mkdtemp(join(tmpdir(), 'gridkit-worker-test-'))
-  const worker = new Worker(entry, { workerData: { scratch } })
+  const worker = new Worker(entry, { workerData: { scratch, storage } })
   let next = 0
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
   const batches: Extract<FromWorker, { kind: 'batch' }>[] = []
@@ -66,6 +66,43 @@ async function start() {
   return rig
 }
 describe('real worker protocol', () => {
+  it('keeps captured cases through editor detach and rejects a released lease', async () => {
+    const rig = await start()
+    try {
+      const revision = { uri: 'file:///snapshot.case.json', version: 1, attachmentId: 'first' }
+      const text = '{"buses":[{"class":"Bus","number":1,"name":"original"}]}'
+      await rig.call('parse', { ...revision, text }).done
+      const captured = await rig.call('captureCase', revision).done
+      await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
+      const reopened = await rig.call('parse', { ...revision, attachmentId: 'second', text: text.replace('original', 'changed') }).done
+      await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
+      const query = { kind: 'rows', from: 'Bus', select: ['name'], ids: true } as const
+      expect(await rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done).toHaveLength(1)
+      expect(await rig.call('query', { ...reopened, query }).done).toHaveLength(1)
+      await rig.call('releaseSnapshot', { snapshotId: captured.snapshotId }).done
+      await expect(rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done).rejects.toThrow(/captured case/)
+    } finally { await rig.stop() }
+  })
+  it('restores recordings and immutable findings in a fresh worker without a case editor', async () => {
+    const storage = await mkdtemp(join(tmpdir(), 'gridkit-persistence-'))
+    let rig = await start(storage)
+    try {
+      const revision = { uri: 'file:///retained.case.json', version: 1 }
+      await rig.call('parse', { ...revision, text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}' }).done
+      const csv = join(rig.scratch, 'original.csv')
+      await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
+      const info = await rig.call('import', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
+      const input = { uri: revision.uri, run: info.id, from: 'Bus', field: 'Vm' }
+      const measured = await rig.call('analyze', input).done
+      await rig.call('release', { uri: revision.uri }).done
+      expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
+      await rig.stop()
+      rig = await start(storage)
+      expect((await rig.call('listSimulations', {}).done)[0]!.id).toBe(info.id)
+      expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
+      expect((await rig.call('evidence', { evidence: measured.evidence! }).done).rows).toEqual(measured.rows)
+    } finally { await rig.stop(); await rm(storage, { recursive: true, force: true }) }
+  })
   it('waits for consumption acknowledgements and cancels an unconsumed stream', async () => {
     const rig = await start()
     const { worker, batches, call, stop } = rig
@@ -190,7 +227,7 @@ describe('real worker protocol', () => {
       )
       await expect(
         call('analyze', { ...analysis, uri: 'file:///other.case.json' }).done,
-      ).rejects.toThrow(/no longer open/)
+      ).rejects.toThrow(/No recording is available/)
       await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()
       expect((await call('analyze', analysis).done).revision).toEqual(revision)
       const comparison = await call('compare', {
@@ -224,7 +261,7 @@ describe('real worker protocol', () => {
       await call('clear', { uri: revision.uri }).done
       await rejected
       expect(await call('stats', {}).done).toMatchObject({ runs: 0, cacheBytes: 0 })
-      await expect(call('analyze', analysis).done).rejects.toThrow(/no longer open/)
+      await expect(call('analyze', analysis).done).rejects.toThrow(/retained recording/)
     } finally {
       await stop()
     }

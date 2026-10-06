@@ -2,7 +2,7 @@ import { parse } from 'jsonc-parser'
 import { getStaticTOMLValue, parseForESLint } from 'toml-eslint-parser'
 import { describe, expect, it } from 'vitest'
 
-import { clientConfig } from './ai-clients.js'
+import { clientConfig } from './clients.js'
 
 const launch = {
   command: 'C:\\Program Files\\Code.exe',

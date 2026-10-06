@@ -1,12 +1,11 @@
 import type { ExtensionContext } from 'vscode'
 
-import { registerAI } from './ai.js'
+import { registerAI } from './ai/index.js'
 import { registerCommands } from './commands.js'
 import { registerNavigation } from './navigation.js'
 import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
 import { registerTasks } from './tasks.js'
-import { registerTrees } from './trees.js'
 import { registerViews } from './views.js'
 let studio: Sessions | undefined
 let ai: ReturnType<typeof registerAI> | undefined
@@ -20,7 +19,6 @@ export function activate(context: ExtensionContext) {
     tasks.provider,
     ...registerViews(studio),
     ...registerCommands(studio, tasks),
-    ...registerTrees(studio),
     ...registerSignals(studio),
     ...registerNavigation(studio),
   )

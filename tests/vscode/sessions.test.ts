@@ -8,7 +8,7 @@ import { setup, suite, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { plotsFor, type Sessions } from '../../src/extension/sessions.js'
-import type { RunInfo } from '../../src/shared/messages.js'
+import type { SimulationInfo } from '../../src/shared/messages.js'
 import { extension, folder } from './harness.js'
 
 suite('Sessions', () => {
@@ -36,11 +36,11 @@ suite('Sessions', () => {
   })
 
   test('a new run keeps the plots it recorded, else plots its first signal', () => {
-    const run = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as RunInfo
+    const run = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as SimulationInfo
     const vm = { from: 'Bus', field: 'Vm' }
     assert.deepEqual(plotsFor(run, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
     assert.deepEqual(plotsFor(run, [{ from: 'Gen', field: 'Pg' }]), [{ from: 'Bus', field: 'Va' }])
-    assert.deepEqual(plotsFor({ outputs: [] } as unknown as RunInfo, [vm]), [])
+    assert.deepEqual(plotsFor({ outputs: [] } as unknown as SimulationInfo, [vm]), [])
   })
 
   test('forgets cases deleted while it was closed, and keeps those that exist', async () => {

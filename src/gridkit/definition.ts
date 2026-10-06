@@ -114,7 +114,7 @@ export const CASE_ROW = 'case'
 const POINT: DataType = { kind: 'vector', items: 'float64', size: 2 }
 const ROUTE: DataType = { kind: 'list', items: POINT }
 
-function catalogOf(json: unknown): Catalog {
+export function catalogOf(json: unknown): Catalog {
   const text = JSON.stringify(json)
   const raw = json as {
     bus: ClassSpec

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { expect, it } from 'vitest'
 
-import { Evidence } from './evidence.js'
+import { Evidence } from './findings.js'
 
 it('pages immutable analysis across disk blocks after the source result is released', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'gridkit-evidence-'))

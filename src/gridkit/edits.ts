@@ -134,16 +134,17 @@ export function editField(
   field: string,
   input: Value,
   recordText?: string,
+  resolve?: (id: string, type: string) => string | number | undefined,
 ): SourceEdit[] {
   const original = recordOf(kase, id)
   const record = recordText === undefined ? original : { ...original, text: recordText, offset: 0 }
   const plan = record.table.shape.plan.get(field)
   if (!plan || !editable(plan))
     throw failure('invalid-input', 'Edit identities and structural changes in JSON.')
-  const value = fieldValue(plan, input, (id, type) => {
+  const value = fieldValue(plan, input, resolve ?? ((id, type) => {
     const target = kase.locate(id)
     return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
-  })
+  }))
   const type = plan.definition.type
   const path = nativePath(plan)
   const real = type === 'float64' && typeof value === 'number'

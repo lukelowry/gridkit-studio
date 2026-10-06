@@ -20,10 +20,11 @@ import { promisify } from 'node:util'
 
 import * as vscode from 'vscode'
 
-import type * as Clients from './ai-clients.js'
-import type { ToolHandler } from './ai-tools.js'
+import type * as Clients from './clients.js'
+import type { ToolHandler } from './tools.js'
 import type { createAdapter } from './mcp-server.js'
-import type { Sessions } from './sessions.js'
+import type { Sessions } from '../sessions.js'
+import { Access } from './access.js'
 
 const execute = promisify(execFile)
 type Connection = { format: 1; address: string; token: string; instance: string; pid: number }
@@ -63,14 +64,17 @@ export class MCP implements vscode.Disposable {
   #stopping?: Promise<void>
   #disposed = false
   #epoch = 0
+  readonly access: Access
 
   constructor(
     readonly studio: Sessions,
     readonly tools: readonly ToolHandler[],
   ) {
     const context = studio.context
+    this.access = new Access(context)
     this.#registrations = [
       this.#changed,
+      studio.command('gridkitStudio.aiAccess', () => this.access.choose()),
       studio.command('gridkitStudio.connectAI', () => this.configure()),
       studio.command('gridkitStudio.connectCodex', () => this.configureProject('codex')),
       studio.command('gridkitStudio.connectClaude', () => this.configureProject('claude')),
@@ -178,6 +182,7 @@ export class MCP implements vscode.Disposable {
               'Project to configure for ' + (client === 'codex' ? 'Codex' : 'Claude Code'),
           })
     if (!folder) return
+    if (!(await this.access.configure())) return
     const launch = await this.start()
     await this.test(launch)
     const uri = vscode.Uri.joinPath(
@@ -380,7 +385,10 @@ export class MCP implements vscode.Disposable {
             context.asAbsolutePath('dist/mcp-server.cjs'),
           ) as { createAdapter: typeof createAdapter }
           this.#adapter = module.createAdapter(
-            this.tools,
+            this.tools.map(tool => ({ ...tool, run: (input, signal) => {
+              this.access.require(tool.capability)
+              return tool.run(input, signal)
+            } })),
             context.extension.packageJSON.contributes.languageModelTools,
             context.extension.packageJSON.version,
             (socket, client) => {
@@ -429,6 +437,7 @@ export class MCP implements vscode.Disposable {
     if (!client) return
     if (client.value === 'codex' || client.value === 'claude')
       return this.configureProject(client.value)
+    if (!(await this.access.configure())) return
     const scope =
       client.value === 'vscode'
         ? 'window'

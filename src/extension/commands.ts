@@ -20,7 +20,6 @@ import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
 import type { Session, Sessions } from './sessions.js'
 import { cacheBytesOf, type Tasks } from './tasks.js'
-import { Node } from './trees.js'
 
 /** What a command acts on: its case, and the element and field it was invoked on. */
 interface Context {
@@ -48,12 +47,11 @@ function rangeOf(text: string): [number, number] | undefined {
 
 export function registerCommands(studio: Sessions, tasks: Tasks) {
   const registrations: vscode.Disposable[] = []
-  /** The case and target an argument names: an Inspector node, a native menu context, a webview
-   *  target, or a case URI. */
+  /** The case and target an argument names: a native menu context, a webview target, or a case
+   *  URI. */
   const targetOf = (value?: unknown, supplied?: Supplied) => {
     let target: Target | undefined
-    if (value instanceof Node) target = value.target
-    else if (value && typeof value === 'object' && 'gridkitTarget' in value)
+    if (value && typeof value === 'object' && 'gridkitTarget' in value)
       target = value.gridkitTarget as Target
     else if (
       value &&
@@ -295,10 +293,6 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
   command('validateCase', async (context) => {
     await studio.documents.ensure(studio.documents.entries.get(context.session.uri)!.document)
     await vscode.commands.executeCommand('workbench.actions.view.problems')
-  })
-  command('inspectField', async (context) => {
-    if (context.element) studio.select(context.session.uri, context.element)
-    await vscode.commands.executeCommand('gridkitStudio.inspector.focus')
   })
   command('followReference', async (context) => {
     if (!context.element || !context.field || !context.type) return

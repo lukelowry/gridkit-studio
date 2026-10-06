@@ -8,11 +8,11 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import type { MCP } from '../../src/extension/mcp.js'
+import type { MCP } from '../../src/extension/ai/mcp.js'
 import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/tasks.js'
 import { available } from '../../src/gridkit/index.js'
-import type { RunInfo, ViewKind } from '../../src/shared/messages.js'
+import type { SimulationInfo, ViewKind } from '../../src/shared/messages.js'
 
 const TIMEOUT = 30_000
 
@@ -122,7 +122,7 @@ export class TestHost {
   readonly report: Record<string, unknown>
   /** Errors thrown in VS Code's pages. */
   readonly errors: string[] = []
-  #results?: Promise<RunInfo>
+  #results?: Promise<SimulationInfo>
 
   private constructor(
     readonly extension: vscode.Extension<{ studio: Sessions; mcp: MCP }>,
@@ -256,6 +256,9 @@ export class TestHost {
         type + ' open',
       )
     }
+    // A box the pointer still rests on shows its state in a hover over the row below; the pointer
+    // leaves first, so the hover goes.
+    await this.page.mouse.move(0, 0)
     await signals
       .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
       .getByRole('checkbox')
@@ -317,10 +320,10 @@ export class TestHost {
 
   /** A run to play: a second of every bus's voltage, each a little out of step with the last,
    *  imported once, with the first bus's plotted. */
-  results(): Promise<RunInfo> {
+  results(): Promise<SimulationInfo> {
     return (this.#results ??= this.#import())
   }
-  async #import(): Promise<RunInfo> {
+  async #import(): Promise<SimulationInfo> {
     const csv = vscode.Uri.joinPath(this.uri, '..', 'Synthetic waveform.csv')
     const { buses } = this.source
     await vscode.workspace.fs.writeFile(

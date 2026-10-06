@@ -34,6 +34,14 @@ export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int
 export const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.type === b.type && a.field === b.field
 
+/** Plot exactly the recorded identities; absent rows means the complete component type. */
+export function recordedRows(outputs: readonly FieldSelection[], field: FieldRef): FieldSelection['rows'] {
+  const selected = outputs.filter(output => output.from === field.type && output.select.includes(field.field))
+  if (selected.some(output => !output.rows)) return undefined
+  const ids = selected.flatMap(output => output.rows?.kind === 'ids' ? [...output.rows.ids] : [])
+  return ids.length ? { kind: 'ids', ids: [...new Set(ids)] } : selected[0]?.rows
+}
+
 /** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel
  *  requires: the network draws every row. */
 export function recordedWhole(

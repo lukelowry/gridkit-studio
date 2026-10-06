@@ -53,12 +53,7 @@ describe('native VS Code contract', () => {
     ).toBe(false)
     // The side bar holds the case's panels; Monitored Signals is a native tree, not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
-      [
-        'gridkitStudio.inspector',
-        'gridkitStudio.simulation',
-        'gridkitStudio.signals',
-        'gridkitStudio.export',
-      ],
+      ['gridkitStudio.simulation', 'gridkitStudio.signals', 'gridkitStudio.export'],
     )
     expect(
       manifest.contributes.views.gridkitStudio.find(

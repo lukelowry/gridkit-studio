@@ -12,6 +12,7 @@
     text,
     problems,
     disabled,
+    compact = false,
     value,
     elements,
     onenter,
@@ -24,6 +25,8 @@
     /** Validation messages, by parameter name. */
     problems: Readonly<Record<string, string>>
     disabled: boolean
+    /** Dropdowns without a label beside them, as where two share a row. */
+    compact?: boolean
     /** The entered value, else the default. */
     value: (name: string, parameter: Parameter) => InputValue | undefined
     /** The choices for a reference parameter's target type. */
@@ -47,6 +50,7 @@
       value={text[name] ?? textOf(value(name, parameter))}
       error={problems[name]}
       {disabled}
+      {compact}
       onvalue={(entered) => onenter(name, parameter, entered)}
     />
   {/if}

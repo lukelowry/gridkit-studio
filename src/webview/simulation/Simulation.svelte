@@ -28,17 +28,36 @@
   const running = $derived(run?.state === 'running' || view.launching === true)
   const study = $derived(run?.contingency)
   const program = $derived((values.program ?? 'DynamicSimulation') as Program)
-  /** A simulation's fault parameters show while its fault is on; an analysis faults every bus,
-   *  so it shows the fault's timing and impedance alone. */
-  const parameters = $derived(
-    Object.entries(summary?.parameters ?? {}).filter(([name]) =>
-      name === 'program'
-        ? false
-        : program === 'ContingencyAnalysis'
-          ? name !== 'fault' && name !== 'fault_bus'
-          : !name.startsWith('fault_') || values.fault === true,
+  const entries = $derived(
+    Object.entries(summary?.parameters ?? {}).filter(([name]) => name !== 'program'),
+  )
+  const faulted = $derived(values.fault === true)
+  /** A simulation's fault switch and its bus, side by side; an analysis faults every bus. */
+  const toggle = $derived(
+    program === 'DynamicSimulation' ? entries.find(([name]) => name === 'fault') : undefined,
+  )
+  const bus = $derived(
+    program === 'DynamicSimulation' ? entries.find(([name]) => name === 'fault_bus') : undefined,
+  )
+  /** The fault's timing and impedance: a simulation's while its fault is on, an analysis's always. */
+  const fault = $derived(
+    entries.filter(
+      ([name]) =>
+        name.startsWith('fault_') &&
+        name !== 'fault_bus' &&
+        (program === 'ContingencyAnalysis' || faulted),
     ),
   )
+  const others = $derived(
+    entries.filter(([name]) => name !== 'fault' && !name.startsWith('fault_')),
+  )
+  /** Every parameter that counts toward the next run, as the checks read them. */
+  const parameters = $derived([
+    ...(toggle ? [toggle] : []),
+    ...(bus && faulted ? [bus] : []),
+    ...fault,
+    ...others,
+  ])
   /** The contingencies with results, to show one at a time. */
   const contingencies = $derived(
     study
@@ -146,6 +165,20 @@
   })
 </script>
 
+{#snippet form(shown: typeof parameters, disabled: boolean, compact = false)}
+  <Form
+    parameters={shown}
+    {text}
+    {problems}
+    {disabled}
+    {compact}
+    {value}
+    {elements}
+    onenter={(name, parameter, entered) => give(name, valueOf(parameter, entered), entered)}
+    ontoggle={(name, on) => give(name, on)}
+  />
+{/snippet}
+
 <div class="study c-settings" data-testid="study-panel">
   {#if !summary}
     <div class="c-empty">
@@ -158,7 +191,17 @@
   {:else}
     <div class="study__draft">
       <div class="study__bar">
-        <span class="study__standing" role="status">{standing}</span>
+        <div class="study__program">
+          <Select
+            label="Study"
+            hideLabel
+            compact
+            options={Object.entries(PROGRAMS).map(([value, label]) => ({ value, label }))}
+            disabled={running}
+            data-testid="study-program"
+            bind:value={() => program, (chosen) => chosen && give('program', chosen)}
+          />
+        </div>
         {#if running}
           <button
             type="button"
@@ -186,10 +229,11 @@
             data-testid="simulation-start"
             onclick={() => bridge.command('startSimulation')}
           >
-            <Icon name="play" /> Start Simulation
+            <Icon name="play" /> Start
           </button>
         {/if}
       </div>
+      <p class="study__standing" role="status">{standing}</p>
       <div class="study__progress-slot">
         {#if running}
           <div
@@ -242,23 +286,16 @@
           </button>
         </div>
       {/if}
-      <Select
-        label="Study"
-        options={Object.entries(PROGRAMS).map(([value, label]) => ({ value, label }))}
-        disabled={running}
-        data-testid="study-program"
-        bind:value={() => program, (chosen) => chosen && give('program', chosen)}
-      />
-      <Form
-        {parameters}
-        {text}
-        {problems}
-        disabled={running}
-        {value}
-        {elements}
-        onenter={(name, parameter, entered) => give(name, valueOf(parameter, entered), entered)}
-        ontoggle={(name, on) => give(name, on)}
-      />
+      {#if toggle}
+        <div class="study__fault">
+          {@render form([toggle], running)}
+          {#if bus}
+            {@render form([bus], running || !faulted, true)}
+          {/if}
+        </div>
+      {/if}
+      {@render form(fault, running)}
+      {@render form(others, running)}
     </div>
   {/if}
 </div>
@@ -275,12 +312,31 @@
     margin-block-end: var(--spacing-lg);
   }
 
+  /* What to run, and the button that runs it. */
   .study__bar {
     display: flex;
-    justify-content: flex-end;
     align-items: center;
     gap: var(--spacing-sm);
-    padding-block-end: var(--spacing-sm);
+    padding-block-end: var(--spacing-xs);
+  }
+
+  .study__program {
+    flex: 1;
+    min-inline-size: 0;
+  }
+
+  /* The fault's switch and its bus share a row until the panel is too narrow for both. */
+  .study__fault {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+
+  @container settings (max-width: 15rem) {
+    .study__fault {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   .study__signals {
@@ -290,11 +346,16 @@
     gap: var(--spacing-sm);
   }
 
+  /* The newest run's status, under the bar once there is one. */
   .study__standing {
-    margin-inline-end: auto;
+    padding-block-end: var(--spacing-2xs);
     color: var(--color-text-2);
     font-size: var(--text-xs);
     font-variant-numeric: tabular-nums;
+  }
+
+  .study__standing:empty {
+    display: none;
   }
 
   /* Reserves the bar's height so the form does not shift when a run starts. */

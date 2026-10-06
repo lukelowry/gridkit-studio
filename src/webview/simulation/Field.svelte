@@ -8,6 +8,7 @@
     value,
     error,
     disabled = false,
+    compact = false,
     onvalue,
   }: {
     row: Row
@@ -15,6 +16,8 @@
     value: string
     error?: string
     disabled?: boolean
+    /** A dropdown without a label beside it, which names itself until a pick. */
+    compact?: boolean
     /** Each keystroke or pick; a cleared dropdown gives ''. */
     onvalue: (text: string) => void
   } = $props()
@@ -28,8 +31,10 @@
 {#if row.control === 'select'}
   <Select
     label={row.label}
+    hideLabel={compact}
+    {compact}
     options={row.choices}
-    placeholder={row.required ? 'None' : 'Default'}
+    placeholder={compact ? row.label : row.required ? 'None' : 'Default'}
     clearable={!row.required}
     {disabled}
     aria-required={row.required || undefined}

@@ -14,15 +14,7 @@ import type {
   Value,
 } from '@latkit/model'
 
-import type {
-  Analysis,
-  AnalysisOptions,
-  Comparison,
-  ResultsTarget,
-  SignalOptions,
-  SignalResult,
-} from './analysis.js'
-import type { Program, RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
+import type { RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
 export type {
   GridKit,
   Program,
@@ -32,9 +24,8 @@ export type {
 } from './simulation.js'
 export { PROGRAMS } from './simulation.js'
 
-import type { MonitoredSignals, ToolFailure } from './ai.js'
 import type { Bindings } from './bindings.js'
-import type { AggregateQuery, CaseQuery, EvidencePage, NeighborhoodQuery } from './inspection.js'
+import type { Failure } from './errors.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
 import type { ClockState, LoopMode } from './transport.js'
@@ -44,7 +35,6 @@ export interface Revision {
   uri: string
   version: number
   attachmentId?: string
-  snapshotId?: string
 }
 
 export interface SourceRange {
@@ -108,81 +98,14 @@ export type Mutation =
 
 /** What the extension asks of the data worker. */
 export interface Requests {
-  captureCase: { input: Revision; output: { snapshotId: string; fingerprint: string } }
-  releaseSnapshot: { input: { snapshotId: string }; output: null }
-  resolveRecording: {
-    input: { snapshotId: string; recording: readonly MonitoredSignals[] }
-    output: FieldSelection[]
-  }
   prepareSimulation: { input: SimulationRequest; output: SimulationInfo }
   getSimulation: { input: { simulationId: string }; output: SimulationInfo }
   describeSimulation: { input: { simulationId: string }; output: Summary }
-  listSimulations: { input: { uri?: string }; output: SimulationInfo[] }
   stopSimulation: { input: { simulationId: string }; output: null }
-  retainSimulation: { input: { simulationId: string; retained: boolean }; output: null }
   shutdown: { input: Record<string, never>; output: null }
-  aggregate: { input: AggregateQuery; output: Record<string, unknown> }
-  neighborhood: { input: NeighborhoodQuery; output: Record<string, unknown> }
   /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
   anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
-  selection: {
-    input: CaseQuery
-    output: {
-      selection: string
-      fingerprint: string
-      from: string
-      count: number
-      sample: string[]
-    }
-  }
-  evidence: { input: { evidence: string; offset?: number; limit?: number }; output: EvidencePage }
-  findingsPublished: { input: { analysisId: string }; output: boolean }
   runs: { input: { uri: string }; output: SimulationInfo[] }
-  preflight: {
-    input: SimulationRequest
-    output: {
-      values: Record<string, unknown>
-      program: Program
-      domain: Domain
-      scenarios: number
-      columns: number
-      runtime: string
-    }
-  }
-  analyze: { input: ResultsTarget & AnalysisOptions; output: Analysis }
-  validateResults: {
-    input: ResultsTarget & Pick<AnalysisOptions, 'from' | 'field' | 'ids' | 'window'>
-    output: null
-  }
-  signals: { input: SignalOptions; output: SignalResult }
-  compare: {
-    input: { before: ResultsTarget; after: ResultsTarget } & AnalysisOptions
-    output: Comparison
-  }
-  rank: {
-    input: ResultsTarget & AnalysisOptions & { contingencies?: number[] }
-    output: {
-      study: string
-      revision: Revision
-      evidence?: string
-      from: string
-      field: string
-      unit: string | null
-      window: Domain
-      failed: number[]
-      unavailable: number[]
-      total: number
-      rows: {
-        contingency: number
-        bus: number
-        state: 'measured' | 'failed' | 'unavailable'
-        worst?: Analysis['rows'][number]
-        snapshot?: Analysis['snapshot']
-        population?: Analysis['population']
-        message?: string
-      }[]
-    }
-  }
   parse: {
     input: Revision &
       ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
@@ -250,7 +173,7 @@ export type FromWorker =
   | {
       kind: 'error'
       id: number
-      problem: ToolFailure
+      problem: Failure
       offset?: number
       length?: number
       /** Whether the error is a defect in Studio; `detail` is its stack. */

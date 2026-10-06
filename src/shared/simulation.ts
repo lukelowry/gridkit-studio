@@ -36,6 +36,7 @@ export interface SimulationInfo {
   state: 'preparing' | 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
   /** Metadata remains discoverable after retention removes its recording. */
   evicted?: boolean
+  /** Honor recordings pinned by earlier versions when applying the disk budget. */
   retained?: boolean
   path: string
   format: 'arrow' | 'csv'
@@ -46,8 +47,6 @@ export interface SimulationInfo {
   /** Finite value ranges over every ingested sample, shared by all views and time windows. */
   domains?: Record<string, Record<string, Domain>>
   message?: string
-  /** Bounded solver evidence, retained even when a failed run has no result file. */
-  evidence?: string[]
   started: number
   outputs: readonly FieldSelection[]
   /** Values validated at launch, never the editor's later settings. Absent for legacy imports. */
@@ -81,7 +80,6 @@ export interface SimulationInfo {
 
 export interface SimulationRequest extends Revision {
   simulationId?: string
-  snapshotId?: string
   values: Record<string, unknown>
   outputs: readonly FieldSelection[]
   gridkit: GridKit

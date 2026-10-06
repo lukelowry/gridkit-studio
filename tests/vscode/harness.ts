@@ -8,7 +8,6 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import type { MCP } from '../../src/extension/ai/mcp.js'
 import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/tasks.js'
 import { available } from '../../src/gridkit/index.js'
@@ -89,10 +88,8 @@ export const theme = (name: string | undefined) =>
 export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
 
 /** GridKit Studio as installed in this VS Code. */
-export function extension(): vscode.Extension<{ studio: Sessions; mcp: MCP }> {
-  const found = vscode.extensions.getExtension<{ studio: Sessions; mcp: MCP }>(
-    'lukelowery.gridkit-studio',
-  )
+export function extension(): vscode.Extension<{ studio: Sessions }> {
+  const found = vscode.extensions.getExtension<{ studio: Sessions }>('lukelowery.gridkit-studio')
   assert.ok(found, 'GridKit Studio must be installed and enabled')
   return found
 }
@@ -131,7 +128,7 @@ export class TestHost {
   #results?: Promise<SimulationInfo>
 
   private constructor(
-    readonly extension: vscode.Extension<{ studio: Sessions; mcp: MCP }>,
+    readonly extension: vscode.Extension<{ studio: Sessions }>,
     readonly browser: Browser,
     /** The VS Code window. */
     readonly page: Page,
@@ -354,6 +351,7 @@ export class TestHost {
       'Settings searching ' + query,
     )
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+    await search.waitFor({ state: 'detached' })
   }
 
   /** The name of the bottom panel's view on show. */

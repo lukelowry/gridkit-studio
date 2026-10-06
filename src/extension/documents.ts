@@ -1,8 +1,7 @@
 import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { problem } from '../shared/ai.js'
-import type { Element, Mutation, Revision, SourceEdit, Summary } from '../shared/messages.js'
+import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
 
 /** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
@@ -95,18 +94,6 @@ export class Documents {
     const entry = this.entries.get(document.uri.toString())
     if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
     return entry?.pending ?? this.parse(document)
-  }
-  /** Require an explicitly captured, still-current projection. */
-  require(revision: Revision): Summary {
-    const entry = this.entries.get(revision.uri)
-    if (!entry || entry.document.isClosed) throw new Error('The case document is closed.')
-    if (
-      entry.stale ||
-      entry.document.version !== revision.version ||
-      entry.summary?.version !== revision.version
-    )
-      throw new Error('The document changed or is invalid. Inspect the case again.')
-    return entry.summary
   }
   parse(document: vscode.TextDocument): Promise<Summary> {
     const uri = document.uri.toString()
@@ -210,23 +197,6 @@ export class Documents {
       'Edit ' + element.field,
     )
   }
-  /** Content-based transactions remain valid when an unchanged document is reopened. */
-  async transactContent(
-    uri: string,
-    fingerprint: string,
-    mutations: readonly Mutation[],
-    edits: readonly SourceEdit[],
-  ) {
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    const summary = await this.ensure(document)
-    if (summary.fingerprint !== fingerprint)
-      throw problem('revision-conflict', 'Case content changed before applying changes.', {
-        expectedRevision: fingerprint,
-        actualRevision: summary.fingerprint,
-      })
-    await this.transact(uri, summary.version, mutations, 'Apply GridKit case changes', edits)
-    return document
-  }
   /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
    *  checked against revision `expected`. */
   transact(
@@ -234,7 +204,6 @@ export class Documents {
     expected: number,
     mutations: readonly Mutation[],
     label = 'Edit GridKit case',
-    prepared?: readonly SourceEdit[],
   ): Promise<void> {
     const entry = this.entries.get(uri)
     if (!entry) return Promise.reject(new Error('The case document is closed.'))
@@ -249,14 +218,12 @@ export class Documents {
       .catch(() => {})
       .then(async () => {
         check()
-        const edits =
-          prepared ??
-          (await this.client.call('transact', {
-            uri,
-            version: expected,
-            attachmentId: entry.attachmentId,
-            mutations,
-          }))
+        const edits = await this.client.call('transact', {
+          uri,
+          version: expected,
+          attachmentId: entry.attachmentId,
+          mutations,
+        })
         check()
         if (!edits.length) return
         const workspaceEdit = new vscode.WorkspaceEdit()

@@ -1,13 +1,10 @@
-/** Appearance: high contrast, a compact window, and the case offered to language models. */
+/** Appearance: high contrast, a compact window. */
 
 import assert from 'node:assert/strict'
-import { basename } from 'node:path'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
-import * as vscode from 'vscode'
 
-import { toolDefinitions } from '../../src/shared/tools.js'
 import { type TestHost, testHost, theme, until, VIEWPORT, visible } from './harness.js'
 
 suite('Appearance', () => {
@@ -42,18 +39,5 @@ suite('Appearance', () => {
     } finally {
       await bench.page.setViewportSize(VIEWPORT)
     }
-  })
-
-  test('offers the case to language models through its tools', async () => {
-    const tools = vscode.lm.tools.filter((tool) => tool.name.startsWith('gridkit_'))
-    assert.deepEqual(
-      tools.map((tool) => tool.name).sort(),
-      toolDefinitions.map((tool) => tool.name).sort(),
-    )
-    const listed = await vscode.lm.invokeTool('gridkit_list_cases', {
-      input: {},
-      toolInvocationToken: undefined,
-    })
-    assert.match(JSON.stringify(listed.content), new RegExp(basename(bench.document.uri.fsPath)))
   })
 })

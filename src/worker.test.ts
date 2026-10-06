@@ -127,7 +127,7 @@ describe('real worker protocol', () => {
     }
   })
   it.each(['copy', 'cleanup'] as const)(
-    'preserves import and analysis state after %s failure',
+    'preserves source files and imported recordings after %s failure',
     async (fault) => {
       const rig = await start(undefined, fault)
       try {
@@ -142,23 +142,15 @@ describe('real worker protocol', () => {
         const input = { ...revision, path, cacheBytes: 16 << 20 }
         if (fault === 'copy') {
           await expect(rig.call('import', input).done).rejects.toMatchObject({ code: 'EACCES' })
-          expect(await rig.call('listSimulations', {}).done).toMatchObject([
-            { state: 'failed', evicted: true },
-          ])
+          expect(await rig.call('runs', { uri: revision.uri }).done).toEqual([])
         } else {
           await rig.call('import', input).done
           const info = await rig.call('import', input).done
           expect(info.state).toBe('complete')
-          const findings = await rig.call('analyze', {
-            uri: revision.uri,
-            run: info.id,
-            from: 'Bus',
-            field: 'Vm',
-          }).done
-          expect(findings.rows[0]?.min?.value).toBe(0.8)
-          expect(await rig.call('findingsPublished', { analysisId: findings.evidence! }).done).toBe(
-            true,
-          )
+          expect(info.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
+          const exported = join(rig.scratch, 'exported.csv')
+          await rig.call('export', { run: info.id, path: exported }).done
+          expect(await readFile(exported, 'utf8')).toContain('0.8')
         }
         expect(await readFile(path, 'utf8')).toBe(source)
       } finally {
@@ -166,13 +158,12 @@ describe('real worker protocol', () => {
       }
     },
   )
-  it('keeps captured cases through editor detach and rejects a released lease', async () => {
+  it('rejects stale attachments without releasing a reopened case', async () => {
     const rig = await start()
     try {
       const revision = { uri: 'file:///snapshot.case.json', version: 1, attachmentId: 'first' }
       const text = '{"buses":[{"class":"Bus","number":1,"name":"original"}]}'
       await rig.call('parse', { ...revision, text }).done
-      const captured = await rig.call('captureCase', revision).done
       await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
       const reopened = await rig.call('parse', {
         ...revision,
@@ -181,19 +172,15 @@ describe('real worker protocol', () => {
       }).done
       await rig.call('release', { uri: revision.uri, attachmentId: 'first' }).done
       const query = { kind: 'rows', from: 'Bus', select: ['name'], ids: true } as const
-      expect(
-        await rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done,
-      ).toHaveLength(1)
       expect(await rig.call('query', { ...reopened, query }).done).toHaveLength(1)
-      await rig.call('releaseSnapshot', { snapshotId: captured.snapshotId }).done
-      await expect(
-        rig.call('query', { ...revision, snapshotId: captured.snapshotId, query }).done,
-      ).rejects.toThrow(/captured case/)
+      await expect(rig.call('query', { ...revision, query }).done).rejects.toThrow(
+        /document changed/,
+      )
     } finally {
       await rig.stop()
     }
   })
-  it('restores recordings and immutable findings in a fresh worker without a case editor', async () => {
+  it('restores recordings in a fresh worker without a case editor', async () => {
     const storage = await mkdtemp(join(tmpdir(), 'gridkit-persistence-'))
     let rig = await start(storage)
     try {
@@ -205,25 +192,25 @@ describe('real worker protocol', () => {
       const csv = join(rig.scratch, 'original.csv')
       await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
       const info = await rig.call('import', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
-      const input = { uri: revision.uri, run: info.id, from: 'Bus', field: 'Vm' }
-      const measured = await rig.call('analyze', input).done
-      expect(await rig.call('findingsPublished', { analysisId: measured.evidence! }).done).toBe(
-        true,
-      )
+      const exported = join(storage, 'exported.csv')
+      const input = { run: info.id, path: exported }
+      await rig.call('export', input).done
+      const measured = await readFile(exported, 'utf8')
       await rig.call('release', { uri: revision.uri }).done
-      expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
+      await rig.call('export', input).done
+      expect(await readFile(exported, 'utf8')).toEqual(measured)
       await rig.stop()
       rig = await start(storage)
-      expect((await rig.call('listSimulations', {}).done)[0]!.id).toBe(info.id)
-      expect((await rig.call('analyze', input).done).rows).toEqual(measured.rows)
-      expect((await rig.call('evidence', { evidence: measured.evidence! }).done).rows).toEqual(
-        measured.rows,
-      )
-      expect(await rig.call('findingsPublished', { analysisId: measured.evidence! }).done).toBe(
-        true,
-      )
+      expect(await rig.call('getSimulation', { simulationId: info.id }).done).toMatchObject({
+        id: info.id,
+      })
+      await rig.call('export', input).done
+      expect(await readFile(exported, 'utf8')).toEqual(measured)
+      expect(await rig.call('describeSimulation', { simulationId: info.id }).done).toMatchObject({
+        fingerprint: info.fingerprint,
+      })
       await rig.call('clear', { uri: revision.uri }).done
-      await expect(rig.call('analyze', input).done).rejects.toMatchObject({
+      await expect(rig.call('export', input).done).rejects.toMatchObject({
         code: 'results-evicted',
         simulationId: info.id,
       })
@@ -342,43 +329,11 @@ describe('real worker protocol', () => {
       expect(frames()).toBeGreaterThan(0)
       expect(frames()).toBeLessThan(200)
 
-      const analysis = { uri: revision.uri, run: run.id, from: 'Bus', field: 'Vm' }
-      const measured = await call('analyze', analysis).done
-      expect(measured.rows[0]).toMatchObject({
-        id: 'Bus/1',
-        valid: 200,
-        min: { value: 1 },
-        max: { value: 1.199, time: 1.99 },
-      })
-      expect(measured.total).toBe(1)
-      await expect(call('analyze', { ...analysis, ids: ['Bus/2'] }).done).rejects.toThrow(
-        /not recorded/,
-      )
-      await expect(
-        call('analyze', { ...analysis, uri: 'file:///other.case.json' }).done,
-      ).rejects.toThrow(/No recording is available/)
+      expect(run.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
       await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()
-      expect((await call('analyze', analysis).done).revision).toEqual(revision)
-      const comparison = await call('compare', {
-        before: analysis,
-        after: analysis,
-        from: 'Bus',
-        field: 'Vm',
-        window: [0.5, 1],
-      }).done
-      expect(comparison).toMatchObject({
-        matched: 1,
-        rows: [{ id: 'Bus/1', minDelta: 0, maxDelta: 0 }],
-      })
-      await expect(
-        call('compare', {
-          before: analysis,
-          after: analysis,
-          from: 'Bus',
-          field: 'Vm',
-          window: [-1, 1],
-        }).done,
-      ).rejects.toThrow(/covered by both/)
+      expect((await call('describeSimulation', { simulationId: run.id }).done).version).toBe(
+        revision.version,
+      )
       // Clearing a run aborts a stream even when its consumer never acknowledges a batch.
       rig.acknowledge = false
       const received = new Promise<void>((resolve) => {
@@ -390,7 +345,7 @@ describe('real worker protocol', () => {
       await call('clear', { uri: revision.uri }).done
       await rejected
       expect(await call('stats', {}).done).toMatchObject({ runs: 0, cacheBytes: 0 })
-      await expect(call('analyze', analysis).done).rejects.toThrow(/retained recording/)
+      await expect(call('batches', stream).done).rejects.toThrow(/retained recording/)
     } finally {
       await stop()
     }

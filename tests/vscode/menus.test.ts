@@ -232,21 +232,27 @@ suite('Network menus', () => {
   })
 
   test('zooms, fits and turns from its own toolbar', async () => {
-    await network.getByRole('button', { name: 'Fit view' }).click()
-    await idle(network)
-    const fitted = await camera()
-    await network.locator('canvas').hover()
-    await bench.page.mouse.wheel(0, -800)
-    await until(async () => !near(await camera(), fitted), 'zoomed in')
-    await network.getByRole('button', { name: 'Fit view' }).click()
-    await until(async () => near(await camera(), fitted), 'fitted again')
-    const turn = network.getByRole('button', { name: 'Auto-rotate' })
-    await turn.click()
-    await until(async () => (await turn.getAttribute('aria-pressed')) === 'true', 'turning')
-    const drawn = await frames(network)
-    await until(async () => (await frames(network)) > drawn + 10, 'drawn as it turns')
-    await turn.click()
-    await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still')
+    // This test exercises motion; the host's accessibility preference may disable orbit.
+    await bench.page.emulateMedia({ reducedMotion: 'no-preference' })
+    try {
+      await network.getByRole('button', { name: 'Fit view' }).click()
+      await idle(network)
+      const fitted = await camera()
+      await network.locator('canvas').hover()
+      await bench.page.mouse.wheel(0, -800)
+      await until(async () => !near(await camera(), fitted), 'zoomed in')
+      await network.getByRole('button', { name: 'Fit view' }).click()
+      await until(async () => near(await camera(), fitted), 'fitted again')
+      const turn = network.getByRole('button', { name: 'Auto-rotate' })
+      await turn.click()
+      await until(async () => (await turn.getAttribute('aria-pressed')) === 'true', 'turning')
+      const drawn = await frames(network)
+      await until(async () => (await frames(network)) > drawn + 10, 'drawn as it turns')
+      await turn.click()
+      await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still')
+    } finally {
+      await bench.page.emulateMedia({ reducedMotion: null })
+    }
   })
 
   test('changes projection from the Command Palette', async () => {
@@ -282,6 +288,7 @@ suite('Network menus', () => {
   })
 
   test('draws again from the start from its title bar', async () => {
+    network = await bench.open('network')
     // At rest, so the title bar's menu holds still under the pointer.
     const drawn = (await idle(network)).frames
     await bench.more(editor())

@@ -66,6 +66,7 @@ suite('Case', () => {
     const picker = bench.page.locator('.quick-input-widget')
     await picker.locator('.monaco-list-row', { hasText: 'Vertex Color' }).click()
     await picker.getByRole('button', { name: 'OK' }).click()
+    await picker.waitFor({ state: 'hidden' })
     await until(
       () => bench.session.bindings.vertexColor?.field === 'params.kv',
       'the column mapped',
@@ -79,6 +80,7 @@ suite('Case', () => {
     await menu(header('params.kv'), 'Mapping Range')
     await picker.locator('input').fill('0.5, 2')
     await picker.locator('input').press('Enter')
+    await picker.waitFor({ state: 'hidden' })
     await until(
       () => bench.session.bindings.vertexColor?.domain?.join() === '0.5,2',
       'the range set',

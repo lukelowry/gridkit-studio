@@ -83,11 +83,7 @@ export function registerTasks(studio: Sessions) {
   }
   /** Whether the case at `uri` is running, or a run of it is starting. */
   const active = (uri: string) => launches.has(uri) || studio.all.get(uri)?.run?.state === 'running'
-  const make = (
-    uri: vscode.Uri,
-    values?: Record<string, unknown>,
-    captured?: SimulationRequest,
-  ) => {
+  const make = (uri: vscode.Uri, values?: Record<string, unknown>) => {
     const definition = {
       type: 'gridkit',
       case: uri.toString(),
@@ -109,7 +105,7 @@ export function registerTasks(studio: Sessions) {
         const launch = duplicate ? undefined : (found ?? track(key).launch)
         if (launch) launch.claimed = true
         let subscription: vscode.Disposable | undefined
-        let request = captured && structuredClone(captured)
+        let request: SimulationRequest | undefined
         let begun = false
         let cancelled = false
         const terminal: vscode.Pseudoterminal = {
@@ -224,47 +220,18 @@ export function registerTasks(studio: Sessions) {
   return {
     provider,
     active,
-    /** Schedule an already accepted simulation. Its identity and snapshot are fixed. */
-    async start(request: SimulationRequest) {
-      if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
-      if (!request.simulationId) throw new Error('Prepare the simulation before scheduling it.')
-      if (launches.has(request.uri)) throw new Error('A simulation is already being scheduled.')
-      const { launch, done } = track(request.uri)
-      let ended: vscode.Disposable | undefined
-      const settled = done.catch((error) => studio.report(error))
-      try {
-        ended = await executeTracked(
-          make(vscode.Uri.parse(request.uri), undefined, structuredClone(request)),
-          () => {
-            void studio.client
-              .call('stopSimulation', { simulationId: request.simulationId! })
-              .catch((error) => studio.report(error))
-            launch.begun()
-          },
-        )
-      } catch (error) {
-        launch.failed(error)
-        throw error
-      } finally {
-        void settled.finally(() => ended?.dispose())
-      }
-    },
     /** Run the case at `uri`; resolves once GridKit's run begins, and rejects with why it could
      *  not. The run's own outcome shows in the Simulation view. */
-    async simulate(uri: string, captured?: SimulationRequest) {
+    async simulate(uri: string) {
       if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
       if (active(uri)) throw new Error('A simulation is already active for this case.')
-      if (captured) {
-        if (captured.uri !== uri) throw new Error('Simulation targets a different case.')
-      }
       const { launch, done } = track(uri)
-      const ended = executeTracked(
-        make(vscode.Uri.parse(uri), undefined, captured && structuredClone(captured)),
-        () => launch.begun(),
-      ).catch((error) => {
-        launch.failed(error)
-        return undefined
-      })
+      const ended = executeTracked(make(vscode.Uri.parse(uri)), () => launch.begun()).catch(
+        (error) => {
+          launch.failed(error)
+          return undefined
+        },
+      )
       try {
         await done
       } finally {

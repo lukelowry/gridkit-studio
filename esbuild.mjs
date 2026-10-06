@@ -24,9 +24,6 @@ const builds = [
     entryPoints: {
       extension: 'src/extension/index.ts',
       worker: 'src/worker.ts',
-      mcp: 'src/mcp.ts',
-      'mcp-server': 'src/extension/ai/mcp-server.ts',
-      'ai-clients': 'src/extension/ai/clients.ts',
     },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },
@@ -56,14 +53,7 @@ const builds = [
 for (const options of builds) {
   const config = { ...common, ...options }
   if (watch) await (await context(config)).watch()
-  else {
-    const result = await build({ ...config, metafile: true })
-    for (const name of ['dist/extension.cjs', 'dist/mcp.cjs']) {
-      const inputs = Object.keys(result.metafile.outputs[name]?.inputs ?? {})
-      if (inputs.some((path) => path.includes('@modelcontextprotocol')))
-        throw new Error('MCP SDK must remain in the lazy server bundle: ' + name)
-    }
-  }
+  else await build(config)
 }
 
 await copyFile('assets/borders.bin', 'dist/webview/borders.bin')

@@ -6,7 +6,6 @@ export interface PreparedSimulation {
   kase: Case
   info: SimulationInfo
   controller: AbortController
-  snapshotId?: string
   completion?: Promise<SimulationInfo>
 }
 

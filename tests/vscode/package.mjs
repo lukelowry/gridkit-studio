@@ -85,11 +85,16 @@ try {
   assert.deepEqual(packaged.dependencies, manifest.dependencies)
   assert.equal(packaged.version, manifest.version)
   assert.equal(packaged.engines.vscode, manifest.engines.vscode)
+  assert.equal(packaged.contributes.languageModelTools, undefined)
+  assert.equal(packaged.contributes.mcpServerDefinitionProviders, undefined)
   await verify(target)
-  for (const name of ['extension.cjs', 'worker.cjs', 'mcp.cjs', 'mcp-server.cjs', 'ai-clients.cjs'])
-    assert.ok(existsSync(join(target, 'dist', name)), 'Missing packaged bundle: ' + name)
+  assert.deepEqual(
+    (await readdir(join(target, 'dist'))).filter((name) => name.endsWith('.cjs')).sort(),
+    ['extension.cjs', 'worker.cjs'],
+    'Ship only the native extension and worker bundles',
+  )
   const entries = process.argv.slice(2)
-  if (!entries.length) entries.push('tests/vscode/mcp.ts', 'tests/vscode/index.ts')
+  if (!entries.length) entries.push('tests/vscode/index.ts')
   for (const entry of entries)
     await run(process.execPath, [join(root, 'tests/vscode/launch.mjs'), entry], {
       ELECTRON_RUN_AS_NODE: undefined,

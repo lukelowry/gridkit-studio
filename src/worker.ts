@@ -10,7 +10,9 @@ import {
   type Parameters,
   type QueryBlock,
   read,
+  rowCount,
   selectBatches,
+  selectRows,
   staticFields,
 } from '@latkit/model'
 
@@ -32,10 +34,16 @@ import {
 } from './gridkit/index.js'
 import { anchors } from './gridkit/inspection.js'
 import { solverLine } from './gridkit/solver.js'
-import { importedFields, ResultCache, Results } from './results/index.js'
+import { importedFields, PROGRESS_MS, ResultCache, Results } from './results/index.js'
 import { Readers } from './results/readers.js'
 import { ResultStorage } from './results/storage.js'
 import { sibling } from './results/study.js'
+import {
+  intersectRows,
+  pageWindow,
+  recordedSelection,
+  type SampleCoverage,
+} from './shared/coverage.js'
 import { failureOf } from './shared/errors.js'
 import { defect, detail, message } from './shared/format.js'
 import type {
@@ -48,12 +56,16 @@ import type {
   ToWorker,
 } from './shared/messages.js'
 import { nameFieldOf } from './shared/schema.js'
-import { packets } from './worker/batches.js'
+import { packets, sendAhead } from './worker/batches.js'
 import { CaseCache, summarize } from './worker/cases.js'
 import { Simulations } from './worker/simulations.js'
 
 const port = parentPort!
 const BLOCK_BYTES = 256 << 10
+/** A run's samples stream in blocks this large, several to a packet. The view keeps each block as a
+ *  page of its own, so a few large blocks are less for it to keep than many small ones. */
+const SAMPLE_BLOCK_BYTES = 4 << 20
+const PACKET_BYTES = 8 << 20
 const cases = new Map<string, { kase: Case; summary: Summary; generation: object }>()
 const sources = new CaseCache()
 const parses = new Map<string, object>()
@@ -220,19 +232,31 @@ async function loadResult(id: string, signal: AbortSignal): Promise<Results> {
       )
       if (kase.version !== record.info.fingerprint)
         throw new Error('The retained case fingerprint does not match its recording.')
-      const result = new Results(
-        { ...record.info, frames: 0, domain: [0, 0] },
-        kase,
-        selections(kase, record.request.outputs),
-        cache,
-        storage.path(id),
-      )
+      const saved = record.info
+      const fields = selections(kase, record.request.outputs)
+      const open = () =>
+        new Results({ ...saved, frames: 0, domain: [0, 0] }, kase, fields, cache, storage.path(id))
+      let result = open()
       try {
-        await result.ingest(
-          signal,
-          () => true,
-          async () => {},
-        )
+        // The run measured its domains as it ran, so reading back its times pages it, unless the
+        // file holds frames they never saw, as a stopped run's last rows may be.
+        let measured = false
+        if (saved.domains) {
+          await result.index(signal)
+          const { frames, domain } = result.info
+          measured =
+            frames === saved.frames &&
+            domain[0] === saved.domain[0] &&
+            domain[1] === saved.domain[1]
+          if (measured) result.info.domains = saved.domains
+          else result = open()
+        }
+        if (!measured)
+          await result.ingest(
+            signal,
+            () => true,
+            async () => {},
+          )
         await retain(record.info.revision.uri, result)
         return result
       } catch (error) {
@@ -433,7 +457,7 @@ async function runCase(input: SimulationRequest) {
           }
         },
         progress: () => {
-          if (performance.now() - lastProgress > 100) {
+          if (performance.now() - lastProgress > PROGRESS_MS) {
             send({ kind: 'run', info })
             lastProgress = performance.now()
           }
@@ -590,7 +614,38 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       // One bounded stream for both rows and samples. Freeze its end before yielding to
       // the solver so a growing recording cannot postpone the view's commit indefinitely.
       const endPage = run?.pages.length ?? 0
-      let pages = request.input.fromPage ?? 0
+      const [firstPage, lastPage] = pageWindow(
+        run?.pages ?? [],
+        input.window,
+        input.fromPage ?? 0,
+        endPage,
+      )
+      const sampled = fields.filter((f) =>
+        f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
+      )
+      const coverage: SampleCoverage[] = []
+      if (run && firstPage < lastPage) {
+        const first = run.pages[firstPage]!
+        const last = run.pages[lastPage - 1]!
+        for (const field of sampled)
+          for (const name of field.select) {
+            if (!kase.schema.types[field.from]?.fields[name]?.sampled) continue
+            const table = kase.data.tables[field.from]!
+            const rows = intersectRows(
+              selectRows(table, field.rows),
+              selectRows(table, recordedSelection(kase.data, run.info.outputs, field.from, name)),
+            )
+            if (rowCount(rows))
+              coverage.push({
+                from: field.from,
+                field: name,
+                rows: { ...rows, index: table.index },
+                first: first.first,
+                count: last.first + last.count - first.first,
+                domain: [first.domain[0], last.domain[1]],
+              })
+          }
+      }
       async function* selected(): AsyncGenerator<DataBatch> {
         if (input.includeStatic !== false)
           yield* selectBatches(kase.data, statics, {
@@ -599,25 +654,22 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
             buffers: 'owned',
           })
         if (!run) return
-        const sampled = fields.filter((f) =>
-          f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
-        )
-        const window = input.window
-        for (; pages < endPage; pages++) {
-          const page = run.pages[pages]!
-          if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
+        for (let pages = firstPage; pages < lastPage; pages++) {
           const data = await run.pageData(pages, signal)
           for await (const batch of selectBatches(data, sampled, {
             signal,
-            maxBlockBytes: BLOCK_BYTES,
+            maxBlockBytes: SAMPLE_BLOCK_BYTES,
             buffers: 'owned',
           }))
             if (batch.kind === 'samples') yield batch
         }
       }
-      for await (const packet of packets(selected(), signal, 1 << 20))
-        await emit(request.id, packet, signal)
-      return { pages }
+      // The next packet is prepared while the view consumes this one.
+      await sendAhead(packets(selected(), signal, PACKET_BYTES), (packet) =>
+        emit(request.id, packet, signal),
+      )
+      const last = run?.pages[endPage - 1]
+      return { pages: endPage, frames: last ? last.first + last.count : 0, coverage }
     }
     case 'elements': {
       const { kase } = get(request.input)
@@ -648,18 +700,8 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         }
       return symbols
     }
-    case 'step': {
-      const run = findRun(request.input.run)
-      const { at, direction } = request.input
-      const forward = direction > 0
-      for (const page of forward ? run.pages : [...run.pages].reverse()) {
-        if (forward ? page.domain[1] <= at : page.domain[0] >= at) continue
-        const times = await run.times(page, signal)
-        const next = forward ? times.find((time) => time > at) : times.findLast((time) => time < at)
-        if (next !== undefined) return next
-      }
-      return forward ? run.info.domain[1] : run.info.domain[0]
-    }
+    case 'step':
+      return findRun(request.input.run).step(request.input.at, request.input.direction)
     case 'transact':
       return transaction(get(request.input).kase, request.input.mutations)
     case 'presentation':

@@ -14,61 +14,54 @@ import {
 } from '@latkit/model'
 
 import type { Case, Field } from '../gridkit/index.js'
+import { pageWindow } from '../shared/coverage.js'
 import type { SimulationInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
+import { csvTimes } from './csv.js'
 import { columnName, type Layout, readResults, samplesOf } from './decode.js'
-
-/** Copies of a publication's batches, whose arrays the decoder reuses: each view, not its buffer. */
-function ownedSamples(publication: Publication): SampleBatch[] {
-  const coordinates = new Map<Float64Array, Float64Array>()
-  return publication.map((batch) => {
-    if (batch.kind !== 'samples')
-      throw new Error('A result publication must contain sampled observations.')
-    let times = coordinates.get(batch.coordinates)
-    if (!times) {
-      times = batch.coordinates.slice()
-      coordinates.set(batch.coordinates, times)
-    }
-    return {
-      ...batch,
-      coordinates: times,
-      rows:
-        batch.rows.kind === 'indices'
-          ? { ...batch.rows, values: batch.rows.values.slice() }
-          : batch.rows,
-      columns: Object.fromEntries(
-        Object.entries(batch.columns).map(([name, column]) => [
-          name,
-          {
-            ...column,
-            values: column.values.slice(),
-            ...(column.validity ? { validity: column.validity.slice() } : {}),
-          },
-        ]),
-      ),
-    }
-  })
-}
+import { PAGE_BYTES, PROGRESS_MS } from './limits.js'
 
 /** The frame times of a page's batches: the coordinates of those of its first output. */
-function timesOf(batches: readonly SampleBatch[]): number[] {
+function timesOf(batches: readonly SampleBatch[]): Float64Array {
   const [first] = batches
-  if (!first) return []
+  if (!first) return new Float64Array()
   const name = Object.keys(first.columns)[0]
-  return batches
-    .filter(
-      (batch) => batch.index.type === first.index.type && Object.keys(batch.columns)[0] === name,
-    )
-    .flatMap((batch) => Array.from(batch.coordinates))
+  const parts = batches.filter(
+    (batch) => batch.index.type === first.index.type && Object.keys(batch.columns)[0] === name,
+  )
+  const times = new Float64Array(
+    parts.reduce((count, batch) => count + batch.coordinates.length, 0),
+  )
+  let at = 0
+  for (const batch of parts) {
+    times.set(batch.coordinates, at)
+    at += batch.coordinates.length
+  }
+  return times
 }
 
-/** Frames `first` on, `count` of them, between bytes `start` and `end` of the results file. */
+/** The first of `count` indices where `holds`, which holds at every index after one it holds at;
+ *  `count` when it holds at none. */
+function firstWhere(count: number, holds: (index: number) => boolean): number {
+  let low = 0
+  let high = count
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (holds(middle)) high = middle
+    else low = middle + 1
+  }
+  return low
+}
+
+/** Frames `first` on, `count` of them at `times`, between bytes `start` and `end` of the results
+ *  file. */
 interface Page {
   start: number
   end: number
   first: number
   count: number
   domain: Domain
+  times: Float64Array
 }
 
 /** Decoded pages by key; past `limit` bytes, the least recently used are dropped. */
@@ -84,10 +77,9 @@ export class ResultCache {
     }
     return found?.batches
   }
-  /** Copies of `publication`'s batches, whose arrays the caller may reuse once this returns; kept
-   *  unless they alone exceed the limit. */
-  put(key: string, publication: Publication) {
-    const batches = ownedSamples(publication)
+  /** Keeps `batches` themselves, whose arrays nothing writes again, unless they alone exceed the
+   *  limit; returns them either way. */
+  put(key: string, batches: readonly SampleBatch[]) {
     const bytes = blockByteLength(batches)
     if (bytes > this.limit) return batches
     const old = this.#entries.get(key)
@@ -114,6 +106,7 @@ export class ResultCache {
 /** A run's results: page offsets into its native file, decoded on demand. */
 export class Results {
   readonly pages: Page[] = []
+  /** The header's bytes: the CSV header line, or the Arrow schema message. */
   #header = new Uint8Array()
   /** How every page of this run reads, from its header. */
   readonly #layout: Layout = {}
@@ -130,10 +123,6 @@ export class Results {
     this.info.domains = {}
   }
 
-  async times(page: Page, signal: AbortSignal): Promise<number[]> {
-    return timesOf(await this.#decode(page.start, page.end, page.first, signal))
-  }
-
   /** Follows the results file as the run writes it, cutting it into pages and publishing each.
    *  Returns once `ended` and the file has nothing more. */
   async ingest(
@@ -141,106 +130,42 @@ export class Results {
     ended: () => boolean,
     publish: (batches: Publication) => Promise<void>,
   ) {
-    let file
-    while (!file) {
-      signal.throwIfAborted()
-      try {
-        file = await open(this.info.path, 'r')
-      } catch (error) {
-        if (ended()) throw error
-        await setTimeout(40, undefined, { signal })
-      }
+    await this.#follow(signal, ended, (start, end, bytes) =>
+      this.#append(start, end, bytes, signal, publish),
+    )
+  }
+
+  /** Pages a finished results file as `ingest` would, but measures nothing: for a run whose domains
+   *  were measured as it ran. A CSV page is read only as far as each row's time, and decoded once
+   *  something asks for it. */
+  async index(signal: AbortSignal) {
+    await this.#follow(
+      signal,
+      () => true,
+      async (start, end, bytes) => {
+        const times =
+          this.info.format === 'csv'
+            ? csvTimes(bytes)
+            : timesOf(await this.#decode(bytes, this.info.frames, signal))
+        if (times.length) this.#add(start, end, times)
+      },
+    )
+  }
+
+  /** The first frame time after `at`, or the last before it when `direction` is -1, from the pages'
+   *  times alone: the run's last or first time when there is none. */
+  step(at: number, direction: -1 | 1): number {
+    const pages = this.pages
+    if (direction > 0) {
+      const p = firstWhere(pages.length, (p) => pages[p]!.domain[1] > at)
+      if (p === pages.length) return this.info.domain[1]
+      const times = pages[p]!.times
+      return times[firstWhere(times.length, (t) => times[t]! > at)]!
     }
-    try {
-      let pending = Buffer.alloc(0)
-      let start = this.#at
-      let csvRows = 0
-      let scan = 0
-      let quoted = false
-      // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
-      // gathered from many small reads.
-      const chunk = Buffer.alloc(4 << 20)
-      while (true) {
-        signal.throwIfAborted()
-        const { bytesRead } = await file.read(chunk, 0, chunk.length, this.#at)
-        if (bytesRead) {
-          this.#at += bytesRead
-          pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)])
-        }
-        const finished = ended() && bytesRead === 0
-        if (this.info.format === 'arrow') {
-          while (pending.length >= 8) {
-            const continuation = pending.readUInt32LE(0) === 0xffffffff
-            const prefix = continuation ? 8 : 4
-            const metadataLength = pending.readUInt32LE(continuation ? 4 : 0)
-            if (!metadataLength) {
-              start += prefix
-              pending = pending.subarray(prefix)
-              break
-            }
-            if (pending.length < prefix + metadataLength) break
-            const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
-            const length = prefix + metadataLength + message.bodyLength
-            if (!Number.isSafeInteger(message.bodyLength) || message.bodyLength < 0)
-              throw new Error('An Arrow message has an invalid body length.')
-            if (pending.length < length) break
-            if (message.header.kind === 'schema') {
-              if (this.#header.length) throw new Error('Repeated Arrow schema.')
-              this.#header = pending.subarray(0, length).slice()
-            } else if (message.header.kind === 'batch')
-              await this.#append(
-                start,
-                start + length,
-                signal,
-                publish,
-                pending.subarray(0, length),
-              )
-            start += length
-            pending = pending.subarray(length)
-          }
-        } else {
-          while (scan < pending.length) {
-            // Only the header quotes; past it, a frame ends at its newline.
-            if (this.#header.length) {
-              const newline = pending.indexOf(10, scan)
-              if (newline < 0) {
-                scan = pending.length
-                break
-              }
-              scan = newline + 1
-            } else {
-              const byte = pending[scan++]!
-              if (byte === 34) quoted = !quoted
-              if (byte !== 10 || quoted) continue
-            }
-            if (!this.#header.length) {
-              this.#header = pending.subarray(0, scan).slice()
-              start += scan
-              pending = pending.subarray(scan)
-              scan = 0
-            } else if (++csvRows >= 64 || scan >= 4 << 20) {
-              await this.#append(start, start + scan, signal, publish, pending.subarray(0, scan))
-              start += scan
-              pending = pending.subarray(scan)
-              scan = 0
-              csvRows = 0
-            }
-          }
-          if (finished && pending.length) {
-            await this.#append(start, start + pending.length, signal, publish, pending)
-            pending = Buffer.alloc(0)
-          }
-        }
-        if (finished) {
-          if (pending.length) throw new Error('Results ended inside an Arrow message.')
-          if (!this.#header.length) throw new Error('Results contain no header.')
-          break
-        }
-        if (!bytesRead) await setTimeout(40, undefined, { signal })
-      }
-    } finally {
-      await file.close()
-    }
+    const p = firstWhere(pages.length, (p) => pages[p]!.domain[0] >= at) - 1
+    if (p < 0) return this.info.domain[0]
+    const times = pages[p]!.times
+    return times[firstWhere(times.length, (t) => times[t]! >= at) - 1]!
   }
 
   async pageData(p: number, signal: AbortSignal): Promise<Data> {
@@ -250,9 +175,8 @@ export class Results {
   /** The case's data with every page that overlaps `window` appended. */
   async data(window: Domain | undefined, signal: AbortSignal): Promise<Data> {
     let data = this.kase.data
-    for (let p = 0; p < this.pages.length; p++) {
-      const page = this.pages[p]!
-      if (window && (page.domain[1] < window[0] || page.domain[0] > window[1])) continue
+    const [first, end] = pageWindow(this.pages, window)
+    for (let p = first; p < end; p++) {
       signal.throwIfAborted()
       data = appendData(data, await this.#page(p, signal))
     }
@@ -275,7 +199,11 @@ export class Results {
       ]
       await file.write(names.map((n) => '"' + n.replaceAll('"', '""') + '"').join(',') + '\n')
       for (const page of this.pages) {
-        const batches = await this.#decode(page.start, page.end, page.first, signal)
+        const batches = await this.#decode(
+          await this.#read(page.start, page.end),
+          page.first,
+          signal,
+        )
         // Each tile of frames holds one batch per field.
         for (let at = 0; at < batches.length; at += this.fields.length) {
           const tile = batches.slice(at, at + this.fields.length)
@@ -317,28 +245,146 @@ export class Results {
     }
   }
 
-  /** The frames between `start` and `end` of the file, the first of them frame `first`; `held` is
-   *  those bytes when the caller has them already. */
-  async #decode(
-    start: number,
-    end: number,
-    first: number,
+  /** Follows the results file until `ended` and it has nothing more, handing `page` each page of it:
+   *  the bytes between `start` and `end` of the file. A CSV page ends at the first row end past
+   *  PAGE_BYTES. While the run writes, one also ends at the last whole row read each time the
+   *  views would take a page, so a live run's pages come at its pace and a finished file's are
+   *  large. */
+  async #follow(
     signal: AbortSignal,
-    held?: Uint8Array,
-  ): Promise<SampleBatch[]> {
-    const bytes = held ?? (await this.#read(start, end))
+    ended: () => boolean,
+    page: (start: number, end: number, bytes: Uint8Array) => Promise<void>,
+  ) {
+    let file
+    while (!file) {
+      signal.throwIfAborted()
+      try {
+        file = await open(this.info.path, 'r')
+      } catch (error) {
+        if (ended()) throw error
+        await setTimeout(40, undefined, { signal })
+      }
+    }
+    try {
+      let pending = Buffer.alloc(0)
+      let start = this.#at
+      /** Where the search for the end of the CSV header, or of a page, resumes in `pending`. */
+      let scan = 0
+      let quoted = false
+      /** When the last page was cut. The first is cut as soon as it can be. */
+      let cutAt = -Infinity
+      const cut = async (length: number) => {
+        await page(start, start + length, pending.subarray(0, length))
+        start += length
+        pending = pending.subarray(length)
+        scan = 0
+        cutAt = performance.now()
+      }
+      // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
+      // gathered from many small reads.
+      const chunk = Buffer.alloc(4 << 20)
+      while (true) {
+        signal.throwIfAborted()
+        // Asked before reading: a writer done by then has written everything this read can see.
+        const over = ended()
+        const { bytesRead } = await file.read(chunk, 0, chunk.length, this.#at)
+        if (bytesRead) {
+          this.#at += bytesRead
+          pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+        }
+        const finished = over && bytesRead === 0
+        if (this.info.format === 'arrow') {
+          while (pending.length >= 8) {
+            const continuation = pending.readUInt32LE(0) === 0xffffffff
+            const prefix = continuation ? 8 : 4
+            const metadataLength = pending.readUInt32LE(continuation ? 4 : 0)
+            if (!metadataLength) {
+              start += prefix
+              pending = pending.subarray(prefix)
+              break
+            }
+            if (pending.length < prefix + metadataLength) break
+            const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
+            const length = prefix + metadataLength + message.bodyLength
+            if (!Number.isSafeInteger(message.bodyLength) || message.bodyLength < 0)
+              throw new Error('An Arrow message has an invalid body length.')
+            if (pending.length < length) break
+            if (message.header.kind === 'batch') {
+              await cut(length)
+              continue
+            }
+            if (message.header.kind === 'schema') {
+              if (this.#header.length) throw new Error('Repeated Arrow schema.')
+              this.#header = pending.subarray(0, length).slice()
+            }
+            start += length
+            pending = pending.subarray(length)
+          }
+        } else {
+          // Only the header quotes; past it, a row ends at its newline.
+          while (!this.#header.length && scan < pending.length) {
+            const byte = pending[scan++]!
+            if (byte === 34) quoted = !quoted
+            if (byte !== 10 || quoted) continue
+            this.#header = pending.subarray(0, scan).slice()
+            // Read alone, the header gives the layout every page is read with.
+            await readResults(
+              Readable.from([this.#header]),
+              this.fields,
+              this.kase,
+              { signal, publish: () => {} },
+              'csv',
+              this.#layout,
+            )
+            start += scan
+            pending = pending.subarray(scan)
+            scan = 0
+          }
+          if (this.#header.length) {
+            while (pending.length >= PAGE_BYTES) {
+              const newline = pending.indexOf(10, Math.max(scan, PAGE_BYTES - 1))
+              if (newline < 0) {
+                scan = pending.length
+                break
+              }
+              await cut(newline + 1)
+            }
+            // Once the writer is done, everything it wrote is a page. Before, the whole rows read so
+            // far are, whenever the views would next take one.
+            const length = finished
+              ? pending.length
+              : !over && performance.now() - cutAt >= PROGRESS_MS
+                ? pending.lastIndexOf(10) + 1
+                : 0
+            if (length) await cut(length)
+          }
+        }
+        if (finished) {
+          if (this.info.format === 'arrow' && pending.length)
+            throw new Error('Results ended inside an Arrow message.')
+          if (!this.#header.length) throw new Error('Results contain no header.')
+          break
+        }
+        if (!bytesRead) await setTimeout(40, undefined, { signal })
+      }
+    } finally {
+      await file.close()
+    }
+  }
+
+  /** The frames in `bytes`, the first of them frame `first`. A CSV page is rows alone, read with the
+   *  layout its header gave; an Arrow batch is read after the schema. */
+  async #decode(bytes: Uint8Array, first: number, signal: AbortSignal): Promise<SampleBatch[]> {
     const batches: SampleBatch[] = []
     await readResults(
-      Readable.from([this.#header, bytes]),
+      Readable.from(this.info.format === 'csv' ? [bytes] : [this.#header, bytes]),
       this.fields,
       this.kase,
       {
         signal,
         publish: (frames) => {
           batches.push(
-            ...ownedSamples(
-              samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
-            ),
+            ...samplesOf(this.fields, { ...frames, firstFrame: frames.firstFrame + first }),
           )
         },
       },
@@ -364,24 +410,20 @@ export class Results {
     }
   }
 
-  /** Decodes the page between `start` and `end`, caches it, and publishes it. */
+  /** Decodes the page between `start` and `end`, `bytes`, caches it and publishes it. */
   async #append(
     start: number,
     end: number,
+    bytes: Uint8Array,
     signal: AbortSignal,
     publish: (batches: Publication) => Promise<void>,
-    held?: Uint8Array,
   ) {
-    const batches = await this.#decode(start, end, this.info.frames, signal, held)
-    const coordinates = timesOf(batches)
-    if (!coordinates.length) return
-    const low = coordinates[0]!
-    const high = coordinates.at(-1)!
-    if (low < this.#last) throw new Error('Result times must be nondecreasing.')
-    this.#last = high
-    const count = coordinates.length
-    const page = { start, end, first: this.info.frames, count, domain: [low, high] as Domain }
-    const owned = this.cache.put(this.#key(this.pages.length), batches)
+    const batches = await this.#decode(bytes, this.info.frames, signal)
+    const times = timesOf(batches)
+    if (!times.length) return
+    const p = this.#add(start, end, times)
+    // The cache keeps the very batches published: a page is decoded once.
+    this.cache.put(this.#key(p), batches)
     // Measure once on ingestion, before eviction or view windowing. Every view uses these
     // same ranges; scrubbing never rescans history or normalizes an individual frame.
     const domains = (this.info.domains ??= {})
@@ -401,10 +443,20 @@ export class Results {
         if (min <= max) fields[name] = [min, max]
       }
     }
-    this.pages.push(page)
-    this.info.frames += count
-    this.info.domain = [this.pages[0]!.domain[0], high]
-    await publish(owned)
+    await publish(batches)
+  }
+
+  /** Adds the page between `start` and `end` whose frames are at `times`, and returns its number. */
+  #add(start: number, end: number, times: Float64Array): number {
+    for (const time of times) {
+      if (time < this.#last) throw new Error('Result times must be nondecreasing.')
+      this.#last = time
+    }
+    const domain: Domain = [times[0]!, times.at(-1)!]
+    this.pages.push({ start, end, first: this.info.frames, count: times.length, domain, times })
+    this.info.frames += times.length
+    this.info.domain = [this.pages[0]!.domain[0], domain[1]]
+    return this.pages.length - 1
   }
 
   /** Page `p`'s batches, from the cache, or decoded again into it. */
@@ -413,7 +465,10 @@ export class Results {
     const key = this.#key(p)
     return (
       this.cache.get(key) ??
-      this.cache.put(key, await this.#decode(page.start, page.end, page.first, signal))
+      this.cache.put(
+        key,
+        await this.#decode(await this.#read(page.start, page.end), page.first, signal),
+      )
     )
   }
 

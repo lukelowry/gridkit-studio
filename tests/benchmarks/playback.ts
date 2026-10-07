@@ -45,7 +45,7 @@ export async function run() {
       frames: number
       visible: boolean
       historyBytes: number
-      historyDrawCalls: number
+      segments: number
       refining: boolean
       at?: number
       lastFrame: number
@@ -123,20 +123,21 @@ export async function run() {
     }
     for (const t of [1.8, 0.1, 1.2, 0.5]) await seek(t)
     // A color mapping keeps the whole-run normalization during seeks and resizing.
-    const unmappedDraws = (await sample())[0]!.historyDrawCalls
+    const unmapped = (await sample())[0]!.segments
     bench.studio.bind(bench.key, VM, ['vertexColor'])
     await until(
-      async () => monitor.evaluate(`!!document.querySelector('canvas').gridkitPlot().valueColor`),
+      async () =>
+        monitor.evaluate(`!!document.querySelector('canvas').gridkitPlot().traces.plotted.color`),
       'mapping applied',
     )
     const domain = () =>
-      monitor.evaluate(`document.querySelector('canvas').gridkitPlot().valueColor.domain`)
+      monitor.evaluate(`document.querySelector('canvas').gridkitPlot().traces.plotted.color.domain`)
     const range = await domain()
     assert.deepEqual(range, bench.session.run!.domains?.Bus?.Vm)
     // Config changes precede presentation. Let the one-time switch to coverage finish.
     await until(async () => {
       const plot = (await sample())[0]!
-      return plot.historyDrawCalls > unmappedDraws && !plot.refining
+      return plot.segments > unmapped && !plot.refining
     }, 'mapped history finishes')
     const normalized = (await sample())[0]!
     const originalRun = bench.session.run!
@@ -159,11 +160,7 @@ export async function run() {
       )
       await pause(80)
       const current = (await sample())[0]!
-      assert.equal(
-        current.historyDrawCalls,
-        normalized.historyDrawCalls,
-        'Normalization performs zero history draws',
-      )
+      assert.equal(current.segments, normalized.segments, 'Normalization draws no line again')
       assert.equal(
         current.gpu.queries,
         normalized.gpu.queries,
@@ -184,7 +181,7 @@ export async function run() {
       'original global range restored',
     )
     const oldPalette = await monitor.evaluate(
-      `JSON.stringify(document.querySelector('canvas').gridkitPlot().valueColor.colormap)`,
+      `JSON.stringify(document.querySelector('canvas').gridkitPlot().traces.plotted.color.colormap)`,
     )
     await vscode.workspace
       .getConfiguration('gridkitStudio')
@@ -192,14 +189,14 @@ export async function run() {
     await until(
       () =>
         monitor.evaluate<boolean>(
-          `JSON.stringify(document.querySelector('canvas').gridkitPlot().valueColor.colormap) !== ${JSON.stringify(oldPalette)}`,
+          `JSON.stringify(document.querySelector('canvas').gridkitPlot().traces.plotted.color.colormap) !== ${JSON.stringify(oldPalette)}`,
         ),
       'new colormap applied',
     )
     await pause(250)
     assert.equal(
-      (await sample())[0]!.historyDrawCalls,
-      normalized.historyDrawCalls,
+      (await sample())[0]!.segments,
+      normalized.segments,
       'Palette changes reuse history too',
     )
 
@@ -293,8 +290,13 @@ export async function run() {
     }
     const timedOut =
       await monitor.evaluate<{ base: boolean; append: boolean }[]>('window.streamAttempts')
-    assert.equal(timedOut[1]!.base, true)
-    assert.equal(timedOut[1]!.append, false)
+    // A stream stopped before its end left the view as it was, so it is asked for again as it was.
+    const asked = ({ base, append }: { base: boolean; append: boolean }) => ({ base, append })
+    assert.deepEqual(
+      asked(timedOut[1]!),
+      asked(timedOut[0]!),
+      'Retry asks again for what never committed',
+    )
     await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
     assert.deepEqual(
       bench.studio.errors,
@@ -303,7 +305,7 @@ export async function run() {
     )
     bench.report.normalization = {
       changes: 12,
-      historyDraws: 0,
+      segments: 0,
       modelQueries: 0,
       commitAttempts: attempts,
       timeoutAttempts: timedOut,
@@ -376,13 +378,13 @@ export async function run() {
       expected.every((error) => /device|destroy|lost/i.test(error)),
       expected.join('\n'),
     )
-    // A render exception also replaces the lane, without leaving a stopped clock or blank plot.
+    // A typed device failure during submission also replaces the lane, without leaving a stopped clock or blank plot.
     await monitor.evaluate(`(() => {
       window.oldMonitorCanvases = Array.from(document.querySelectorAll('canvas'));
       const original = GPUQueue.prototype.submit;
       GPUQueue.prototype.submit = function(...args) {
         GPUQueue.prototype.submit = original;
-        throw new Error('Injected playback render failure');
+        throw Object.assign(new Error('Injected playback render failure'), { code: 'device-lost' });
       };
     })()`)
     await until(

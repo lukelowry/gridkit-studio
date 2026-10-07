@@ -6,18 +6,36 @@ import {
   type Data,
   type Domain,
   type FieldSelection,
-  type Item,
   rowAt,
   selectRows,
 } from '@latkit/model'
-import type { Monitor, MonitorConfig, MonitorLimits } from '@latkit/monitor'
+import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
+import { intersectRows, recordedSelection } from '../../shared/coverage.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import type { SimulationInfo } from '../../shared/simulation.js'
 import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
+
+/** The same physical rows drive drawing, selection, keyboard readings and export. */
+export function plotRows(
+  source: Data,
+  run: SimulationInfo | undefined,
+  plot: Plotted,
+): FieldSelection['rows'] {
+  const recorded = recordedSelection(source, run?.outputs ?? [], plot.type, plot.field)
+  if (!plot.id) return recorded
+  const table = source.tables[plot.type]!
+  return {
+    ...intersectRows(
+      selectRows(table, recorded),
+      selectRows(table, { kind: 'ids', ids: [plot.id] }),
+    ),
+    index: table.index,
+  }
+}
 
 /** Caps each plot's history textures; the complete run is held outside the plot. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
@@ -31,7 +49,7 @@ export function traceSelection(
   selected: string | undefined,
   type: string,
   rows?: FieldSelection['rows'],
-): Item[] {
+): MonitorItem[] {
   if (!selected?.startsWith(type + '/')) return []
   const table = source.tables[type]
   if (!table) return []
@@ -42,10 +60,27 @@ export function traceSelection(
       available.kind === 'range'
         ? row >= available.offset && row < available.offset + available.count
         : available.values.includes(row)
-    return included ? [{ source, index: table.index, row }] : []
+    return included ? [{ source, index: table.index, row, trace: TRACE }] : []
   } catch {
     return []
   }
+}
+
+/** Whether two selections hold the same trace rows, whichever readings found them. */
+export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((item, i) => {
+      const other = b[i]!
+      return (
+        item.row === other.row &&
+        item.trace === other.trace &&
+        item.index.source === other.index.source &&
+        item.index.type === other.index.type &&
+        item.index.version === other.index.version
+      )
+    })
+  )
 }
 
 /** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the
@@ -68,32 +103,35 @@ export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolea
   a?.[0] === b?.[0] && a?.[1] === b?.[1]
 
 /** The trace of `plotted`: a line for each row of its type, or for the one row it names. A field the
- *  network colors is colored the same way: its colormap, over the same range. */
+ *  network colors is colored the same way, by the value each line plots: its colormap, over the same
+ *  range. The plot keeps only where lines lie and colors them as it draws, so a new range or
+ *  colormap draws no line again. */
 export function plotBindings(
   settings: SettingsReader,
   { type, field, id }: Plotted,
   bindings: Bindings = {},
   rows?: FieldSelection['rows'],
   run?: SimulationInfo,
-): Pick<MonitorConfig, 'traces' | 'valueColor'> {
+): Pick<MonitorConfig, 'traces'> {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
   )
+  // The run's whole range, measured as it was read: the plot never reads it.
   const domain = mapped?.domain ?? run?.domains?.[type]?.[field]
-  const colormap = colormaps[settings.get('network.colormap')]
-  // Same-value color is applied to cached coverage. Explicit global ranges never become
-  // trace bindings, so new live extrema cannot invalidate the history or append fast path.
   return {
-    valueColor: mapped && domain ? { domain, colormap } : null,
     traces: {
       [TRACE]: {
         from: type,
         y: field,
         interpolation: settings.get('monitor.interpolation'),
-        ...(id !== undefined
-          ? { rows: { kind: 'ids' as const, ids: [id] } }
-          : rows
-            ? { rows }
+        ...(mapped &&
+          domain && {
+            color: { field, domain, colormap: colormaps[settings.get('network.colormap')] },
+          }),
+        ...(rows
+          ? { rows }
+          : id !== undefined
+            ? { rows: { kind: 'ids' as const, ids: [id] } }
             : {}),
       },
     },
@@ -118,14 +156,14 @@ export function plotOptions(
   font: string | null,
   axis: string,
   valueLabel: string,
-): Parameters<Monitor['set']>[0] {
+): Partial<MonitorConfig> {
   const xPrecision = s.get('monitor.xAxis.precision')
   const yPrecision = s.get('monitor.yAxis.precision')
   const family = s.get('monitor.font') || font
   const motion = s.get('accessibility.motion')
   return {
     fontSizePx: s.get('monitor.fontSizePx'),
-    font: family ? { family } : null,
+    ...(family && { font: { family } }),
     paddingPx: [...MARGIN_PX],
     xAxis: s.get('monitor.xAxis.visible')
       ? {
@@ -162,7 +200,7 @@ export function plotOptions(
     axisColor: color(s.get('monitor.axisColor'), palette?.border),
     gridColor: color(
       s.get('monitor.gridColor'),
-      palette ? [palette.text2[0], palette.text2[1], palette.text2[2], 0.15] : null,
+      palette ? [palette.text2[0], palette.text2[1], palette.text2[2], 0.15] : undefined,
     ),
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),
     selectedColor: color(s.get('monitor.selectedColor'), palette?.primaryText),

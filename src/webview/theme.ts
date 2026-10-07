@@ -19,38 +19,69 @@ const PALETTE = {
 
 export type Palette = Readonly<Record<keyof typeof PALETTE, RGBA>>
 
-/** The current theme's colors. */
-export function palette(): Palette {
+/** The theme's colors, and the editor's monospace font family. */
+export interface Theme {
+  readonly palette: Palette
+  readonly font: string
+}
+
+let current: Theme | undefined
+const listeners = new Set<() => void>()
+let observer: MutationObserver | undefined
+
+/** The current theme, read from the tokens once each time it changes. */
+export function theme(): Theme {
+  observe()
+  if (current) return current
   const css = getComputedStyle(document.body)
-  return Object.fromEntries(
-    Object.entries(PALETTE).map(([name, [token, fallback]]) => [
-      name,
-      parseColor(css.getPropertyValue(token).trim()) ?? parseColor(fallback)!,
-    ]),
-  ) as Palette
+  return (current = {
+    palette: Object.fromEntries(
+      Object.entries(PALETTE).map(([name, [token, fallback]]) => [
+        name,
+        parseColor(css.getPropertyValue(token).trim()) ?? parseColor(fallback)!,
+      ]),
+    ) as Palette,
+    font: css.getPropertyValue('--font-mono').trim(),
+  })
 }
 
-/** The editor's monospace font family. */
-export function font(): string {
-  return getComputedStyle(document.body).getPropertyValue('--font-mono').trim()
+/** VS Code sets its theme's colors on the document and names the theme on the body. */
+function observe() {
+  if (observer) return
+  observer = new MutationObserver(changed)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] })
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class', 'data-vscode-theme-id'],
+  })
 }
 
-/** Resolve a saved hex override, or the contextual default; null leaves the renderer's own. */
+function changed() {
+  current = undefined
+  for (const listener of listeners) listener()
+}
+
+/** Resolve a saved hex override, or the contextual default; none leaves the renderer's own. */
 export function color(value: string | null, fallback: RGBA): RGBA
-export function color(value: string | null, fallback?: RGBA | null): RGBA | null
-export function color(value: string | null, fallback: RGBA | null = null): RGBA | null {
+export function color(value: string | null, fallback?: RGBA): RGBA | undefined
+export function color(value: string | null, fallback?: RGBA): RGBA | undefined {
   return value === null ? fallback : (parseColor(value) ?? fallback)
 }
 
-/** Expose the user's motion and contrast settings to the tokens. */
+/** Expose the user's motion and contrast settings to the tokens. Another contrast changes the
+ *  theme's colors, which the watchers hear at once. */
 export function appearance(settings: SettingsValues | undefined) {
-  document.body.dataset.contrast = settings?.['accessibility.contrast'] ?? 'system'
-  document.body.dataset.motion = settings?.['accessibility.motion'] ?? 'system'
+  const { dataset } = document.body
+  dataset.motion = settings?.['accessibility.motion'] ?? 'system'
+  const contrast = settings?.['accessibility.contrast'] ?? 'system'
+  if (dataset.contrast === contrast) return
+  dataset.contrast = contrast
+  changed()
 }
 
-/** Calls `changed` whenever the VS Code theme changes; returns the unsubscribe. */
-export function watchTheme(changed: () => void): () => void {
-  const observer = new MutationObserver(changed)
-  observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'style'] })
-  return () => observer.disconnect()
+/** Calls `listener` whenever the theme changes; returns the unsubscribe. */
+export function watchTheme(listener: () => void): () => void {
+  observe()
+  listeners.add(listener)
+  return () => listeners.delete(listener)
 }

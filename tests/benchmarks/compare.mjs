@@ -1,6 +1,6 @@
 /**
- * Compares two runs of the view benchmarks, for a person to read. It never fails: timings vary
- * between runs, even on one machine, and work counters change with every renderer release.
+ * Compares two runs of the benchmarks in views.ts, for a person to read. It never fails: timings
+ * vary between runs, even on one machine, and work counters change with every renderer release.
  *
  *   node tests/benchmarks/compare.mjs base.json head.json
  *   node tests/benchmarks/compare.mjs head.json
@@ -44,7 +44,7 @@ if (base) {
 
 const scaled = new Map()
 for (const [name, samples] of Object.entries(head.timings)) {
-  // Groups are named `<view> <size> buses`, such as `network 2000 buses`.
+  // Groups are named `<area> <size> buses`, such as `network 2000 buses` or `playback 39 buses`.
   const match = /^(.*?) (\d+) buses > (.*)$/.exec(name)
   if (!match) continue
   const key = `${match[1]} > ${match[3]}`

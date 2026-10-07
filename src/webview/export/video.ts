@@ -7,18 +7,19 @@ import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
-import { recordedRows } from '../../shared/bindings.js'
+import { recordedWhole } from '../../shared/bindings.js'
+import { coversInterval } from '../../shared/coverage.js'
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
-import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions } from '../monitor/plot.js'
+import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions, plotRows } from '../monitor/plot.js'
 import { loadBorders } from '../network/borders.js'
 import { isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
-import { font, palette } from '../theme.js'
+import { theme } from '../theme.js'
 
 export interface VideoSettings {
   readonly views: readonly VideoView[]
@@ -118,8 +119,7 @@ export async function exportVideo(
   onProgress: (progress: VideoProgress) => void,
 ): Promise<void> {
   const preferences = reader(state.settings)
-  const colors = palette()
-  const face = font()
+  const { palette: colors, font: face } = theme()
   const still = { input: 'none', motion: 'reduce' } as const
   /** Each view's renderers, in selection order. */
   const cells: View[][] = []
@@ -131,6 +131,18 @@ export async function exportVideo(
   try {
     for (const view of settings.views) {
       if (view === 'network') {
+        for (const { type, field } of Object.values(state.bindings ?? {})) {
+          if (
+            !state.run ||
+            !rows.schema.types[type]?.fields[field]?.sampled ||
+            !recordedWhole(state.run.outputs, state.summary?.counts[type] ?? 0, { type, field })
+          )
+            continue
+          if (!coversInterval(samples, type, field, settings.timeRange))
+            throw new Error(
+              `Export samples do not cover ${type}.${field} over the requested interval.`,
+            )
+        }
         const geographic = isGeographic(rows)
         const borders =
           geographic && preferences.get('network.borders')
@@ -140,6 +152,7 @@ export async function exportVideo(
         const network = keep(
           createNetwork(gpu, {
             ...networkConfig(rows, samples, state, geographic, borders),
+            at: settings.timeRange[0],
             ...still,
             canvas: null,
             camera: (cameras.network as never) ?? {
@@ -166,33 +179,29 @@ export async function exportVideo(
         cells.push(
           plots.map((plot) => {
             const definition = rows.schema.types[plot.from]?.fields[plot.field]
-            const monitor = keep(
+            return keep(
               createMonitor(gpu, {
+                ...plotOptions(
+                  preferences,
+                  colors,
+                  face,
+                  axisLabel(rows.schema.axis),
+                  fieldName(definition, plot.field),
+                ),
+                ...still,
                 canvas: null,
-                input: 'none',
                 source: samples,
                 ...plotBindings(
                   preferences,
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,
-                  recordedRows(state.run?.outputs ?? [], { type: plot.from, field: plot.field }),
+                  plotRows(samples, state.run, { type: plot.from, field: plot.field, id: plot.id }),
                   state.run,
                 ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,
               }),
             )
-            monitor.set({
-              ...plotOptions(
-                preferences,
-                colors,
-                face,
-                axisLabel(rows.schema.axis),
-                fieldName(definition, plot.field),
-              ),
-              ...still,
-            })
-            return monitor
           }),
         )
       }

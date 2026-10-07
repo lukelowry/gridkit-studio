@@ -42,7 +42,13 @@ export class CanvasGpu {
           () => {
             this.gpu = undefined
             this.#pending = undefined
-            if (!this.#closed) lost?.(failure ?? gpu.signal.reason)
+            if (!this.#closed)
+              lost?.(
+                Object.assign(new Error('Graphics device lost. Recreating graphics.'), {
+                  code: 'device-lost',
+                  cause: failure ?? gpu.signal.reason,
+                }),
+              )
           },
           { once: true },
         )

@@ -27,3 +27,16 @@ export async function* packets(
   signal.throwIfAborted()
   if (pending.length) yield pending
 }
+
+/** Sends each packet of `source` once the one before it is acknowledged, and prepares the next
+ *  meanwhile: one packet waits on its acknowledgement while one more is made ready. */
+export async function sendAhead<T>(source: AsyncIterable<T>, send: (packet: T) => Promise<void>) {
+  let sent = Promise.resolve()
+  for await (const packet of source) {
+    await sent
+    sent = send(packet)
+    // It is awaited before the next send or after the last; a failure meanwhile waits for that.
+    sent.catch(() => {})
+  }
+  await sent
+}

@@ -24,6 +24,7 @@ describe('mapping readiness', () => {
     stream: 1,
     revision,
     schema: catalog.schema,
+    counts: summary.counts,
     fields: [{ from: 'Bus', select: ['name', 'params.kv'] }],
     sampled: [],
     base: true,

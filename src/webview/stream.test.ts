@@ -13,6 +13,7 @@ vi.mock('./bridge.js', () => ({
       return () => {}
     },
     send: transport.send,
+    report: vi.fn(),
   },
 }))
 import { receive } from './stream.js'
@@ -20,13 +21,16 @@ import { receive } from './stream.js'
 const begin = (stream: number, base = true): Begin => ({
   kind: 'begin',
   stream,
-  base,
+  ...(base
+    ? { base, schema: { types: { Bus: { fields: { x: { type: 'float64' } } } } } }
+    : { base }),
   append: !base,
   revision: { uri: 'file:///one', version: 1, attachmentId: 'first' },
-  schema: { types: { Bus: { fields: { x: { type: 'float64' } } } } },
+  counts: { Bus: 1 },
   fields: [{ from: 'Bus', select: ['x'] }],
   sampled: [],
 })
+const end = (stream: number): ToView => ({ kind: 'end', stream, coverage: [] })
 const rows = (value: number) => ({
   kind: 'rows' as const,
   index: { source: 'case', type: 'Bus', version: 'one' },
@@ -45,27 +49,27 @@ describe('atomic stream replacement', () => {
     receive(held)
     send(begin(1))
     send({ kind: 'batch', stream: 1, sequence: 1, batches: [rows(1)] })
-    send({ kind: 'end', stream: 1 })
-    const base = held.mock.calls[0]![2]
+    send(end(1))
+    const base = held.mock.calls[0]![0].rows
     send(begin(2))
     send({ kind: 'batch', stream: 2, sequence: 2, batches: [rows(2)] })
-    send({ kind: 'end', stream: 2 })
+    send(end(2))
     expect(transport.send).toHaveBeenLastCalledWith({
       kind: 'commit',
       stream: 2,
       error: expect.objectContaining({ code: 'protocol' }),
     })
     send(begin(3, false))
-    send({ kind: 'end', stream: 3 })
+    send(end(3))
     expect(held).toHaveBeenCalledTimes(2)
-    expect(held.mock.calls[1]![2]).toBe(base)
+    expect(held.mock.calls[1]![0].rows).toBe(base)
   })
 
   it('rejects assembly failures and retries a complete replacement', () => {
     const held = vi.fn()
     receive(held)
     send(begin(1, false))
-    send({ kind: 'end', stream: 1 })
+    send(end(1))
     expect(transport.send).toHaveBeenLastCalledWith({
       kind: 'commit',
       stream: 1,
@@ -74,7 +78,7 @@ describe('atomic stream replacement', () => {
     expect(held).not.toHaveBeenCalled()
     send(begin(2))
     send({ kind: 'batch', stream: 2, sequence: 1, batches: [rows(2)] })
-    send({ kind: 'end', stream: 2 })
+    send(end(2))
     expect(held).toHaveBeenCalledOnce()
     expect(transport.send).toHaveBeenLastCalledWith({ kind: 'commit', stream: 2 })
   })
@@ -84,9 +88,9 @@ describe('atomic stream replacement', () => {
     receive(held)
     send({ ...begin(1), simulationId: 'one' })
     send({ kind: 'batch', stream: 1, sequence: 1, batches: [rows(1)] })
-    send({ kind: 'end', stream: 1 })
+    send(end(1))
     send({ ...begin(2, false), simulationId: 'two' })
-    send({ kind: 'end', stream: 2 })
+    send(end(2))
     expect(transport.send).toHaveBeenLastCalledWith({
       kind: 'commit',
       stream: 2,
@@ -103,13 +107,13 @@ describe('atomic stream replacement', () => {
     expect(held).not.toHaveBeenCalled()
     send(begin(2))
     send({ kind: 'batch', stream: 1, sequence: 2, batches: [rows(99)] })
-    send({ kind: 'end', stream: 1 })
+    send(end(1))
     send({ kind: 'batch', stream: 2, sequence: 1, batches: [rows(2)] })
-    send({ kind: 'end', stream: 2 })
-    send({ kind: 'end', stream: 2 })
+    send(end(2))
+    send(end(2))
     send(begin(1))
     expect(held).toHaveBeenCalledTimes(1)
-    expect(held.mock.calls[0]![1].stream).toBe(2)
+    expect(held.mock.calls[0]![0].begin.stream).toBe(2)
     expect(transport.send).toHaveBeenCalledWith({ kind: 'ack', stream: 1, sequence: 2 })
     expect(transport.send).toHaveBeenCalledWith({ kind: 'commit', stream: 2 })
   })
@@ -119,14 +123,63 @@ describe('atomic stream replacement', () => {
     receive(held, (message) => message.stream !== 2)
     send(begin(1))
     send({ kind: 'batch', stream: 1, sequence: 1, batches: [rows(1)] })
-    send({ kind: 'end', stream: 1 })
-    const base = held.mock.calls[0]![2]
+    send(end(1))
+    const base = held.mock.calls[0]![0].rows
     send(begin(2))
     send({ kind: 'batch', stream: 2, sequence: 1, batches: [rows(2)] })
-    send({ kind: 'end', stream: 2 })
+    send(end(2))
     send(begin(3, false))
-    send({ kind: 'end', stream: 3 })
+    send(end(3))
     expect(held).toHaveBeenCalledTimes(2)
-    expect(held.mock.calls[1]![2]).toBe(base)
+    expect(held.mock.calls[1]![0].rows).toBe(base)
+  })
+
+  it('rejects a structurally valid stream whose advertised samples are missing', () => {
+    const held = vi.fn()
+    receive(held)
+    send(begin(1))
+    send({ kind: 'batch', stream: 1, sequence: 1, batches: [rows(1)] })
+    send(end(1))
+    const before = held.mock.calls[0]![0]
+    send(begin(2, false))
+    send({
+      kind: 'end',
+      stream: 2,
+      coverage: [
+        {
+          from: 'Bus',
+          field: 'missing',
+          rows: { kind: 'range', offset: 0, count: 1 },
+          first: 0,
+          count: 2,
+          domain: [0, 1],
+        },
+      ],
+    })
+    expect(transport.send).toHaveBeenLastCalledWith({
+      kind: 'commit',
+      stream: 2,
+      error: expect.objectContaining({ code: 'invalid-input' }),
+    })
+    expect(held).toHaveBeenCalledOnce()
+    send(begin(3, false))
+    send(end(3))
+    expect(held.mock.calls[1]![0].rows).toBe(before.rows)
+  })
+
+  it('does not reject an accepted transaction when its renderer fails afterward', () => {
+    const held = vi.fn(() => {
+      throw new Error('Renderer failed')
+    })
+    receive(held)
+    send(begin(1))
+    send({ kind: 'batch', stream: 1, sequence: 1, batches: [rows(1)] })
+    send(end(1))
+    send(end(1))
+    expect(held).toHaveBeenCalledOnce()
+    expect(transport.send).toHaveBeenLastCalledWith({ kind: 'commit', stream: 1 })
+    send(begin(2, false))
+    send(end(2))
+    expect(transport.send).toHaveBeenLastCalledWith({ kind: 'commit', stream: 2 })
   })
 })

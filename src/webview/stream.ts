@@ -11,13 +11,21 @@ import {
   type Schema,
 } from '@latkit/model'
 
+import { validateCoverage, validateStatics } from '../shared/coverage.js'
 import { type Failure, failureOf } from '../shared/errors.js'
 import type { Begin } from '../shared/messages.js'
 import { bridge } from './bridge.js'
 
+/** One immutable publication. Requested windows never stand for actual data coverage. */
+export interface Snapshot {
+  readonly data: Data
+  readonly rows: Data
+  readonly begin: Begin
+}
+
 /** Assemble and validate before publishing. The sender owns retries and terminal errors. */
 export function receive(
-  held: (data: Data, begin: Begin, rows: Data) => void,
+  held: (snapshot: Snapshot) => void,
   accept: (begin: Begin) => boolean = () => true,
 ): () => void {
   let begin: Begin | undefined
@@ -58,6 +66,7 @@ export function receive(
       begin = undefined
       const pending = batches
       batches = []
+      let publication: Snapshot | undefined
       try {
         if (!accept(complete))
           throw Object.assign(new Error('Stream superseded.'), { code: 'superseded' })
@@ -86,7 +95,9 @@ export function receive(
           complete.append && !complete.base && data ? data : nextBase,
           pending.filter((batch): batch is SampleBatch => batch.kind === 'samples'),
         )
-        held(nextData, complete, nextBase)
+        if (complete.base) validateStatics(nextBase, complete.fields, complete.counts)
+        validateCoverage(nextData, message.coverage)
+        publication = Object.freeze({ data: nextData, rows: nextBase, begin: complete })
         base = nextBase
         data = nextData
         schema = nextSchema
@@ -94,6 +105,15 @@ export function receive(
         settled = { kind: 'commit', stream: complete.stream }
       } catch (reason) {
         settled = { kind: 'commit', stream: complete.stream, error: failureOf(reason) }
+      }
+      // The commit is final before notifying a renderer. A renderer failure cannot turn an
+      // accepted append into a rejected transaction that the sender might duplicate.
+      if (publication) {
+        try {
+          held(publication)
+        } catch (reason) {
+          bridge.report(reason)
+        }
       }
       bridge.send(settled)
     }

@@ -9,8 +9,7 @@ import { networkConfig } from './style.js'
 vi.mock('./borders.js', () => ({ BORDERS: [] }))
 vi.mock('../theme.js', async (original) => ({
   ...(await original<typeof import('../theme.js')>()),
-  font: () => 'monospace',
-  palette: () => new Proxy({}, { get: () => [0.8, 0.8, 0.8, 1] }),
+  theme: () => ({ font: 'monospace', palette: new Proxy({}, { get: () => [0.8, 0.8, 0.8, 1] }) }),
 }))
 
 it('uses the same global normalization in Network and Monitor at every resident time window', () => {
@@ -75,9 +74,9 @@ it('uses the same global normalization in Network and Monitor at every resident 
       const config = networkConfig(kase.data, samples, view, false, null)
       for (const channel of ['color', 'z', 'radiusPx'] as const)
         expect(config.vertices.Bus![channel]).toMatchObject({ domain: [0.5, 2] })
-      expect(plotBindings(reader(), field, view.bindings, undefined, run).valueColor).toMatchObject(
-        { domain: [0.5, 2] },
-      )
+      expect(
+        plotBindings(reader(), field, view.bindings, undefined, run).traces.plotted!.color,
+      ).toMatchObject({ domain: [0.5, 2] })
       const fixed = networkConfig(
         kase.data,
         samples,

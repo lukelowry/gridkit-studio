@@ -1,7 +1,7 @@
 <!-- One lane per plotted signal of the run on show. Plots are added from the view's title bar,
   which also names the run, and played from the status bar. -->
 <script lang="ts">
-  import type { Data, Domain, FieldSelection } from '@latkit/model'
+  import type { Domain } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
@@ -11,8 +11,8 @@
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
-  import { receive } from '../stream.js'
-  import { appearance, font, palette, watchTheme } from '../theme.js'
+  import { receive, type Snapshot } from '../stream.js'
+  import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
 
@@ -20,15 +20,14 @@
   const WINDOW_MS = 120
 
   let view = $state.raw<ViewState>({})
-  /** The case with the run's frames so far. */
-  let source = $state.raw<Data | undefined>()
-  /** The fields, and their rows, whose samples `source` holds. */
-  let sampled = $state.raw<readonly FieldSelection[]>([])
+  let snapshot = $state.raw<Snapshot | undefined>()
+  const source = $derived(snapshot?.data)
+  const sampled = $derived(snapshot?.begin.sampled ?? [])
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */
   let t = $state(0)
-  let theme = $state.raw({ palette: palette(), font: font() })
+  let colors = $state.raw(theme())
   /** Bumped on GPU loss or retry; canvases remount while lane state survives. */
   let epoch = $state(0)
   /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
@@ -79,8 +78,7 @@
           if (view.run?.id !== before.run?.id) {
             clearTimeout(telling)
             chosen = told = undefined
-            source = undefined
-            sampled = []
+            snapshot = undefined
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
@@ -92,13 +90,12 @@
         }
       }),
       receive(
-        (data, begin) => {
-          source = data
-          sampled = begin.sampled
+        (next) => {
+          snapshot = next
         },
         (begin) => currentStream(begin, view),
       ),
-      watchTheme(() => (theme = { palette: palette(), font: font() })),
+      watchTheme(() => (colors = theme())),
     ]
     const visibility = () => (hidden = document.hidden)
     document.addEventListener('visibilitychange', visibility)
@@ -140,7 +137,7 @@
           {sampled}
           {t}
           {shown}
-          {theme}
+          theme={colors}
           {clock}
           {tick}
           {gpu}

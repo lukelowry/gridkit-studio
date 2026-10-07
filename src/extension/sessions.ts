@@ -178,7 +178,10 @@ export class Sessions {
       this.#logged.add(reason)
     }
     // A defect's stack is for whoever fixes it; anything else is said as it was told.
-    const text = defect(reason) || !(reason instanceof Error) ? detail(reason) : reason.message
+    const text =
+      defect(reason) || !(reason instanceof Error) || (reason as { code?: string }).code
+        ? detail(reason)
+        : reason.message
     this.output.error(text)
     if (this.errors.push(text) > 100) this.errors.shift()
   }

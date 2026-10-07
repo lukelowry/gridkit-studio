@@ -1,0 +1,411 @@
+diff --git a/dist/index.js b/dist/index.js
+index 2e8646bfc083d13e13e4357ab0d445cea230011f..18d25d19d963cbfe570e26e7d6b5f0c6d762fbe5 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1032,101 +1032,7 @@ async function pipelines(gpu, format2, msaa, shade) {
+ }
+ 
+ // src/picking.ts
+-import { kit as kit7 } from "@latkit/gpu";
+-import {
+-  Work,
+-  bitAt,
+-  rowCount as rowCount4,
+-  rowAt as rowAt2,
+-  sampleAt as sampleAt2
+-} from "@latkit/model";
+-function below(a, b) {
+-  return a.distance > b.distance || a.distance === b.distance && a.order < b.order;
+-}
+-var Nearest = class {
+-  constructor(limit) {
+-    this.limit = limit;
+-  }
+-  limit;
+-  heap = [];
+-  admits(distance, order) {
+-    const worst = this.heap[0];
+-    return this.heap.length < this.limit || distance < worst.distance || distance === worst.distance && order > worst.order;
+-  }
+-  add(candidate) {
+-    const heap = this.heap;
+-    let i;
+-    if (heap.length < this.limit) {
+-      i = heap.push(candidate) - 1;
+-      while (i > 0) {
+-        const parent = i - 1 >> 1;
+-        if (!below(heap[i], heap[parent])) break;
+-        [heap[i], heap[parent]] = [heap[parent], heap[i]];
+-        i = parent;
+-      }
+-      return;
+-    }
+-    heap[0] = candidate;
+-    i = 0;
+-    for (; ; ) {
+-      const left = i * 2 + 1, right = left + 1;
+-      let worst = i;
+-      if (left < heap.length && below(heap[left], heap[worst])) worst = left;
+-      if (right < heap.length && below(heap[right], heap[worst])) worst = right;
+-      if (worst === i) break;
+-      [heap[i], heap[worst]] = [heap[worst], heap[i]];
+-      i = worst;
+-    }
+-  }
+-  /** Nearest first, topmost breaking ties. */
+-  sorted() {
+-    return [...this.heap].sort((a, b) => a.distance - b.distance || b.order - a.order).map((candidate) => candidate.reading);
+-  }
+-};
+-async function pick(request) {
+-  const { reads, data, bindings, plot: plot2, x, y, point, radius, limit } = request;
+-  const work = new Work(reads.signal, Infinity, 3);
+-  const coordinate = plotCoordinate(plot2, x, point[0]), delta = radius / plot2.width * (x[1] - x[0]);
+-  const between = [Math.max(x[0], coordinate - delta), Math.min(x[1], coordinate + delta)];
+-  const nearest = new Nearest(limit);
+-  let order = 0;
+-  for (const item of bindings) {
+-    const { y: plotted, visible } = item.channels, fields2 = { [plotted.column]: item.fields[plotted.column] };
+-    if (visible.column !== void 0) fields2[visible.column] = item.fields[visible.column];
+-    for await (const tile of reads.fields({
+-      source: data.source,
+-      from: item.trace.from,
+-      rows: item.rows,
+-      fields: fields2,
+-      window: { kind: "range", between }
+-    })) {
+-      const samples = tile.samples, column = tile.columns[plotted.column], frames = samples.coordinates.length;
+-      for (let r = 0; r < rowCount4(tile.rows); r++)
+-        for (let f = 0; f < frames; f++, order++) {
+-          if ((order & 1023) === 0) await work.step();
+-          if (!bitAt(tile.presence[plotted.column], r)) continue;
+-          const value = sampleAt2(column, r, f);
+-          if (value === null || !Number.isFinite(value)) continue;
+-          if (!kit7.channelOn(visible, tile, r, f)) continue;
+-          const px = plotX(plot2, x, samples.coordinates[f]), py = plotY(plot2, y, value), distance = (px - point[0]) ** 2 + (py - point[1]) ** 2;
+-          if (distance > radius * radius || !nearest.admits(distance, order)) continue;
+-          const reading = {
+-            source: item.source,
+-            index: tile.index,
+-            row: rowAt2(tile.rows, r),
+-            field: item.field,
+-            trace: item.name,
+-            frame: samples.firstFrame + f,
+-            coordinate: samples.coordinates[f],
+-            value,
+-            point: [px, py]
+-          };
+-          nearest.add({ distance, order, reading });
+-        }
+-    }
+-  }
+-  return nearest.sorted();
+-}
++import { pick } from './picking.js';
+ 
+ // src/monitor.ts
+ function createMonitor(gpu, config) {
+@@ -1155,6 +1061,10 @@ function frameReadings(items, camera, area, [top, right, bottom, left]) {
+   };
+ }
+ var sameDomain = (a, b) => a[0] === b[0] && a[1] === b[1];
++/** Whether two presented frames draw the same lines, so a pick of one stands for the other. */
++function samePresentation(a, b) {
++  return a.data.source === b.data.source && a.data.traces === b.data.traces && a.traces === b.traces && a.width === b.width && sameDomain(a.window, b.window) && sameDomain(a.values, b.values) && a.plot.x === b.plot.x && a.plot.y === b.plot.y && a.plot.width === b.plot.width && a.plot.height === b.plot.height;
++}
+ function grown(wanted, shown) {
+   if (wanted[0] >= shown[0] && wanted[1] <= shown[1]) return shown;
+   const half = (wanted[1] - wanted[0]) / 2;
+@@ -1252,6 +1162,12 @@ var MonitorView = class extends kit8.BaseItemView {
+   labels = new kit8.TextBank({ label: "monitor axes" });
+   shown;
+   inspection;
++  /** Aborts the picks of a presented frame once another, drawing other lines, replaces it. */
++  inspectionStop = new AbortController();
++  /** Counts clicks and menus: one that answers after a later one is dropped. */
++  interaction = 0;
++  /** Where the latest click was, the traces it found, and which of them it chose. */
++  clicked;
+   drawCalls = 0;
+   /** The hover search: exact readings, a frame later. */
+   nearest = (point, radius, { signal }) => this.shown ? this.read(point, radius, 1, signal).then((hits) => hits[0] ?? null) : null;
+@@ -1341,8 +1257,7 @@ var MonitorView = class extends kit8.BaseItemView {
+       item.index.type,
+       item.index.version,
+       item.row,
+-      item.trace ?? null,
+-      item.frame ?? null
++      item.trace ?? null
+     ]);
+   }
+   accept(item) {
+@@ -1633,7 +1548,7 @@ var MonitorView = class extends kit8.BaseItemView {
+       composed,
+       advanced,
+       segments,
+-      shown: { window: camera.x, values: camera.y, plot: this.layout.plot }
++      shown: { window: camera.x, values: camera.y, plot: this.layout.plot, data: this.data, traces: this.traces, width: this.style.traceWidthPx }
+     };
+   }
+   /**
+@@ -1735,12 +1650,19 @@ var MonitorView = class extends kit8.BaseItemView {
+     }
+     history.complete = !history.back && done(history.front) && (!history.focus || done(history.focus));
+     if (!frame.presented) return;
++    if (this.shown && !samePresentation(this.shown, prepared.shown)) {
++      this.inspectionStop.abort();
++      this.inspectionStop = new AbortController();
++      this.inspection = void 0;
++    }
+     this.shown = prepared.shown;
+     if (this.exportedHistory) destroySurface(this.exportedHistory);
+     this.exportedHistory = void 0;
+   }
+   release() {
+     if (this.resizeTimer !== void 0) clearTimeout(this.resizeTimer);
++    this.inspectionStop.abort();
++    this.inspectionStop = new AbortController();
+     this.inspection = void 0;
+     destroySurface(this.presentedHistory);
+     if (this.exportedHistory) destroySurface(this.exportedHistory);
+@@ -1837,36 +1759,71 @@ var MonitorView = class extends kit8.BaseItemView {
+   /** Exact readings near a point in the latest drawn frame, nearest first. */
+   async read(point, radius, limit, signal) {
+     this.live();
+-    const shown = this.shown, traces = this.traces;
+-    if (!shown || !traces) return [];
+-    const p = shown.plot;
+-    if (!onPlot(p, point)) return [];
++    const shown = this.shown;
++    if (!shown?.traces || !onPlot(shown.plot, point)) return [];
+     signal?.throwIfAborted();
+-    const cached = this.inspection, source = this.data.source;
+-    if (cached && cached.point[0] === point[0] && cached.point[1] === point[1] && cached.radius === radius && cached.limit >= limit && cached.source === source && cached.shown === shown)
+-      return cached.result.length > limit ? cached.result.slice(0, limit) : cached.result;
++    const cached = this.inspection;
++    if (cached && cached.point[0] === point[0] && cached.point[1] === point[1] && cached.radius === radius && cached.limit >= limit && samePresentation(cached.shown, shown))
++      return cached.result.slice(0, limit);
+     const reads = this.gpu.reader.open({
+-      signal: signal ? AbortSignal.any([signal, this.signal]) : this.signal
++      signal: AbortSignal.any([this.signal, this.inspectionStop.signal, ...signal ? [signal] : []])
+     });
+     let result;
+     try {
+       result = await pick({
+         reads,
+-        data: this.data,
+-        bindings: traces,
+-        plot: p,
++        data: shown.data,
++        bindings: shown.traces,
++        plot: shown.plot,
+         x: shown.window,
+         y: shown.values,
++        width: shown.width,
+         point,
+         radius,
+         limit
+       });
++    } catch (error) {
++      if (reads.signal.aborted) return [];
++      throw error;
+     } finally {
+       reads.close();
+     }
+-    this.inspection = { point: [point[0], point[1]], radius, limit, source, shown, result };
++    if (signal?.aborted || this.closed || !this.shown || !samePresentation(shown, this.shown)) return [];
++    this.inspection = { point: [point[0], point[1]], radius, limit, shown, result };
+     return result;
+   }
++  /**
++   * Select the trace a click hits, as every view does, answering in order: a click whose pick ends
++   * after a later click or menu, or after its frame gave way to other lines, does nothing. Clicking
++   * again in place cycles while the same traces lie there.
++   */
++  async click(point, modifiers, options = {}) {
++    const token = ++this.interaction, shown = this.shown;
++    const radius = options.touch ? Math.max(22, this.style.pickRadiusPx) : this.style.pickRadiusPx;
++    const hits = await this.read(point, radius, 16, options.signal);
++    if (options.signal?.aborted || this.closed || token !== this.interaction || !shown || !this.shown || !samePresentation(shown, this.shown)) return;
++    const additive = modifiers.shift || modifiers.control || modifiers.meta;
++    const keys = hits.map((hit) => this.identify(hit)).join("\n"), last = this.clicked;
++    const turn = !additive && last && last.keys === keys && Math.hypot(point[0] - last.point[0], point[1] - last.point[1]) < 3 ? last.turn + 1 : 0;
++    this.clicked = additive ? void 0 : { point: [point[0], point[1]], keys, turn };
++    const hit = hits.length ? hits[turn % hits.length] : void 0;
++    if (!additive) this.choose(hit ? [hit] : []);
++    else if (hit) {
++      const key = this.identify(hit), rest = this.selection.filter((item) => this.identify(item) !== key);
++      this.choose(rest.length === this.selection.length ? [...rest, hit] : rest);
++    }
++  }
++  /** Report a context menu with the traces at a point, unless a later click or menu, or other lines, came first. */
++  async menu(point, trigger, modifiers) {
++    const token = ++this.interaction, shown = this.shown;
++    try {
++      const items = await this.read(point, this.style.pickRadiusPx, 16);
++      if (!this.closed && token === this.interaction && shown && this.shown && samePresentation(shown, this.shown))
++        this.emit("contextmenu", { point, items, trigger, modifiers });
++    } catch (error) {
++      this.fail(error);
++    }
++  }
+   /** The table of an item's rows among the sources the traces read. */
+   table(item) {
+     const config = this.config, sources = /* @__PURE__ */ new Set([config.source]);
+@@ -1882,4 +1839,3 @@ var MonitorView = class extends kit8.BaseItemView {
+ export {
+   createMonitor
+ };
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/dist/picking.js b/dist/picking.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1d88873bf284a1b0a5881ae09ee0b19ea57d64e1
+--- /dev/null
++++ b/dist/picking.js
+@@ -0,0 +1,145 @@
++import { kit } from '@latkit/gpu';
++import { Work, bitAt, rowAt, rowCount, sampleAt } from '@latkit/model';
++
++/** The widest a trace draws when a field sets its width, as a constant width may be. */
++const MAX_WIDTH_PX = 64;
++
++/** The squared distance from `point` to the segment from `a` to `b`. */
++function distanceSquared(point, a, b) {
++  const dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
++  const u = length ? Math.max(0, Math.min(1, ((point[0] - a.x) * dx + (point[1] - a.y) * dy) / length)) : 0;
++  return (point[0] - a.x - u * dx) ** 2 + (point[1] - a.y - u * dy) ** 2;
++}
++
++/** The segment from `a` to `b` within the plot grown by `margin`, as its stroke draws there;
++ *  undefined when none of it does. */
++function clip(a, b, plot, margin) {
++  const dx = b.x - a.x, dy = b.y - a.y;
++  let first = 0, last = 1;
++  for (const [p, q] of [
++    [-dx, a.x - plot.x + margin],
++    [dx, plot.x + plot.width + margin - a.x],
++    [-dy, a.y - plot.y + margin],
++    [dy, plot.y + plot.height + margin - a.y]
++  ]) {
++    if (!p) {
++      if (q < 0) return void 0;
++      continue;
++    }
++    const at = q / p;
++    if (p < 0) first = Math.max(first, at);
++    else last = Math.min(last, at);
++    if (first > last) return void 0;
++  }
++  return [
++    { ...a, x: a.x + first * dx, y: a.y + first * dy },
++    { ...b, x: a.x + last * dx, y: a.y + last * dy }
++  ];
++}
++
++/** A trace's width when it is the same for every sample; undefined when a field sets it. */
++function fixedWidth(item, width) {
++  if (item.channels.widthPx.column !== void 0) return void 0;
++  const constant = item.bound.channels.widthPx.constant;
++  return typeof constant === 'number' ? constant : width;
++}
++
++/**
++ * The traces drawn near a point, nearest first: each row's line is hit along its segments as
++ * they draw, steps and stroke width included. A hit reads the recorded sample at the nearer end
++ * of its segment, never a value between samples, and each trace row is read once.
++ */
++export async function pick(request) {
++  const { reads, data, bindings, plot, x, y, point, radius, limit, width } = request;
++  if (!limit || !(plot.width > 0) || !(plot.height > 0)) return [];
++  const work = new Work(reads.signal, Infinity, 3);
++  const at = x[0] + ((point[0] - plot.x) / plot.width) * (x[1] - x[0]);
++  const widest = Math.max(width, ...bindings.map((item) => fixedWidth(item, width) ?? MAX_WIDTH_PX));
++  const reach = ((radius + widest / 2) / plot.width) * (x[1] - x[0]);
++  const between = [Math.max(x[0], at - reach), Math.min(x[1], at + reach)];
++  const hits = new Map();
++  let steps = 0;
++  for (const [order, item] of bindings.entries()) {
++    const { y: plotted, visible, widthPx } = item.channels;
++    const fields = { [plotted.column]: item.fields[plotted.column] };
++    for (const channel of [visible, widthPx])
++      if (channel.column !== void 0) fields[channel.column] = item.fields[channel.column];
++    const fixed = fixedWidth(item, width), interpolation = item.trace.interpolation ?? 'linear';
++    const pages = item.source.tables[item.trace.from]?.fields[item.field];
++    const first = pages?.at(0)?.samples, last = pages?.at(-1)?.samples;
++    // A trace of one frame draws a dot: the segment from that frame to itself.
++    const dot = !!first && !!last && last.firstFrame + last.coordinates.length === first.firstFrame + 1;
++    const previous = new Map();
++    for await (const tile of reads.fields({
++      source: data.source,
++      from: item.trace.from,
++      rows: item.rows,
++      fields,
++      window: { kind: 'range', between, context: { before: 1, after: 1 } }
++    })) {
++      const { samples } = tile, column = tile.columns[plotted.column], present = tile.presence[plotted.column];
++      if (!samples) continue;
++      for (let r = 0; r < rowCount(tile.rows); r++) {
++        const row = rowAt(tile.rows, r), key = order * 0x100000000 + row;
++        let a = previous.get(row);
++        for (let f = 0; f < samples.coordinates.length; f++) {
++          if ((steps++ & 1023) === 0) await work.step();
++          const value = sampleAt(column, r, f), coordinate = samples.coordinates[f];
++          const b = {
++            x: plot.x + ((coordinate - x[0]) / (x[1] - x[0])) * plot.width,
++            y: value === null ? NaN : plot.y + ((y[1] - value) / (y[1] - y[0])) * plot.height,
++            width: fixed ?? kit.channelValue(widthPx, tile, r, f),
++            frame: samples.firstFrame + f,
++            coordinate,
++            value,
++            valid: bitAt(present, r) && value !== null && Number.isFinite(value) && kit.channelOn(visible, tile, r, f)
++          };
++          if (dot) a = b;
++          if (a && b.frame === a.frame + (dot ? 0 : 1)) {
++            // A step's corner takes the later sample's width where the line steps first, as it draws.
++            const corner = interpolation === 'step-before' ? { ...a, y: b.y, width: b.width } : { ...a, x: b.x };
++            for (const [start, end] of interpolation === 'linear' ? [[a, b]] : [[a, corner], [corner, b]]) {
++              if (!start.valid || !end.valid || ![start.x, start.y, end.x, end.y].every(Number.isFinite)) continue;
++              const half = Math.max(start.width, end.width) / 2, tolerance = radius + half;
++              if (
++                point[0] < Math.min(start.x, end.x) - tolerance ||
++                point[0] > Math.max(start.x, end.x) + tolerance ||
++                point[1] < Math.min(start.y, end.y) - tolerance ||
++                point[1] > Math.max(start.y, end.y) + tolerance
++              )
++                continue;
++              const clipped = clip(start, end, plot, half + 1);
++              if (!clipped) continue;
++              const distance = distanceSquared(point, clipped[0], clipped[1]);
++              if (distance > tolerance * tolerance || (hits.get(key)?.distance ?? Infinity) <= distance) continue;
++              const sample = !b.valid || (a.valid && Math.abs(a.coordinate - at) < Math.abs(b.coordinate - at)) ? a : b;
++              hits.set(key, {
++                distance,
++                order,
++                rank: tile.rowOffset + r,
++                reading: {
++                  source: item.source,
++                  index: tile.index,
++                  row,
++                  field: item.field,
++                  trace: item.name,
++                  frame: sample.frame,
++                  coordinate: sample.coordinate,
++                  value: sample.value,
++                  point: [sample.x, sample.y]
++                }
++              });
++            }
++          }
++          a = b;
++        }
++        previous.set(row, a);
++      }
++    }
++  }
++  // Nearest first; the trace drawn on top, then its later row, breaks a tie.
++  return [...hits.values()]
++    .sort((a, b) => a.distance - b.distance || b.order - a.order || b.rank - a.rank)
++    .slice(0, limit)
++    .map((hit) => hit.reading);
++}

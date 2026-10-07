@@ -16,6 +16,9 @@
 
   let view = $state.raw<ViewState>({})
   let values = $state.raw<Values>({})
+  /** The values as the extension last sent them, and those this view sent since others set them. */
+  let told = '{}'
+  let own = new Set<string>()
   /** Text as typed by parameter name, so formatting a value never rewrites an entry mid-edit. */
   let text = $state.raw<Readonly<Record<string, string>>>({})
   /** Element choices by type, cached per case revision. */
@@ -70,6 +73,7 @@
     if (typed === undefined) delete texts[name]
     else texts[name] = typed
     text = texts
+    own.add(JSON.stringify(next))
     bridge.send({ kind: 'values', uri: view.uri!, values: next })
   }
 
@@ -77,11 +81,16 @@
     const stop = bridge.on((message) => {
       if (message.kind !== 'state') return
       const incoming = (message.state.values ?? {}) as Readonly<Record<string, InputValue>>
-      // Another case, or values set elsewhere (a bus menu's fault), discard the typed text.
-      if (view.uri !== message.state.uri || JSON.stringify(values) !== JSON.stringify(incoming)) {
+      const sent = JSON.stringify(incoming)
+      // Another case, or values set elsewhere (a bus menu's fault), discard the typed text. State
+      // the extension sent before it heard of this view's entries holds values the view already
+      // had, or sent itself, which its latest entry stands over.
+      if (view.uri !== message.state.uri || (sent !== told && !own.has(sent))) {
         values = incoming
         text = {}
+        own = new Set()
       }
+      told = sent
       view = merged(view, message.state)
       appearance(view.settings)
       if (view.summary?.version !== revision) {

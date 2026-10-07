@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { Positions } from '@latkit/gpu'
-  import type { Data } from '@latkit/model'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
@@ -8,7 +7,7 @@
   import { currentStream } from '../../shared/streams.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
-  import { receive } from '../stream.js'
+  import { receive, type Snapshot } from '../stream.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -39,8 +38,7 @@
   let seeded: string | undefined
   let touched = false
   /** The streamed case, and where it saves its diagram blocks. */
-  let rows: Data | undefined
-  let samples: Data | undefined
+  let snapshot: Snapshot | undefined
   let presentation: Record<string, Positions> = {}
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
@@ -107,7 +105,10 @@
         { views: chosen.views, window: chosen.timeRange },
         signal,
       )
-      if (!rows || !samples) throw new Error('The case could not be read.')
+      const committed = snapshot
+      if (!committed || committed.begin.simulationId !== state.run?.id)
+        throw new Error('The export recording changed while its samples were loading.')
+      const { rows, data: samples } = committed
       const gpu = await owner.get()
       signal.throwIfAborted()
       // Each export follows the device it draws on, which an earlier export may have created.
@@ -161,10 +162,9 @@
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
       }),
       receive(
-        (data, begin, base) => {
-          rows = base
-          samples = data
-          if (begin.presentation) presentation = begin.presentation
+        (next) => {
+          snapshot = next
+          if (next.begin.base && next.begin.presentation) presentation = next.begin.presentation
         },
         (begin) => currentStream(begin, view),
       ),

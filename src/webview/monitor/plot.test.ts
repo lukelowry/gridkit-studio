@@ -20,28 +20,29 @@ describe('the window a plot shows', () => {
   })
 })
 
-it('uses the global recorded range for mapped traces, including a single selected trace', () => {
+it('colors a mapped trace by the value it plots, over the run’s recorded range', () => {
   const run = { domains: { Bus: { Vm: [0.5, 1.5] } } } as unknown as SimulationInfo
   const binding = { type: 'Bus', field: 'Vm' }
   for (const id of [undefined, 'Bus/1']) {
-    const config = plotBindings(
+    const { traces } = plotBindings(
       reader(),
       { ...binding, id },
       { vertexColor: binding },
       undefined,
       run,
     )
-    expect(config.valueColor).toMatchObject({ domain: [0.5, 1.5] })
-    expect(config.traces.plotted).not.toHaveProperty('color')
+    // Colored by its own field, with no rows of its own: the plot keeps only where lines lie.
+    expect(traces.plotted!.color).toMatchObject({ field: 'Vm', domain: [0.5, 1.5] })
+    expect(traces.plotted!.color).not.toHaveProperty('rows')
   }
-  const config = plotBindings(
+  const { traces } = plotBindings(
     reader(),
     binding,
     { vertexColor: { ...binding, domain: [0, 2] } },
     undefined,
     run,
   )
-  expect(config.valueColor).toMatchObject({ domain: [0, 2] })
+  expect(traces.plotted!.color).toMatchObject({ domain: [0, 2] })
 })
 
 it('waits for the samples a plot draws: its field, for its row or for every row', () => {
@@ -54,18 +55,18 @@ it('waits for the samples a plot draws: its field, for its row or for every row'
   expect(holds([every], { type: 'Bus', field: 'Va' })).toBe(false)
 })
 
-it('keeps trace bindings equal when live extrema or the colormap change', () => {
+it('changes only a trace’s color when live extrema or the colormap change', () => {
   const field = { type: 'Bus', field: 'Vm' }
   const bindings = { vertexColor: field }
   const config = (range: [number, number], palette: 'batlow' | 'viridis') =>
     plotBindings(reader({ 'network.colormap': palette }), field, bindings, undefined, {
       domains: { Bus: { Vm: range } },
-    } as unknown as SimulationInfo)
+    } as unknown as SimulationInfo).traces.plotted!
   const before = config([1, 1], 'batlow')
   const after = config([0.2, 1.8], 'viridis')
-  expect(after.traces).toEqual(before.traces)
-  expect(after.valueColor).not.toEqual(before.valueColor)
-  expect(plotBindings(reader(), field, {}, undefined).valueColor).toBeNull()
+  expect({ ...after, color: undefined }).toEqual({ ...before, color: undefined })
+  expect(after.color).not.toEqual(before.color)
+  expect(plotBindings(reader(), field, {}, undefined).traces.plotted).not.toHaveProperty('color')
 })
 
 it('replaces the plotted field in place, under one trace', () => {
@@ -81,7 +82,11 @@ it('colors a field as the network colors it: its colormap, over the same range',
   const s = reader({ 'network.colormap': 'batlow' })
   const vertexColor = { type: 'Hub', field: 'level', domain: [0.5, 1.5] as const }
   const config = plotBindings(s, { type: 'Hub', field: 'level' }, { vertexColor })
-  expect(config.valueColor).toMatchObject({ domain: [0.5, 1.5], colormap: colormaps.batlow })
+  expect(config.traces.plotted!.color).toMatchObject({
+    field: 'level',
+    domain: [0.5, 1.5],
+    colormap: colormaps.batlow,
+  })
   const height = { vertexHeight: vertexColor }
   expect(
     Object.values(plotBindings(s, { type: 'Hub', field: 'level' }, height).traces)[0],

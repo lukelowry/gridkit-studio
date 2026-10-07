@@ -1,12 +1,19 @@
 <!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import { type Data, type Domain, type FieldSelection, itemId } from '@latkit/model'
+  import {
+    type Data,
+    type Domain,
+    type FieldSelection,
+    itemId,
+    read,
+    type RowsBlock,
+  } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
-  import { recordedRows } from '../../shared/bindings.js'
   import { rowsOf } from '../../shared/cells.js'
+  import { coversTime } from '../../shared/coverage.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
   import { fieldName, typeName } from '../../shared/schema.js'
@@ -15,7 +22,7 @@
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
   import { Recovery } from '../recovery.js'
-  import type { Palette } from '../theme.js'
+  import type { Theme } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
   import {
@@ -24,6 +31,8 @@
     PLOT_LIMITS,
     plotBindings,
     plotOptions,
+    plotRows,
+    sameSelection,
     sameWindow,
     traceSelection,
   } from './plot.js'
@@ -54,7 +63,7 @@
     t: number
     /** The window every plot shows. */
     shown: Domain
-    theme: { readonly palette: Palette; readonly font: string }
+    theme: Theme
     clock: Clock
     tick: ClockState
     /** The GPU the plots share. */
@@ -103,9 +112,9 @@
     ),
   )
   const rows = $derived(
-    plot.id
-      ? { kind: 'ids' as const, ids: [plot.id] }
-      : recordedRows(view.run?.outputs ?? [], { type: plot.from, field: plot.field }),
+    source && source.tables[plot.from]
+      ? plotRows(source, view.run, { type: plot.from, field: plot.field, id: plot.id })
+      : undefined,
   )
   const bindings = $derived(
     plotBindings(
@@ -123,10 +132,14 @@
   const resting = $derived(paused || !visible)
   let epoch = $state(0)
   let camera: Monitor['camera'] | undefined
-  const recovery = new Recovery(() => {
-    camera = monitor?.camera ?? camera
-    epoch++
-  }, bridge.report)
+  const recovery = new Recovery(
+    () => {
+      camera = monitor?.camera ?? camera
+      epoch++
+    },
+    (error) =>
+      bridge.report(error, { view: 'monitor', phase: 'draw', plot, run: view.run?.id, at: t }),
+  )
   let windowUpdate = 0
   let previousFit: boolean | undefined
   /** The plot's whole config, besides its canvas, time, and camera. */
@@ -138,24 +151,16 @@
     const device = await gpu()
     signal.throwIfAborted()
     const made = createMonitor(device, {
+      ...config,
       canvas,
       at: t,
       paused: resting,
-      source: config.source,
-      traces: config.traces,
-      limits: PLOT_LIMITS,
       camera: {
         ...camera,
         x: [shown[0], shown[1]],
         fit: camera?.fit ?? settings.get('monitor.camera.fit'),
       },
     })
-    try {
-      made.set(config, { replace: true })
-    } catch (error) {
-      made.destroy()
-      throw error
-    }
     let lastFrame = performance.now()
     let presentedAt: number | undefined
     const failed = (error: unknown) => {
@@ -204,11 +209,31 @@
     canvas.addEventListener('pointermove', seek)
     canvas.addEventListener('contextmenu', stop)
     monitor = made
-    const inspected = canvas as HTMLCanvasElement & { gridkitPlot?: () => unknown }
+    const inspected = canvas as HTMLCanvasElement & {
+      gridkitPlot?: () => unknown
+      gridkitPoint?: (at: number, value: number) => readonly number[] | null
+      gridkitRead?: (point: [number, number]) => Promise<unknown>
+    }
+    inspected.gridkitPoint = (at, value) => {
+      const table = made.config.source.tables[plot.from]!
+      const reading = {
+        source: made.config.source,
+        index: table.index,
+        row: 0,
+        coordinate: at,
+        value,
+      }
+      return made.locate(reading)
+    }
+    inspected.gridkitRead = async (point) =>
+      (await made.pick(point)).map((item) => ({
+        id: itemId(item),
+        frame: item.frame,
+        value: item.value,
+      }))
     inspected.gridkitPlot = () => ({
       camera: made.camera,
       traces: made.config.traces,
-      valueColor: made.config.valueColor,
       at: presentedAt,
       lastFrame,
       paused: made.config.paused,
@@ -219,7 +244,7 @@
     // Detect a wedged renderer from presented frames, not from the independent host clock.
     // Hidden lanes and idle plots need no frames. Give initialization/refinement time to work.
     const health = setInterval(() => {
-      if (resting) {
+      if (resting || recovery.blocked) {
         lastFrame = performance.now()
         return
       }
@@ -240,6 +265,8 @@
       camera = made.camera
       clearInterval(health)
       delete inspected.gridkitPlot
+      delete inspected.gridkitPoint
+      delete inspected.gridkitRead
       canvas.removeEventListener('pointermove', seek)
       canvas.removeEventListener('contextmenu', stop)
       for (const off of offs) off()
@@ -270,12 +297,14 @@
       queueMicrotask(() => windowUpdate--)
     }
   })
-  // Highlight the selected element's trace when it is of the plotted type.
+  // Highlight the selected element's trace when it is of the plotted type. The plot hears only of
+  // another trace: each selection it is given draws the highlighted trace again.
   $effect(() => {
     const selected = view.selection?.id
     void source // Each new snapshot needs the row found again.
     if (!monitor) return
-    monitor.select(traceSelection(monitor.config.source, selected, plot.from, rows))
+    const next = traceSelection(monitor.config.source, selected, plot.from, rows)
+    if (!sameSelection(next, monitor.selection)) monitor.select(next)
   })
   $effect(() => {
     if (!monitor) return
@@ -294,13 +323,20 @@
   $effect(() => {
     if (!inspecting || !recorded || tick.status === 'playing' || tick.follow) return
     const at = t
+    const snapshot = source
+    const selection = rows
+    if (!snapshot || !coversTime(snapshot, plot.from, plot.field, at, selection)) {
+      sample = null
+      return
+    }
     const { from, field, id } = plot
     const offset = id ? 0 : trace
     const reading = new AbortController()
     const timer = setTimeout(() => {
-      bridge
-        .request(
-          'query',
+      void (async () => {
+        const blocks: RowsBlock[] = []
+        for await (const block of read(
+          snapshot,
           {
             kind: 'rows',
             from,
@@ -309,24 +345,32 @@
             offset,
             limit: 1,
             at,
-            ...(id && { rows: { kind: 'ids', ids: [id] } }),
+            rows: selection,
           },
-          reading.signal,
-        )
-        .then(
-          (blocks) => {
-            const row = rowsOf(blocks)[0]
-            const value = row?.values[field]
-            sample = row?.id
-              ? {
-                  label: row.id.slice(from.length + 1),
-                  value: typeof value === 'number' ? value : null,
-                  t: at,
-                }
-              : null
-          },
-          () => (sample = null),
-        )
+          { signal: reading.signal },
+        ))
+          if (block.kind === 'rows') blocks.push(block)
+        return blocks
+      })().then(
+        (blocks) => {
+          if (reading.signal.aborted || source !== snapshot) return
+          const row = rowsOf(blocks)[0]
+          const value = row?.values[field]
+          sample = row?.id
+            ? {
+                label: row.id.slice(from.length + 1),
+                value: typeof value === 'number' ? value : null,
+                t: at,
+              }
+            : null
+        },
+        (error) => {
+          if (!reading.signal.aborted) {
+            sample = null
+            bridge.report(error)
+          }
+        },
+      )
     }, 150)
     return () => {
       clearTimeout(timer)
@@ -470,6 +514,8 @@
     text-overflow: ellipsis;
     writing-mode: vertical-rl;
     transform: rotate(180deg);
+    /* Its box spans the lane above the plot: the pointer reaches the traces beneath. */
+    pointer-events: none;
   }
 
   /* Shown while the pointer or focus is on the lane, over the plot's top right corner. */

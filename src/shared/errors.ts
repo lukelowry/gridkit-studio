@@ -26,6 +26,7 @@ export function failureOf(error: unknown, aborted = false): Failure {
         'actualRevision',
         'simulationId',
         'changeId',
+        'coverage',
       ]
         .filter((key) => value?.[key] !== undefined)
         .map((key) => [key, value![key]]),

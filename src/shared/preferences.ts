@@ -514,6 +514,15 @@ export function validateSettings(input: unknown): SettingsDocument {
   return Object.fromEntries(entries) as SettingsDocument
 }
 
-export function reader(values: SettingsDocument = {}): SettingsReader {
-  return { get: (key) => (key in values ? values[key]! : defaults[key]) }
+const readers = new WeakMap<SettingsDocument, SettingsReader>()
+const unset: SettingsReader = { get: (key) => defaults[key] }
+
+/** The settings in `values`, else their defaults. Each object has one reader, so what is derived
+ *  from a reader stays equal while its settings do. */
+export function reader(values?: SettingsDocument): SettingsReader {
+  if (!values) return unset
+  let found = readers.get(values)
+  if (!found)
+    readers.set(values, (found = { get: (key) => (key in values ? values[key]! : defaults[key]) }))
+  return found
 }

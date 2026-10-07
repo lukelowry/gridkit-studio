@@ -25,6 +25,7 @@ export type {
 export { PROGRAMS } from './simulation.js'
 
 import type { Bindings } from './bindings.js'
+import type { SampleCoverage } from './coverage.js'
 import type { Failure } from './errors.js'
 import type { SettingsValues } from './preferences.js'
 import type { Held } from './streams.js'
@@ -137,7 +138,7 @@ export interface Requests {
       fromPage?: number
     }
     /** How many of the run's pages the stream covered. */
-    output: { pages: number }
+    output: { pages: number; frames: number; coverage: readonly SampleCoverage[] }
   }
   /** The next sample time from `at` in `direction`; the run's first or last time when none. */
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
@@ -248,25 +249,27 @@ export interface Cameras {
   diagram?: unknown
 }
 
-/** Opens a stream of rows and samples, which an `end` of the same `stream` closes. */
-export interface Begin {
+/** Opens a stream of rows and samples, which an `end` of the same `stream` closes. A `base` stream
+ *  replaces the case the view holds, and carries what the case is: its schema, and where the
+ *  diagram's blocks are arranged. */
+export type Begin = Stream &
+  ({ base: true; schema: Schema; presentation?: Record<string, Positions> } | { base: false })
+
+interface Stream {
   /** Fields actually carried by this topology/sample projection. */
   fields: readonly FieldSelection[]
   simulationId?: string
   kind: 'begin'
   stream: number
-  schema: Schema
   revision: Revision
-  /** Whether the rows that follow replace the case the view holds. */
-  base: boolean
+  /** Physical row counts, including empty types, independent of the fields projected. */
+  counts: Readonly<Record<string, number>>
   /** Whether the samples that follow extend those the view holds rather than replace them. */
   append: boolean
   /** The times whose samples the view holds once the stream ends; absent, the whole run. */
   held?: Held
   /** The sampled fields, and their rows, whose samples follow. */
   sampled: readonly FieldSelection[]
-  /** Where the diagram's blocks are arranged. */
-  presentation?: Record<string, Positions>
 }
 
 export type ToView =
@@ -275,7 +278,8 @@ export type ToView =
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
   | Begin
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
-  | { kind: 'end'; stream: number }
+  /** Closes a stream with the samples it holds, which the view checks before it commits. */
+  | { kind: 'end'; stream: number; coverage: readonly SampleCoverage[] }
   /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack,
    *  and `cancelled` a request let go of, where nothing failed. */
   | {
@@ -332,4 +336,11 @@ export type FromView =
   | { kind: 'tableState'; table: TableState; shown: number }
   | { kind: 'busy'; busy: boolean }
   /** Why something in the view failed, which the extension tells the user. */
-  | { kind: 'error'; message: string; detail?: string; defect?: boolean }
+  | {
+      kind: 'error'
+      message: string
+      code?: string
+      context?: unknown
+      detail?: string
+      defect?: boolean
+    }

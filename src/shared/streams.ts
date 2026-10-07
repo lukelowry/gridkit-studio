@@ -47,6 +47,15 @@ export interface Held {
   readonly to?: number
 }
 
+/** The run samples a view holds whole; past it the view holds the times around what it shows,
+ *  and asks for more as it moves. */
+export const WHOLE_RUN_BYTES = 48 << 20
+
+/** How far a window reaches ahead of a playhead playing at normal speed, and how far it keeps
+ *  behind, in the run's seconds. */
+export const AHEAD_S = 4
+export const BEHIND_S = 1
+
 /** `held` while it covers `need`, else `need` widened by `margin`. An `open` window has no end, so
  *  frames append to it; it restarts once `need` is three spans past its start, bounding memory. */
 export function holdFor(held: Held | undefined, need: Domain, open: boolean, margin: number): Held {

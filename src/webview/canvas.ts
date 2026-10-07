@@ -9,13 +9,14 @@ import { type Data, type Item, itemId } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
 import type { Begin, Element, ViewState } from '../shared/messages.js'
-import { drawable } from '../shared/streams.js'
+import { currentStream, drawable } from '../shared/streams.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu } from './gpu.js'
 import { loadBorders } from './network/borders.js'
 import { Recovery } from './recovery.js'
-import { receive } from './stream.js'
+import { CommittedWindows, timeReady, TimeResidency } from './residency.js'
+import { receive, type Snapshot } from './stream.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
 
@@ -38,11 +39,13 @@ function boot() {
   const hint =
     (kind === 'network' ? 'Network' : 'Diagram') + ' view. Right-click an element for actions.'
   document.getElementById('app')!.innerHTML =
-    '<main class="canvas-host" aria-busy="true"><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div></main>'
+    '<main class="canvas-host" aria-busy="true"><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div><div class="canvas-host__status" role="status" hidden></div></main>'
   const host = document.querySelector<HTMLElement>('.canvas-host')!
   const canvas = host.querySelector('canvas')!
   const fallback = host.querySelector<HTMLElement>('.canvas-host__fallback')!
   const fallbackText = fallback.firstElementChild!
+  const availability = host.querySelector<HTMLElement>('.canvas-host__status')!
+  let buffering: ReturnType<typeof setTimeout> | undefined
   canvas.setAttribute('aria-label', hint)
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
 
@@ -51,16 +54,14 @@ function boot() {
   let networkStyles: typeof import('./network/style.js') | undefined
   let diagramModule: typeof import('./diagram/diagram.js') | undefined
   let diagramStyles: typeof import('./diagram/style.js') | undefined
-  /** The case's rows alone, and with the shown run's samples. */
-  let rows: Data | undefined
-  let data: Data | undefined
-  let received: Begin | undefined
   let view: Network | Diagram | undefined
   let state: ViewState = {}
-  /** The times of the run the case holds; undefined when it holds all of them. */
-  let held: Begin['held']
-  /** Whether the view has asked for other times of the run and not yet received them. */
-  let asked = false
+  /** The case's rows, alone and with the shown run's samples, as last committed or reused. */
+  let snapshot: Snapshot | undefined
+  let painted: Snapshot | undefined
+  let presentedAt: number | undefined
+  const residency = new TimeResidency((bounds) => bridge.send({ kind: 'window', bounds }))
+  const windows = new CommittedWindows()
   /** Where the case saves its diagram blocks. */
   let presented: Record<string, Positions> = {}
   let closed = false
@@ -74,7 +75,7 @@ function boot() {
   /** Labels, like borders, wait for the first frame so text layout never delays it. */
   let labelled = false
   /** Topology is unchanged by sampled frames. Do not rescan coordinates on every update. */
-  let locatedRows: Data | undefined
+  let located: Data | undefined
   let styling = 0
   /** The shown selection and what stands for it, and the last one this view made, which it does
    *  not reveal. */
@@ -88,6 +89,10 @@ function boot() {
   let sync = () => {}
 
   const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
+  /** Whether a stream's case is the one to draw. The Network waits for the samples its mappings
+   *  read; the Diagram maps nothing, so its rows are enough. */
+  const current = (begin: Begin | undefined) =>
+    kind === 'network' ? drawable(begin, state) : currentStream(begin, state) && !state.stale
   /** A case that has never read draws nothing and stops waiting; one that stops reading keeps its
    *  last valid revision. Neither says so here: Problems lists why, as for any file. */
   const say = () => {
@@ -102,7 +107,14 @@ function boot() {
   const error = (reason: unknown) => {
     if (!canvas.dataset.rendered) fallback.hidden = true
     host.setAttribute('aria-busy', 'false')
-    bridge.report(reason)
+    bridge.report(reason, {
+      view: kind,
+      phase: 'draw',
+      stream: snapshot?.begin.stream,
+      run: snapshot?.begin.simulationId,
+      at: clock.now(),
+      held: snapshot?.begin.held,
+    })
   }
   const drop = () => {
     view?.destroy()
@@ -159,9 +171,9 @@ function boot() {
       return undefined
     }
   }
-  const networkConfig = () =>
-    networkStyles!.networkConfig(rows!, data!, state, geographic, borders, labelled)
-  const diagramConfig = () => diagramStyles!.diagramConfig(rows!, state, presented)
+  const networkConfig = ({ rows, data }: Snapshot) =>
+    networkStyles!.networkConfig(rows, data, state, geographic, borders, labelled)
+  const diagramConfig = ({ rows }: Snapshot) => diagramStyles!.diagramConfig(rows, state, presented)
   const orbit = () => {
     if (kind !== 'network' || !view || state.settings?.['accessibility.motion'] === 'reduce') return
     const network = view as Network
@@ -196,14 +208,17 @@ function boot() {
     })
   }
   function paintNow() {
-    if (!view || !rows || !data || closed) return
+    if (!view || !snapshot || closed) return
     // State arrives before the matching row stream. Keep the last valid frame until both
     // refer to the same revision, rather than applying new row selections to old tables.
-    if (!drawable(received, state)) return
+    if (!current(snapshot.begin)) return
+    const at = clock.now()
+    if (kind === 'network' && !ready(at)) return
     appearance(state.settings)
     try {
-      if (kind === 'diagram') (view as Diagram).set(diagramConfig(), { replace: true })
-      else (view as Network).set(networkConfig(), { replace: true })
+      if (kind === 'diagram') (view as Diagram).set(diagramConfig(snapshot), { replace: true })
+      else (view as Network).set({ ...networkConfig(snapshot), at }, { replace: true })
+      painted = snapshot
     } catch (reason) {
       return error(reason)
     }
@@ -221,7 +236,7 @@ function boot() {
     }
   }
   function selection(force = false) {
-    if (!view || !drawable(received, state)) return
+    if (!view || !current(snapshot?.begin)) return
     const key = keyOf(state.selection)
     const anchors = state.anchors?.join('\n') ?? ''
     const moved = key !== selectionKey || anchors !== anchorKey
@@ -283,7 +298,8 @@ function boot() {
     // Both renderers emit these events; the union's `on` overloads are not callable.
     const events = mounted as Network
     events.on('error', (reason) => recovery.fail(reason))
-    events.on('frame', () => {
+    events.on('frame', (frame) => {
+      presentedAt = frame.at
       recovery.presented()
       if (!canvas.dataset.rendered) {
         mark('canvas:frame')
@@ -318,7 +334,7 @@ function boot() {
     }
   }
   async function render() {
-    if (!rows || closed) return
+    if (!snapshot || closed) return
     if (rendering) {
       queued = true
       return
@@ -327,20 +343,21 @@ function boot() {
     try {
       const [gpu] = await Promise.all([owner.get(lost), rendererReady])
       mark('canvas:gpu')
-      if (closed || !drawable(received, state)) return
+      if (closed || !snapshot || !current(snapshot.begin)) return
       if (kind === 'network') {
-        if (!networkModule || !networkStyles) return
+        const at = clock.now()
+        if (!ready(at) || !networkModule || !networkStyles) return
         mark('canvas:module')
-        if (locatedRows !== rows) {
-          geographic = networkModule.isGeographic(rows)
-          locatedRows = rows
+        if (located !== snapshot.rows) {
+          geographic = networkModule.isGeographic(snapshot.rows)
+          located = snapshot.rows
         }
         if (!view) {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
             geographic,
           )
-          const first = networkConfig()
+          const first = { ...networkConfig(snapshot), at }
           view = networkModule.mountNetwork(
             gpu,
             canvas,
@@ -353,7 +370,7 @@ function boot() {
         }
       } else {
         if (!diagramModule || !diagramStyles) return
-        if (!diagramModule.diagrammed(rows)) {
+        if (!diagramModule.diagrammed(snapshot.rows)) {
           drop()
           fallback.hidden = false
           fallbackText.textContent =
@@ -362,7 +379,7 @@ function boot() {
           return
         }
         if (!view) {
-          const first = diagramConfig()
+          const first = diagramConfig(snapshot)
           view = diagramModule.mountDiagram(
             gpu,
             canvas,
@@ -378,7 +395,6 @@ function boot() {
         }
       }
       mark('canvas:mounted')
-      view.set({ at: clock.now() })
       paint()
       mark('canvas:styled')
       selection(true)
@@ -390,32 +406,58 @@ function boot() {
       }
     }
   }
-  // Paint at the playhead. A network holding a window of the run asks for the times ahead before
-  // the playhead runs out of them.
+  /** Whether the Network holds what it maps at `at`, taking a window it held before when that
+   *  does; else it asks for the times it needs. */
+  function ready(at: number): boolean {
+    if (!timeReady(snapshot, state, at)) snapshot = windows.at(state, at) ?? snapshot
+    const available = timeReady(snapshot, state, at)
+    const domain = state.run?.domain
+    const unavailable = domain && (at < domain[0] || at > domain[1])
+    const played = clock.state
+    if (!unavailable)
+      residency.update(
+        at,
+        snapshot?.begin.held,
+        available,
+        played.status === 'playing' ? played.rate * played.direction : 0,
+      )
+    const status = unavailable ? 'unavailable' : available ? 'ready' : 'buffering'
+    if (host.dataset.availability !== status) {
+      host.setAttribute('aria-busy', String(status === 'buffering'))
+      host.dataset.availability = status
+      clearTimeout(buffering)
+      availability.hidden = true
+      if (status !== 'ready')
+        buffering = setTimeout(() => {
+          availability.textContent =
+            status === 'buffering' ? 'Loading samples…' : 'No recorded sample at this time.'
+          availability.hidden = !canvas.dataset.rendered
+        }, 150)
+    }
+    return available
+  }
+  // Source and time change together. An uncovered seek keeps the last valid frame visible. The
+  // Diagram maps no samples, so time leaves it as it is.
   const clock = createClock((t) => {
-    if (!shown) return
-    view?.set({ at: t })
-    if (kind !== 'network' || !held || asked) return
-    if (t >= held.from && (held.to === undefined || t <= held.to - 1)) return
-    asked = true
-    bridge.send({ kind: 'window', bounds: [t - 1, t + 4] })
+    if (!shown || kind === 'diagram' || !ready(t)) return
+    if (view && painted === snapshot) view.set({ at: t })
+    else if (!view) void render().catch(error)
+    else paint()
   })
   receive(
-    (next, begin, base) => {
+    (next) => {
       mark('canvas:data')
-      data = next
-      received = begin
-      const changedRows = rows !== base
-      rows = base
-      held = begin.held
-      asked = false
-      if (begin.presentation) presented = begin.presentation
-      if (drawable(begin, state)) {
+      const changedRows = snapshot?.rows !== next.rows
+      windows.add(next)
+      snapshot = next
+      residency.committed(next.begin.held)
+      if (next.begin.base && next.begin.presentation) presented = next.begin.presentation
+      if (current(next.begin)) {
         if (!view || changedRows) void render().catch(error)
         else paint()
       }
     },
-    (begin) => drawable(begin, state),
+    (begin) => current(begin),
   )
   bridge.on((message) => {
     if (message.kind === 'begin') mark('canvas:begin')
@@ -433,7 +475,8 @@ function boot() {
     } else if (message.kind === 'action') {
       if (message.command === 'shown') {
         shown = message.value === true
-        view?.set({ paused: !shown || document.hidden, ...(shown && { at: clock.now() }) })
+        view?.set({ paused: !shown || document.hidden })
+        if (shown) paint()
         return
       }
       if (message.command === 'reloadView') {
@@ -457,9 +500,17 @@ function boot() {
   })
   const unwatch = watchTheme(paint)
   // Test and benchmark hooks: the view's counters plus its GPU's cumulative work, which the
-  // benchmarks hold to tests/benchmarks/work.json.
+  // benchmarks report beside their timings.
   ;(window as { gridkitStats?: () => unknown }).gridkitStats = () =>
-    view && { ...view.stats(), ...owner.gpu?.stats() }
+    view && {
+      ...view.stats(),
+      ...owner.gpu?.stats(),
+      at: presentedAt,
+      requestedAt: clock.now(),
+      stream: painted?.begin.stream,
+      held: painted?.begin.held,
+      availability: host.dataset.availability,
+    }
   // What the view shows selected, and where its camera is, so tests can follow a selection made
   // in another view.
   ;(window as { gridkitSelection?: () => unknown }).gridkitSelection = () =>
@@ -480,6 +531,7 @@ function boot() {
     closed = true
     cancelAnimationFrame(styling)
     clearTimeout(saving)
+    clearTimeout(buffering)
     unwatch()
     clock.stop()
     recovery.dispose()

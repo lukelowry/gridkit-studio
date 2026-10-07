@@ -38,11 +38,13 @@ export const bridge = {
   },
   /** Tell the user why something failed, in the one place Studio does: a notification from the
    *  extension. A cancellation is no failure. */
-  report(reason: unknown) {
+  report(reason: unknown, context?: unknown) {
     if (cancelled(reason)) return
     api.postMessage({
       kind: 'error',
       message: message(reason),
+      code: String((reason as { code?: unknown } | null)?.code ?? 'operation-failed'),
+      context,
       detail: detail(reason),
       ...(defect(reason) && { defect: true }),
     })

@@ -12,7 +12,7 @@ import {
 
 import { nameFieldOf } from '../../shared/schema.js'
 
-/** Per table, so each config reuses the same field and the patch leaves labels out. */
+/** Per table: a table's labels are read once, and every config after reuses them. */
 const cache = new WeakMap<TableData, FieldInput>()
 
 /** The label field of `type`: its name field when every row has a name, else the names with ids

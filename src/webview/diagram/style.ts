@@ -5,7 +5,7 @@ import type { Data } from '@latkit/model'
 import type { ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf } from '../../shared/schema.js'
-import { font, palette } from '../theme.js'
+import { theme } from '../theme.js'
 import { labelsOf } from './labels.js'
 import { diagramOptions } from './options.js'
 
@@ -19,7 +19,8 @@ export function diagramConfig(
   const s = reader(state.settings)
   const drawn = diagramOf(source.schema)
   const editing = state.diagramEditing === true
-  const options = diagramOptions(s, palette(), font())
+  const { palette, font } = theme()
+  const options = diagramOptions(s, palette, font)
   const maxWidth = s.get('diagram.labels.maxWidth')
   return {
     ...options,

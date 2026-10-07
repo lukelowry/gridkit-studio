@@ -118,7 +118,7 @@ describe('real worker protocol', () => {
     }
   })
 
-  it('streams many immutable result pages in bounded batches instead of one round trip per page', async () => {
+  it('streams every frame of a run once and in order, across its pages', async () => {
     const rig = await start()
     rig.acknowledge = true
     try {
@@ -128,11 +128,12 @@ describe('real worker protocol', () => {
         text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
       }).done
       const path = join(rig.scratch, 'many.csv')
+      const frames = 600_000
       await writeFile(
         path,
-        'time,Bus_one_Vm\n' + Array.from({ length: 4096 }, (_, i) => `${i},${i % 3}\n`).join(''),
+        'time,Bus_one_Vm\n' + Array.from({ length: frames }, (_, i) => `${i},${i % 3}\n`).join(''),
       )
-      const run = await rig.call('import', { ...revision, path, cacheBytes: 16 << 20 }).done
+      const run = await rig.call('import', { ...revision, path, cacheBytes: 64 << 20 }).done
       expect(run.domains).toEqual({ Bus: { Vm: [0, 2] } })
       rig.batches.length = 0
       const result = await rig.call('batches', {
@@ -141,12 +142,13 @@ describe('real worker protocol', () => {
         fields: [{ from: 'Bus', select: ['Vm'] }],
         includeStatic: false,
       }).done
-      expect(result.pages).toBe(64)
-      expect(rig.batches.length).toBe(1)
-      const samples = rig.batches
+      expect(result.pages).toBeGreaterThan(1)
+      expect(result.frames).toBe(frames)
+      const times = rig.batches
         .flatMap((message) => message.batches)
-        .filter((batch) => batch.kind === 'samples')
-      expect(samples.reduce((sum, batch) => sum + batch.coordinates.length, 0)).toBe(4096)
+        .flatMap((batch) => (batch.kind === 'samples' ? Array.from(batch.coordinates) : []))
+      expect(times).toHaveLength(frames)
+      expect(times.every((time, i) => time === i)).toBe(true)
     } finally {
       await rig.stop()
     }
@@ -231,6 +233,13 @@ describe('real worker protocol', () => {
       })
       await rig.call('export', input).done
       expect(await readFile(exported, 'utf8')).toEqual(measured)
+      // Paged again from its times, the run keeps the domains it measured, and steps as it did.
+      expect((await rig.call('runs', { uri: revision.uri }).done)[0]).toMatchObject({
+        frames: info.frames,
+        domain: info.domain,
+        domains: info.domains,
+      })
+      expect(await rig.call('step', { run: info.id, at: 0, direction: 1 }).done).toBe(1)
       expect(await rig.call('describeSimulation', { simulationId: info.id }).done).toMatchObject({
         fingerprint: info.fingerprint,
       })
@@ -307,16 +316,17 @@ describe('real worker protocol', () => {
       const revision = { uri: 'file:///test.case.json', version: 1 }
       const text = await readFile('cases/TwoArea.case.json', 'utf8')
       await call('parse', { ...revision, text }).done
-      // 200 frames of one bus's voltage: a few pages of results.
+      // 700,000 frames of one bus's voltage: a few pages of results.
       const path = join(scratch, 'waveform.csv')
       const name = JSON.parse(text).buses[0].name
+      const count = 700_000
       await writeFile(
         path,
         `time,Bus_${name}_Vm\n` +
-          Array.from({ length: 200 }, (_, i) => `${i / 100},${1 + i / 1000}\n`).join(''),
+          Array.from({ length: count }, (_, i) => `${i / 100},${1 + (i % 200) / 1000}\n`).join(''),
       )
-      const run = await call('import', { ...revision, path, cacheBytes: 32 << 20 }).done
-      expect(run).toMatchObject({ state: 'complete', frames: 200 })
+      const run = await call('import', { ...revision, path, cacheBytes: 64 << 20 }).done
+      expect(run).toMatchObject({ state: 'complete', frames: count })
       // Results that cannot be read fail the import, and take no run's place.
       const broken = join(scratch, 'broken.csv')
       await writeFile(broken, `time,Bus_${name}_Vm\n0,1\n0.01\n`)
@@ -335,24 +345,28 @@ describe('real worker protocol', () => {
 
       const whole = await call('batches', stream).done
       expect(whole.pages).toBeGreaterThan(1)
-      expect(frames()).toBe(200)
+      expect(frames()).toBe(count)
 
       // Nothing was published since: the view holds every page.
       batches.length = 0
-      expect(await call('batches', { ...stream, fromPage: whole.pages }).done).toEqual(whole)
+      expect(await call('batches', { ...stream, fromPage: whole.pages }).done).toEqual({
+        ...whole,
+        coverage: [],
+      })
       expect(batches).toHaveLength(0)
 
       // A view one page behind is sent that page alone.
       const last = await call('batches', { ...stream, fromPage: whole.pages - 1 }).done
-      expect(last).toEqual(whole)
+      expect(last).toMatchObject({ pages: whole.pages, frames: whole.frames })
+      expect(last.coverage[0]!.first).toBeGreaterThan(0)
       expect(frames()).toBeGreaterThan(0)
-      expect(frames()).toBeLessThan(200)
+      expect(frames()).toBeLessThan(count)
 
       // A view that holds a window of the run is sent the pages that overlap it, and no others.
       batches.length = 0
       await call('batches', { ...stream, window: [0.1, 0.2] }).done
       expect(frames()).toBeGreaterThan(0)
-      expect(frames()).toBeLessThan(200)
+      expect(frames()).toBeLessThan(count)
 
       expect(run.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
       await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()

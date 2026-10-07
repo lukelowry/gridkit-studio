@@ -19,14 +19,11 @@ import {
 } from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
-import { type Held, holdFor } from '../shared/streams.js'
+import { AHEAD_S, BEHIND_S, type Held, holdFor, WHOLE_RUN_BYTES } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
-import { StreamDelivery } from './stream.js'
+import { packed, StreamDelivery } from './stream.js'
 import { VideoFile } from './video.js'
 
-/** The run samples a view holds whole; past it the view holds the times around what it shows,
- *  and asks for more as it moves. */
-const WHOLE_RUN_BYTES = 48 << 20
 /** Results decode to float64. */
 const SAMPLE_BYTES = 8
 /** The views that draw the case, and so are streamed its rows and samples. */
@@ -74,8 +71,10 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   return parts.join(' · ')
 }
 
-/** The state each non-drawing view shows; it is sent state only when this changes. */
-const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
+/** What each view reads of the state, besides the summary and settings, which are compared on
+ *  their own; a view is sent state only when this changes. While a run streams, only what a view
+ *  draws from the run sends it state again. */
+const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
   case: ({ version, stale, error, writable, selection, bindings, table }) => [
     version,
     stale,
@@ -93,6 +92,54 @@ const SHOWN: Partial<Record<ViewKind, (state: ViewState) => unknown>> = {
     outputs,
     run && [run.id, run.state, run.frames, run.domain, run.span, run.message, run.contingency],
     launching,
+  ],
+  diagram: ({ uri, stale, error, writable, selection, anchors, bindings, diagramEditing }) => [
+    uri,
+    stale,
+    error,
+    writable,
+    selection,
+    anchors,
+    bindings,
+    diagramEditing,
+  ],
+  // The times a run holds mark which ones the network can draw, and its ranges color it.
+  network: ({ uri, stale, error, writable, selection, anchors, bindings, run }) => [
+    uri,
+    stale,
+    error,
+    writable,
+    selection,
+    anchors,
+    bindings,
+    run && [
+      run.id,
+      run.fingerprint,
+      run.frames > 0,
+      run.outputs,
+      run.domain,
+      run.span,
+      run.domains,
+    ],
+  ],
+  // A run the plots show has a fixed span, else the times it recorded.
+  monitor: ({ uri, stale, selection, bindings, plots, window, run }) => [
+    uri,
+    stale,
+    selection,
+    bindings,
+    plots,
+    window,
+    run && [run.id, run.state, run.frames > 0, run.outputs, run.span ?? run.domain, run.domains],
+  ],
+  // An export's times follow the run's until the user chooses their own.
+  export: ({ uri, stale, error, bindings, plots, run }) => [
+    uri,
+    stale,
+    error,
+    bindings,
+    plots,
+    run && [run.id, run.frames > 0, run.outputs, run.domain, run.span, run.domains],
   ],
 }
 
@@ -220,7 +267,7 @@ class View {
   }
   send(message: ToView): Thenable<boolean> {
     // A replaced view's late messages would reach the page that took its place.
-    return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(message)
+    return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(packed(message))
   }
   /** Send the view a snapshot of the clock. */
   tick() {
@@ -270,9 +317,13 @@ class View {
       case 'window': {
         const bounds = message.bounds
         if (!session || bounds?.length !== 2 || !bounds.every(Number.isFinite)) return
-        if (!(bounds[0] < bounds[1])) return
+        // A window may be a moment alone, as a seek at rest asks for.
+        if (!(bounds[0] <= bounds[1])) return
         if (this.kind === 'monitor') session.window = [bounds[0], bounds[1]]
-        else this.#need = [bounds[0], bounds[1]]
+        else {
+          this.#need = [bounds[0], bounds[1]]
+          this.#controller?.abort()
+        }
         await this.update()
         return
       }
@@ -315,7 +366,8 @@ class View {
       case 'error':
         this.studio.report(
           Object.assign(new Error(String(message.message)), {
-            detail: message.detail,
+            code: message.code,
+            detail: `[${this.kind}] ${message.code ?? 'operation-failed'} ${JSON.stringify(message.context ?? {})}\n${message.detail ?? message.message}`,
             ...(message.defect === true && { defect: true }),
           }),
         )
@@ -448,7 +500,8 @@ class View {
     })())
   }
   async #once() {
-    if (!this.#ready || (!this.panel.visible && this.hidden !== 'working')) return
+    // A hidden view catches up when it shows; one kept working works on while hidden.
+    if (!this.#ready || (!this.panel.visible && !(this.hidden === 'working' && this.busy))) return
     const state = this.studio.state(this.uri)
     if ((this.kind === 'monitor' || this.kind === 'export') && state.run?.frames) {
       if (this.#resultSummary?.simulationId !== state.run.id)
@@ -461,10 +514,8 @@ class View {
       state.summary = this.#resultSummary.value
     }
     const session = this.studio.all.get(this.uri)
-    const shown = SHOWN[this.kind]
-    const signature = shown ? JSON.stringify(shown(state)) : undefined
+    const signature = JSON.stringify(SHOWN[this.kind](state))
     if (
-      signature === undefined ||
       signature !== this.#shown ||
       state.summary !== this.#summary ||
       state.settings !== this.#settings
@@ -473,7 +524,7 @@ class View {
       const sent = { ...state }
       if (state.summary === this.#summary) delete sent.summary
       if (state.settings === this.#settings) delete sent.settings
-      this.#shown = signature ?? ''
+      this.#shown = signature
       this.#summary = state.summary
       this.#settings = state.settings
       await this.send({ kind: 'state', state: sent })
@@ -590,8 +641,9 @@ class View {
   #draws(view: VideoView): boolean {
     return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
   }
-  /** The window of `run` to hold: the Monitor's visible times, or a few seconds around the
-   *  playhead. A view following the run's head holds an open-ended window. */
+  /** The window of `run` to hold: the Monitor's visible times, or the times the view asked for,
+   *  at first those around the playhead. A view following the run's head holds an open-ended
+   *  window. */
   #window(run: SimulationInfo, session: Session): Held {
     const { transport } = session
     const [start, end] = run.domain
@@ -599,7 +651,7 @@ class View {
     const need: Domain =
       this.kind === 'monitor'
         ? (session.window ?? run.span ?? [start, end])
-        : (this.#need ?? [t - 1, t + 4])
+        : (this.#need ?? [t - BEHIND_S, t + AHEAD_S])
     // The default Monitor interval is fixed. Finishing a run must not replace its entire
     // history merely to close the stream's upper bound.
     const open =
@@ -613,22 +665,32 @@ class View {
     this.#failure = ''
     for (let attempt = 0; attempt < 3; attempt++) {
       const stream = ++this.#stream
+      /** Whether the view may have committed this stream, whose receipt may yet be lost. */
+      let ending = false
       try {
         await this.send({
           kind: 'begin',
           fields: [...demand.statics, ...demand.sampled],
           simulationId: demand.run?.id,
           stream,
-          schema: summary.schema,
+          counts: summary.counts,
           revision,
-          base,
           append,
           ...(demand.held && { held: demand.held }),
           sampled: demand.sampled,
-          ...(base &&
-            this.#draws('diagram') && {
-              presentation: await studio.client.call('presentation', revision, controller.signal),
-            }),
+          ...(base
+            ? {
+                base: true as const,
+                schema: summary.schema,
+                ...(this.#draws('diagram') && {
+                  presentation: await studio.client.call(
+                    'presentation',
+                    revision,
+                    controller.signal,
+                  ),
+                }),
+              }
+            : { base: false as const }),
         })
         let sequence = 0
         // Backpressure: the next batch waits for the view to ack this one.
@@ -639,7 +701,7 @@ class View {
           )
         }
         const { held, run } = demand
-        const { pages } = await studio.client.call(
+        const { pages, frames, coverage } = await studio.client.call(
           'batches',
           {
             ...revision,
@@ -655,26 +717,30 @@ class View {
           consume,
         )
         controller.signal.throwIfAborted()
-        await this.#delivery.post({ kind: 'end', stream }, controller.signal)
+        ending = true
+        await this.#delivery.post({ kind: 'end', stream, coverage }, controller.signal)
         controller.signal.throwIfAborted()
         this.#base = demand.base
         this.#samples = demand.samples
         this.#pages = pages
-        this.#frames = run?.frames ?? 0
+        this.#frames = frames
         this.#held = held
         this.#failed = this.#failure = ''
+        this.#controller = undefined
         return
       } catch (error) {
+        // A stream stopped before its end left the view as it was. One stopped after may have
+        // committed, its receipt lost: an obsolete one too. Then what the view holds is unknown,
+        // and the next stream replaces it from a fresh base, so samples cannot be duplicated.
+        if (ending) {
+          this.#base = undefined
+          base = true
+          append = false
+        }
         if (controller.signal.aborted || this.#disposed) return
-        // Even an obsolete transaction may have committed before its receipt was lost.
-        this.#base = undefined
         // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
         if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
         if (!demand.run && studio.state(uri).summary?.version !== revision.version) return
-        // The view may have committed before its acknowledgment was lost. Never resend an
-        // uncertain append: replace from a fresh base so samples cannot be duplicated.
-        base = true
-        append = false
         if ((error as { code?: string })?.code === 'superseded') {
           this.#again = true
           return
@@ -702,9 +768,10 @@ class View {
       }
     }
   }
-  /** Whether its page is on screen and still loading: replacing it now breaks VS Code's loader. */
+  /** Whether its page is still loading where VS Code keeps one, on screen or kept while hidden:
+   *  replacing it now breaks VS Code's loader. */
   get loading(): boolean {
-    return !this.#ready && this.panel.visible
+    return !this.#ready && (this.panel.visible || this.hidden !== 'destroyed')
   }
   /** Settles once its page has loaded, it is disposed, or a few seconds pass. */
   get loaded(): Promise<void> {

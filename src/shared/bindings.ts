@@ -2,6 +2,8 @@
 
 import type { FieldSelection } from '@latkit/model'
 
+import { coversRows } from './coverage.js'
+
 /** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
@@ -34,21 +36,6 @@ export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int
 export const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.type === b.type && a.field === b.field
 
-/** Plot exactly the recorded identities; absent rows means the complete component type. */
-export function recordedRows(
-  outputs: readonly FieldSelection[],
-  field: FieldRef,
-): FieldSelection['rows'] {
-  const selected = outputs.filter(
-    (output) => output.from === field.type && output.select.includes(field.field),
-  )
-  if (selected.some((output) => !output.rows)) return undefined
-  const ids = selected.flatMap((output) =>
-    output.rows?.kind === 'ids' ? [...output.rows.ids] : [],
-  )
-  return ids.length ? { kind: 'ids', ids: [...new Set(ids)] } : selected[0]?.rows
-}
-
 /** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel
  *  requires: the network draws every row. */
 export function recordedWhole(
@@ -56,13 +43,14 @@ export function recordedWhole(
   count: number,
   field: FieldRef,
 ): boolean {
-  return outputs.some(({ from, select, rows }) => {
-    if (from !== field.type || !select.includes(field.field)) return false
-    if (rows === undefined) return true
-    if (rows.kind === 'ids') return rows.ids.length === count
-    if (rows.kind === 'indices') return rows.values.length === count
-    return false
-  })
+  const matching = outputs.filter(
+    ({ from, select }) => from === field.type && select.includes(field.field),
+  )
+  if (matching.some(({ rows }) => rows === undefined)) return true
+  const ids = new Set(matching.flatMap(({ rows }) => (rows?.kind === 'ids' ? [...rows.ids] : [])))
+  if (ids.size === count && count > 0) return true
+  const axes = matching.flatMap(({ rows }) => (rows && rows.kind !== 'ids' ? [rows] : []))
+  return axes.length > 0 && coversRows(axes, { kind: 'range', offset: 0, count })
 }
 
 /** The channels a type drawn as `placement` offers. */

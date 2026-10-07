@@ -7,7 +7,7 @@ import type { ViewState } from '../../shared/messages.js'
 import { located as isLocated } from '../../shared/positions.js'
 import { reader } from '../../shared/preferences.js'
 import { nameFieldOf, networkOf, positionOf } from '../../shared/schema.js'
-import { font, palette } from '../theme.js'
+import { theme } from '../theme.js'
 import { BORDERS } from './borders.js'
 import { channelsOf, type Sampled } from './channels.js'
 import { networkOptions } from './options.js'
@@ -39,7 +39,8 @@ export function networkConfig(
 ): Omit<NetworkConfig, 'canvas' | 'camera'> {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
-  const options = networkOptions(s, palette(), font(), geographic)
+  const { palette, font } = theme()
+  const options = networkOptions(s, palette, font, geographic)
   const colormap = colormaps[s.get('network.colormap')]
   const sampled = sampledFrom(samples, state)
   const bindings = state.bindings ?? {}
@@ -105,7 +106,7 @@ export function networkConfig(
 
 /** Where a bound field's values come from: undefined for the case's own data, the run for a field
  *  it recorded for every row, else null. Colors span all recorded times, including when only
- *  a window of samples is resident in the view. */
+ *  a window of samples is resident in the view; the view draws only times its samples cover. */
 function sampledFrom(
   source: Data,
   { run, summary }: ViewState,

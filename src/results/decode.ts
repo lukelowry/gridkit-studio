@@ -1,4 +1,4 @@
-/** Decodes native results into one reused staging area, never a whole run at once. */
+/** Decodes native results a batch of frames at a time, never a whole run at once. */
 
 import { addAbortSignal, type Readable } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
@@ -12,7 +12,7 @@ import { BATCH_BYTES } from './limits.js'
 
 type ResultFormat = 'arrow' | 'csv'
 
-/** Decoded frames. Views are borrowed until `publish` settles, then overwritten. */
+/** Decoded frames, in arrays of their own that nothing writes again. */
 interface Frames {
   readonly firstFrame: number
   readonly count: number
@@ -23,7 +23,7 @@ interface Frames {
 
 interface Reading {
   readonly signal: AbortSignal
-  /** Copies what it keeps of `frames`: their views are overwritten once it settles. */
+  /** Keeps `frames` as they are: each batch is decoded into arrays of its own. */
   readonly publish: (frames: Frames) => void | Promise<void>
 }
 
@@ -68,7 +68,8 @@ export function samplesOf(fields: readonly Field[], frames: Frames): SampleBatch
   })
 }
 
-/** Reads the results in `source`, publishing each batch of frames as it decodes. */
+/** Reads the results in `source`, publishing each batch of frames as it decodes. Once `layout`
+ *  holds a CSV header's columns, a CSV `source` is rows alone; a header alone learns them. */
 export async function readResults(
   source: Readable,
   outputs: readonly Field[],
@@ -83,7 +84,6 @@ export async function readResults(
   let yielded = performance.now()
   const frameBytes = 8 * (1 + outputs.reduce((n, field) => n + field.rows.length, 0))
   const perBatch = Math.max(1, Math.floor(BATCH_BYTES / frameBytes))
-  const staging = new Staging(outputs.map((field) => field.rows.length))
   try {
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
@@ -119,7 +119,9 @@ export async function readResults(
         }
         // With no outputs, only the times are checked.
         if (!outputs.length) continue
-        const { coordinates, values } = staging.take(count)
+        // The copy kernels write every cell, so fresh arrays need no clearing.
+        const coordinates = new Float64Array(count)
+        const values = outputs.map((field) => new Float64Array(count * field.rows.length))
         if (message.kind === 'rows') {
           for (let t = 0; t < count; t++)
             coordinates[t] = message.values[(from + t) * message.width]!
@@ -147,25 +149,6 @@ export async function readResults(
   } catch (error) {
     reading.signal.throwIfAborted()
     throw error
-  }
-}
-
-/** One run's sample staging, grown to its largest batch and reused for every batch after it.
- *  The copy kernels write every cell, so no batch reads values another left. */
-class Staging {
-  #coordinates = new Float64Array(0)
-  #values: Float64Array[] = []
-  constructor(private readonly widths: readonly number[]) {}
-
-  take(count: number): Pick<Frames, 'coordinates' | 'values'> {
-    if (count > this.#coordinates.length) {
-      this.#coordinates = new Float64Array(count)
-      this.#values = this.widths.map((width) => new Float64Array(count * width))
-    }
-    return {
-      coordinates: this.#coordinates.subarray(0, count),
-      values: this.#values.map((cells, f) => cells.subarray(0, count * this.widths[f]!)),
-    }
   }
 }
 

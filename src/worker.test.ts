@@ -136,14 +136,18 @@ describe('real worker protocol', () => {
       const run = await rig.call('import', { ...revision, path, cacheBytes: 64 << 20 }).done
       expect(run.domains).toEqual({ Bus: { Vm: [0, 2] } })
       rig.batches.length = 0
-      const result = await rig.call('batches', {
+      await rig.call('batches', {
         ...revision,
         run: run.id,
         fields: [{ from: 'Bus', select: ['Vm'] }],
         includeStatic: false,
       }).done
-      expect(result.pages).toBeGreaterThan(1)
-      expect(result.frames).toBe(frames)
+      // The pages tile every frame in order.
+      const { pages } = await rig.call('pages', { run: run.id, from: 0 }).done
+      expect(pages.length).toBeGreaterThan(1)
+      expect(
+        pages.reduce((first, page) => (page.first === first ? first + page.count : NaN), 0),
+      ).toBe(frames)
       const times = rig.batches
         .flatMap((message) => message.batches)
         .flatMap((batch) => (batch.kind === 'samples' ? Array.from(batch.coordinates) : []))
@@ -308,7 +312,7 @@ describe('real worker protocol', () => {
       await stop()
     }
   })
-  it('sends a view that holds a run only the pages it lacks', async () => {
+  it('sends a view the pages it asks for, and no others', async () => {
     const rig = await start()
     const { scratch, batches, call, stop } = rig
     rig.acknowledge = true
@@ -343,30 +347,31 @@ describe('real worker protocol', () => {
             0,
           )
 
-      const whole = await call('batches', stream).done
-      expect(whole.pages).toBeGreaterThan(1)
+      await call('batches', stream).done
       expect(frames()).toBe(count)
-
-      // Nothing was published since: the view holds every page.
-      batches.length = 0
-      expect(await call('batches', { ...stream, fromPage: whole.pages }).done).toEqual({
-        ...whole,
-        coverage: [],
+      const { paging, pages } = await call('pages', { run: run.id, from: 0 }).done
+      expect(pages.length).toBeGreaterThan(1)
+      // A run lists the pages it published after those a view was told of.
+      expect(await call('pages', { run: run.id, from: pages.length - 1 }).done).toEqual({
+        paging,
+        pages: pages.slice(-1),
       })
+      // Pages asked for as another reading cut the run are refused.
+      await expect(
+        call('batches', { ...stream, pages: [0, 1], paging: 'another' }).done,
+      ).rejects.toMatchObject({ code: 'conflict' })
+
+      // No page asked for, none sent.
+      batches.length = 0
+      expect(await call('batches', { ...stream, pages: [1, 1] }).done).toEqual({ coverage: [] })
       expect(batches).toHaveLength(0)
 
-      // A view one page behind is sent that page alone.
-      const last = await call('batches', { ...stream, fromPage: whole.pages - 1 }).done
-      expect(last).toMatchObject({ pages: whole.pages, frames: whole.frames })
-      expect(last.coverage[0]!.first).toBeGreaterThan(0)
-      expect(frames()).toBeGreaterThan(0)
-      expect(frames()).toBeLessThan(count)
-
-      // A view that holds a window of the run is sent the pages that overlap it, and no others.
-      batches.length = 0
-      await call('batches', { ...stream, window: [0.1, 0.2] }).done
-      expect(frames()).toBeGreaterThan(0)
-      expect(frames()).toBeLessThan(count)
+      // The last page alone: its frames, and the coverage that says so.
+      const last = pages.length - 1
+      const { coverage } = await call('batches', { ...stream, pages: [last, last + 1], paging })
+        .done
+      expect(frames()).toBe(pages[last]!.count)
+      expect(coverage[0]).toMatchObject({ first: pages[last]!.first, count: pages[last]!.count })
 
       expect(run.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
       await expect(call('parse', { ...revision, version: 2, text: '{' }).done).rejects.toThrow()

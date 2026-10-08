@@ -200,15 +200,26 @@ export async function run() {
       'Palette changes reuse history too',
     )
 
-    // Corrupt one received batch. The view must reject the commit; the host must resend
-    // a full base automatically even though this completed run has no new frames.
+    // A field's pages go with its last plot, and come again with a new one.
+    const allPlots = bench.session.plots
+    const withoutVa = async () => {
+      bench.session.plots = allPlots.filter((p) => p.field !== 'Va')
+      bench.studio.changed.fire(bench.key)
+      await until(
+        () => monitor.evaluate<boolean>(`document.querySelectorAll('canvas').length === 9`),
+        'the Va plot removed',
+      )
+    }
+    await withoutVa()
+    // Corrupt one received batch. The view must reject the commit; the host must send the same
+    // pages again by itself, though this completed run has no new frames.
     await monitor.evaluate(`(() => {
       window.streamAttempts = [];
       window.streamEnds = [];
       let corrupt = true;
       window.streamFault = event => {
         const m = event.data;
-        if (m?.kind === 'begin') window.streamAttempts.push({ stream: m.stream, base: m.base, append: m.append });
+        if (m?.kind === 'begin') window.streamAttempts.push({ stream: m.stream, base: m.base, pages: m.pages });
         if (m?.kind === 'end') window.streamEnds.push(m.stream);
         if (m?.kind === 'batch' && corrupt) {
           corrupt = false;
@@ -219,8 +230,7 @@ export async function run() {
       };
       window.addEventListener('message', window.streamFault, true);
     })()`)
-    const allPlots = bench.session.plots
-    bench.session.plots = allPlots.filter((p) => p.field !== 'Va')
+    bench.session.plots = allPlots
     bench.studio.changed.fire(bench.key)
     await until(
       () =>
@@ -235,11 +245,15 @@ export async function run() {
           errors: bench.studio.errors,
         }),
     )
-    const attempts =
-      await monitor.evaluate<{ base: boolean; append: boolean }[]>('window.streamAttempts')
-    assert.equal(attempts[1]!.base, true, 'Retry replaces the uncertain snapshot')
-    assert.equal(attempts[1]!.append, false, 'Retry cannot duplicate an uncertain append')
+    type Attempt = { base: boolean; pages?: [number, number] }
+    /** What a stream brought, besides its number. */
+    const asked = ({ base, pages }: Attempt) => ({ base, pages })
+    const attempts = await monitor.evaluate<Attempt[]>('window.streamAttempts')
+    // A rejected stream changed nothing, so the same pages come again: a page held is held once.
+    assert.equal(attempts[0]!.base, false, 'The plot asks for pages alone')
+    assert.deepEqual(asked(attempts[1]!), asked(attempts[0]!), 'Retry sends the rejected pages')
     await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
+    await withoutVa()
     // Fail after every batch was acknowledged but before final commit. The completed run
     // must still be retried. Lost commit receipts themselves are covered by StreamDelivery.
     await monitor.evaluate(`(() => {
@@ -248,7 +262,7 @@ export async function run() {
       window.streamFault = event => {
         const m = event.data;
         if (m?.kind === 'begin') {
-          window.streamAttempts.push({ stream: m.stream, base: m.base, append: m.append });
+          window.streamAttempts.push({ stream: m.stream, base: m.base, pages: m.pages });
         }
         if (m?.kind === 'end') window.streamEnds.push(m.stream);
       };
@@ -288,10 +302,8 @@ export async function run() {
     } finally {
       bench.studio.client.call = originalCall
     }
-    const timedOut =
-      await monitor.evaluate<{ base: boolean; append: boolean }[]>('window.streamAttempts')
+    const timedOut = await monitor.evaluate<Attempt[]>('window.streamAttempts')
     // A stream stopped before its end left the view as it was, so it is asked for again as it was.
-    const asked = ({ base, append }: { base: boolean; append: boolean }) => ({ base, append })
     assert.deepEqual(
       asked(timedOut[1]!),
       asked(timedOut[0]!),

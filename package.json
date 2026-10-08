@@ -53,6 +53,7 @@
     "test:simulation": "vitest run --project simulation",
     "test:playback": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/playback.ts",
     "test:windowed": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/windowed-playback.ts",
+    "test:scrub": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/scrub.ts",
     "test:vscode": "pnpm build && node tests/vscode/launch.mjs",
     "test:package": "node tests/vscode/package.mjs",
     "test:trust": "pnpm build && node tests/vscode/launch.mjs --untrusted tests/vscode/trust.ts",

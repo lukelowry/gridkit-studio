@@ -79,33 +79,26 @@ export function plotsOf({ run, plots = [] }: ViewState): Plot[] {
   )
 }
 
-/** What keeps the export from starting, in words; null when it can. */
-export function blockedReason(settings: VideoSettings, state: ViewState): string | null {
-  if (!state.summary && state.error)
-    return 'The case can export once the problems listed in Problems are fixed.'
+/** Whether the export can start: a case with a recorded run, a view, a signal for the Monitor's
+ *  part, a time range within the run, an even size up to 4K and a positive speed. */
+export function exportable(settings: VideoSettings, state: ViewState): boolean {
   const range = state.run?.domain
-  if (!state.summary || !range || !(range[1] > range[0]))
-    return 'Start a simulation to export its recorded history.'
-  if (settings.views.length === 0) return 'Choose at least one view.'
-  if (settings.views.includes('monitor') && plotsOf(state).length === 0)
-    return 'Choose a signal in Monitor.'
+  if (!state.summary || !range || !(range[1] > range[0])) return false
+  if (settings.views.length === 0) return false
+  if (settings.views.includes('monitor') && plotsOf(state).length === 0) return false
   const [start, end] = settings.timeRange
-  if (
-    !Number.isFinite(start) ||
-    !Number.isFinite(end) ||
-    start < range[0] ||
-    end > range[1] ||
-    end <= start
+  return (
+    Number.isFinite(start) &&
+    Number.isFinite(end) &&
+    start >= range[0] &&
+    end <= range[1] &&
+    end > start &&
+    [settings.width, settings.height].every(
+      (n) => Number.isSafeInteger(n) && n > 0 && n % 2 === 0,
+    ) &&
+    settings.width * settings.height <= MAX_OUTPUT_PIXELS &&
+    settings.rate > 0
   )
-    return 'Choose a start and end within the recorded history.'
-  if (
-    ![settings.width, settings.height].every((n) => Number.isSafeInteger(n) && n > 0 && n % 2 === 0)
-  )
-    return 'Video dimensions must be positive, even pixel counts.'
-  if (settings.width * settings.height > MAX_OUTPUT_PIXELS)
-    return 'Video resolution may be up to 4K.'
-  if (!(settings.rate > 0)) return 'Playback speed must be positive.'
-  return null
 }
 
 /** Encodes the views to `output` on renderers of their own, so VS Code stays usable; colors span

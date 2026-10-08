@@ -4,22 +4,17 @@
   import { onMount } from 'svelte'
 
   import type { VideoView, ViewState } from '../../shared/messages.js'
+  import { pagesOver } from '../../shared/pages.js'
   import { currentStream } from '../../shared/streams.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
+  import { exportNeeds, PageStore } from '../pages.js'
   import { receive, type Snapshot } from '../stream.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
-  import {
-    blockedReason,
-    DEFAULTS,
-    exportVideo,
-    plotsOf,
-    type VideoSettings,
-    viewsOf,
-  } from './video.js'
+  import { DEFAULTS, exportable, exportVideo, type VideoSettings, viewsOf } from './video.js'
 
   const ENDS = [0, 1] as const
 
@@ -37,9 +32,13 @@
   /** The run the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  /** The streamed case, and where it saves its diagram blocks. */
+  /** The streamed case, where it saves its diagram blocks, and the pages of its run's samples. */
   let snapshot: Snapshot | undefined
   let presentation: Record<string, Positions> = {}
+  let settled = 0
+  const store = new PageStore((want) => bridge.send({ kind: 'want', ...want, settled }))
+  /** Called as pages arrive. */
+  let arrived = () => {}
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
   let cancelled = false
@@ -49,12 +48,11 @@
   const busy = $derived(status === 'running')
   const range = $derived(view.run?.domain)
   const views = $derived(viewsOf(view))
-  const blocked = $derived(blockedReason(settings, view))
+  const ready = $derived(exportable(settings, view))
   const percent = $derived(
     progress ? Math.floor((100 * progress.completedFrames) / Math.max(1, progress.totalFrames)) : 0,
   )
   const duration = $derived((settings.timeRange[1] - settings.timeRange[0]) / settings.rate)
-  const plotted = $derived(plotsOf(view).length)
 
   const change = (next: Partial<VideoSettings>) => (settings = { ...settings, ...next })
 
@@ -79,7 +77,7 @@
 
   /** Export to a file the user picks, written as frames are encoded. */
   async function start(): Promise<void> {
-    if (busy || blocked !== null || !view.summary) return
+    if (busy || !ready || !view.summary) return
     const chosen = settings
     const state = view
     const control = (stop = new AbortController())
@@ -100,15 +98,32 @@
         status = 'idle'
         return
       }
-      const cameras = await bridge.request(
-        'videoData',
-        { views: chosen.views, window: chosen.timeRange },
-        signal,
-      )
+      const cameras = await bridge.request('videoData', { views: chosen.views }, signal)
+      const run = state.run?.id
+      const needs = exportNeeds(state, chosen.views)
       const committed = snapshot
-      if (!committed || committed.begin.simulationId !== state.run?.id)
+      if (
+        !committed ||
+        !currentStream(committed.begin, state) ||
+        (needs.length > 0 && store.run !== run)
+      )
         throw new Error('The export recording changed while its samples were loading.')
-      const { rows, data: samples } = committed
+      // Every page over the time range, before the first frame is drawn.
+      const required = pagesOver(store.pages, chosen.timeRange)
+      store.want(run, needs, required)
+      if (needs.length)
+        await new Promise<void>((resolve, reject) => {
+          const abort = () => reject(signal.reason)
+          arrived = () => {
+            if (!store.holds(required)) return
+            signal.removeEventListener('abort', abort)
+            resolve()
+          }
+          signal.addEventListener('abort', abort, { once: true })
+          arrived()
+        })
+      const { rows } = committed
+      const samples = store.data(rows, run)
       const gpu = await owner.get()
       signal.throwIfAborted()
       // Each export follows the device it draws on, which an earlier export may have created.
@@ -137,6 +152,9 @@
       if (!cancelled)
         bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
+      arrived = () => {}
+      // The pages served this export alone.
+      store.clear()
       if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
       bridge.send({ kind: 'busy', busy: false })
     }
@@ -161,13 +179,22 @@
         if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
       }),
-      receive(
-        (next) => {
+      bridge.on((message) => {
+        if (message.kind === 'pages')
+          store.list(message.run, message.paging, message.from, message.pages)
+      }),
+      receive({
+        rows: (next) => {
           snapshot = next
           if (next.begin.base && next.begin.presentation) presentation = next.begin.presentation
         },
-        (begin) => currentStream(begin, view),
-      ),
+        pages: ({ begin, samples }) => {
+          store.insert(begin.simulationId, begin.paging, samples, begin.stream)
+          arrived()
+        },
+        accept: (begin) => currentStream(begin, view),
+        settled: (stream) => (settled = stream),
+      }),
     ]
     bridge.send({ kind: 'ready' })
     return () => {
@@ -194,13 +221,6 @@
           bind:checked={() => settings.views.includes(shown.value), (on) => toggle(shown.value, on)}
         />
       {/each}
-      {#if settings.views.includes('monitor')}
-        <p class="c-note">
-          {plotted > 0
-            ? `Draws the ${plotted === 1 ? 'signal' : `${plotted} signals`} plotted in Monitor.`
-            : 'Choose a signal in Monitor.'}
-        </p>
-      {/if}
       <Select
         label="Arrangement"
         disabled={settings.views.length < 2}
@@ -215,7 +235,6 @@
           }
         }
       />
-      <p class="c-note">Views appear in selection order, with their current framing.</p>
     </Section>
     <Section label="Time">
       {#each ENDS as end (end)}
@@ -251,11 +270,9 @@
           }
         }
       />
-      <p class="c-note">
-        Output duration: {Number.isFinite(duration) && duration > 0
-          ? duration.toFixed(2) + ' s'
-          : 'Choose a time range'}.
-      </p>
+      {#if Number.isFinite(duration) && duration > 0}
+        <p class="c-note">Output duration: {duration.toFixed(2)} s.</p>
+      {/if}
     </Section>
     <Section label="Output">
       <Select
@@ -311,7 +328,6 @@
           }
         }
       />
-      <p class="c-note">Saves the video when export finishes.</p>
     </Section>
   </fieldset>
   <div class="export__footer">
@@ -319,7 +335,7 @@
       <button
         class="c-btn c-btn--primary"
         type="submit"
-        disabled={busy || blocked !== null}
+        disabled={busy || !ready}
         data-testid="video-start"
       >
         Export video
@@ -351,10 +367,6 @@
         <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
       {:else if status === 'cancelled'}
         <p class="c-note" role="status">Export cancelled.</p>
-      {:else}
-        <p class="c-note">
-          {blocked ?? 'Playback and navigation remain available during export.'}
-        </p>
       {/if}
     </div>
   </div>

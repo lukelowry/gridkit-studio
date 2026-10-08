@@ -1,15 +1,17 @@
 <!-- One lane per plotted signal of the run on show. Plots are added from the view's title bar,
   which also names the run, and played from the status bar. -->
 <script lang="ts">
-  import type { Domain } from '@latkit/model'
+  import type { Data, Domain, FieldSelection } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
+  import { pagesOver } from '../../shared/pages.js'
   import { currentStream } from '../../shared/streams.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
+  import { PageStore, plotNeeds } from '../pages.js'
   import { Recovery } from '../recovery.js'
   import { receive, type Snapshot } from '../stream.js'
   import { appearance, theme, watchTheme } from '../theme.js'
@@ -20,9 +22,14 @@
   const WINDOW_MS = 120
 
   let view = $state.raw<ViewState>({})
-  let snapshot = $state.raw<Snapshot | undefined>()
-  const source = $derived(snapshot?.data)
-  const sampled = $derived(snapshot?.begin.sampled ?? [])
+  /** The run's case, and the pages of its samples the plots draw. */
+  let rows = $state.raw<Snapshot | undefined>()
+  let settled = 0
+  const store = new PageStore((want) => bridge.send({ kind: 'want', ...want, settled }))
+  /** Bumped as pages arrive or the run lists more. */
+  let held = $state(0)
+  let source = $state.raw<Data | undefined>()
+  let sampled = $state.raw<readonly FieldSelection[]>([])
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */
@@ -57,6 +64,21 @@
   const shown = $derived(monitorWindow(run, chosen ?? view.window))
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
+  // The plots draw the pages over the times shown; those around them load after, so a pan
+  // finds them held.
+  $effect(() => {
+    void held
+    const span = shown
+    const current = rows && currentStream(rows.begin, view) ? rows : undefined
+    const needs = plotNeeds(view)
+    store.want(view.run?.id, needs, pagesOver(store.pages, span), {
+      at: (span[0] + span[1]) / 2,
+      travel: 0,
+    })
+    source = current && store.data(current.rows, view.run?.id)
+    sampled = store.sampled(view.run?.id)
+  })
+
   /** Every plot follows `bounds` at once; the extension hears once they rest. */
   function turn(bounds: Domain) {
     chosen = bounds
@@ -78,7 +100,6 @@
           if (view.run?.id !== before.run?.id) {
             clearTimeout(telling)
             chosen = told = undefined
-            snapshot = undefined
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
@@ -87,14 +108,20 @@
           else if (incoming.command === 'retryMonitor') {
             epoch++
           }
+        } else if (incoming.kind === 'pages') {
+          store.list(incoming.run, incoming.paging, incoming.from, incoming.pages)
+          held++
         }
       }),
-      receive(
-        (next) => {
-          snapshot = next
+      receive({
+        rows: (next) => (rows = next),
+        pages: ({ begin, samples }) => {
+          store.insert(begin.simulationId, begin.paging, samples, begin.stream)
+          held++
         },
-        (begin) => currentStream(begin, view),
-      ),
+        accept: (begin) => currentStream(begin, view),
+        settled: (stream) => (settled = stream),
+      }),
       watchTheme(() => (colors = theme())),
     ]
     const visibility = () => (hidden = document.hidden)
@@ -114,14 +141,9 @@
 <div class="monitor">
   {#if plots.length === 0 || !run}
     <div class="c-empty monitor__empty">
-      <p class="c-empty__text">
-        {!view.summary
-          ? 'Loading case…'
-          : !run
-            ? 'Start a simulation or import results to plot recorded signals.'
-            : 'Add a plot from the title bar to see a recorded signal.'}
-      </p>
-      {#if view.summary && !run}
+      {#if !view.summary}
+        <p class="c-empty__text">Loading case…</p>
+      {:else if !run}
         <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
           Choose monitored signals
         </button>

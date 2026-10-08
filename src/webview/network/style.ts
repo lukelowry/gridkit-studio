@@ -105,8 +105,8 @@ export function networkConfig(
 }
 
 /** Where a bound field's values come from: undefined for the case's own data, the run for a field
- *  it recorded for every row, else null. Colors span all recorded times, including when only
- *  a window of samples is resident in the view; the view draws only times its samples cover. */
+ *  it recorded for every row, else null. Colors span all recorded times, including when the view
+ *  holds only some of the run's pages; the view draws only times its pages cover. */
 function sampledFrom(
   source: Data,
   { run, summary }: ViewState,

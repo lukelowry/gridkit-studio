@@ -38,12 +38,7 @@ import { importedFields, PROGRESS_MS, ResultCache, Results } from './results/ind
 import { Readers } from './results/readers.js'
 import { ResultStorage } from './results/storage.js'
 import { sibling } from './results/study.js'
-import {
-  intersectRows,
-  pageWindow,
-  recordedSelection,
-  type SampleCoverage,
-} from './shared/coverage.js'
+import { intersectRows, recordedSelection, type SampleCoverage } from './shared/coverage.js'
 import { failureOf } from './shared/errors.js'
 import { defect, detail, message } from './shared/format.js'
 import type {
@@ -614,12 +609,12 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       // One bounded stream for both rows and samples. Freeze its end before yielding to
       // the solver so a growing recording cannot postpone the view's commit indefinitely.
       const endPage = run?.pages.length ?? 0
-      const [firstPage, lastPage] = pageWindow(
-        run?.pages ?? [],
-        input.window,
-        input.fromPage ?? 0,
-        endPage,
-      )
+      // Pages are named by how one reading of the run cut it; another reading cuts it elsewhere.
+      if (run && input.paging !== undefined && input.paging !== run.paging)
+        throw failure('conflict', 'The run was paged again: its pages are asked for anew.')
+      const [firstPage, lastPage] = input.pages
+        ? [Math.max(0, input.pages[0]), Math.min(endPage, input.pages[1])]
+        : [0, endPage]
       const sampled = fields.filter((f) =>
         f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
       )
@@ -668,8 +663,16 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       await sendAhead(packets(selected(), signal, PACKET_BYTES), (packet) =>
         emit(request.id, packet, signal),
       )
-      const last = run?.pages[endPage - 1]
-      return { pages: endPage, frames: last ? last.first + last.count : 0, coverage }
+      return { coverage }
+    }
+    case 'pages': {
+      const run = findRun(request.input.run)
+      return {
+        paging: run.paging,
+        pages: run.pages
+          .slice(request.input.from)
+          .map(({ first, count, domain }) => ({ first, count, domain })),
+      }
     }
     case 'elements': {
       const { kase } = get(request.input)

@@ -16,27 +16,35 @@ import { type Failure, failureOf } from '../shared/errors.js'
 import type { Begin } from '../shared/messages.js'
 import { bridge } from './bridge.js'
 
-/** One immutable publication. Requested windows never stand for actual data coverage. */
+/** The case's rows, as one stream published them. */
 export interface Snapshot {
-  readonly data: Data
   readonly rows: Data
   readonly begin: Begin
 }
 
+/** Pages of a run's samples, checked against the rows they extend. */
+export interface Delivery {
+  readonly begin: Extract<Begin, { base: false }>
+  readonly samples: readonly SampleBatch[]
+}
+
 /** Assemble and validate before publishing. The sender owns retries and terminal errors. */
-export function receive(
-  held: (snapshot: Snapshot) => void,
-  accept: (begin: Begin) => boolean = () => true,
-): () => void {
+export function receive(handlers: {
+  rows: (snapshot: Snapshot) => void
+  pages?: (delivery: Delivery) => void
+  /** Whether the view still wants what a stream brings. */
+  accept?: (begin: Begin) => boolean
+  /** Each stream the view settled, whether it committed it or not. */
+  settled?: (stream: number) => void
+}): () => void {
+  const accept = handlers.accept ?? (() => true)
   let begin: Begin | undefined
-  /** The rows alone, which replacing samples start from. */
-  let base: Data | undefined
-  let data: Data | undefined
+  /** The rows held, which pages extend. */
+  let base: Snapshot | undefined
   let batches: DataBatch[] = []
   let latest = -1
   let sequence = 0
   let problem: Failure | undefined
-  let committed: Begin | undefined
   let settled: { kind: 'commit'; stream: number; error?: Failure } | undefined
   /** Reused while its content is unchanged: each stream carries a copy, and the renderers keep
    *  their cached work only for the same schema object. */
@@ -66,56 +74,50 @@ export function receive(
       begin = undefined
       const pending = batches
       batches = []
-      let publication: Snapshot | undefined
+      let rows: Snapshot | undefined
+      let pages: Delivery | undefined
       try {
         if (!accept(complete))
           throw Object.assign(new Error('Stream superseded.'), { code: 'superseded' })
         if (problem) throw Object.assign(new Error(problem.message), problem)
-        if (
-          !complete.base &&
-          (!committed ||
-            committed.revision.uri !== complete.revision.uri ||
-            committed.revision.version !== complete.revision.version ||
-            committed.revision.attachmentId !== complete.revision.attachmentId ||
-            (complete.append && committed.simulationId !== complete.simulationId))
-        )
-          throw failure('conflict', 'Stream requires a new base snapshot.')
-        let nextBase = base
-        let nextSchema = schema
         if (complete.base) {
           const text = JSON.stringify(complete.schema)
-          if (nextSchema?.text !== text) nextSchema = { value: complete.schema, text }
-          nextBase = createData(
-            nextSchema.value,
+          if (schema?.text !== text) schema = { value: complete.schema, text }
+          const data = createData(
+            schema.value,
             pending.filter((batch): batch is RowBatch => batch.kind === 'rows'),
           )
+          validateStatics(data, complete.fields, complete.counts)
+          validateCoverage(data, message.coverage)
+          rows = Object.freeze({ rows: data, begin: complete })
+          base = rows
+        } else {
+          const held = base?.begin.revision
+          if (
+            !held ||
+            held.uri !== complete.revision.uri ||
+            held.version !== complete.revision.version ||
+            held.attachmentId !== complete.revision.attachmentId
+          )
+            throw failure('conflict', 'Pages need the rows they extend.')
+          const samples = pending.filter((batch): batch is SampleBatch => batch.kind === 'samples')
+          validateCoverage(appendData(base!.rows, samples), message.coverage)
+          pages = { begin: complete, samples }
         }
-        if (!nextBase) throw failure('conflict', 'Stream has no base snapshot.')
-        const nextData = appendData(
-          complete.append && !complete.base && data ? data : nextBase,
-          pending.filter((batch): batch is SampleBatch => batch.kind === 'samples'),
-        )
-        if (complete.base) validateStatics(nextBase, complete.fields, complete.counts)
-        validateCoverage(nextData, message.coverage)
-        publication = Object.freeze({ data: nextData, rows: nextBase, begin: complete })
-        base = nextBase
-        data = nextData
-        schema = nextSchema
-        committed = complete
         settled = { kind: 'commit', stream: complete.stream }
       } catch (reason) {
         settled = { kind: 'commit', stream: complete.stream, error: failureOf(reason) }
       }
       // The commit is final before notifying a renderer. A renderer failure cannot turn an
-      // accepted append into a rejected transaction that the sender might duplicate.
-      if (publication) {
-        try {
-          held(publication)
-        } catch (reason) {
-          bridge.report(reason)
-        }
+      // accepted stream into a rejected one that the sender might send again.
+      try {
+        if (rows) handlers.rows(rows)
+        if (pages) handlers.pages?.(pages)
+      } catch (reason) {
+        bridge.report(reason)
       }
       bridge.send(settled)
+      handlers.settled?.(complete.stream)
     }
   })
 }

@@ -459,13 +459,9 @@
       {/key}
     {:else}
       <div class="c-empty lane__empty">
-        <p class="c-empty__text">
-          {view.run?.state === 'running' || (recorded && view.run?.frames)
-            ? 'Waiting for samples…'
-            : view.run
-              ? `This simulation did not record ${name}.`
-              : `Start a simulation to plot ${name}.`}
-        </p>
+        {#if view.run?.state === 'running' || (recorded && view.run?.frames)}
+          <p class="c-empty__text">Waiting for samples…</p>
+        {/if}
       </div>
     {/if}
   </div>

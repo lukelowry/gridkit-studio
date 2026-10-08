@@ -12,7 +12,7 @@ vi.mock('../theme.js', async (original) => ({
   theme: () => ({ font: 'monospace', palette: new Proxy({}, { get: () => [0.8, 0.8, 0.8, 1] }) }),
 }))
 
-it('uses the same global normalization in Network and Monitor at every resident time window', () => {
+it('uses the same global normalization in Network and Monitor whatever pages are held', () => {
   const data = createData(
     {
       types: {

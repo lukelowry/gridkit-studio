@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, open, rm } from 'node:fs/promises'
 import { dirname, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -106,6 +107,9 @@ export class ResultCache {
 /** A run's results: page offsets into its native file, decoded on demand. */
 export class Results {
   readonly pages: Page[] = []
+  /** Names how this reading cuts the run into pages. Another reading of the same run, as after it
+   *  is loaded again from its file, may cut it elsewhere; its pages only ever grow. */
+  readonly paging = randomUUID()
   /** The header's bytes: the CSV header line, or the Arrow schema message. */
   #header = new Uint8Array()
   /** How every page of this run reads, from its header. */

@@ -1,4 +1,5 @@
-/** Real GridKit replay above the residency threshold, including delayed commits and trace clicks. */
+/** Real GridKit replay past what the Network holds at once, two fields mapped, including delayed
+ *  commits, a scrub through times not yet held, and trace clicks. */
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -6,8 +7,11 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import { rowsOf } from '../../src/shared/cells.js'
-import { WHOLE_RUN_BYTES } from '../../src/shared/streams.js'
+import { SAMPLE_BUDGET } from '../../src/webview/pages.js'
 import { notifications, pause, testHost, until, visible, VM } from '../vscode/harness.js'
+
+/** What the Network's pages hold. */
+type Held = { listed: number; held: number; bytes: number }
 
 export async function run() {
   const bench = await testHost()
@@ -18,7 +22,7 @@ export async function run() {
     const session = bench.studio.all.get(key)!
     const source = JSON.parse(await readFile(uri.fsPath, 'utf8'))
     const id = `Bus/${source.buses[0].number}`
-    bench.studio.record(key, [{ from: 'Bus', select: ['Vm'] }])
+    bench.studio.record(key, [{ from: 'Bus', select: ['Vm', 'Va'] }])
     session.values = { tmax: 10, dt_monitor: 0.01 }
     await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
     await until(
@@ -28,8 +32,8 @@ export async function run() {
     )
     assert.equal(session.run!.state, 'complete', session.run!.message)
     assert.ok(
-      source.buses.length * session.run!.frames * 8 > WHOLE_RUN_BYTES,
-      'Must exercise windowed residency',
+      2 * source.buses.length * session.run!.frames * 8 > SAMPLE_BUDGET,
+      'The two mapped fields must exceed what the Network holds at once',
     )
     session.transport.pause()
     session.plots = [
@@ -37,6 +41,7 @@ export async function run() {
       { from: 'Bus', field: 'Vm', id },
     ]
     bench.studio.bind(key, VM, ['vertexColor'])
+    bench.studio.bind(key, { type: 'Bus', field: 'Va' }, ['vertexHeight'])
     bench.studio.changed.fire(key)
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
@@ -50,10 +55,11 @@ export async function run() {
       'both plots render',
       60_000,
     )
-    await until(
-      () => network.evaluate<boolean>('!!gridkitStats()?.held'),
-      'network uses a bounded window',
-    )
+    const held = () => network.evaluate<Held>('gridkitStats().pages')
+    await until(async () => {
+      const { listed, held: pages } = await held()
+      return pages > 0 && pages < listed
+    }, 'network holds part of the run')
     await network.evaluate(`(() => {
       window.originalNetworkCanvas = document.querySelector('canvas');
       window.windowCommits = 0;
@@ -95,14 +101,55 @@ export async function run() {
     }
     await seek(0.2)
     for (const at of [8.5, 0.1, 7.8, 1.2, 9.6, 0]) await seek(at)
+    // Once the pages around a moment are held, moving among them waits on no sample.
     await seek(8.5)
-    const cachedStream = await network.evaluate<number>('gridkitStats().stream')
-    await seek(0.2)
-    await seek(8.5)
-    assert.equal(
-      await network.evaluate('gridkitStats().stream'),
-      cachedStream,
-      'Returning to a resident window reuses its committed snapshot',
+    await until(
+      async () => {
+        const before = (await held()).held
+        await pause(500)
+        return (await held()).held === before
+      },
+      'the pages around 8.5 held',
+      60_000,
+    )
+    /** Count the frames the Network waits on samples, until `waited` stops counting. */
+    const waiting = () =>
+      network.evaluate(`(() => {
+        window.waited = 0
+        const look = () => {
+          if (gridkitStats()?.availability === 'buffering') window.waited++
+          window.looking = requestAnimationFrame(look)
+        }
+        look()
+      })()`)
+    const waited = () =>
+      network.evaluate<number>('(cancelAnimationFrame(window.looking), window.waited)')
+    await waiting()
+    for (const at of [8.3, 8.7, 8.1, 8.5]) await seek(at)
+    assert.equal(await waited(), 0, 'Moving among held pages waits on no sample')
+    // A scrub through times it may not hold presents them on its way, not only where it rests. It
+    // lasts a few of the slowest loads above, so a load it lets finish shows before it ends.
+    const load = Math.max(...samples.map((sample) => sample.elapsedMs))
+    await network.evaluate(`(() => {
+      window.scrubbed = []
+      const look = () => {
+        const stats = gridkitStats()
+        if (stats?.availability === 'ready') window.scrubbed.push(stats.at)
+        window.scrubbing = requestAnimationFrame(look)
+      }
+      look()
+    })()`)
+    const steps = 100
+    for (let i = 0; i <= steps; i++) {
+      session.transport.seek(2 + (3 * i) / steps)
+      await pause(Math.max(16, (3 * load) / steps))
+    }
+    const scrubbed = await network.evaluate<number[]>(
+      '(cancelAnimationFrame(window.scrubbing), window.scrubbed)',
+    )
+    assert.ok(
+      scrubbed.some((at) => at > 2.1 && at < 4.9),
+      'A scrub presents the times it passes, not only where it rests',
     )
     await seek(4.5)
     const windowCommits = await network.evaluate<number>('window.windowCommits')
@@ -176,6 +223,8 @@ export async function run() {
           rows: source.buses.length,
           windowCommits,
           samples,
+          scrubbed: new Set(scrubbed).size,
+          held: await held(),
           hits,
           densePick,
           windows,
@@ -186,7 +235,7 @@ export async function run() {
       ),
     )
     console.log(
-      `10k replay passed: ${session.run!.frames} frames, delayed window commits, rapid seeks, real trace click, fixed intervals; no errors.`,
+      `10k replay passed: ${session.run!.frames} frames, delayed page commits, rapid seeks, a scrub, real trace click, fixed intervals; no errors.`,
     )
   } catch (error) {
     console.error('Studio errors:', JSON.stringify(bench.studio.errors))

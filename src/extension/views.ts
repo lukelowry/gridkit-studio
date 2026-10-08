@@ -1,14 +1,17 @@
 import { randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { type DataBatch, type Domain, type FieldSelection, staticFields } from '@latkit/model'
+import { type DataBatch, type FieldSelection, staticFields } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { recordedWhole } from '../shared/bindings.js'
+import { BATCH_BYTES } from '../results/limits.js'
 import { retryable } from '../shared/errors.js'
 import { cancelled, defect, detail, message } from '../shared/format.js'
 import {
+  type Begin,
   type FromView,
+  type Requests,
+  type Revision,
   type SimulationInfo,
   type Summary,
   type ToView,
@@ -17,9 +20,9 @@ import {
   type ViewRequests,
   type ViewState,
 } from '../shared/messages.js'
+import { type PageEntry, type PageRange, type Want, wantKey } from '../shared/pages.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
-import { AHEAD_S, BEHIND_S, type Held, holdFor, WHOLE_RUN_BYTES } from '../shared/streams.js'
 import type { Session, Sessions } from './sessions.js'
 import { packed, StreamDelivery } from './stream.js'
 import { VideoFile } from './video.js'
@@ -146,17 +149,20 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
 /** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
 type Hidden = 'destroyed' | 'idle' | 'working'
 
-/** What a view is streamed. */
-interface Demand {
-  /** Identity of the static rows; a change replaces what the view holds. */
-  base: string
-  statics: FieldSelection[]
-  /** Identity of the sampled fields; while it holds, new frames are appended. */
-  samples: string
-  sampled: FieldSelection[]
-  run?: SimulationInfo
-  held?: Held
+/** A stream a view is sent: the case's rows, or pages of a run's samples. Either may be sent again
+ *  safely, as rows replace those the view holds and a page it holds already is held once. */
+interface Transfer {
+  /** What names it, so one that failed is not sent again until something changes. */
+  keys: readonly string[]
+  /** The run it belongs to: a stream for another is let go. */
+  run?: string
+  revision: Revision
+  begin: (signal: AbortSignal) => Promise<BeginBody> | BeginBody
+  request: Requests['batches']['input']
 }
+/** `T` without `K`, each member of a union on its own. */
+type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+type BeginBody = Without<Begin, 'kind' | 'stream'>
 
 function html(
   webview: vscode.Webview,
@@ -183,23 +189,27 @@ class View {
   #stream = 0
   #controller?: AbortController
   readonly #delivery = new StreamDelivery((message) => this.send(message))
-  /** What the view holds: its rows, its samples, and how far into the run they reach. */
+  /** What names the rows the view holds. */
   #base?: string
-  #samples = ''
-  #pages = 0
-  #frames = 0
-  #held?: Held
+  /** The run whose pages the view was told of, how it was cut into them, and those it had
+   *  published. */
+  #listed?: { run: string; paging: string; frames: number; pages: readonly PageEntry[] }
+  /** The pages the view last asked for. */
+  #asked?: Omit<Extract<FromView, { kind: 'want' }>, 'kind'>
+  /** The stream that brought each field of each page, so a want sent before it arrived is not
+   *  answered twice. */
+  readonly #delivered = new Map<string, number>()
+  /** The pages on their way, and whether the view needs them to show what it shows now. */
+  #flight?: { run: string; pages: PageRange; required: boolean }
   /** Invalid data waits for a changed demand; transient failures retry after a quiet interval. */
-  #failed = ''
-  #retry?: { key: string; timer: ReturnType<typeof setTimeout> }
+  readonly #failed = new Set<string>()
+  #retry?: { keys: ReadonlySet<string>; timer: ReturnType<typeof setTimeout> }
   #failure = ''
   /** Whether another update is due, and the update in progress. */
   #again = false
   #running?: Promise<void>
   /** The sequence number of the latest transport change this view made. */
   #seq = 0
-  /** The times a network holding a window of the run needs next. */
-  #need?: Domain
   /** The data a video export asked for. */
   #video?: ViewRequests['videoData']['input']
   #files = new Map<number, VideoFile>()
@@ -242,7 +252,7 @@ class View {
         void this.send({ kind: 'action', command: action.command, value: action.value })
         // A reload asks again for what last failed to stream.
         if (action.command === 'retryMonitor' || action.command === 'reloadView') {
-          this.#failed = ''
+          this.#failed.clear()
           this.clearRetry()
           void this.update().catch(report)
         }
@@ -301,8 +311,9 @@ class View {
         this.#ready = true
         this.#settle()
         this.#shown = ''
-        this.#base = this.#summary = this.#settings = this.#held = this.#need = undefined
-        this.#samples = this.#failed = ''
+        this.#base = this.#summary = this.#settings = this.#listed = this.#asked = undefined
+        this.#delivered.clear()
+        this.#failed.clear()
         this.tick()
         await this.update()
         return
@@ -316,13 +327,28 @@ class View {
         return
       case 'window': {
         const bounds = message.bounds
-        if (!session || bounds?.length !== 2 || !bounds.every(Number.isFinite)) return
-        // A window may be a moment alone, as a seek at rest asks for.
-        if (!(bounds[0] <= bounds[1])) return
-        if (this.kind === 'monitor') session.window = [bounds[0], bounds[1]]
-        else {
-          this.#need = [bounds[0], bounds[1]]
-          this.#controller?.abort()
+        if (this.kind !== 'monitor' || !session || bounds?.length !== 2) return
+        if (!bounds.every(Number.isFinite) || !(bounds[0] < bounds[1])) return
+        session.window = [bounds[0], bounds[1]]
+        await this.update()
+        return
+      }
+      case 'want': {
+        const { run, paging, wants, required, settled } = message
+        if (typeof run !== 'string' || typeof paging !== 'string' || !Array.isArray(wants)) return
+        if (!Number.isSafeInteger(required) || !Number.isSafeInteger(settled)) return
+        this.#asked = { run, paging, wants, required, settled }
+        // Pages on their way finish while the view still wants them; pages sent ahead give way to
+        // those it needs to show now.
+        const flight = this.#flight
+        if (flight) {
+          const carried = ({ page }: Want) => page >= flight.pages[0] && page < flight.pages[1]
+          if (
+            run !== flight.run ||
+            !wants.some(carried) ||
+            (!flight.required && !wants.slice(0, required).every(carried))
+          )
+            this.#controller?.abort()
         }
         await this.update()
         return
@@ -532,31 +558,58 @@ class View {
     }
     if (!DRAWN.has(this.kind) || !state.summary || !session) return
     if (state.stale && this.kind !== 'monitor' && this.kind !== 'export') return
-    const demand = this.#demand(state.summary, state.run, session)
-    if (!demand) return
-    const base = demand.base !== this.#base
-    const append = !base && demand.samples === this.#samples
-    if (append && (demand.run?.frames ?? 0) === this.#frames) return
-    const key = demand.base + '\n' + demand.samples
-    if (key === this.#failed) return
-    if (key === this.#retry?.key) return
-    this.clearRetry()
-    await this.#streamed(state.summary, demand, base, append, key)
+    const { summary } = state
+    const run = this.#sampled(summary, state.run)
+    // The rows first: pages extend them.
+    const rows = this.#rows(summary, run, session)
+    if (!rows) return
+    if (rows.key !== this.#base) {
+      if (this.#stuck(rows.key)) return
+      this.clearRetry()
+      const sent = await this.#send(this.#rowsTransfer(summary, rows, run))
+      if (sent === undefined) return
+      this.#base = rows.key
+    }
+    if (!run || this.#stuck('pages:' + run.id)) return
+    await this.#list(run)
+    // One stream of pages a pass, so the view's state reaches it between them.
+    const next = this.#next(summary, run)
+    if (!next) return
+    this.#flight = { run: run.id, pages: next.pages, required: next.required }
+    try {
+      const stream = await this.#send(this.#pagesTransfer(summary, run, this.#listed!.paging, next))
+      if (stream !== undefined)
+        for (let page = next.pages[0]; page < next.pages[1]; page++)
+          for (const field of next.fields) this.#delivered.set(wantKey(page, field), stream)
+    } finally {
+      this.#flight = undefined
+    }
+    this.#again = true
+  }
+  /** Whether `key` failed, or waits to be retried. */
+  #stuck(key: string): boolean {
+    return this.#failed.has(key) || !!this.#retry?.keys.has(key)
   }
   private clearRetry() {
     clearTimeout(this.#retry?.timer)
     this.#retry = undefined
   }
-  /** The rows the view draws, and the samples it binds or plots: the whole run while it is small,
-   *  a window of it past that. */
-  #demand(
+  /** The run whose samples the view draws: the Monitor's run on show, or the Network's while it is
+   *  of this revision, as an export's are. A run is readable once it reports frames. */
+  #sampled(summary: Summary, run: SimulationInfo | undefined): SimulationInfo | undefined {
+    if (!run?.frames) return undefined
+    if (this.#draws('monitor')) return run
+    return this.#draws('network') && run.fingerprint === summary.fingerprint ? run : undefined
+  }
+  /** The case's rows the view draws: the types it shows, with the fields their names, places,
+   *  routes, references and static mappings read. A run's samples come in pages beside them. */
+  #rows(
     summary: Summary,
-    shown: SimulationInfo | undefined,
+    run: SimulationInfo | undefined,
     session: Session,
-  ): Demand | undefined {
+  ): { key: string; statics: FieldSelection[] } | undefined {
     const { kind } = this
-    const video = this.#video
-    if (kind === 'export' && !video) return undefined
+    if (kind === 'export' && !this.#video) return undefined
     const { schema } = summary
     const bindings = Object.values(session.bindings)
     const network = networkOf(schema)
@@ -578,11 +631,7 @@ class View {
         ),
       }))
       .filter((field) => field.select.length > 0)
-    // The network draws only a run of the current revision; plots draw whichever run is shown.
-    const current = shown?.fingerprint === summary.fingerprint
-    // A run's results are readable only once it reports frames; until then only the case streams.
-    const run = shown?.frames && (this.#draws('monitor') || current) ? shown : undefined
-    const base =
+    const key =
       JSON.stringify([
         summary.uri,
         summary.attachmentId,
@@ -591,107 +640,172 @@ class View {
       ]) +
       ':' +
       JSON.stringify(statics)
-    const fields = new Map<string, { from: string; select: string[]; ids?: string[] }>()
-    const add = (from: string, field: string, id?: string) => {
-      if (!run?.outputs.some((output) => output.from === from && output.select.includes(field)))
-        return
-      const found = fields.get(from + '\n' + field)
-      if (!found)
-        fields.set(from + '\n' + field, { from, select: [field], ...(id && { ids: [id] }) })
-      else if (!id) delete found.ids
-      else if (found.ids && !found.ids.includes(id)) found.ids.push(id)
-    }
-    if (this.#draws('network') && current)
-      for (const binding of bindings)
-        if (
-          schema.types[binding.type]?.fields[binding.field]?.sampled &&
-          recordedWhole(shown.outputs, summary.counts[binding.type] ?? 0, binding)
-        )
-          add(binding.type, binding.field)
-    if (this.#draws('monitor'))
-      for (const plot of session.plots) add(plot.from, plot.field, plot.id)
-    const sampled = [...fields.values()].map(({ from, select, ids }): FieldSelection => ({
-      from,
-      select,
-      ...(ids && { rows: { kind: 'ids', ids } }),
-    }))
-    if (!run || !sampled.length) return { base, statics, samples: '', sampled: [] }
-    const bytes =
-      [...fields.values()].reduce(
-        (rows, { from, ids }) => rows + (ids?.length ?? summary.counts[from] ?? 0),
-        0,
-      ) *
-      run.frames *
-      SAMPLE_BYTES
-    const held = video
-      ? { from: video.window[0], to: video.window[1] }
-      : bytes <= WHOLE_RUN_BYTES
-        ? undefined
-        : this.#window(run, session)
+    return { key, statics }
+  }
+  /** The rows as a stream. The Monitor's, and an export's, are the case its run ran on. */
+  #rowsTransfer(
+    summary: Summary,
+    rows: { key: string; statics: FieldSelection[] },
+    run: SimulationInfo | undefined,
+  ): Transfer {
+    const revision = { uri: this.uri, version: summary.version, attachmentId: summary.attachmentId }
+    const of = this.kind === 'monitor' || this.kind === 'export' ? run : undefined
     return {
-      base,
-      statics,
-      samples: [run.id, JSON.stringify(sampled), held?.from, held?.to].join('\n'),
-      sampled,
-      run,
-      ...(held && { held }),
+      keys: [rows.key],
+      run: of?.id,
+      revision,
+      begin: async (signal) => ({
+        base: true,
+        schema: summary.schema,
+        fields: rows.statics,
+        revision,
+        counts: summary.counts,
+        ...(this.#draws('diagram') && {
+          presentation: await this.studio.client.call('presentation', revision, signal),
+        }),
+      }),
+      request: {
+        ...revision,
+        fields: rows.statics,
+        includeStatic: true,
+        ...(of && { run: of.id, pages: [0, 0] as const }),
+      },
+    }
+  }
+  /** Tell the view of the pages `run` published since it was last told. A run it was not told of,
+   *  or one cut into pages anew, starts over. */
+  async #list(run: SimulationInfo): Promise<void> {
+    let listed = this.#listed?.run === run.id ? this.#listed : undefined
+    if (listed?.frames === run.frames) return
+    let answer: Requests['pages']['output']
+    try {
+      answer = await this.studio.client.call('pages', {
+        run: run.id,
+        from: listed?.pages.length ?? 0,
+      })
+      if (listed && answer.paging !== listed.paging) {
+        listed = undefined
+        answer = await this.studio.client.call('pages', { run: run.id, from: 0 })
+      }
+    } catch (error) {
+      if (this.#disposed || this.studio.all.get(this.uri)?.run?.id !== run.id) return
+      this.#failed.add('pages:' + run.id)
+      this.studio.report(error)
+      return
+    }
+    if (this.#disposed) return
+    const { paging, pages } = answer
+    const from = listed?.pages.length ?? 0
+    if (!listed) {
+      this.#delivered.clear()
+      this.#failed.clear()
+      this.#asked = undefined
+    }
+    this.#listed = {
+      run: run.id,
+      paging,
+      frames: run.frames,
+      pages: [...(listed?.pages ?? []), ...pages],
+    }
+    if (pages.length || !listed)
+      await this.send({ kind: 'pages', run: run.id, paging, from, pages })
+  }
+  /** Whether `run` was cut into pages anew since `paging`; then the view starts over. */
+  async #repaged(run: string, paging: string): Promise<boolean> {
+    const now = await this.studio.client
+      .call('pages', { run, from: Infinity })
+      .catch(() => undefined)
+    if (!now || now.paging === paging) return false
+    this.#listed = undefined
+    return true
+  }
+  /** The next pages to send: the first the view wants that no stream since its last settled one
+   *  brought. Pages it needs to show now go together, up to BATCH_BYTES; pages sent ahead go one
+   *  at a time, so a page the view comes to need waits behind one at most. */
+  #next(
+    summary: Summary,
+    run: SimulationInfo,
+  ): { pages: PageRange; fields: FieldSelection[]; required: boolean } | undefined {
+    const asked = this.#asked
+    const listed = this.#listed
+    if (!asked || !listed || asked.run !== run.id || listed.run !== run.id) return undefined
+    if (asked.paging !== listed.paging) return undefined
+    const lacking = ({ page, fields }: Want) =>
+      Number.isSafeInteger(page) && page >= 0 && page < listed.pages.length
+        ? fields.filter((field) => {
+            const key = wantKey(page, field)
+            return !this.#stuck(key) && (this.#delivered.get(key) ?? 0) <= asked.settled
+          })
+        : []
+    const bytes = (page: number, fields: readonly FieldSelection[]) =>
+      fields.reduce(
+        (sum, { from, rows }) =>
+          sum +
+          (rows?.kind === 'ids' ? rows.ids.length : (summary.counts[from] ?? 0)) *
+            listed.pages[page]!.count *
+            SAMPLE_BYTES,
+        0,
+      )
+    for (let i = 0; i < asked.wants.length; i++) {
+      const fields = lacking(asked.wants[i]!)
+      if (!fields.length) continue
+      const first = asked.wants[i]!.page
+      if (i >= asked.required) return { pages: [first, first + 1], fields, required: false }
+      const needed = new Map(asked.wants.slice(0, asked.required).map((want) => [want.page, want]))
+      const same = JSON.stringify(fields)
+      let end = first + 1
+      let size = bytes(first, fields)
+      for (let next = needed.get(end); next; next = needed.get(end)) {
+        size += bytes(end, fields)
+        if (size > BATCH_BYTES || JSON.stringify(lacking(next)) !== same) break
+        end++
+      }
+      return { pages: [first, end], fields, required: true }
+    }
+    return undefined
+  }
+  /** Pages `pages` of `run`'s samples, cut as `paging` names, of `fields`, as a stream. */
+  #pagesTransfer(
+    summary: Summary,
+    run: SimulationInfo,
+    paging: string,
+    { pages, fields }: { pages: PageRange; fields: FieldSelection[] },
+  ): Transfer {
+    const revision = { uri: this.uri, version: summary.version, attachmentId: summary.attachmentId }
+    const keys: string[] = []
+    for (let page = pages[0]; page < pages[1]; page++)
+      for (const field of fields) keys.push(wantKey(page, field))
+    return {
+      keys,
+      run: run.id,
+      revision,
+      begin: () => ({
+        base: false,
+        simulationId: run.id,
+        pages,
+        paging,
+        fields,
+        revision,
+        counts: summary.counts,
+      }),
+      request: { ...revision, fields, run: run.id, pages, paging, includeStatic: false },
     }
   }
   /** Whether this view draws `view`, as itself or in a video export. */
   #draws(view: VideoView): boolean {
     return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
   }
-  /** The window of `run` to hold: the Monitor's visible times, or the times the view asked for,
-   *  at first those around the playhead. A view following the run's head holds an open-ended
-   *  window. */
-  #window(run: SimulationInfo, session: Session): Held {
-    const { transport } = session
-    const [start, end] = run.domain
-    const t = transport.currentT()
-    const need: Domain =
-      this.kind === 'monitor'
-        ? (session.window ?? run.span ?? [start, end])
-        : (this.#need ?? [t - BEHIND_S, t + AHEAD_S])
-    // The default Monitor interval is fixed. Finishing a run must not replace its entire
-    // history merely to close the stream's upper bound.
-    const open =
-      this.kind === 'monitor' ? !session.window : transport.live && transport.state.follow
-    return holdFor(this.#held, need, open, this.kind === 'monitor' ? need[1] - need[0] : 0)
-  }
-  async #streamed(summary: Summary, demand: Demand, base: boolean, append: boolean, key: string) {
+  /** Send `transfer`, and resolve with its stream once the view commits it; undefined when it did
+   *  not. What may pass is sent again: a stream changes nothing until it commits, and one that
+   *  committed with its receipt lost is held once. */
+  async #send(transfer: Transfer): Promise<number | undefined> {
     const { studio, uri } = this
-    const revision = { uri, version: summary.version, attachmentId: summary.attachmentId }
     const controller = (this.#controller = new AbortController())
     this.#failure = ''
     for (let attempt = 0; attempt < 3; attempt++) {
       const stream = ++this.#stream
-      /** Whether the view may have committed this stream, whose receipt may yet be lost. */
-      let ending = false
       try {
-        await this.send({
-          kind: 'begin',
-          fields: [...demand.statics, ...demand.sampled],
-          simulationId: demand.run?.id,
-          stream,
-          counts: summary.counts,
-          revision,
-          append,
-          ...(demand.held && { held: demand.held }),
-          sampled: demand.sampled,
-          ...(base
-            ? {
-                base: true as const,
-                schema: summary.schema,
-                ...(this.#draws('diagram') && {
-                  presentation: await studio.client.call(
-                    'presentation',
-                    revision,
-                    controller.signal,
-                  ),
-                }),
-              }
-            : { base: false as const }),
-        })
+        await this.send({ kind: 'begin', stream, ...(await transfer.begin(controller.signal)) })
         let sequence = 0
         // Backpressure: the next batch waits for the view to ack this one.
         const consume = async (batches: readonly DataBatch[]) => {
@@ -700,73 +814,63 @@ class View {
             controller.signal,
           )
         }
-        const { held, run } = demand
-        const { pages, frames, coverage } = await studio.client.call(
+        const { coverage } = await studio.client.call(
           'batches',
-          {
-            ...revision,
-            fields: [...demand.statics, ...demand.sampled],
-            includeStatic: base,
-            ...(run && {
-              run: run.id,
-              fromPage: append ? this.#pages : 0,
-              ...(held && { window: [held.from, held.to ?? Infinity] as const }),
-            }),
-          },
+          transfer.request,
           controller.signal,
           consume,
         )
         controller.signal.throwIfAborted()
-        ending = true
         await this.#delivery.post({ kind: 'end', stream, coverage }, controller.signal)
         controller.signal.throwIfAborted()
-        this.#base = demand.base
-        this.#samples = demand.samples
-        this.#pages = pages
-        this.#frames = frames
-        this.#held = held
-        this.#failed = this.#failure = ''
-        this.#controller = undefined
-        return
+        this.#failure = ''
+        if (this.#controller === controller) this.#controller = undefined
+        return stream
       } catch (error) {
-        // A stream stopped before its end left the view as it was. One stopped after may have
-        // committed, its receipt lost: an obsolete one too. Then what the view holds is unknown,
-        // and the next stream replaces it from a fresh base, so samples cannot be duplicated.
-        if (ending) {
-          this.#base = undefined
-          base = true
-          append = false
-        }
-        if (controller.signal.aborted || this.#disposed) return
+        if (controller.signal.aborted || this.#disposed) return undefined
         // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
-        if (demand.run && studio.all.get(uri)?.run?.id !== demand.run.id) return
-        if (!demand.run && studio.state(uri).summary?.version !== revision.version) return
+        if (transfer.run && studio.all.get(uri)?.run?.id !== transfer.run) return undefined
+        if (!transfer.run && studio.state(uri).summary?.version !== transfer.revision.version)
+          return undefined
         if ((error as { code?: string })?.code === 'superseded') {
           this.#again = true
-          return
+          return undefined
+        }
+        // Pages asked for as a reading of the run no longer cuts it: the view starts over.
+        const { run, paging } = transfer.request
+        if (
+          run &&
+          paging !== undefined &&
+          (error as { code?: string })?.code === 'conflict' &&
+          (await this.#repaged(run, paging))
+        ) {
+          this.#again = true
+          return undefined
         }
         if (retryable(error) && attempt < 2) {
           try {
             await delay(250 * 4 ** attempt, undefined, { signal: controller.signal })
           } catch {
-            return
+            return undefined
           }
           continue
         }
         if (retryable(error)) {
+          this.clearRetry()
           this.#retry = {
-            key,
+            keys: new Set(transfer.keys),
             timer: setTimeout(() => {
               this.#retry = undefined
               void this.update().catch((reason) => studio.error(reason))
             }, 10_000),
           }
-        } else this.#failed = key
+        } else for (const key of transfer.keys) this.#failed.add(key)
         this.#failure = message(error)
         studio.report(error)
-        return
+        return undefined
       }
     }
+    return undefined
   }
   /** Whether its page is still loading where VS Code keeps one, on screen or kept while hidden:
    *  replacing it now breaks VS Code's loader. */
@@ -786,13 +890,8 @@ class View {
     for (const disposable of this.disposables) disposable.dispose()
   }
 }
-/** Each panel's placeholder while no case is open. */
-const EMPTY: Record<Exclude<ViewKind, 'network' | 'diagram'>, string> = {
-  case: 'Open a GridKit case to inspect its fields.',
-  monitor: 'Open a GridKit case to inspect its recorded signals.',
-  simulation: 'Open a GridKit case to configure a simulation.',
-  export: 'Open a GridKit case to export a video of it.',
-}
+/** A panel while no case is open. */
+const EMPTY = '<!doctype html><html lang="en"><body></body></html>'
 /** The side bar and panel views VS Code has shown, by kind. */
 const resolved = new Map<ViewKind, vscode.WebviewView>()
 
@@ -866,10 +965,7 @@ export function registerViews(studio: Sessions) {
                 content = new View(studio, panel, uri, kind, hidden)
                 panel.description = describe(studio, kind, uri)
               } else {
-                panel.webview.html =
-                  '<!doctype html><html lang="en"><body style="font-family:var(--vscode-font-family);color:var(--vscode-descriptionForeground);padding:12px">' +
-                  EMPTY[kind] +
-                  '</body></html>'
+                panel.webview.html = EMPTY
                 panel.description = undefined
               }
             }

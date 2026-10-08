@@ -27,8 +27,8 @@ export { PROGRAMS } from './simulation.js'
 import type { Bindings } from './bindings.js'
 import type { SampleCoverage } from './coverage.js'
 import type { Failure } from './errors.js'
+import type { PageEntry, PageRange, Want } from './pages.js'
 import type { SettingsValues } from './preferences.js'
-import type { Held } from './streams.js'
 import type { ClockState, LoopMode } from './transport.js'
 
 /** A case document at one version. */
@@ -132,13 +132,17 @@ export interface Requests {
     input: Revision & {
       fields?: readonly FieldSelection[]
       run?: string
-      window?: Domain
+      /** The run's pages to send, as `paging` cut them; absent, all of them. */
+      pages?: PageRange
+      paging?: string
       includeStatic?: boolean
-      /** The first run page to send; the view holds those before it. */
-      fromPage?: number
     }
-    /** How many of the run's pages the stream covered. */
-    output: { pages: number; frames: number; coverage: readonly SampleCoverage[] }
+    output: { coverage: readonly SampleCoverage[] }
+  }
+  /** The run's pages from `from` on, and how it is cut into them. */
+  pages: {
+    input: { run: string; from: number }
+    output: { paging: string; pages: PageEntry[] }
   }
   /** The next sample time from `at` in `direction`; the run's first or last time when none. */
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
@@ -249,14 +253,17 @@ export interface Cameras {
   diagram?: unknown
 }
 
-/** Opens a stream of rows and samples, which an `end` of the same `stream` closes. A `base` stream
- *  replaces the case the view holds, and carries what the case is: its schema, and where the
- *  diagram's blocks are arranged. */
+/** Opens a stream, which an `end` of the same `stream` closes: the case's rows, which replace those
+ *  the view holds and carry what the case is, its schema and where the diagram's blocks are
+ *  arranged; or pages of a run's samples, which the view holds beside those it has. */
 export type Begin = Stream &
-  ({ base: true; schema: Schema; presentation?: Record<string, Positions> } | { base: false })
+  (
+    | { base: true; schema: Schema; presentation?: Record<string, Positions> }
+    | { base: false; simulationId: string; pages: PageRange; paging: string }
+  )
 
 interface Stream {
-  /** Fields actually carried by this topology/sample projection. */
+  /** The fields the stream carries: the rows' static fields, or the pages' sampled ones. */
   fields: readonly FieldSelection[]
   simulationId?: string
   kind: 'begin'
@@ -264,18 +271,14 @@ interface Stream {
   revision: Revision
   /** Physical row counts, including empty types, independent of the fields projected. */
   counts: Readonly<Record<string, number>>
-  /** Whether the samples that follow extend those the view holds rather than replace them. */
-  append: boolean
-  /** The times whose samples the view holds once the stream ends; absent, the whole run. */
-  held?: Held
-  /** The sampled fields, and their rows, whose samples follow. */
-  sampled: readonly FieldSelection[]
 }
 
 export type ToView =
   | { kind: 'state'; state: ViewState }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
+  /** The pages run `run`, cut as `paging` names, has published from `from` on. */
+  | { kind: 'pages'; run: string; paging: string; from: number; pages: readonly PageEntry[] }
   | Begin
   | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
   /** Closes a stream with the samples it holds, which the view checks before it commits. */
@@ -312,8 +315,8 @@ export interface ViewRequests {
   }
   /** Asks the user where to save a video: a file handle, or null when they cancel. */
   videoOpen: { input: { name: string; format: 'mp4' | 'webm' }; output: number | null }
-  /** Holds what `views` draw over `window`; resolves with their framing once held. */
-  videoData: { input: { views: readonly VideoView[]; window: Domain }; output: Cameras }
+  /** Holds the rows `views` draw; resolves with their framing once held. */
+  videoData: { input: { views: readonly VideoView[] }; output: Cameras }
   videoWrite: { input: { file: number; position: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished video's path. */
   videoClose: { input: { file: number; abort?: boolean }; output: string | null }
@@ -328,7 +331,19 @@ export type FromView =
   | { kind: 'request'; id: number; method: keyof ViewRequests; input: unknown }
   | { kind: 'command'; command: string; value?: unknown }
   | { kind: 'select'; element: Element | null }
+  /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: Domain }
+  /** The pages of run `run`, cut as `paging` names, the view lacks, in the order it needs them, the
+   *  first `required` of them for what it shows now; `settled` is the last stream it had settled
+   *  when it asked. */
+  | {
+      kind: 'want'
+      run: string
+      paging: string
+      wants: readonly Want[]
+      required: number
+      settled: number
+    }
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   | { kind: 'values'; uri: string; values: Record<string, unknown> }

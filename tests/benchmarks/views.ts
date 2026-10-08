@@ -247,10 +247,10 @@ export async function run() {
       )
       const opened = performance.now()
       const diagram = await bench.view('diagram')
-      // A case with no directed signal components says so instead of drawing.
+      // A case with no directed signal components draws nothing.
       const drawn = await diagram
         .waitForFunction(
-          `() => document.querySelector('canvas[data-rendered=true]') ? 'drawn' : /no directed signal/.test(document.body.innerText) ? 'none' : ''`,
+          `() => document.querySelector('canvas[data-rendered=true]') ? 'drawn' : document.querySelector('.canvas-host[data-empty]') ? 'none' : ''`,
           undefined,
           { polling: 'raf', timeout: 120_000 },
         )

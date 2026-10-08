@@ -5,7 +5,7 @@ import type { NetworkConfig } from '@latkit/network'
 import type { SettingsReader } from '../../shared/preferences.js'
 import { color, type Palette } from '../theme.js'
 
-/** Alpha of the hover and selection halos over the theme's focus color. */
+/** The strength of the hover and selection glows in the theme's focus color. */
 const HOVER_ALPHA = 0.5
 const SELECTED_ALPHA = 0.82
 /** Alpha of borders over the theme's text color. */

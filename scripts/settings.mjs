@@ -48,7 +48,9 @@ function property(group, setting) {
     case 'color':
       return {
         ...base,
-        markdownDescription: base.markdownDescription + '. Null follows the current VS Code theme.',
+        markdownDescription:
+          base.markdownDescription.replace(/\.?$/, '.') +
+          ' Null follows the current VS Code theme.',
         type: ['string', 'null'],
         pattern: '^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
         format: 'color-hex',

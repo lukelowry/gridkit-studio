@@ -568,7 +568,7 @@
     background: var(--color-row-hover);
   }
   /* The selected row takes VS Code's list selection, and on its header the accent the Network and
-     Diagram halo the selection in. */
+     Diagram glow the selection in. */
   tbody tr.selected > * {
     background: var(--color-selected);
   }

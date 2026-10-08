@@ -6,6 +6,7 @@ import {
   type Data,
   type Domain,
   type FieldSelection,
+  itemKey,
   rowAt,
   selectRows,
 } from '@latkit/model'
@@ -43,7 +44,8 @@ export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 /** The single trace key, so another field replaces the trace in place. */
 const TRACE = 'plotted'
 
-/** Highlight only a displayed row. The renderer's focus query otherwise overrides trace rows. */
+/** The selected element's trace, when the plot draws its row. Any selection fades the other lines,
+ *  so one the plot does not draw would fade them all. */
 export function traceSelection(
   source: Data,
   selected: string | undefined,
@@ -66,21 +68,12 @@ export function traceSelection(
   }
 }
 
+/** A trace row's identity, as the plot selects by it: the reading's frame is not part of it. */
+const traceKey = (item: MonitorItem): string => itemKey(item, item.trace ?? '')
+
 /** Whether two selections hold the same trace rows, whichever readings found them. */
 export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every((item, i) => {
-      const other = b[i]!
-      return (
-        item.row === other.row &&
-        item.trace === other.trace &&
-        item.index.source === other.index.source &&
-        item.index.type === other.index.type &&
-        item.index.version === other.index.version
-      )
-    })
-  )
+  return a.length === b.length && a.every((item, i) => traceKey(item) === traceKey(b[i]!))
 }
 
 /** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the

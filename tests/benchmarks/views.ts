@@ -45,6 +45,7 @@ const STILL = {
   'accessibility.motion': 'reduce',
   // Pin the workload across changes to application defaults.
   'network.vertices.labels': true,
+  'network.grid': true,
 }
 /** A second of simulation, its frames a hundredth of a second apart. */
 const RUN = { tmax: 1, dt_monitor: 0.01 }
@@ -237,6 +238,14 @@ export async function run() {
           { timeout: 60_000 },
         )
       }
+      const [{ id: bus }] = await bench.studio.client.call('elements', {
+        uri: key,
+        version: summary().version,
+        type: 'Bus',
+      })
+      // A selection draws again over the rest, glowing. Clearing it draws as before.
+      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus! }))
+      bench.studio.select(key)
 
       // ── Diagram ──
       await vscode.commands.executeCommand(
@@ -352,20 +361,32 @@ export async function run() {
       const span = session.run!.domain
       await steady(monitor)
       transport.setLoop('wrap')
-      transport.seek(span[0])
-      const before = { network: (await idle<Stats>(network)).frames, monitor: await plots(monitor) }
-      started = performance.now()
-      transport.play()
-      await pause(PLAYBACK_MS)
-      const after = { network: (await network.evaluate<Stats>('gridkitStats()')).frames }
-      const lanes = await plots(monitor)
-      const playing = performance.now() - started
-      transport.pause()
-      // The time between frames each view presents while playing: one display frame at best.
-      timings[`playback ${size} > network frame`] = [playing / (after.network - before.network)]
-      timings[`playback ${size} > monitor frame`] = [
-        playing / Math.max(1, lanes[0]!.frames - before.monitor[0]!.frames),
-      ]
+      /** The time between frames each view presents while playing: one display frame at best. */
+      async function playback(scenario: string) {
+        transport.seek(span[0])
+        const before = {
+          network: (await idle<Stats>(network)).frames,
+          monitor: await plots(monitor),
+        }
+        const start = performance.now()
+        transport.play()
+        await pause(PLAYBACK_MS)
+        const after = (await network.evaluate<Stats>('gridkitStats()')).frames
+        const lanes = await plots(monitor)
+        const playing = performance.now() - start
+        transport.pause()
+        timings[`playback ${size} > network ${scenario}`] = [playing / (after - before.network)]
+        timings[`playback ${size} > monitor ${scenario}`] = [
+          playing / Math.max(1, lanes[0]!.frames - before.monitor[0]!.frames),
+        ]
+      }
+      await playback('frame')
+      // A selected bus draws again over the rest in the Network, and fades the other traces in
+      // the Monitor.
+      bench.studio.select(key, { id: bus! })
+      await steady(monitor)
+      await playback('frame, selected')
+      bench.studio.select(key)
       const at = (i: number) => span[0] + SEEKS[i]! * (span[1] - span[0])
       await time(`playback ${size} > seek`, SEEKS.length, {
         act: (i) => transport.seek(at(i)),
@@ -389,15 +410,11 @@ export async function run() {
       })
 
       // ── Plots ──
-      const [{ id: first }] = await bench.studio.client.call('elements', {
-        uri: key,
-        version: summary().version,
-        type: 'Bus',
-      })
+      const first = bus!
       const lanesBefore = (await plots(monitor)).length
       await time(`monitor ${size} > add plot`, 1, {
         act: () => {
-          session.plots = [...session.plots, { from: 'Bus', field: 'Vm', id: first! }]
+          session.plots = [...session.plots, { from: 'Bus', field: 'Vm', id: first }]
           bench.studio.changed.fire(key)
         },
         done: () =>

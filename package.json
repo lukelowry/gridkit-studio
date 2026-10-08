@@ -64,12 +64,12 @@
     "vscode:prepublish": "pnpm build"
   },
   "dependencies": {
-    "@latkit/diagram": "0.10.1",
-    "@latkit/gpu": "0.17.0",
-    "@latkit/model": "4.0.0",
-    "@latkit/monitor": "0.16.0",
-    "@latkit/network": "0.20.1",
-    "@latkit/video": "0.6.3",
+    "@latkit/diagram": "0.11.0",
+    "@latkit/gpu": "0.18.0",
+    "@latkit/model": "4.1.0",
+    "@latkit/monitor": "0.17.0",
+    "@latkit/network": "0.21.0",
+    "@latkit/video": "0.6.4",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
@@ -99,10 +99,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ],
-    "patchedDependencies": {
-      "@latkit/monitor@0.16.0": "patches/@latkit__monitor@0.16.0.patch"
-    }
+    ]
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -1483,9 +1480,9 @@
             "type": "boolean"
           },
           "gridkitStudio.network.grid": {
-            "default": false,
+            "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Grid. Draw lines of latitude and longitude.",
+            "markdownDescription": "Layers — Grid. Draw a coordinate grid under the network, latitude and longitude on the globe.",
             "type": "boolean"
           },
           "gridkitStudio.network.earthAxis": {
@@ -1642,13 +1639,13 @@
           "gridkitStudio.network.selectedEnds": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Highlight — Selected edge ends. Halo the vertices a selected edge joins.",
+            "markdownDescription": "Highlight — Selected edge ends. Draw the vertices a selected edge joins over the rest.",
             "type": "boolean"
           },
           "gridkitStudio.network.hoverEnds": {
             "default": false,
             "scope": "resource",
-            "markdownDescription": "Highlight — Hovered edge ends. Halo the vertices a hovered edge joins.",
+            "markdownDescription": "Highlight — Hovered edge ends. Draw the vertices a hovered edge joins over the rest.",
             "type": "boolean"
           },
           "gridkitStudio.network.hoverScale": {
@@ -1660,17 +1657,17 @@
             "maximum": 3
           },
           "gridkitStudio.network.hoverWidthPx": {
-            "default": 4.75,
+            "default": 6,
             "scope": "resource",
-            "markdownDescription": "Highlight — Hover width",
+            "markdownDescription": "Highlight — Hover glow. How far the glow around a hovered item reaches.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
           },
           "gridkitStudio.network.selectedWidthPx": {
-            "default": 6,
+            "default": 8,
             "scope": "resource",
-            "markdownDescription": "Highlight — Selection width",
+            "markdownDescription": "Highlight — Selection glow. How far the glow around a selected item reaches.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
@@ -1678,7 +1675,7 @@
           "gridkitStudio.network.hoverColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Highlight — Hover color. Its alpha is the halo’s opacity.. Null follows the current VS Code theme.",
+            "markdownDescription": "Highlight — Hover color. Its alpha is the glow’s strength. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1689,7 +1686,7 @@
           "gridkitStudio.network.selectedColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Highlight — Selection color. Its alpha is the halo’s opacity.. Null follows the current VS Code theme.",
+            "markdownDescription": "Highlight — Selection color. Its alpha is the glow’s strength. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1780,7 +1777,7 @@
           "gridkitStudio.network.vertexColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Vertex color. Vertices while no field drives their color.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Vertex color. Vertices while no field drives their color. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1791,7 +1788,7 @@
           "gridkitStudio.network.edgeColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Edge color. Edges while no field drives their color.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Edge color. Edges while no field drives their color. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1813,7 +1810,7 @@
           "gridkitStudio.network.surfaceColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Ground. The globe, and the ground under a tilted view.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Ground. The globe, and the ground under a tilted view. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1824,7 +1821,7 @@
           "gridkitStudio.network.gridColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Grid color. Lines of latitude and longitude.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Grid color. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -1835,7 +1832,7 @@
           "gridkitStudio.network.pathColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Color — Border color. Coasts and country borders.. Null follows the current VS Code theme.",
+            "markdownDescription": "Color — Border color. Coasts and country borders. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -2216,7 +2213,7 @@
           "gridkitStudio.monitor.selectedWidthPx": {
             "default": 3,
             "scope": "resource",
-            "markdownDescription": "Selection — Selection width",
+            "markdownDescription": "Selection — Selection glow. How far the glow around a selected line reaches.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
@@ -2243,7 +2240,7 @@
           "gridkitStudio.monitor.cursorColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Selection — Playhead color. The line at the time on show.. Null follows the current VS Code theme.",
+            "markdownDescription": "Selection — Playhead color. The line at the time on show. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -2427,7 +2424,7 @@
           "gridkitStudio.diagram.vertexColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Blocks — Fill. Blocks while no field drives their color.. Null follows the current VS Code theme.",
+            "markdownDescription": "Blocks — Fill. Blocks while no field drives their color. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -2438,7 +2435,7 @@
           "gridkitStudio.diagram.outlineColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Blocks — Outline color. Block and group outlines.. Null follows the current VS Code theme.",
+            "markdownDescription": "Blocks — Outline color. Block and group outlines. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -2562,7 +2559,7 @@
           "gridkitStudio.diagram.edgeColor": {
             "default": null,
             "scope": "resource",
-            "markdownDescription": "Wires — Color. Wires and ports while no field drives their color.. Null follows the current VS Code theme.",
+            "markdownDescription": "Wires — Color. Wires and ports while no field drives their color. Null follows the current VS Code theme.",
             "type": [
               "string",
               "null"
@@ -2683,17 +2680,17 @@
             "maximum": 12
           },
           "gridkitStudio.diagram.hoverWidthPx": {
-            "default": 3,
+            "default": 6,
             "scope": "resource",
-            "markdownDescription": "Highlight — Hover width",
+            "markdownDescription": "Highlight — Hover glow. How far the glow around a hovered item reaches.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
           },
           "gridkitStudio.diagram.selectedWidthPx": {
-            "default": 3,
+            "default": 8,
             "scope": "resource",
-            "markdownDescription": "Highlight — Selection width",
+            "markdownDescription": "Highlight — Selection glow. How far the glow around a selected item reaches.",
             "type": "number",
             "minimum": 0,
             "maximum": 16

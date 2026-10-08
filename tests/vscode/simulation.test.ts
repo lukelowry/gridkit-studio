@@ -92,8 +92,10 @@ suite('Simulation', () => {
   })
 
   test('says once why a run from the Tasks menu could not start, as Run does', async () => {
-    await bench.replace(bench.text.replace('{', '{,'))
-    await until(() => bench.studio.state(bench.key).stale, 'the case invalid')
+    // Nothing recorded keeps the run from starting. The case is left as it is, since VS Code
+    // saves every edited file before it runs a task.
+    await vscode.commands.executeCommand('gridkitStudio.clearSignals')
+    await until(() => !bench.session.outputs?.length, 'nothing recorded')
     const [task] = (await vscode.tasks.fetchTasks({ type: 'gridkit' })).filter(
       (task) => task.definition.case === bench.key,
     )
@@ -102,7 +104,6 @@ suite('Simulation', () => {
     const shown = await notified('why the run could not start')
     assert.equal(shown.length, 1, shown.join('\n'))
     await until(() => !bench.session.launching, 'Starting… ends')
-    await bench.replace(bench.text)
-    await bench.settled()
+    assert.equal(bench.studio.errors.splice(0).length, 1)
   })
 })

@@ -10,7 +10,16 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { frames, notifications, type TestHost, testHost, until, visible, VM } from './harness.js'
+import {
+  again,
+  frames,
+  notifications,
+  type TestHost,
+  testHost,
+  until,
+  visible,
+  VM,
+} from './harness.js'
 
 /** Pixels painted in a color, not the grays of axes, text and background. */
 function colored(png: PNG): number {
@@ -45,12 +54,27 @@ suite('Run', function () {
     monitor = await bench.show('monitor')
     // The Monitor's own button brings the native Monitored Signals view back into sight.
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
-    await monitor.getByRole('button', { name: 'Choose monitored signals' }).click()
+    const pane = bench.page.locator('.pane', {
+      has: bench.page.locator('.pane-header', { hasText: /monitored signals/i }),
+    })
+    await again(
+      () => monitor.getByRole('button', { name: 'Choose monitored signals' }).click(),
+      () => pane.getByRole('treeitem').first().isVisible(),
+      'Monitored Signals shown',
+    )
     const signals = await bench.signals({ reveal: false })
     // Clear every signal through the view's own title action.
-    await signals.locator('.pane-header').hover()
-    await signals.getByRole('button', { name: 'Record No Signals' }).click()
-    await until(() => !bench.session.outputs?.length, 'all monitored fields cleared')
+    await again(
+      async () => {
+        await signals.locator('.pane-header').hover()
+        await signals
+          .getByRole('button', { name: 'Record No Signals' })
+          .click({ timeout: 2000 })
+          .catch(() => {})
+      },
+      () => !bench.session.outputs?.length,
+      'all monitored fields cleared',
+    )
     simulation = await bench.view('simulation')
     // Start says what keeps it from running, and offers to choose what to record.
     await bench.start()

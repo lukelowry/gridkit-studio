@@ -183,7 +183,9 @@ const get = (revision: Revision) => {
     parses.get(revision.uri) !== entry.generation ||
     (revision.attachmentId !== undefined && attachments.get(revision.uri) !== revision.attachmentId)
   )
-    throw new Error('The document changed. Wait for the current revision.')
+    throw Object.assign(new Error('The document changed. Wait for the current revision.'), {
+      code: 'stale',
+    })
   return entry
 }
 const findRun = (id: string, uri?: string, allowStudy = false) => {

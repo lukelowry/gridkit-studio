@@ -832,6 +832,9 @@ class View {
         if (transfer.run && studio.all.get(uri)?.run?.id !== transfer.run) return undefined
         if (!transfer.run && studio.state(uri).summary?.version !== transfer.revision.version)
           return undefined
+        // The worker holds a newer reading of the case than the one asked for, as while an edit
+        // leaves it unreadable: the view catches up once that reading reaches it.
+        if ((error as { code?: string })?.code === 'stale') return undefined
         if ((error as { code?: string })?.code === 'superseded') {
           this.#again = true
           return undefined

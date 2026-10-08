@@ -283,7 +283,11 @@ export class TestHost {
     const box = signals
       .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
       .getByRole('checkbox')
-    const checked = await box.isChecked()
+    // Done once what the next run records changes, not once the box looks it: a tree drawn again
+    // for another case can change the box when no click took.
+    const recorded = () =>
+      !!this.session.outputs?.some(({ from, select }) => from === type && select.includes(field))
+    const was = recorded()
     // A box the pointer rests on shows its state in a hover over the row below: the pointer leaves
     // before and after each click, so no hover covers the next box.
     await again(
@@ -292,8 +296,8 @@ export class TestHost {
         await box.click({ timeout: 2000 }).catch(() => {})
         await this.page.mouse.move(0, 0)
       },
-      async () => (await box.isChecked()) !== checked,
-      `${type} ${field} ${checked ? 'unchecked' : 'checked'}`,
+      () => recorded() !== was,
+      `${type} ${field} ${was ? 'no longer recorded' : 'recorded'}`,
     )
   }
 

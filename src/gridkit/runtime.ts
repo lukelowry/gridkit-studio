@@ -11,7 +11,7 @@ import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/format.js'
 import type { GridKit, Program, RuntimeProcess } from '../shared/messages.js'
-import { readSolverLine, solverError, type SolverLine } from './solver.js'
+import { readSolverLine, type SolverLine } from './solver.js'
 /** Where a container sees the run's folder. */
 const MOUNT = '/simulation'
 /** The label that names the machine a run's container was started from. */
@@ -310,7 +310,7 @@ export async function launch(
   if (child.pid) lifecycle(owned)
   let ended = false
   const tail: string[] = []
-  /** The first error GridKit printed: what stopped the run, and when. */
+  /** What stopped the run: the first error GridKit printed. */
   let nativeError: SolverLine | undefined
   /** The faults whose contingencies failed, by ID. */
   const failed = new Set<string>()
@@ -340,7 +340,7 @@ export async function launch(
       // A container that never ran says why last: no engine, no image, no access.
       const said = container ? tail.findLast((line) => line.trim()) : undefined
       if (signal.aborted) reject(signal.reason)
-      else if (nativeError) reject(solverError(nativeError))
+      else if (nativeError) reject(new Error(nativeError.text))
       // ContingencyAnalysis exits 1 when a contingency failed; the study still finished.
       else if (code !== 0 && !(program === 'ContingencyAnalysis' && failed.size))
         reject(new Error(`${program} exited with code ${code}.${said ? ' ' + said : ''}`))

@@ -230,10 +230,9 @@ export class Sessions {
     if (info.state === 'failed') {
       if (this.#failures.has(info.id)) return
       this.#failures.add(info.id)
-      const at = info.failedAt === undefined ? '' : ` at t = ${formatNumber(info.failedAt)} s`
       const why = info.message ?? 'GridKit stopped'
       this.report(
-        notice(`${info.name} failed${at}: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
+        notice(`${info.name} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
       )
       return
     }

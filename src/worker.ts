@@ -459,8 +459,7 @@ async function runCase(input: SimulationRequest) {
             lastProgress = performance.now()
           }
         },
-        // Each line in plain words at its level, at most 100 a second; the rest are counted, and the
-        // count sent.
+        // Each line at its level, at most 100 a second; the rest are counted, and the count sent.
         log: (entry) => {
           const line = solverLine(entry.message, input.values.program, said)
           if (!line) return
@@ -489,8 +488,6 @@ async function runCase(input: SimulationRequest) {
           : 'cancelled'
         : 'failed'
       info.message = message(error)
-      const at = (error as { at?: unknown } | null)?.at
-      if (typeof at === 'number') info.failedAt = at
       if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
     } finally {
       // The run's last state goes out whatever its cleanup meets, so it never stays running.

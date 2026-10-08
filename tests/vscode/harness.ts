@@ -309,6 +309,12 @@ export class TestHost {
       .getByRole('button', { name: new RegExp('^' + name) })
   }
 
+  /** The times the status bar's playback shows: the playhead, then the end. */
+  async times(): Promise<number[]> {
+    const text = await this.playback('Time').innerText()
+    return (text.match(/-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi) ?? []).map(Number)
+  }
+
   /** A title-bar action of the bottom panel's view on show, by the start of its name. */
   panelAction(name: string): Locator {
     return this.page
@@ -336,11 +342,11 @@ export class TestHost {
     await (await this.viewAction(/^Simulation/, 'Start Simulation')).click()
   }
 
-  /** The notification on show that says `text`. */
-  notification(text: RegExp): Locator {
+  /** The button `action` on a notification on show. */
+  notice(action: string): Locator {
     return this.page
       .locator('.notifications-toasts .notification-list-item')
-      .filter({ hasText: text })
+      .getByRole('button', { name: action })
       .first()
   }
 
@@ -615,6 +621,13 @@ export async function notifications(): Promise<string[]> {
   if (shown.length) await vscode.commands.executeCommand('notifications.clearAll')
   return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()))
 }
+
+/** Wait for VS Code to show notifications, then clear them. */
+export const notified = (label: string) =>
+  until(async () => {
+    const found = await notifications()
+    return found.length ? found : undefined
+  }, label)
 
 /** Keep what VS Code showed when `test` failed. */
 export async function failed(test: string): Promise<void> {

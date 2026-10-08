@@ -10,6 +10,7 @@ import * as vscode from 'vscode'
 
 import { definitions } from '../../src/shared/preferences.js'
 import {
+  again,
   folder,
   frames,
   idle,
@@ -310,20 +311,19 @@ suite('Diagram menus', () => {
     JSON.stringify(
       (await diagram.evaluate<{ camera: unknown } | null>('gridkitSelection()'))?.camera,
     )
-  /** Right-click the block, or its port `field`, where the Diagram drew it. */
+  /** Right-click the block, or its port `field`, where the Diagram drew it last. */
   async function menu(field: string | undefined, item: string) {
-    await idle(diagram)
-    const [x, y] = await until(
-      () =>
-        diagram.evaluate<[number, number] | null>(
-          `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
-        ),
-      id + ' drawn',
-    )
-    await bench.menu(
-      () => diagram.locator('canvas').click({ button: 'right', position: { x, y } }),
-      item,
-    )
+    await bench.menu(async () => {
+      await idle(diagram)
+      const [x, y] = await until(
+        () =>
+          diagram.evaluate<[number, number] | null>(
+            `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
+          ),
+        id + ' drawn',
+      )
+      await diagram.locator('canvas').click({ button: 'right', position: { x, y } })
+    }, item)
   }
 
   suiteSetup(async () => {
@@ -503,8 +503,11 @@ suite('Studio commands', () => {
     const header = bench.page.locator('.pane-header', { hasText: /^Simulation/ })
     await bench.menu(() => bench.more(header), 'Where GridKit Runs')
     await bench.settings(/gridkitStudio\.gridkitPath/)
-    await bench.menu(() => bench.more(header), 'Show Simulation Output')
-    await until(async () => (await bench.panelShown()) === 'Output', 'the output on show')
+    await again(
+      () => bench.menu(() => bench.more(header), 'Show Simulation Output'),
+      async () => (await bench.panelShown()) === 'Output',
+      'the output on show',
+    )
   })
 
   test('validates the case and diagnoses performance from the Command Palette', async () => {

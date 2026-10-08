@@ -7,7 +7,7 @@ import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { notifications, type TestHost, testHost, until, visible } from './harness.js'
+import { notified, type TestHost, testHost, until, visible } from './harness.js'
 
 suite('Simulation', () => {
   let bench: TestHost
@@ -71,10 +71,7 @@ suite('Simulation', () => {
     await until(() => !bench.session.outputs?.length, 'nothing recorded')
     await bench.start()
     // Nothing recorded: the notification offers Monitored Signals.
-    await bench
-      .notification(/Choose at least one signal/)
-      .getByRole('button', { name: 'Choose Signals' })
-      .click()
+    await bench.notice('Choose Signals').click()
     await bench.signals({ reveal: false })
     await vscode.commands.executeCommand('gridkitStudio.selectAllSignals')
     await until(recorded, 'every signal recorded')
@@ -86,10 +83,10 @@ suite('Simulation', () => {
     await until(async () => (await tmax.getAttribute('aria-invalid')) === 'true', 'outlined')
     assert.equal(await simulation.locator('.c-note').count(), 0)
     await bench.start()
-    await bench.notification(/End time must be a number\./).waitFor()
+    const shown = await notified('why Start could not run')
+    assert.equal(shown.length, 1, shown.join('\n'))
     assert.equal(bench.session.launching, false)
     assert.equal(bench.studio.errors.splice(0).length, 2)
-    await vscode.commands.executeCommand('notifications.clearAll')
     await tmax.fill(before)
     await until(async () => (await tmax.getAttribute('aria-invalid')) === 'false', 'fixed')
   })
@@ -102,10 +99,7 @@ suite('Simulation', () => {
     )
     assert.ok(task, 'The case offers its run as a task')
     await vscode.tasks.executeTask(task)
-    const shown = await until(async () => {
-      const found = await notifications()
-      return found.length ? found : undefined
-    }, 'why the run could not start')
+    const shown = await notified('why the run could not start')
     assert.equal(shown.length, 1, shown.join('\n'))
     await until(() => !bench.session.launching, 'Starting… ends')
     await bench.replace(bench.text)

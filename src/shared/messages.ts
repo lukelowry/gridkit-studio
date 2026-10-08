@@ -190,8 +190,8 @@ export type FromWorker =
     }
   | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
   | { kind: 'run'; info: SimulationInfo }
-  /** With `uri`, a line of that case's run in plain words, and `raw`, the line as GridKit printed
-   *  it where they differ. Without, a line of Studio's own. */
+  /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
+   *  where they differ. Without, a line of Studio's own. */
   | {
       kind: 'log'
       uri?: string

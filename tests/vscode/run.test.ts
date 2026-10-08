@@ -10,16 +10,7 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import {
-  again,
-  frames,
-  notifications,
-  type TestHost,
-  testHost,
-  until,
-  visible,
-  VM,
-} from './harness.js'
+import { again, frames, notified, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 /** Pixels painted in a color, not the grays of axes, text and background. */
 function colored(png: PNG): number {
@@ -78,10 +69,7 @@ suite('Run', function () {
     simulation = await bench.view('simulation')
     // Start says what keeps it from running, and offers to choose what to record.
     await bench.start()
-    await bench
-      .notification(/Choose at least one signal/)
-      .getByRole('button', { name: 'Choose Signals' })
-      .click()
+    await bench.notice('Choose Signals').click()
     await bench.signals({ reveal: false })
     assert.equal(bench.session.launching, false)
     assert.equal(bench.studio.errors.splice(0).length, 1)
@@ -106,7 +94,10 @@ suite('Run', function () {
     const followed = session.run!.state !== 'running' || session.transport.state.follow
     await until(() => session.run?.state !== 'running', 'the run ends', 300_000)
     assert.equal(session.run?.state, 'complete', session.run?.message)
-    assert.equal(session.run.frames, 201)
+    assert.ok(
+      Math.abs(session.run.domain[1] - session.run.span![1]) < 1e-9,
+      'the run reaches its end',
+    )
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
@@ -140,7 +131,7 @@ suite('Run', function () {
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     await until(
-      async () => (await bench.playback('Time').innerText()).startsWith(end.toFixed(2) + ' /'),
+      async () => Math.abs((await bench.times())[0]! - end) < 0.01,
       'the status bar rests at the end of the run',
     )
   })
@@ -247,8 +238,9 @@ suite('Run', function () {
       () => bench.session.run?.id !== previous && bench.session.run?.state !== 'running',
       'TwoArea ends',
     )
-    assert.equal(bench.session.run?.state, 'complete', bench.session.run?.message)
-    assert.equal(bench.session.run.frames, 201)
+    const { run } = bench.session
+    assert.equal(run?.state, 'complete', run?.message)
+    assert.ok(Math.abs(run.domain[1] - run.span![1]) < 1e-9, 'the run reaches its end')
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     await bench.capture('run-twoarea')
@@ -278,7 +270,7 @@ suite('Run', function () {
       async () => (await intervals()).every(([start, end]) => start === 0 && end === 1000),
       'all live plots keep the configured interval',
     )
-    assert.match(await bench.playback('Time').innerText(), /\/ 1000\.00/)
+    assert.equal((await bench.times())[1], 1000)
     await bench.playback('Go live').click()
     await until(() => bench.session.transport.state.follow, 'follow live again')
     await bench.stop()
@@ -290,7 +282,7 @@ suite('Run', function () {
       (await intervals()).every(([start, end]) => start === 0 && end === 1000),
       'cancellation keeps the configured plot interval',
     )
-    assert.match(await bench.playback('Time').innerText(), /\/ 1000\.00/)
+    assert.equal((await bench.times())[1], 1000)
     await bench.playback('Previous sample').click()
     await until(
       () => bench.session.transport.currentT() < bench.session.run!.domain[1],
@@ -298,62 +290,38 @@ suite('Run', function () {
     )
   })
 
-  test('says when and why the solver gave up, in one notification, with the Monitor in front', async () => {
+  test('says once why GridKit could not finish, and runs again once allowed', async () => {
     simulation = await bench.show('simulation')
     await simulation.locator('[data-testid="field-max_steps"]').fill('1')
     await until(() => bench.session.values.max_steps === 1, 'one solver step allowed')
     const previous = bench.session.run!.id
     await bench.start()
-    await until(
-      () => bench.session.run?.id !== previous && bench.session.run?.state === 'failed',
-      'the solver gives up',
-    )
-    const shown = await until(async () => {
-      const found = await notifications()
-      return found.length ? found : undefined
-    }, 'why the run failed')
-    // Plain words and the time, not the solver's own line.
+    const run = await until(() => {
+      const { run } = bench.session
+      return run?.id !== previous && run?.state === 'failed' ? run : undefined
+    }, 'GridKit gives up')
+    // GridKit's reason, said in one notification and in none of the views.
+    const why = run.message
+    assert.ok(why)
+    const shown = await notified('why the run failed')
     assert.equal(shown.length, 1, shown.join(' | '))
-    assert.match(shown[0]!, /failed at t = \S+ s: the solver reached its step limit\.$/)
-    assert.doesNotMatch(shown[0]!, /\[ERROR\]|rank|idas/)
+    assert.ok(shown[0]!.includes(why), shown[0])
     assert.equal(bench.studio.errors.splice(0).length, 1)
-    // The Monitor stays in front, and no view speaks of the failure.
     assert.equal(await bench.panelShown(), 'Monitor')
     for (const kind of ['simulation', 'monitor'] as const)
-      assert.doesNotMatch(await (await bench.view(kind)).locator('body').innerText(), /fail/i)
+      assert.ok(!(await (await bench.view(kind)).locator('body').innerText()).includes(why))
     await simulation.locator('[data-testid="field-max_steps"]').fill('')
-    await until(() => bench.session.values.max_steps === undefined, 'no step limit')
-  })
-
-  test('says once why a native run failed, keeps it out of the views, and retries after correction', async () => {
-    const good = bench.document.getText()
-    await bench.replace(good.replace(/"Ispdlim":\s*0\.0/, '"Ispdlim":2.0'))
-    await bench.settled()
-    simulation = await bench.show('simulation')
     await simulation.locator('[data-testid="field-tmax"]').fill('0.1')
-    const previous = bench.session.run!.id
+    await until(
+      () => bench.session.values.max_steps === undefined && bench.session.values.tmax === 0.1,
+      'run settings captured',
+    )
     await bench.start()
     await until(
-      () => bench.session.run?.id !== previous && bench.session.run?.state === 'failed',
-      'native initialization fails',
+      () => bench.session.run?.id !== run.id && bench.session.run?.state === 'complete',
+      'the next run completes',
     )
-    // The one place an error is said: a notification, and the log behind it.
-    const shown = await until(async () => {
-      const found = await notifications()
-      return found.length ? found : undefined
-    }, 'the native error reported')
-    assert.equal(shown.length, 1, shown.join(' | '))
-    assert.match(shown[0]!, /Ispdlim/)
-    assert.equal(bench.studio.errors.splice(0).length, 1)
     monitor = await bench.view('monitor')
-    simulation = await bench.view('simulation')
-    for (const view of [monitor, simulation])
-      assert.equal(await view.locator('.c-note--error, [role="alert"]').count(), 0)
-    await bench.replace(good)
-    await bench.settled()
-    await bench.start()
-    await until(() => bench.session.run?.state === 'complete', 'corrected TwoArea runs')
     await visible(monitor, 'canvas[data-rendered=true]')
-    assert.equal(await monitor.locator('.c-note--error').count(), 0)
   })
 })

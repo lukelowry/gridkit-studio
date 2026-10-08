@@ -39,6 +39,27 @@ export async function until<T>(
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+/** Do `act` until `done` holds. VS Code drops an input it gets while busy, as a right-click that
+ *  opens no menu, or a click on a menu or a box that does not take: once the act has had time to
+ *  take effect and has not, it is done again. */
+export async function again(
+  act: () => Promise<unknown>,
+  done: () => Promise<boolean> | boolean,
+  label: string,
+  timeout = TIMEOUT,
+): Promise<void> {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    await act()
+    const acted = Date.now()
+    while (Date.now() - acted < 2000) {
+      if (await done()) return
+      await pause(100)
+    }
+  }
+  throw new Error('Timed out: ' + label)
+}
+
 /** Wait for `selector` to show in `frame`. */
 export async function visible(frame: Frame, selector: string): Promise<void> {
   await frame.locator(selector).first().waitFor({ state: 'visible', timeout: TIMEOUT })
@@ -259,13 +280,21 @@ export class TestHost {
         type + ' open',
       )
     }
-    // A box the pointer still rests on shows its state in a hover over the row below; the pointer
-    // leaves first, so the hover goes.
-    await this.page.mouse.move(0, 0)
-    await signals
+    const box = signals
       .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
       .getByRole('checkbox')
-      .click()
+    const checked = await box.isChecked()
+    // A box the pointer rests on shows its state in a hover over the row below: the pointer leaves
+    // before and after each click, so no hover covers the next box.
+    await again(
+      async () => {
+        await this.page.mouse.move(0, 0)
+        await box.click({ timeout: 2000 }).catch(() => {})
+        await this.page.mouse.move(0, 0)
+      },
+      async () => (await box.isChecked()) !== checked,
+      `${type} ${field} ${checked ? 'unchecked' : 'checked'}`,
+    )
   }
 
   /** A playback item of the status bar by the start of its name: Previous sample, Play, Pause,
@@ -381,13 +410,30 @@ export class TestHost {
       .waitFor({ state: 'visible' })
   }
 
+  /** Open a native menu with `open`, as a right-click or More Actions, until it offers `item`. */
+  async opened(open: () => Promise<unknown>, item: string): Promise<void> {
+    const entry = this.page.getByRole('menuitem', { name: new RegExp('^' + item) }).first()
+    await again(open, () => entry.isVisible(), item + ' offered')
+  }
+
+  /** Open a native menu with `open`, and choose `item` from it. */
+  async menu(open: () => Promise<unknown>, item: string): Promise<void> {
+    await this.opened(open, item)
+    await this.choose(item)
+  }
+
   /** Choose `item` from the native menu on show, as the user does: point at it, then click. */
   async choose(item: string): Promise<void> {
     const entry = this.page.getByRole('menuitem', { name: new RegExp('^' + item) })
     await entry.waitFor({ state: 'visible' })
-    await entry.hover()
-    await entry.click()
-    await entry.waitFor({ state: 'detached' })
+    await again(
+      async () => {
+        await entry.hover({ timeout: 2000 }).catch(() => {})
+        await entry.click({ timeout: 2000 }).catch(() => {})
+      },
+      async () => (await entry.count()) === 0,
+      item + ' chosen',
+    )
   }
 
   /** Save a picture of the whole VS Code window. */

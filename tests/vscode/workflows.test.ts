@@ -29,8 +29,7 @@ suite('Workflows', function () {
   const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
   /** Choose `item` from the native menu of `target`. */
   async function menu(target: Locator, item: string) {
-    await target.click({ button: 'right' })
-    await bench.choose(item)
+    await bench.menu(() => target.click({ button: 'right' }), item)
   }
   /** The bus's recorded voltage at time `t` of run `run`. */
   async function voltage(run: string, t: number): Promise<number> {

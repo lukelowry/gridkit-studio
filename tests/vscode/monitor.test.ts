@@ -64,8 +64,10 @@ suite('Monitor', () => {
   })
 
   test('opens its settings from the native context menu', async () => {
-    await monitor.locator('canvas').click({ button: 'right' })
-    await bench.offered('Monitor Settings')
+    await bench.opened(
+      () => monitor.locator('canvas').click({ button: 'right' }),
+      'Monitor Settings',
+    )
     await bench.capture('monitor-native-menu')
     await bench.page.keyboard.press('Escape')
   })

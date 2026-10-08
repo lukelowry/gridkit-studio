@@ -17,8 +17,7 @@ suite('Case', () => {
     view.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
   /** Choose `item` from the native menu of `target`. */
   async function menu(target: Locator, item: string) {
-    await target.click({ button: 'right' })
-    await bench.choose(item)
+    await bench.menu(() => target.click({ button: 'right' }), item)
   }
 
   suiteSetup(async () => {
@@ -114,11 +113,14 @@ suite('Case', () => {
   })
 
   test('offers a field its commands in the native context menu', async () => {
-    await view
-      .locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`)
-      .first()
-      .click({ button: 'right' })
-    await bench.offered('Edit Field')
+    await bench.opened(
+      () =>
+        view
+          .locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`)
+          .first()
+          .click({ button: 'right' }),
+      'Edit Field',
+    )
     await bench.offered('Map To')
     await bench.capture('case-native-menu')
     await bench.page.keyboard.press('Escape')

@@ -119,7 +119,7 @@ jobs:
             gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
           fi
           if ! gh release view "$tag" > /dev/null 2>&1; then
-            gh release create "$tag" --draft --prerelease --verify-tag --title "GridKit Studio $tag" --generate-notes
+            gh release create "$tag" --draft --prerelease --verify-tag --title "GridKit Studio $tag" --notes ""
           fi
           gh release upload "$tag" "$asset" --clobber
           gh release edit "$tag" --draft=false

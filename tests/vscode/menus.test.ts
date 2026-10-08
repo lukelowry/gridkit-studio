@@ -57,8 +57,7 @@ suite('Case panel menus', () => {
   const selected = () => bench.session.selection?.id
   /** Choose `item` from the native menu of `target`. */
   async function menu(target: Locator, item: string) {
-    await target.click({ button: 'right' })
-    await bench.choose(item)
+    await bench.menu(() => target.click({ button: 'right' }), item)
   }
   /** Show the elements of `type` from the title bar. */
   async function show(type: RegExp) {
@@ -89,8 +88,7 @@ suite('Case panel menus', () => {
     await picker.getByRole('button', { name: 'OK' }).click()
     await until(async () => (await header('name').count()) === 0, 'the name column gone')
     await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)
-    await bench.more(bench.page.locator('.part.panel'))
-    await bench.choose('Reset Columns')
+    await bench.menu(() => bench.more(bench.page.locator('.part.panel')), 'Reset Columns')
     await visible(table, `thead th[data-vscode-context*='"field":"name"']`)
   })
 
@@ -142,8 +140,7 @@ suite('Case panel menus', () => {
       )
     }, 'the source selects its element')
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
-    await bench.more(bench.page.locator('.part.panel'))
-    await bench.choose('Open JSON Source')
+    await bench.menu(() => bench.more(bench.page.locator('.part.panel')), 'Open JSON Source')
     await until(
       () => vscode.window.activeTextEditor?.document === bench.document,
       'the source in front',
@@ -167,8 +164,10 @@ suite('Network menus', () => {
   async function menu(id: string, item: string) {
     await idle(network)
     const [x, y] = await point(id)
-    await network.locator('canvas').click({ button: 'right', position: { x, y } })
-    await bench.choose(item)
+    await bench.menu(
+      () => network.locator('canvas').click({ button: 'right', position: { x, y } }),
+      item,
+    )
   }
   const editor = () => bench.page.locator('.part.editor')
 
@@ -272,8 +271,7 @@ suite('Network menus', () => {
       (option) => option.value !== before,
     )!
     try {
-      await bench.more(editor())
-      await bench.choose('Colormap')
+      await bench.menu(() => bench.more(editor()), 'Colormap')
       await bench.page
         .locator('.quick-input-widget .monaco-list-row', {
           hasText: new RegExp(`^${other.label}$`),
@@ -283,8 +281,7 @@ suite('Network menus', () => {
     } finally {
       await settings().update('network.colormap', undefined, vscode.ConfigurationTarget.Workspace)
     }
-    await bench.more(editor())
-    await bench.choose('Network Settings')
+    await bench.menu(() => bench.more(editor()), 'Network Settings')
     await bench.settings(/gridkitStudio\.network/)
   })
 
@@ -292,8 +289,7 @@ suite('Network menus', () => {
     network = await bench.open('network')
     // At rest, so the title bar's menu holds still under the pointer.
     const drawn = (await idle(network)).frames
-    await bench.more(editor())
-    await bench.choose('Reload Visualization')
+    await bench.menu(() => bench.more(editor()), 'Reload Visualization')
     await until(async () => (await frames(network).catch(() => Infinity)) < drawn, 'a new drawing')
     await visible(network, 'canvas[data-rendered=true]')
   })
@@ -324,8 +320,10 @@ suite('Diagram menus', () => {
         ),
       id + ' drawn',
     )
-    await diagram.locator('canvas').click({ button: 'right', position: { x, y } })
-    await bench.choose(item)
+    await bench.menu(
+      () => diagram.locator('canvas').click({ button: 'right', position: { x, y } }),
+      item,
+    )
   }
 
   suiteSetup(async () => {
@@ -356,8 +354,7 @@ suite('Diagram menus', () => {
 
   test('opens its settings from the title bar', async () => {
     diagram = await bench.open('diagram')
-    await bench.more(bench.page.locator('.part.editor'))
-    await bench.choose('Diagram Settings')
+    await bench.menu(() => bench.more(bench.page.locator('.part.editor')), 'Diagram Settings')
     await bench.settings(/gridkitStudio\.diagram/)
   })
 })
@@ -375,13 +372,11 @@ suite('Monitor menus', () => {
     bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: text }).first()
   /** Choose `item` from the native menu of the plot `n`. */
   async function menu(item: string, n = 0) {
-    await monitor.locator('canvas').nth(n).click({ button: 'right' })
-    await bench.choose(item)
+    await bench.menu(() => monitor.locator('canvas').nth(n).click({ button: 'right' }), item)
   }
   /** Choose `item` from the title bar's More Actions. */
   async function more(item: string) {
-    await bench.more(panel())
-    await bench.choose(item)
+    await bench.menu(() => bench.more(panel()), item)
   }
 
   suiteSetup(async () => {
@@ -506,11 +501,9 @@ suite('Studio commands', () => {
   test("says where GridKit runs and shows its output from the Simulation view's menu", async () => {
     await bench.show('simulation')
     const header = bench.page.locator('.pane-header', { hasText: /^Simulation/ })
-    await bench.more(header)
-    await bench.choose('Where GridKit Runs')
+    await bench.menu(() => bench.more(header), 'Where GridKit Runs')
     await bench.settings(/gridkitStudio\.gridkitPath/)
-    await bench.more(header)
-    await bench.choose('Show Simulation Output')
+    await bench.menu(() => bench.more(header), 'Show Simulation Output')
     await until(async () => (await bench.panelShown()) === 'Output', 'the output on show')
   })
 
@@ -540,8 +533,7 @@ suite('Studio commands', () => {
       ['Open Diagram', 'diagram'],
       ['Open Network', 'network'],
     ] as const) {
-      await file.click({ button: 'right' })
-      await bench.choose(item)
+      await bench.menu(() => file.click({ button: 'right' }), item)
       await until(
         () =>
           custom()?.viewType === 'gridkitStudio.' + kind &&

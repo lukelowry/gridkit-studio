@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",

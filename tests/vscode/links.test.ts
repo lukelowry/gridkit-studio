@@ -55,9 +55,16 @@ suite('Links', () => {
 
   test('brings a bus picked in the Network into view in the table', async () => {
     const id = 'Bus/' + bench.source.buses.at(-1)!.number
-    const [x, y] = await point(id)
-    await network.locator('canvas').click({ position: { x, y } })
-    await until(() => bench.session.selection?.id === id, 'the pick selects the bus')
+    // Where the Network draws it as the click is made: a view still moving moves it.
+    await again(
+      async () => {
+        await idle(network)
+        const [x, y] = await point(id)
+        await network.locator('canvas').click({ position: { x, y } })
+      },
+      () => bench.session.selection?.id === id,
+      'the pick selects the bus',
+    )
     await until(async () => {
       const row = await table.locator('tbody tr.selected').boundingBox()
       const area = await table.locator('.case__scroll').boundingBox()
@@ -97,9 +104,15 @@ suite('Links', () => {
   test('offers each thing its own menu', async () => {
     // A bus in the Network, the one just framed: where else it shows, and what to do with the
     // whole element. The camera rests first, so the bus is where it was found.
-    await idle(network)
-    const [x, y] = await point(bench.session.selection!.id)
-    const bus = await bench.offered(network.locator('canvas'), { x, y })
+    const id = bench.session.selection!.id
+    const bus = await bench.offered(network.locator('canvas'), {
+      on: id,
+      at: async () => {
+        await idle(network)
+        const [x, y] = await point(id)
+        return { x, y }
+      },
+    })
     for (const item of [
       'Reveal in Source',
       'Reveal in Case',

@@ -151,9 +151,9 @@ suite('Network menus', () => {
     )
     return { x, y }
   }
-  /** Right-click `id` where the Network drew it, and choose `item`. */
+  /** Right-click `id` where the Network draws it, and choose `item`. */
   async function menu(id: string, item: string) {
-    await bench.menu(network.locator('canvas'), item, await point(id))
+    await bench.menu(network.locator('canvas'), item, { on: id, at: () => point(id) })
   }
 
   suiteSetup(async () => {
@@ -287,17 +287,20 @@ suite('Diagram menus', () => {
     JSON.stringify(
       (await diagram.evaluate<{ camera: unknown } | null>('gridkitSelection()'))?.camera,
     )
-  /** Right-click the block, or its port `field`, where the Diagram drew it last. */
+  /** Right-click the block, or its port `field`, where the Diagram draws it. */
   async function menu(field: string | undefined, item: string) {
-    await idle(diagram)
-    const [x, y] = await until(
-      () =>
-        diagram.evaluate<[number, number] | null>(
-          `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
-        ),
-      id + ' drawn',
-    )
-    await bench.menu(diagram.locator('canvas'), item, { x, y })
+    const at = async () => {
+      await idle(diagram)
+      const [x, y] = await until(
+        () =>
+          diagram.evaluate<[number, number] | null>(
+            `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
+          ),
+        id + ' drawn',
+      )
+      return { x, y }
+    }
+    await bench.menu(diagram.locator('canvas'), item, { on: 'Ieeest/' + id, at })
   }
 
   suiteSetup(async () => {

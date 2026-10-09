@@ -67,16 +67,20 @@ suite('Native menus', () => {
   test("a bus on the Network shows its menu's items, and runs the one chosen", async () => {
     const network = await bench.open('network')
     const id = 'Bus/' + bench.source.buses[2]!.number
-    await idle(network)
-    const [x, y] = await until(
-      () => network.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(id)})`),
-      id + ' drawn',
-    )
+    /** Where the Network draws the bus now. */
+    const at = async () => {
+      await idle(network)
+      const [x, y] = await until(
+        () => network.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(id)})`),
+        id + ' drawn',
+      )
+      return { x, y }
+    }
     const canvas = network.locator('canvas')
-    const offered = await bench.offered(canvas, { x, y })
+    const offered = await bench.offered(canvas, { on: id, at })
     await vscode.env.clipboard.writeText('')
     const shown = await bench.native(
-      () => canvas.click({ button: 'right', position: { x, y } }),
+      async () => canvas.click({ button: 'right', position: await at() }),
       'Copy Identifier',
       async () => (await clipboard()) === id,
     )

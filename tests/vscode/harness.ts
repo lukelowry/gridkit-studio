@@ -20,6 +20,13 @@ const TIMEOUT = 30_000
  *  in front. */
 export type TitleBar = 'case' | 'monitor' | 'simulation' | 'signals' | 'export' | 'editor'
 
+/** What a right-click on a canvas view aims at: the element `on`, where the view draws it now. That
+ *  is found again before each try, as a view may move between finding it and the click. */
+export interface Aim {
+  readonly on: string
+  readonly at: () => Promise<{ x: number; y: number }>
+}
+
 /** A label `name` starts with, as a pattern. */
 const starting = (name: string) => new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
 
@@ -419,27 +426,38 @@ export class TestHost {
     }
   }
 
-  /** What a right-click on `target`, at `position` in it, carries to VS Code's menu: its
-   *  `data-vscode-context` merged up the tree, or what a canvas view found under the pointer. A
-   *  right-click VS Code dropped while busy is clicked again, but only well after a canvas view
-   *  could have answered it, as each click opens a menu of its own. */
-  async carried(
-    target: Locator,
-    position?: { x: number; y: number },
-  ): Promise<Record<string, unknown>> {
+  /** What a right-click on `target`, or on what `aim` points at in it, carries to VS Code's menu:
+   *  its `data-vscode-context` merged up the tree, or what a canvas view found under the pointer.
+   *  A right-click VS Code dropped while busy, or one that missed what it aimed at, is made again:
+   *  the probe keeps the menu of each try from VS Code. */
+  async carried(target: Locator, aim?: Aim): Promise<Record<string, unknown>> {
     const caught = () =>
       target.evaluate(
         (node: Probed) => (node.ownerDocument.defaultView as Probing).gridkitMenus ?? [],
       )
+    // On what it aimed at: among what lies under the pointer, as overlapping elements all are.
+    const aimed = (context: Record<string, unknown>) =>
+      !aim ||
+      !!(context.gridkitTarget as { items?: { id: string }[] }).items?.some(
+        (item) => item.id === aim.on,
+      )
     await target.evaluate(probe)
     await again(
-      () => target.click({ button: 'right', position, timeout: 2000 }).catch(() => {}),
-      async () => (await caught()).length > 0,
-      'a menu opened on ' + target,
-      TIMEOUT,
-      10_000,
+      async () => {
+        const position = aim && (await aim.at())
+        await target.click({ button: 'right', position, timeout: 2000 }).catch(() => {})
+      },
+      async () => (await caught()).some(aimed),
+      async () => {
+        const got = (await caught()).map((context) =>
+          ((context.gridkitTarget as { items?: { id: string }[] }).items ?? [])
+            .map((item) => item.id)
+            .join(' and '),
+        )
+        return `a menu on ${aim?.on ?? target}${got.length ? `, not on ${got.join(', ')}` : ''}`
+      },
     )
-    return (await caught())[0]!
+    return (await caught()).find(aimed)!
   }
 
   /** Let VS Code open the menus right-clicks open again, in every page the probe watches. */
@@ -453,14 +471,14 @@ export class TestHost {
   }
 
   /** The titles of what a right-click on `target` offers, as VS Code would show them. */
-  async offered(target: Locator, position?: { x: number; y: number }): Promise<string[]> {
-    const context = await this.carried(target, position)
+  async offered(target: Locator, aim?: Aim): Promise<string[]> {
+    const context = await this.carried(target, aim)
     return this.menus.offered('webview/context', context).map((each) => each.title)
   }
 
-  /** Right-click `target`, at `position` in it, and choose `item` from what it offers. */
-  async menu(target: Locator, item: string, position?: { x: number; y: number }): Promise<void> {
-    const context = await this.carried(target, position)
+  /** Right-click `target`, or what `aim` points at in it, and choose `item` from what it offers. */
+  async menu(target: Locator, item: string, aim?: Aim): Promise<void> {
+    const context = await this.carried(target, aim)
     const { command } = this.menus.find('webview/context', item, context)
     assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
     const origin = context.gridkitOrigin as string

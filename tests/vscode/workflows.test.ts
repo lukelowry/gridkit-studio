@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 
 import type { RowsBlock } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
-import type { Frame, Locator } from 'playwright-core'
+import type { Frame } from 'playwright-core'
 
 import { rowsOf } from '../../src/shared/cells.js'
 import { frames, type TestHost, testHost, until, visible } from './harness.js'
@@ -20,17 +20,12 @@ suite('Workflows', function () {
   let table: Frame
   let bus: TestHost['source']['buses'][number]
   let id: string
-  const picker = () => bench.page.locator('.quick-input-widget')
   /** The bus's row in the Case panel. */
   const row = () =>
     table
       .locator('tbody tr')
       .filter({ has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${bus.number}$`) }) })
   const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
-  /** Choose `item` from the native menu of `target`. */
-  async function menu(target: Locator, item: string) {
-    await bench.menu(() => target.click({ button: 'right' }), item)
-  }
   /** The bus's recorded voltage at time `t` of run `run`. */
   async function voltage(run: string, t: number): Promise<number> {
     const blocks = await bench.studio.client.call('query', {
@@ -54,6 +49,7 @@ suite('Workflows', function () {
     if (!(await bench.gridkit())) this.skip()
     network = await bench.open('network')
     table = await bench.show('case')
+    await bench.caseType('Bus')
     await visible(table, 'tbody .cell')
     bus = bench.source.buses.at(-1)!
     id = 'Bus/' + bus.number
@@ -61,9 +57,8 @@ suite('Workflows', function () {
 
   test('finds a bus by name and sees it selected on the Network', async () => {
     // VS Code's own input box, from the Case panel's title bar, filters as it is typed in.
-    await bench.panelAction('Filter Rows').click()
-    await bench.page.locator('.quick-input-widget input').fill(bus.name)
-    await bench.page.locator('.quick-input-widget input').press('Enter')
+    await bench.title('case', 'Filter Rows')
+    await bench.answer(bus.name)
     await until(
       async () =>
         (await table.locator('tbody th[scope="row"]').count()) === 1 && (await row().count()) === 1,
@@ -80,9 +75,8 @@ suite('Workflows', function () {
 
   test('changes its voltage level from the cell menu, and takes it back with undo', async () => {
     const changed = bus.params.kv + 1
-    await menu(kv().locator('.cell'), 'Edit Field')
-    await picker().locator('input').fill(String(changed))
-    await picker().locator('input').press('Enter')
+    await bench.menu(kv().locator('.cell'), 'Edit Field')
+    await bench.answer(String(changed))
     await until(
       () =>
         JSON.parse(bench.document.getText()).buses.find(
@@ -103,13 +97,13 @@ suite('Workflows', function () {
   })
 
   test('faults it from its menu, runs GridKit, and reads its voltage drop in the Monitor', async () => {
-    await menu(row().locator('th[scope="row"]'), 'Configure Fault')
+    await bench.menu(row().locator('th[scope="row"]'), 'Configure Fault')
     await until(
       () => bench.session.values.fault === true && bench.session.values.fault_bus === id,
       'the next run faults the bus',
     )
-    await menu(row().locator('th[scope="row"]'), 'Plot Signal')
-    await picker().locator('.monaco-list-row', { hasText: 'Bus.Vm' }).click()
+    await bench.menu(row().locator('th[scope="row"]'), 'Plot Signal')
+    await bench.pick('Bus.Vm')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm' && plot.id === id),
       'its voltage plotted',
@@ -144,12 +138,11 @@ suite('Workflows', function () {
     const monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     const before = await frames(network)
-    await menu(monitor.locator('canvas').first(), 'Map To')
-    await picker().locator('.monaco-list-row', { hasText: 'Vertex Color' }).click()
-    await picker().getByRole('button', { name: 'OK' }).click()
+    await bench.menu(monitor.locator('canvas').first(), 'Map To')
+    await bench.check(['Vertex Color'])
     await until(() => bench.session.bindings.vertexColor?.field === 'Vm', 'voltage mapped to color')
     await until(async () => (await frames(network)) > before, 'the Network repaints')
-    await menu(monitor.locator('canvas').first(), 'Remove Mapping')
+    await bench.menu(monitor.locator('canvas').first(), 'Remove Mapping')
     await until(() => !bench.session.bindings.vertexColor, 'the mapping removed')
   })
 })

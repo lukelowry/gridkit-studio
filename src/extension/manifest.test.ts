@@ -3,10 +3,28 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { holds, type Manifest, Menus, named } from '../../tests/menus.js'
 import { catalog } from '../gridkit/index.js'
 import { menuContext } from '../shared/contexts.js'
 import { defaults, definitions, validateSettings } from '../shared/preferences.js'
 describe('native VS Code contract', () => {
+  it('places each command by a clause VS Code reads, and webview menus by keys every view gives', async () => {
+    const menus = new Menus(JSON.parse(await readFile('package.json', 'utf8')) as Manifest)
+    // Every menu any view opens carries the same keys, whatever it was opened on.
+    const given = new Set(
+      Object.keys(
+        menuContext(
+          { schema: catalog.schema, editable: {} },
+          { uri: '', version: 0, origin: 'case' },
+        ),
+      ),
+    )
+    for (const { place, when } of menus.clauses()) {
+      expect(() => holds(when, {}), place + ': ' + when).not.toThrow()
+      if (place === 'webview/context')
+        for (const key of named(when)) expect(given, `${key} in "${when}"`).toContain(key)
+    }
+  })
   it('exposes every display setting exactly once with resource scope', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
     const settings = Object.assign(

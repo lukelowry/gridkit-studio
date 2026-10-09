@@ -22,12 +22,6 @@ suite('Links', () => {
     table.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
   const cells = (field: string): Locator =>
     table.locator(`td[data-vscode-context*='"field":"${field}"'] .cell`)
-  const offered = (item: string) =>
-    bench.page.getByRole('menuitem', { name: new RegExp('^' + item) }).count()
-  /** Choose `item` from the native menu of `target`. */
-  async function menu(target: Locator, item: string) {
-    await bench.menu(() => target.click({ button: 'right' }), item)
-  }
   /** Where the Network drew `id` in its latest frame. */
   const point = (id: string) =>
     until(
@@ -39,6 +33,7 @@ suite('Links', () => {
     bench = await testHost()
     network = await bench.open('network')
     table = await bench.show('case')
+    await bench.caseType('Bus')
     await visible(table, 'tbody .cell')
   })
 
@@ -92,7 +87,7 @@ suite('Links', () => {
 
   test('zooms the Network to the neighborhood of a row', async () => {
     const before = JSON.stringify((await shown())?.camera)
-    await menu(table.locator('tbody th[scope="row"]').nth(5), 'Zoom to Neighborhood')
+    await bench.menu(table.locator('tbody th[scope="row"]').nth(5), 'Zoom to Neighborhood')
     await until(
       async () => JSON.stringify((await shown())?.camera) !== before,
       'the Network frames it',
@@ -104,56 +99,51 @@ suite('Links', () => {
     // whole element. The camera rests first, so the bus is where it was found.
     await idle(network)
     const [x, y] = await point(bench.session.selection!.id)
-    await bench.opened(
-      () => network.locator('canvas').click({ button: 'right', position: { x, y } }),
-      'Reveal in Source',
-    )
+    const bus = await bench.offered(network.locator('canvas'), { x, y })
     for (const item of [
       'Reveal in Source',
       'Reveal in Case',
       'Zoom to Neighborhood',
-      'Plot Signal',
+      'Plot Signal…',
     ])
-      await bench.offered(item)
-    assert.equal(await offered('Reveal in Network'), 0, 'the Network does not reveal in itself')
-    assert.equal(await offered('Map To'), 0, 'a whole element maps nothing')
-    await bench.page.keyboard.press('Escape')
+      assert.ok(bus.includes(item), `${item} offered: ${bus.join(', ')}`)
+    assert.ok(!bus.includes('Reveal in Network'), 'the Network does not reveal in itself')
+    assert.ok(!bus.includes('Map To…'), 'a whole element maps nothing')
     // A cell: its value.
-    await bench.opened(() => cells('params.kv').first().click({ button: 'right' }), 'Edit Field')
-    for (const item of ['Edit Field', 'Reveal in Network', 'Filter to This Value', 'Copy Value'])
-      await bench.offered(item)
-    assert.equal(await offered('Sort Ascending'), 0, 'a cell does not order its column')
-    await bench.capture('links-cell-menu')
-    await bench.page.keyboard.press('Escape')
+    const cell = await bench.offered(cells('params.kv').first())
+    for (const item of ['Edit Field…', 'Reveal in Network', 'Filter to This Value', 'Copy Value'])
+      assert.ok(cell.includes(item), `${item} offered: ${cell.join(', ')}`)
+    assert.ok(!cell.includes('Sort Ascending'), 'a cell does not order its column')
   })
 
   test('orders, filters and hides the rows from their menus', async () => {
-    await menu(header('params.kv'), 'Sort Descending')
+    await bench.menu(header('params.kv'), 'Sort Descending')
     await until(
       async () => (await header('params.kv').getAttribute('aria-sort')) === 'descending',
       'sorted',
     )
     // The order on show is not offered again.
-    await bench.opened(() => header('params.kv').click({ button: 'right' }), 'Sort Ascending')
-    assert.equal(await offered('Sort Descending'), 0)
-    await bench.choose('Clear Sort')
+    const sorted = await bench.offered(header('params.kv'))
+    assert.ok(sorted.includes('Sort Ascending') && sorted.includes('Clear Sort'), sorted.join())
+    assert.ok(!sorted.includes('Sort Descending'), sorted.join())
+    await bench.menu(header('params.kv'), 'Clear Sort')
     await until(
       async () => (await header('params.kv').getAttribute('aria-sort')) === 'none',
       'unsorted',
     )
     // One name: the rows holding it, until the title bar's Clear Filter.
     const name = (await cells('name').first().innerText()).trim()
-    await menu(cells('name').first(), 'Filter to This Value')
+    await bench.menu(cells('name').first(), 'Filter to This Value')
     await until(async () => {
       const names = (await cells('name').allInnerTexts()).map((text) => text.trim())
       return names.length > 0 && names.every((text) => text === name)
     }, 'only rows of that name')
-    await bench.panelAction('Clear Filter').click()
+    await bench.title('case', 'Clear Filter')
     await until(
       async () => (await cells('name').count()) === bench.source.buses.length,
       'every row again',
     )
-    await menu(header('params.kv'), 'Hide Column')
+    await bench.menu(header('params.kv'), 'Hide Column')
     await until(async () => (await header('params.kv').count()) === 0, 'the column hidden')
     await vscode.commands.executeCommand('gridkitStudio.resetColumns')
     await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)

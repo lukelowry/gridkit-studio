@@ -63,8 +63,8 @@
   )
   const context = (id: string | null, field?: string) =>
     view.summary
-      ? JSON.stringify({
-          ...menuContext(
+      ? JSON.stringify(
+          menuContext(
             view.summary,
             {
               uri: view.summary.uri,
@@ -75,11 +75,10 @@
               ...(id ? { element: { id, ...(field ? { field } : {}) } } : {}),
             },
             view.bindings,
+            // The panel's own view of its rows, for the items that change it.
+            { sort: order, filtered: !!(filter || equal) },
           ),
-          // The panel's own view of its rows, for the items that change it.
-          gridkitSort: field && order?.field === field ? order.direction : '',
-          gridkitFiltered: !!(filter || equal),
-        })
+        )
       : '{}'
   const persist = () =>
     bridge.send({

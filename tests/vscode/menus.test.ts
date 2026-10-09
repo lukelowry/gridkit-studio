@@ -10,7 +10,6 @@ import * as vscode from 'vscode'
 
 import { definitions } from '../../src/shared/preferences.js'
 import {
-  again,
   folder,
   frames,
   idle,
@@ -56,40 +55,30 @@ suite('Case panel menus', () => {
   const row = (id: string): Locator =>
     table.locator('tbody th[scope="row"]', { hasText: new RegExp(`^${id}$`) })
   const selected = () => bench.session.selection?.id
-  /** Choose `item` from the native menu of `target`. */
-  async function menu(target: Locator, item: string) {
-    await bench.menu(() => target.click({ button: 'right' }), item)
-  }
-  /** Show the elements of `type` from the title bar. */
-  async function show(type: RegExp) {
-    await bench.panelAction('Choose Type').click()
-    await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: type }).click()
-  }
 
   suiteSetup(async () => {
     bench = await testHost()
     table = await bench.show('case')
+    await bench.caseType('Bus')
     await visible(table, 'tbody .cell')
   })
 
   test("copies a row's id, a value, and a column's path", async () => {
     const [bus] = bench.source.buses
-    await menu(row(String(bus!.number)), 'Copy Identifier')
+    await bench.menu(row(String(bus!.number)), 'Copy Identifier')
     await until(async () => (await clipboard()) === 'Bus/' + bus!.number, 'the id copied')
-    await menu(cells('params.kv').first(), 'Copy Value')
+    await bench.menu(cells('params.kv').first(), 'Copy Value')
     await until(async () => (await clipboard()) === String(bus!.params.kv), 'the value copied')
-    await menu(header('params.kv'), 'Copy Field Path')
+    await bench.menu(header('params.kv'), 'Copy Field Path')
     await until(async () => (await clipboard()) === 'params.kv', 'the path copied')
   })
 
   test('chooses its columns from the title bar, and resets them from its menu', async () => {
-    await bench.panelAction('Choose Columns').click()
-    const picker = bench.page.locator('.quick-input-widget')
-    await picker.locator('.monaco-list-row', { hasText: /^name/ }).click()
-    await picker.getByRole('button', { name: 'OK' }).click()
+    await bench.title('case', 'Choose Columns')
+    await bench.check(['name'], false)
     await until(async () => (await header('name').count()) === 0, 'the name column gone')
     await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)
-    await bench.menu(() => bench.more(bench.page.locator('.part.panel')), 'Reset Columns')
+    await bench.title('case', 'Reset Columns')
     await visible(table, `thead th[data-vscode-context*='"field":"name"']`)
   })
 
@@ -99,29 +88,27 @@ suite('Case panel menus', () => {
       ['Go to Endpoint 1', 'bus1'],
       ['Go to Endpoint 2', 'bus2'],
     ] as const) {
-      await show(/^Branch/)
-      await menu(row(branch.id), item)
+      await bench.caseType('Branch')
+      await bench.menu(row(branch.id), item)
       await until(() => selected() === 'Bus/' + branch.ports[end], item)
     }
     // Its second end, among the columns the title bar offers.
-    await show(/^Branch/)
-    await bench.panelAction('Choose Columns').click()
-    const picker = bench.page.locator('.quick-input-widget')
-    await picker.locator('.monaco-list-row', { hasText: /^bus2/ }).click()
-    await picker.getByRole('button', { name: 'OK' }).click()
+    await bench.caseType('Branch')
+    await bench.title('case', 'Choose Columns')
+    await bench.check(['bus2'])
     const reference = table
       .locator('tbody tr', {
         has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${branch.id}$`) }),
       })
       .locator(`td[data-vscode-context*='"field":"ports.bus2"'] .cell`)
-    await menu(reference, 'Go to Referenced Element')
+    await bench.menu(reference, 'Go to Referenced Element')
     await until(() => selected() === 'Bus/' + branch.ports.bus2, 'the bus it names')
   })
 
   test('reveals a row in the Diagram and in the source, and opens the source from its menu', async () => {
     const generator = source().devices.find((device) => device.class === 'Genrou')!
-    await show(/^GENROU/i)
-    await menu(row(generator.id), 'Reveal in Diagram')
+    await bench.caseType('Genrou')
+    await bench.menu(row(generator.id), 'Reveal in Diagram')
     await until(() => custom()?.viewType === 'gridkitStudio.diagram', 'the Diagram in front')
     const diagram = await bench.view('diagram')
     await until(
@@ -132,7 +119,7 @@ suite('Case panel menus', () => {
       'the Diagram selects it',
     )
     table = await bench.show('case')
-    await menu(row(generator.id), 'Reveal in Source')
+    await bench.menu(row(generator.id), 'Reveal in Source')
     await until(() => {
       const editor = vscode.window.activeTextEditor
       return (
@@ -141,7 +128,7 @@ suite('Case panel menus', () => {
       )
     }, 'the source selects its element')
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
-    await bench.menu(() => bench.more(bench.page.locator('.part.panel')), 'Open JSON Source')
+    await bench.title('case', 'Open JSON Source')
     await until(
       () => vscode.window.activeTextEditor?.document === bench.document,
       'the source in front',
@@ -155,22 +142,19 @@ suite('Network menus', () => {
   const camera = async () =>
     (await network.evaluate<{ camera: Record<string, unknown> } | null>('gridkitSelection()'))
       ?.camera
-  /** Where the Network drew `id` in its latest frame. */
-  const point = (id: string) =>
-    until(
+  /** Where the Network drew `id` in its latest frame, once the camera rests. */
+  async function point(id: string) {
+    await idle(network)
+    const [x, y] = await until(
       () => network.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(id)})`),
       id + ' drawn',
     )
-  /** Right-click `id` where the Network drew it, once the camera rests. */
-  async function menu(id: string, item: string) {
-    await idle(network)
-    const [x, y] = await point(id)
-    await bench.menu(
-      () => network.locator('canvas').click({ button: 'right', position: { x, y } }),
-      item,
-    )
+    return { x, y }
   }
-  const editor = () => bench.page.locator('.part.editor')
+  /** Right-click `id` where the Network drew it, and choose `item`. */
+  async function menu(id: string, item: string) {
+    await bench.menu(network.locator('canvas'), item, await point(id))
+  }
 
   suiteSetup(async () => {
     bench = await testHost()
@@ -203,9 +187,7 @@ suite('Network menus', () => {
     try {
       network = await bench.open('network')
       await menu('Branch/' + line.id, 'Select Overlapping')
-      await bench.page
-        .locator('.quick-input-widget .monaco-list-row', { hasText: 'Branch/' + second.id })
-        .click()
+      await bench.pick('Branch/' + second.id)
       await until(
         () => bench.session.selection?.id === 'Branch/' + second.id,
         'the second circuit selected',
@@ -234,15 +216,14 @@ suite('Network menus', () => {
   test('fits from the editor title bar, and turns from its own toolbar', async () => {
     // This test exercises motion; the host's accessibility preference may disable orbit.
     await bench.page.emulateMedia({ reducedMotion: 'no-preference' })
-    const fit = bench.page.locator('.part.editor').getByRole('button', { name: /^Fit All/ })
     try {
-      await fit.click()
+      await bench.title('editor', 'Fit All')
       await idle(network)
       const fitted = await camera()
       await network.locator('canvas').hover()
       await bench.page.mouse.wheel(0, -800)
       await until(async () => !near(await camera(), fitted), 'zoomed in')
-      await fit.click()
+      await bench.title('editor', 'Fit All')
       await until(async () => near(await camera(), fitted), 'fitted again')
       const turn = network.getByRole('button', { name: 'Auto-rotate' })
       await turn.click()
@@ -258,7 +239,7 @@ suite('Network menus', () => {
 
   test('changes projection from the Command Palette', async () => {
     await bench.palette('Projection…')
-    await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: /^tilt/ }).click()
+    await bench.pick('tilt')
     await until(async () => (await camera())?.projection === 'tilt', 'tilted')
     await network.getByRole('button', { name: 'Flat', exact: true }).click()
     await until(async () => (await camera())?.projection === 'flat', 'flat again')
@@ -272,25 +253,20 @@ suite('Network menus', () => {
       (option) => option.value !== before,
     )!
     try {
-      await bench.menu(() => bench.more(editor()), 'Colormap')
-      await bench.page
-        .locator('.quick-input-widget .monaco-list-row', {
-          hasText: new RegExp(`^${other.label}$`),
-        })
-        .click()
+      await bench.title('editor', 'Colormap')
+      await bench.pick(new RegExp(`^${other.label}$`), other.label)
       await until(() => settings().get('network.colormap') === other.value, 'the colormap set')
     } finally {
       await settings().update('network.colormap', undefined, vscode.ConfigurationTarget.Workspace)
     }
-    await bench.menu(() => bench.more(editor()), 'Network Settings')
+    await bench.title('editor', 'Network Settings')
     await bench.settings(/gridkitStudio\.network/)
   })
 
   test('draws again from the start from its title bar', async () => {
     network = await bench.open('network')
-    // At rest, so the title bar's menu holds still under the pointer.
     const drawn = (await idle(network)).frames
-    await bench.menu(() => bench.more(editor()), 'Reload Visualization')
+    await bench.title('editor', 'Reload Visualization')
     await until(async () => (await frames(network).catch(() => Infinity)) < drawn, 'a new drawing')
     await visible(network, 'canvas[data-rendered=true]')
   })
@@ -313,17 +289,15 @@ suite('Diagram menus', () => {
     )
   /** Right-click the block, or its port `field`, where the Diagram drew it last. */
   async function menu(field: string | undefined, item: string) {
-    await bench.menu(async () => {
-      await idle(diagram)
-      const [x, y] = await until(
-        () =>
-          diagram.evaluate<[number, number] | null>(
-            `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
-          ),
-        id + ' drawn',
-      )
-      await diagram.locator('canvas').click({ button: 'right', position: { x, y } })
-    }, item)
+    await idle(diagram)
+    const [x, y] = await until(
+      () =>
+        diagram.evaluate<[number, number] | null>(
+          `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
+        ),
+      id + ' drawn',
+    )
+    await bench.menu(diagram.locator('canvas'), item, { x, y })
   }
 
   suiteSetup(async () => {
@@ -354,7 +328,7 @@ suite('Diagram menus', () => {
 
   test('opens its settings from the title bar', async () => {
     diagram = await bench.open('diagram')
-    await bench.menu(() => bench.more(bench.page.locator('.part.editor')), 'Diagram Settings')
+    await bench.title('editor', 'Diagram Settings')
     await bench.settings(/gridkitStudio\.diagram/)
   })
 })
@@ -362,21 +336,13 @@ suite('Diagram menus', () => {
 suite('Monitor menus', () => {
   let bench: TestHost
   let monitor: Frame
-  const panel = () => bench.page.locator('.part.panel')
   const plotted = () =>
     monitor.evaluate<{ x: number[]; y: number[] }>(
       'document.querySelector("canvas").gridkitPlot().camera',
     )
-  const input = () => bench.page.locator('.quick-input-widget input')
-  const row = (text: string | RegExp) =>
-    bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: text }).first()
-  /** Choose `item` from the native menu of the plot `n`. */
+  /** Choose `item` from the menu of the plot `n`. */
   async function menu(item: string, n = 0) {
-    await bench.menu(() => monitor.locator('canvas').nth(n).click({ button: 'right' }), item)
-  }
-  /** Choose `item` from the title bar's More Actions. */
-  async function more(item: string) {
-    await bench.menu(() => bench.more(panel()), item)
+    await bench.menu(monitor.locator('canvas').nth(n), item)
   }
 
   suiteSetup(async () => {
@@ -391,24 +357,22 @@ suite('Monitor menus', () => {
   test('narrows a plot to another element from its menu', async () => {
     const id = 'Bus/' + bench.source.buses[4]!.number
     await menu('Choose Plot Element')
-    await input().fill(id)
-    await row(id).click()
+    // The picker names each bus, its id beside the name; typing an exact id finds that one.
+    await bench.pick(new RegExp(id), id)
     await until(() => bench.session.plots[0]?.id === id, 'the plot narrowed')
   })
 
   test("sets a plot's value range from its menu", async () => {
     await menu('Plot Value Range')
-    await input().fill('0.5, 1.5')
-    await input().press('Enter')
+    await bench.answer('0.5, 1.5')
     await until(async () => (await plotted()).y.join() === '0.5,1.5', 'the range set')
   })
 
   test('narrows the time it shows and fits it back from the title bar', async () => {
-    await more('Time Window')
-    await input().fill('0.2, 0.4')
-    await input().press('Enter')
+    await bench.title('monitor', 'Time Window')
+    await bench.answer('0.2, 0.4')
     await until(async () => (await plotted()).x.join() === '0.2,0.4', 'the window narrowed')
-    await more('Fit Recorded Time')
+    await bench.title('monitor', 'Fit Recorded Time')
     const run = bench.session.run!
     await until(
       async () => (await plotted()).x.join() === (run.span ?? run.domain).join(),
@@ -422,7 +386,7 @@ suite('Monitor menus', () => {
       .locator('canvas')
       .first()
       .evaluate((canvas) => (canvas.dataset.before = ''))
-    await more('Reload Monitor')
+    await bench.title('monitor', 'Reload Monitor')
     await until(
       async () => (await monitor.locator('canvas[data-before]').count()) === 0,
       'remounted',
@@ -432,13 +396,13 @@ suite('Monitor menus', () => {
 
   test('repeats playback as chosen from the Command Palette', async () => {
     await bench.palette('Repeat Mode…')
-    await row(/^Bounce/).click()
+    await bench.pick('Bounce')
     await until(() => bench.session.transport.state.loop === 'pingpong', 'bouncing')
   })
 
   test('adds a plot from the title bar, and removes plots from their menu and close button', async () => {
-    await bench.panelAction('Add Plot').click()
-    await row('Vm').click()
+    await bench.title('monitor', 'Add Plot')
+    await bench.pick(/Vm/, 'Vm')
     await until(() => bench.session.plots.length === 2, 'a second plot')
     await until(
       async () => (await monitor.locator('canvas').count()) === 2,
@@ -454,7 +418,7 @@ suite('Monitor menus', () => {
 
   test('exports the run as CSV from the title bar', async () => {
     const csv = vscode.Uri.joinPath(folder(), 'Exported run.csv')
-    await more('Export CSV')
+    await bench.title('monitor', 'Export CSV')
     await bench.dialog(csv.fsPath)
     await until(
       () =>
@@ -470,9 +434,9 @@ suite('Monitor menus', () => {
 
   test('imports results from the title bar, and plots one of their signals', async () => {
     const before = bench.session.run!.id
-    await more('Import Results')
+    await bench.title('monitor', 'Import Results')
     await bench.dialog(vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath)
-    await row('Bus.Vm').click()
+    await bench.pick('Bus.Vm')
     await until(() => bench.session.run?.id !== before, 'the imported run on show')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm'),
@@ -482,7 +446,7 @@ suite('Monitor menus', () => {
   })
 
   test('clears the results from the title bar, and playback leaves the status bar', async () => {
-    await more('Clear Results')
+    await bench.title('monitor', 'Clear Results')
     await until(() => !bench.session.run, 'no results')
     await visible(monitor, '.c-empty')
     await until(async () => (await bench.playback('Play').count()) === 0, 'playback gone')
@@ -500,14 +464,10 @@ suite('Studio commands', () => {
 
   test("says where GridKit runs and shows its output from the Simulation view's menu", async () => {
     await bench.show('simulation')
-    const header = bench.page.locator('.pane-header', { hasText: /^Simulation/ })
-    await bench.menu(() => bench.more(header), 'Where GridKit Runs')
+    await bench.title('simulation', 'Where GridKit Runs')
     await bench.settings(/gridkitStudio\.gridkitPath/)
-    await again(
-      () => bench.menu(() => bench.more(header), 'Show Simulation Output'),
-      async () => (await bench.panelShown()) === 'Output',
-      'the output on show',
-    )
+    await bench.title('simulation', 'Show Simulation Output')
+    await until(async () => (await bench.panelShown()) === 'Output', 'the output on show')
   })
 
   test('validates the case and diagnoses performance from the Command Palette', async () => {
@@ -528,25 +488,18 @@ suite('Studio commands', () => {
         custom()?.path === copy.path.toLowerCase(),
       'its Network in front',
     )
-    await vscode.commands.executeCommand('revealInExplorer', bench.uri)
-    const file = bench.page
-      .locator('.part.sidebar')
-      .getByRole('treeitem', { name: /IEEE39\.case\.json/ })
     for (const [item, kind] of [
       ['Open Diagram', 'diagram'],
       ['Open Network', 'network'],
     ] as const) {
-      await bench.menu(() => file.click({ button: 'right' }), item)
+      bench.explorer(bench.uri, item)
       await until(
         () =>
           custom()?.viewType === 'gridkitStudio.' + kind &&
           custom()?.path === bench.uri.path.toLowerCase(),
         item,
       )
-      // Drawn and at rest before the next menu opens over it.
-      const view = await bench.view(kind)
-      await visible(view, 'canvas[data-rendered=true]')
-      await idle(view)
+      await visible(await bench.view(kind), 'canvas[data-rendered=true]')
     }
   })
 })

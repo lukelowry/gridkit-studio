@@ -24,7 +24,10 @@ suite('Simulation', () => {
 
   test('shows its typed fields, and Start in its title bar', async () => {
     await visible(simulation, '[data-testid="field-tmax"]')
-    await (await bench.viewAction(/^Simulation/, 'Start Simulation')).waitFor()
+    // A side bar view shows its title bar's actions while the pointer is over its header.
+    const header = bench.page.locator('.pane-header', { hasText: /^Simulation/ })
+    await header.hover()
+    await header.getByRole('button', { name: /^Start Simulation/ }).waitFor()
     // Its title bar starts the run; the form has no Start of its own.
     assert.equal(await simulation.getByRole('button', { name: /^Start/ }).count(), 0)
     await bench.capture('simulation-vscode')
@@ -60,9 +63,9 @@ suite('Simulation', () => {
     await bench.toggleSignal('Bus', 'Va')
     await until(recorded, 'the signal recorded again')
     // The view's title bar records every field, or none.
-    await (await bench.viewAction(/^Monitored Signals/, 'Record All Signals')).click()
+    await bench.title('signals', 'Record All Signals')
     await until(() => bused() > 2, 'every Bus value recorded')
-    await (await bench.viewAction(/^Monitored Signals/, 'Record No Signals')).click()
+    await bench.title('signals', 'Record No Signals')
     await until(() => bused() === 0, 'Bus recorded not at all')
   })
 

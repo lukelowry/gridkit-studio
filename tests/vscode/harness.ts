@@ -12,8 +12,74 @@ import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/tasks.js'
 import { available } from '../../src/gridkit/index.js'
 import type { SimulationInfo, ViewKind } from '../../src/shared/messages.js'
+import { type Keys, type Manifest, Menus } from '../menus.js'
 
 const TIMEOUT = 30_000
+
+/** The title bars `title` runs commands from: a panel or side bar view's, or the custom editor's
+ *  in front. */
+export type TitleBar = 'case' | 'monitor' | 'simulation' | 'signals' | 'export' | 'editor'
+
+/** A label `name` starts with, as a pattern. */
+const starting = (name: string) => new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+
+/** What the probe touches in a page, which the host's own code has no DOM library to name. */
+interface Probed {
+  closest(selector: string): Probed | null
+  readonly parentElement: Probed | null
+  readonly dataset: Readonly<Record<string, string | undefined>>
+  readonly ownerDocument: {
+    readonly defaultView: unknown
+    addEventListener(
+      type: 'contextmenu',
+      listener: (event: {
+        readonly target: Probed | null
+        preventDefault(): void
+        stopPropagation(): void
+      }) => void,
+      capture: boolean,
+    ): void
+  }
+}
+/** The probe's state, on the page's window: the menus caught since it was armed. */
+interface Probing {
+  gridkitMenus?: Record<string, unknown>[]
+  gridkitProbe?: boolean
+  gridkitProbing?: boolean
+}
+
+/** Catch the menus right-clicks in the page of `node` open, as VS Code reads them, and keep VS Code
+ *  from opening any while armed, so none is left open over the views. Run in the page: it reaches
+ *  for nothing outside itself. */
+const probe = (node: Probed) => {
+  const page = node.ownerDocument.defaultView as Probing
+  page.gridkitMenus = []
+  page.gridkitProbing = true
+  if (page.gridkitProbe) return
+  page.gridkitProbe = true
+  node.ownerDocument.addEventListener(
+    'contextmenu',
+    (event) => {
+      if (!page.gridkitProbing) return
+      // Each element's context up the tree, the nearest winning, as VS Code merges them.
+      let context: Record<string, unknown> = {}
+      for (
+        let at = event.target?.closest('[data-vscode-context]');
+        at;
+        at = at.parentElement?.closest('[data-vscode-context]')
+      )
+        context = { ...JSON.parse(at.dataset.vscodeContext!), ...context }
+      // A canvas's own right-click carries nothing: its view opens the menu once it has found
+      // what lies under the pointer.
+      if (!('gridkitTarget' in context)) return
+      // VS Code leaves a menu someone handled to them, and never hears of one gone no further.
+      event.preventDefault()
+      event.stopPropagation()
+      page.gridkitMenus?.push(context)
+    },
+    true,
+  )
+}
 
 /** The window size every suite starts from. */
 export const VIEWPORT = { width: 1600, height: 1000 }
@@ -40,24 +106,25 @@ export async function until<T>(
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /** Do `act` until `done` holds. VS Code drops an input it gets while busy, as a right-click that
- *  opens no menu, or a click on a menu or a box that does not take: once the act has had time to
- *  take effect and has not, it is done again. */
+ *  opens no menu, or a click on a menu or a box that does not take: once the act has had `settle`
+ *  milliseconds to take effect and has not, it is done again. */
 export async function again(
   act: () => Promise<unknown>,
   done: () => Promise<boolean> | boolean,
-  label: string,
+  label: string | (() => Promise<string> | string),
   timeout = TIMEOUT,
+  settle = 2000,
 ): Promise<void> {
   const start = Date.now()
   while (Date.now() - start < timeout) {
     await act()
     const acted = Date.now()
-    while (Date.now() - acted < 2000) {
+    while (Date.now() - acted < settle) {
       if (await done()) return
       await pause(100)
     }
   }
-  throw new Error('Timed out: ' + label)
+  throw new Error('Timed out: ' + (typeof label === 'string' ? label : await label()))
 }
 
 /** Wait for `selector` to show in `frame`. */
@@ -144,8 +211,12 @@ export class TestHost {
   }
   /** What the run measured, written beside the screenshots when it ends. */
   readonly report: Record<string, unknown>
-  /** Errors thrown in VS Code's pages. */
+  /** Errors Studio's own pages threw. */
   readonly errors: string[] = []
+  /** Errors VS Code's own code threw in its pages, kept in the report: VS Code's to fix. */
+  readonly vscodeErrors: string[] = []
+  /** Where the installed manifest places Studio's commands. */
+  readonly menus: Menus
   #results?: Promise<SimulationInfo>
 
   private constructor(
@@ -164,7 +235,12 @@ export class TestHost {
       extensionVersion: extension.packageJSON.version,
       latkit: extension.packageJSON.dependencies,
     }
-    page.on('pageerror', (error) => this.errors.push(error.stack ?? error.message))
+    this.menus = new Menus(extension.packageJSON as Manifest)
+    page.on('pageerror', (error) => {
+      const text = error.stack ?? error.message
+      // Studio's pages run its own bundles; anything else threw in VS Code's code.
+      ;(/[\\/]dist[\\/]webview[\\/]/.test(text) ? this.errors : this.vscodeErrors).push(text)
+    })
   }
 
   static async start(): Promise<TestHost> {
@@ -315,33 +391,6 @@ export class TestHost {
     return (text.match(/-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi) ?? []).map(Number)
   }
 
-  /** A title-bar action of the bottom panel's view on show, by the start of its name. */
-  panelAction(name: string): Locator {
-    return this.page
-      .locator('.part.panel')
-      .getByRole('button', { name: new RegExp('^' + name) })
-      .first()
-  }
-
-  /** A title-bar action of the side bar view whose header reads `view`, by the start of its name.
-   *  VS Code shows a view's actions while the pointer is over it, so the pointer goes there first. */
-  async viewAction(view: RegExp, name: string): Promise<Locator> {
-    const header = this.page.locator('.pane-header', { hasText: view })
-    await header.hover()
-    return header.getByRole('button', { name: new RegExp('^' + name) })
-  }
-
-  /** Press Start in the Simulation view's title bar, once no run holds it. What keeps a run from
-   *  starting is said in a notification. */
-  async start(): Promise<void> {
-    const start = await this.viewAction(/^Simulation/, 'Start Simulation')
-    await until(
-      async () => !(await start.isDisabled({ timeout: 1000 }).catch(() => true)),
-      'Start Simulation enabled',
-    )
-    await (await this.viewAction(/^Simulation/, 'Start Simulation')).click()
-  }
-
   /** The button `action` on a notification on show. */
   notice(action: string): Locator {
     return this.page
@@ -350,43 +399,256 @@ export class TestHost {
       .first()
   }
 
+  // ── Commands, from where the user finds them ──
+  //
+  // A view decides what its menus carry, the manifest decides what each place offers, and the
+  // command decides what it does: those are Studio's, and the suites check them all here. Drawing
+  // a popup and calling the command with what it carries are VS Code's, which the Native menus
+  // suite checks against the manifest. So a right-click here is the user's own, on the thing
+  // itself, but what it opens is read as VS Code reads it, and its item is run as VS Code runs
+  // it, without waiting on a popup VS Code may drop.
+
+  /** The context keys VS Code holds for title bars and the Command Palette: Studio's own, and the
+   *  workspace's trust. */
+  keys(): Keys {
+    return {
+      ...Object.fromEntries(
+        [...this.studio.contexts].map(([key, value]) => ['gridkitStudio.' + key, value]),
+      ),
+      isWorkspaceTrusted: vscode.workspace.isTrusted,
+    }
+  }
+
+  /** What a right-click on `target`, at `position` in it, carries to VS Code's menu: its
+   *  `data-vscode-context` merged up the tree, or what a canvas view found under the pointer. A
+   *  right-click VS Code dropped while busy is clicked again, but only well after a canvas view
+   *  could have answered it, as each click opens a menu of its own. */
+  async carried(
+    target: Locator,
+    position?: { x: number; y: number },
+  ): Promise<Record<string, unknown>> {
+    const caught = () =>
+      target.evaluate(
+        (node: Probed) => (node.ownerDocument.defaultView as Probing).gridkitMenus ?? [],
+      )
+    await target.evaluate(probe)
+    await again(
+      () => target.click({ button: 'right', position, timeout: 2000 }).catch(() => {}),
+      async () => (await caught()).length > 0,
+      'a menu opened on ' + target,
+      TIMEOUT,
+      10_000,
+    )
+    return (await caught())[0]!
+  }
+
+  /** Let VS Code open the menus right-clicks open again, in every page the probe watches. */
+  async #unprobe(): Promise<void> {
+    for (const frame of this.#frames())
+      await frame
+        .evaluate(() => {
+          ;(globalThis as Probing).gridkitProbing = false
+        })
+        .catch(() => {})
+  }
+
+  /** The titles of what a right-click on `target` offers, as VS Code would show them. */
+  async offered(target: Locator, position?: { x: number; y: number }): Promise<string[]> {
+    const context = await this.carried(target, position)
+    return this.menus.offered('webview/context', context).map((each) => each.title)
+  }
+
+  /** Right-click `target`, at `position` in it, and choose `item` from what it offers. */
+  async menu(target: Locator, item: string, position?: { x: number; y: number }): Promise<void> {
+    const context = await this.carried(target, position)
+    const { command } = this.menus.find('webview/context', item, context)
+    assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
+    const origin = context.gridkitOrigin as string
+    this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
+  }
+
+  /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
+   *  there and enabled. */
+  async title(where: TitleBar, item: string): Promise<void> {
+    const editor = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+    const place = where === 'editor' ? 'editor/title' : 'view/title'
+    const keys = () => ({
+      ...this.keys(),
+      ...(where === 'editor'
+        ? { activeCustomEditorId: editor instanceof vscode.TabInputCustom ? editor.viewType : '' }
+        : { view: 'gridkitStudio.' + where }),
+    })
+    const find = () => this.menus.find(place, item, keys())
+    const { command } = await until(
+      () => {
+        try {
+          const found = find()
+          return this.menus.enabled(found.command, keys()) ? found : undefined
+        } catch {
+          return undefined
+        }
+      },
+      () => {
+        try {
+          return `${find().title} enabled`
+        } catch (error) {
+          return (error as Error).message
+        }
+      },
+    )
+    // An editor's title bar gives its command the editor's file; a view's gives nothing.
+    if (where === 'editor') this.#run(command, (editor as vscode.TabInputCustom).uri)
+    else this.#run(command)
+  }
+
+  /** Show the elements of `type` in the Case panel, from its title bar, and wait for the panel to
+   *  say it shows them: what the panel shows is what its title bar's commands act on. */
+  async caseType(type: string): Promise<void> {
+    await this.title('case', 'Choose Type')
+    await this.pick(new RegExp('^' + type, 'i'), type)
+    await until(() => this.session.table.type === type, 'the Case panel shows ' + type)
+  }
+
+  /** Start a run from the Simulation view's title bar, once no run holds it. What keeps a run from
+   *  starting is said in a notification. */
+  start(): Promise<void> {
+    return this.title('simulation', 'Start Simulation')
+  }
+
   /** Stop the run from the Simulation view's title bar. */
-  async stop(): Promise<void> {
-    await (await this.viewAction(/^Simulation/, 'Stop Simulation')).click()
+  stop(): Promise<void> {
+    return this.title('simulation', 'Stop Simulation')
   }
 
-  /** Open the "More Actions" menu of the title bar in `area`: the bottom panel, the editor, or a
-   *  side bar view's header. */
-  async more(area: Locator): Promise<void> {
-    const button = area.getByRole('button', { name: /More Actions/ }).first()
-    // A side bar view shows its actions only while the pointer is over its header.
-    if (!(await button.isVisible())) await area.hover()
-    await button.click()
+  /** Choose `item` from the Explorer's menu on the file `uri`. */
+  explorer(uri: vscode.Uri, item: string): void {
+    const keys = { ...this.keys(), resourceFilename: basename(uri.path) }
+    const { command } = this.menus.find('explorer/context', item, keys)
+    this.#run(command, uri, [uri])
   }
 
-  /** Run one of Studio's commands from the Command Palette by its whole title, as the user does. */
+  /** Run the command titled `title` from the Command Palette, once it is enabled. */
   async palette(title: string): Promise<void> {
-    await vscode.commands.executeCommand('workbench.action.showCommands')
-    const named = 'GridKit Studio: ' + title
-    await this.page.locator('.quick-input-widget input').fill('>' + named)
-    const exact = new RegExp('^' + named.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
-    await this.page
-      .locator('.quick-input-widget .monaco-list-row')
-      .filter({ has: this.page.locator('.label-name', { hasText: exact }) })
-      .first()
-      .click()
+    const { command } = this.menus.palette(title, this.keys())
+    await until(() => this.menus.enabled(command, this.keys()), title + ' enabled')
+    this.#run(command)
+  }
+
+  /** Run `command` as VS Code does from a menu: without waiting on it, as one that asks something
+   *  waits for its answer. A command's failure is reported, which fails the test. */
+  #run(command: string, ...args: unknown[]): void {
+    void vscode.commands
+      .executeCommand(command, ...args)
+      .then(undefined, (error: unknown) => this.studio.error(error))
+  }
+
+  // ── VS Code's own prompts, answered from the keyboard ──
+
+  /** The quick input on show: a quick pick, an input box, or a file dialog. */
+  #prompt() {
+    const widget = this.page.locator('.quick-input-widget')
+    return { widget, input: widget.locator('.quick-input-box input').first() }
+  }
+
+  /** The title of the prompt on show, which says what it asks. */
+  async #asked(): Promise<string> {
+    const { widget, input } = this.#prompt()
+    await input.waitFor({ state: 'visible' })
+    return widget
+      .locator('.quick-input-title')
+      .innerText()
+      .catch(() => '')
+  }
+
+  /** Press Enter on the prompt that asked `asked` until it takes `entered`: it closes, or asks
+   *  something else. One that still asks it with the same text has not taken it, so Enter only
+   *  ever reaches the prompt. */
+  async #take(asked: string, entered: string): Promise<void> {
+    const { widget, input } = this.#prompt()
+    const asking = async () =>
+      (await widget.isVisible()) &&
+      (await widget
+        .locator('.quick-input-title')
+        .innerText()
+        .catch(() => '')) === asked &&
+      (await input.inputValue().catch(() => '')) === entered
+    await again(
+      async () => {
+        if (await asking()) await input.press('Enter', { timeout: 2000 }).catch(() => {})
+      },
+      async () => !(await asking()),
+      'the prompt takes ' + (entered || 'the answer'),
+    )
+  }
+
+  /** Answer the quick pick on show with its item whose label starts with `label`, or whose whole
+   *  row, its description included, matches the pattern `label`: `typed` filters the list, the item
+   *  is made the active one, and Enter takes it. */
+  async pick(
+    label: string | RegExp,
+    typed = typeof label === 'string' ? label : '',
+  ): Promise<void> {
+    const { widget, input } = this.#prompt()
+    const asked = await this.#asked()
+    await input.fill(typed)
+    const rows =
+      typeof label === 'string'
+        ? widget.locator('.monaco-list-row', {
+            has: this.page.locator('.label-name', { hasText: starting(label) }),
+          })
+        : widget.locator('.monaco-list-row', { hasText: label })
+    const active = rows.and(widget.locator('.monaco-list-row.focused'))
+    // Typing makes the first match active; one further down is reached with the arrow keys.
+    await until(async () => {
+      if (await active.count()) return true
+      if (await rows.count()) await input.press('ArrowDown')
+      return false
+    }, `${label} offered`)
+    await this.#take(asked, typed)
+  }
+
+  /** Check each of `labels` in the multiple-choice pick on show, or uncheck it, then take the
+   *  choice. Typing finds each, as a long list draws only the rows in view. */
+  async check(labels: readonly string[], checked = true): Promise<void> {
+    const { widget, input } = this.#prompt()
+    const asked = await this.#asked()
+    for (const label of labels) {
+      await input.fill(label)
+      const box = widget
+        .locator('.monaco-list-row', {
+          has: this.page.locator('.label-name', { hasText: starting(label) }),
+        })
+        .getByRole('checkbox')
+        .first()
+      // Done once the box shows it, which is what Enter takes.
+      await again(
+        () => box.click({ timeout: 2000 }).catch(() => {}),
+        async () => (await box.isChecked({ timeout: 1000 }).catch(() => !checked)) === checked,
+        `${label} ${checked ? 'checked' : 'unchecked'}`,
+      )
+    }
+    await this.#take(asked, labels.at(-1) ?? '')
+  }
+
+  /** Answer the input box on show with `text`. */
+  async answer(text: string): Promise<void> {
+    const { input } = this.#prompt()
+    const asked = await this.#asked()
+    await input.fill(text)
+    await this.#take(asked, text)
   }
 
   /** Answer the file dialog on show, VS Code's own, with `path`. */
   async dialog(path: string): Promise<void> {
-    const input = this.page.locator('.quick-input-widget input').first()
+    const { input } = this.#prompt()
     // The dialog opens on the folder it starts in; a picker still closing holds other text.
     await until(
       async () => /[\\/]/.test(await input.inputValue().catch(() => '')),
       'the file dialog',
     )
+    const asked = await this.#asked()
     await input.fill(path)
-    await input.press('Enter')
+    await this.#take(asked, path)
   }
 
   /** Wait for the Settings editor to search for `query`, then close it. */
@@ -411,39 +673,48 @@ export class TestHost {
     ).trim()
   }
 
-  /** Wait for a native menu to offer `item`. */
-  async offered(item: string): Promise<void> {
-    await this.page
-      .getByRole('menuitem')
-      .filter({ hasText: item })
-      .first()
-      .waitFor({ state: 'visible' })
-  }
-
-  /** Open a native menu with `open`, as a right-click or More Actions, until it offers `item`. */
-  async opened(open: () => Promise<unknown>, item: string): Promise<void> {
-    const entry = this.page.getByRole('menuitem', { name: new RegExp('^' + item) }).first()
-    await again(open, () => entry.isVisible(), item + ' offered')
-  }
-
-  /** Open a native menu with `open`, and choose `item` from it. */
-  async menu(open: () => Promise<unknown>, item: string): Promise<void> {
-    await this.opened(open, item)
-    await this.choose(item)
-  }
-
-  /** Choose `item` from the native menu on show, as the user does: point at it, then click. */
-  async choose(item: string): Promise<void> {
-    const entry = this.page.getByRole('menuitem', { name: new RegExp('^' + item) })
-    await entry.waitFor({ state: 'visible' })
+  /**
+   * Choose `item` from the popup VS Code opens when `open` runs, as the user does, until `done`
+   * holds, and say what the popup offered. Only the Native menus suite goes through VS Code's own
+   * popups: VS Code may drop the click that opens one, or close one unasked, so the whole gesture
+   * starts over until it takes, which only an item that does the same each time allows.
+   */
+  async native(
+    open: () => Promise<unknown>,
+    item: string,
+    done: () => Promise<boolean> | boolean,
+  ): Promise<string[]> {
+    await this.#unprobe()
+    // The popup's items, not the menu bar's, which are menu items too.
+    const items = this.page.locator('.context-view').getByRole('menuitem')
+    const entry = items.filter({ hasText: starting(item) }).first()
+    let shown: string[] = []
     await again(
       async () => {
-        await entry.hover({ timeout: 2000 }).catch(() => {})
+        // No popup left from a try before.
+        if (await items.first().isVisible()) await this.page.keyboard.press('Escape')
+        await open()
+        const opened = await entry.waitFor({ state: 'visible', timeout: 5000 }).then(
+          () => true,
+          () => false,
+        )
+        if (!opened) return
+        // Each item's title, without the keys that run it.
+        shown = await items.evaluateAll((all) =>
+          all.map((each) =>
+            (each.querySelector('.action-label')?.textContent ?? each.textContent ?? '').trim(),
+          ),
+        )
+        // An item hears the click that chooses it only 100 ms after it shows, so the release of
+        // the click that opened its menu chooses nothing: a timer that long, set in the same page
+        // now, ends after the item's own.
+        await this.page.evaluate('new Promise((resolve) => setTimeout(resolve, 100))')
         await entry.click({ timeout: 2000 }).catch(() => {})
       },
-      async () => (await entry.count()) === 0,
-      item + ' chosen',
+      done,
+      item + ' chosen from its popup',
     )
+    return shown
   }
 
   /** Save a picture of the whole VS Code window. */
@@ -534,6 +805,8 @@ export class TestHost {
   /** Back to the case alone in its Network editor: its source as found and saved, nothing
    *  selected or mapped, its clock at rest. */
   async reset(): Promise<void> {
+    // A prompt a test left asking holds its command open, and would take the next one's keys.
+    await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
     if (this.session?.run?.state === 'running')
       await this.studio.client.call('stop', { uri: this.key })
     if (this.document.getText() !== this.text) await this.replace(this.text)
@@ -585,11 +858,12 @@ export class TestHost {
     try {
       this.report.worker = await this.studio.client.call('stats', {})
       this.report.pageErrors = this.errors
+      this.report.vscodeErrors = this.vscodeErrors
       await writeFile(
         join(this.output, 'tests', 'vscode-report.json'),
         JSON.stringify(this.report, null, 2),
       )
-      assert.deepEqual(this.errors, [], 'A VS Code page threw')
+      assert.deepEqual(this.errors, [], "A page of Studio's threw")
     } finally {
       await this.browser.close()
     }

@@ -101,9 +101,10 @@ suite('Run', function () {
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
-    await monitor.locator('canvas').focus()
+    // The plot reads its trace while it holds focus: focus the run's own views take is given back.
     const reading = () => monitor.locator('.lane [role="status"]').innerText()
-    await until(
+    await again(
+      () => monitor.locator('canvas').focus(),
       async () => /1\.0485/.test(await reading()),
       async () => {
         const { status, follow } = bench.session.transport.state

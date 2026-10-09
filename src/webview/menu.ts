@@ -48,9 +48,11 @@ export function nativeMenu(
   )
   document.body.append(node)
   const bounds = canvas.getBoundingClientRect()
+  // Cancelable as the browser's own is, so code that handles it first can keep VS Code's away.
   node.dispatchEvent(
     new MouseEvent('contextmenu', {
       bubbles: true,
+      cancelable: true,
       clientX: bounds.left + point[0],
       clientY: bounds.top + point[1],
     }),

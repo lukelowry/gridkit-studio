@@ -15,10 +15,6 @@ suite('Case', () => {
   /** The header of the Bus column `field`. */
   const header = (field: string): Locator =>
     view.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
-  /** Choose `item` from the native menu of `target`. */
-  async function menu(target: Locator, item: string) {
-    await bench.menu(() => target.click({ button: 'right' }), item)
-  }
 
   suiteSetup(async () => {
     bench = await testHost()
@@ -43,16 +39,12 @@ suite('Case', () => {
   })
 
   test('switches type from its title bar, which says what shows', async () => {
-    const choose = async (type: RegExp) => {
-      await bench.panelAction('Choose Type').click()
-      await bench.page.locator('.quick-input-widget .monaco-list-row', { hasText: type }).click()
-    }
-    await choose(/^GENROU/i)
+    await bench.caseType('Genrou')
     await until(
       async () => /genrou/i.test(await view.locator('tbody th[scope="row"]').first().innerText()),
       'generators listed',
     )
-    await choose(/^Bus/)
+    await bench.caseType('Bus')
     await visible(view, `thead th[data-vscode-context*='"field":"params.kv"']`)
     // The unit kv already says goes unsaid.
     assert.equal((await header('params.kv').innerText()).trim(), 'kv')
@@ -61,11 +53,8 @@ suite('Case', () => {
   test('maps a column onto the network from its menu, and removes it there', async () => {
     const network = await bench.view('network')
     const before = await frames(network)
-    await menu(header('params.kv'), 'Map To')
-    const picker = bench.page.locator('.quick-input-widget')
-    await picker.locator('.monaco-list-row', { hasText: 'Vertex Color' }).click()
-    await picker.getByRole('button', { name: 'OK' }).click()
-    await picker.waitFor({ state: 'hidden' })
+    await bench.menu(header('params.kv'), 'Map To')
+    await bench.check(['Vertex Color'])
     await until(
       () => bench.session.bindings.vertexColor?.field === 'params.kv',
       'the column mapped',
@@ -76,15 +65,13 @@ suite('Case', () => {
       'the header says so',
     )
     await bench.capture('case-mapped')
-    await menu(header('params.kv'), 'Mapping Range')
-    await picker.locator('input').fill('0.5, 2')
-    await picker.locator('input').press('Enter')
-    await picker.waitFor({ state: 'hidden' })
+    await bench.menu(header('params.kv'), 'Mapping Range')
+    await bench.answer('0.5, 2')
     await until(
       () => bench.session.bindings.vertexColor?.domain?.join() === '0.5,2',
       'the range set',
     )
-    await menu(header('params.kv'), 'Remove Mapping')
+    await bench.menu(header('params.kv'), 'Remove Mapping')
     await until(() => !bench.session.bindings.vertexColor, 'the mapping removed')
     await until(
       async () => !/color/.test(await header('params.kv').innerText()),
@@ -112,18 +99,12 @@ suite('Case', () => {
     await bench.undo('the source restored')
   })
 
-  test('offers a field its commands in the native context menu', async () => {
-    await bench.opened(
-      () =>
-        view
-          .locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`)
-          .first()
-          .click({ button: 'right' }),
-      'Edit Field',
+  test('offers a field its commands in its menu', async () => {
+    const offered = await bench.offered(
+      view.locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`).first(),
     )
-    await bench.offered('Map To')
-    await bench.capture('case-native-menu')
-    await bench.page.keyboard.press('Escape')
+    for (const item of ['Edit Field…', 'Map To…'])
+      assert.ok(offered.includes(item), `${item} offered: ${offered.join(', ')}`)
   })
 
   test('refuses an edit made against an older revision', async () => {

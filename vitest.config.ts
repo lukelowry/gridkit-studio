@@ -2,12 +2,12 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     projects: [
-      // Unit tests beside the code they test; they run anywhere.
+      // Unit tests beside the code they test, the VS Code suites' own included; they run anywhere.
       {
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['src/**/*.test.ts'],
+          include: ['src/**/*.test.ts', 'tests/*.test.ts'],
           clearMocks: true,
         },
       },

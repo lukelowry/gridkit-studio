@@ -25,14 +25,22 @@ export interface Target extends Revision {
   plot?: Plot
 }
 
+/** The Case panel's own view of its rows, which its menus change: the column it sorts by, and
+ *  whether a filter hides rows. */
+export interface Rows {
+  sort?: { field: string; direction: 'ascending' | 'descending' }
+  filtered?: boolean
+}
+
 const drawn = new WeakMap<Schema, { network: Drawn; diagram: Drawn }>()
 
 /** VS Code context keys for a menu on `target`, which carry the target to its commands; opening a
- *  menu never selects another row. */
+ *  menu never selects another row. Every view's menus take these keys, and only these. */
 export function menuContext(
   summary: Pick<Summary, 'schema' | 'editable'>,
   target: Target,
   bindings: Bindings = {},
+  rows: Rows = {},
 ) {
   const type = target.type ?? (target.element && elementType(target.element.id))
   const field = target.field ?? target.element?.field
@@ -83,5 +91,7 @@ export function menuContext(
     gridkitOverlapping: (target.items?.length ?? 0) > 1,
     gridkitPlot: !!target.plot,
     gridkitBus: network === 'vertex',
+    gridkitSort: field && rows.sort?.field === field ? rows.sort.direction : '',
+    gridkitFiltered: !!rows.filtered,
   }
 }

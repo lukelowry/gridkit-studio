@@ -25,7 +25,10 @@ suite('Monitor', () => {
 
   test('plots the chosen signal in the bottom panel, played from the status bar', async () => {
     await bench.playback('Play').waitFor()
-    await bench.panelAction('Add Plot').waitFor()
+    await bench.page
+      .locator('.part.panel')
+      .getByRole('button', { name: /^Add Plot/ })
+      .waitFor()
     assert.ok((await monitor.locator('.lane__name').first().textContent())?.includes('Bus'))
     const panel = await bench.page.locator('.part.panel').boundingBox()
     const plot = await monitor.locator('canvas').boundingBox()
@@ -52,21 +55,16 @@ suite('Monitor', () => {
     await bench.playback('Next sample').click()
     await until(() => transport().currentT() > paused, 'a frame step from the status bar')
     await bench.playback('Speed').click()
-    await bench.page.locator('.quick-input-widget input').fill('2')
-    await bench.page.locator('.quick-input-widget input').press('Enter')
+    await bench.pick('2')
     await until(() => transport().state.rate === 2, 'a faster speed')
     await until(async () => (await bench.playback('Speed').innerText()).includes('2'), 'it says so')
     await bench.playback('Go to end').click()
     await until(() => transport().currentT() === transport().state.span[1], 'the run ends')
   })
 
-  test('opens its settings from the native context menu', async () => {
-    await bench.opened(
-      () => monitor.locator('canvas').click({ button: 'right' }),
-      'Monitor Settings',
-    )
-    await bench.capture('monitor-native-menu')
-    await bench.page.keyboard.press('Escape')
+  test('opens its settings from its menu', async () => {
+    await bench.menu(monitor.locator('canvas'), 'Monitor Settings')
+    await bench.settings(/gridkitStudio\.monitor/)
   })
 
   test('keeps its plots while another panel takes its place', async () => {

@@ -381,7 +381,7 @@ export class ResultsFile {
   /** Tells the views, through `info`, what the file holds and how it is cut, once its header says. */
   #learned() {
     if (this.info.outputs.length || !this.fields.length) return
-    this.info.outputs = selectionsOf(this.kase, this.fields)
+    this.info.outputs = selectionsOf(this.fields)
     this.info.chunk = chunkFrames(this.fields)
   }
 

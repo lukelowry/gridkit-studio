@@ -1,0 +1,19 @@
+diff --git a/dist/index.js b/dist/index.js
+index 286af68db0768d1f2491a860b3077e5587ade3bf..816ee41777fe74b1347ee7413a4b998e76fb0035 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -289,8 +289,13 @@ var bindings = /* @__PURE__ */ new Map([
+   [VERTEX, /* @__PURE__ */ new WeakMap()],
+   [LINE, /* @__PURE__ */ new WeakMap()]
+ ]);
++/** Stands for no layout of a bank's own, which channels are also bound for. */
++var UNLAID = {};
+ function channels(options, kinds, local) {
+-  const cache = bindings.get(kinds), key = local ?? options;
++  // Bound for these options and this layout both: either may change while the other stands.
++  const byOptions = bindings.get(kinds), key = local ?? UNLAID;
++  let cache = byOptions.get(options);
++  if (!cache) byOptions.set(options, cache = /* @__PURE__ */ new WeakMap());
+   let found = cache.get(key);
+   if (!found) {
+     const marker = "marker" in options ? options.marker : void 0, inputs = Object.fromEntries(

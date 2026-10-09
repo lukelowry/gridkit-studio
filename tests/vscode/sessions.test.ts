@@ -84,8 +84,7 @@ suite('Sessions', () => {
       new TextEncoder().encode(`time,Bus_${buses[0]!.name}_Vm\n0,1\n0.5,0.9\n1,1\n`),
     )
     const info = await studio.client.call('open', {
-      uri: session.uri,
-      version: (await studio.documents.ensure(document)).version,
+      ...(await studio.revisionOf(session.uri)),
       path: csv.fsPath,
       cacheBytes: 16 << 20,
     })

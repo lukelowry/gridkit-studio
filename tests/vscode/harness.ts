@@ -856,8 +856,7 @@ export class TestHost {
       ),
     )
     const results = await this.studio.client.call('open', {
-      uri: this.key,
-      version: (await this.current()).version,
+      ...(await this.studio.revisionOf(this.key)),
       path: csv.fsPath,
       cacheBytes: 32 << 20,
     })

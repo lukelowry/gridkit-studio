@@ -56,8 +56,10 @@ export interface Results {
   /** Frames per chunk, from the header's width, 0 before it is read. Chunk `k` holds frames
    *  `k * chunk` up to `(k + 1) * chunk`, so every process cuts the file alike. */
   chunk: number
-  /** Whether a run still writes it. */
+  /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
   growing: boolean
+  /** Why reading it stopped before its end, when it did. */
+  error?: string
   /** The times a run will cover, as its solver file says. */
   span?: Domain
   /** The study it is one contingency of. */
@@ -80,6 +82,8 @@ export interface Run {
 
 /** A run of `program` on a solver file, with what Studio read of it and of its case. */
 export interface SimulationRequest extends Revision {
+  /** The case's source at its revision, which the results are read against. */
+  text: string
   program: Program
   /** The .solver.json GridKit runs, in its folder. */
   solver: string

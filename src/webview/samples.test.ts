@@ -246,6 +246,28 @@ describe('the samples a view holds', () => {
     expect(quiet.report).not.toHaveBeenCalled()
   })
 
+  it('settles a wait once it holds the window, and fails one it cannot have', async () => {
+    const file = { frames: 12 }
+    const { request } = worker(file)
+    const { samples } = cache(request)
+    samples.want(results(12), [need, angle], [0, 0.11])
+    await samples.until([0, 0.11], AbortSignal.timeout(5000))
+    expect(samples.holds([0, 0.11])).toBe(true)
+    // A file that has none of the frames asked for.
+    const empty = cache(worker({ frames: 0 }).request)
+    empty.samples.want(results(8), [need], [0, 0.07])
+    await expect(empty.samples.until([0, 0.07], AbortSignal.timeout(5000))).rejects.toThrow(
+      /could not be read/,
+    )
+    // A wait let go of before the frames come.
+    const slow = cache(vi.fn(() => new Promise<SampleBatch[]>(() => {})))
+    slow.samples.want(results(8), [need], [0, 0.07])
+    const controller = new AbortController()
+    const waiting = slow.samples.until([0, 0.07], controller.signal)
+    controller.abort(new Error('Export cancelled.'))
+    await expect(waiting).rejects.toThrow('Export cancelled.')
+  })
+
   it('lets go of everything held when the view shows other results', async () => {
     const file = { frames: 8 }
     const { request } = worker(file)

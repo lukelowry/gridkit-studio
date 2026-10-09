@@ -1,29 +1,27 @@
 import { randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { type FieldSelection, staticFields } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { cancelled, defect, detail, message } from '../shared/format.js'
 import type {
   FromView,
-  Results,
+  Requests,
   SamplesInput,
   Summary,
   ToView,
-  VideoView,
   ViewKind,
   ViewRequests,
   ViewState,
 } from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
-import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
+import { typeName } from '../shared/schema.js'
 import { packed } from './packed.js'
-import type { Session, Sessions } from './sessions.js'
+import type { Sessions } from './sessions.js'
 import { VideoFile } from './video.js'
 
-/** The views that draw the case, and so are sent its rows and read samples. */
-const DRAWN: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor', 'export'])
+/** The views a clock moves. */
+const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor'])
 /** The commands a webview may run. */
 const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
@@ -162,19 +160,11 @@ class View {
   #shown = ''
   #ready = false
   #disposed = false
-  #controller?: AbortController
-  /** What names the rows the view holds. */
-  #base?: string
-  /** Rows that failed to read, which are not asked for again until something changes. */
-  readonly #failed = new Set<string>()
-  #failure = ''
   /** Whether another update is due, and the update in progress. */
   #again = false
   #running?: Promise<void>
   /** The sequence number of the latest transport change this view made. */
   #seq = 0
-  /** The data a video export asked for. */
-  #video?: ViewRequests['videoData']['input']
   #files = new Map<number, VideoFile>()
   #file = 0
   /** Whether the view is mid-task and must not be replaced. */
@@ -213,11 +203,6 @@ class View {
       studio.action.event((action) => {
         if (action.uri !== uri || (action.view && action.view !== kind)) return
         void this.send({ kind: 'action', command: action.command, value: action.value })
-        // A reload asks again for rows that failed to read.
-        if (action.command === 'retryMonitor' || action.command === 'reloadView') {
-          this.#failed.clear()
-          void this.update().catch(report)
-        }
       }),
       ('onDidChangeViewState' in panel ? panel.onDidChangeViewState : panel.onDidChangeVisibility)(
         () => {
@@ -230,7 +215,7 @@ class View {
           } else if (hidden === 'destroyed') {
             // The webview is destroyed; its replacement sends 'ready' again.
             this.#ready = false
-            this.cancel(true)
+            this.cancel()
           }
         },
       ),
@@ -245,7 +230,7 @@ class View {
   tick() {
     const session = this.studio.all.get(this.uri)
     if (!session || !this.#ready || !this.panel.visible) return
-    if (this.kind === 'export' || !DRAWN.has(this.kind)) return
+    if (!CLOCKED.has(this.kind)) return
     void this.send({
       kind: 'clock',
       clock: session.transport.snapshot(),
@@ -253,12 +238,10 @@ class View {
       seq: this.#seq,
     })
   }
-  cancel(requests = false) {
-    if (requests) {
-      for (const controller of this.#requests.values()) controller.abort()
-      this.#requests.clear()
-    }
-    this.#controller?.abort()
+  /** Let go of the view's requests under way. */
+  cancel() {
+    for (const controller of this.#requests.values()) controller.abort()
+    this.#requests.clear()
   }
   async receive(message: FromView) {
     if (!message || typeof message !== 'object' || this.#disposed) return
@@ -268,12 +251,10 @@ class View {
         this.#requests.get(message.id)?.abort()
         return
       case 'ready':
-        this.cancel()
         this.#ready = true
         this.#settle()
         this.#shown = ''
-        this.#base = this.#summary = this.#settings = undefined
-        this.#failed.clear()
+        this.#summary = this.#settings = undefined
         this.tick()
         await this.update()
         return
@@ -317,7 +298,6 @@ class View {
         return
       case 'busy':
         this.busy = message.busy === true
-        if (!this.busy) this.#video = undefined
         return
       case 'error':
         this.studio.report(
@@ -373,8 +353,14 @@ class View {
   }
   async handle(method: keyof ViewRequests, input: unknown, signal: AbortSignal): Promise<unknown> {
     const { studio, uri } = this
-    // A view asks for the frames it lacks of the results it shows.
+    // A view asks for what it lacks of the case and the results it shows: the case's revision
+    // names what it asks of, and is refused once stale.
     if (method === 'samples') return studio.client.call('samples', input as SamplesInput, signal)
+    if (method === 'rows')
+      return studio.client.call('rows', input as Requests['rows']['input'], signal)
+    if (method === 'presentation')
+      return studio.client.call('presentation', input as Requests['presentation']['input'], signal)
+    if (method === 'cameras') return studio.all.get(uri)?.cameras ?? {}
     if (method === 'videoWrite') {
       const { file, position, bytes } = input as ViewRequests['videoWrite']['input']
       const chunk = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes
@@ -412,12 +398,6 @@ class View {
       }
       this.#files.set(++this.#file, file)
       return this.#file
-    }
-    if (method === 'videoData') {
-      this.#video = input as ViewRequests['videoData']['input']
-      await this.update()
-      if (this.#failure) throw new Error(this.#failure)
-      return studio.all.get(uri)?.cameras ?? {}
     }
     // A request made while the case is read again, as it is after each edit, waits for that
     // reading. A case that no longer reads keeps the view on its last revision, which says so, and
@@ -469,7 +449,6 @@ class View {
         }
       state.summary = this.#described.summary
     }
-    const session = this.studio.all.get(this.uri)
     const signature = JSON.stringify(SHOWN[this.kind](state))
     if (
       signature !== this.#shown ||
@@ -484,117 +463,7 @@ class View {
       this.#summary = state.summary
       this.#settings = state.settings
       await this.send({ kind: 'state', state: sent })
-      if (this.#disposed) return
     }
-    if (!DRAWN.has(this.kind) || !state.summary || !session) return
-    if (state.stale && this.kind !== 'monitor' && this.kind !== 'export') return
-    const results = this.#sampled(state.summary, state.results)
-    const rows = this.#rows(state.summary, results, session)
-    if (!rows || rows.key === this.#base || this.#failed.has(rows.key)) return
-    await this.#sendRows(state.summary, rows, results)
-  }
-  /** The results whose samples the view draws: the Monitor's on show, or the Network's while they
-   *  are of this revision, as an export's are. Results are readable once they hold frames. */
-  #sampled(summary: Summary, results: Results | undefined): Results | undefined {
-    if (!results?.frames) return undefined
-    if (this.#draws('monitor')) return results
-    return this.#draws('network') && results.fingerprint === summary.fingerprint
-      ? results
-      : undefined
-  }
-  /** The case's rows the view draws: the types it shows, with the fields their names, places,
-   *  routes, references and static mappings read. Samples come beside them, as the view asks. */
-  #rows(
-    summary: Summary,
-    results: Results | undefined,
-    session: Session,
-  ): { key: string; statics: FieldSelection[] } | undefined {
-    const { kind } = this
-    if (kind === 'export' && !this.#video) return undefined
-    const { schema } = summary
-    const bindings = Object.values(session.bindings)
-    const network = networkOf(schema)
-    const drawn =
-      kind === 'network'
-        ? new Set([...network.vertices, ...network.edges.map((edge) => edge.type)])
-        : undefined
-    const statics = staticFields(schema)
-      .filter((field) => !drawn || drawn.has(field.from))
-      .map((field) => ({
-        ...field,
-        select: field.select.filter(
-          (name) =>
-            bindings.some((binding) => binding.type === field.from && binding.field === name) ||
-            name === nameFieldOf(schema, field.from) ||
-            [positionOf(schema, field.from)?.x, positionOf(schema, field.from)?.y].includes(name) ||
-            network.edges.some((edge) => edge.type === field.from && edge.bends === name) ||
-            isReference(schema.types[field.from]!.fields[name]),
-        ),
-      }))
-      .filter((field) => field.select.length > 0)
-    const key =
-      JSON.stringify([
-        summary.uri,
-        summary.attachmentId,
-        summary.version,
-        kind === 'monitor' && results ? results.fingerprint : summary.fingerprint,
-      ]) +
-      ':' +
-      JSON.stringify(statics)
-    return { key, statics }
-  }
-  /** Send the view its rows, which replace those it holds. The Monitor's, and an export's, are the
-   *  case its results were read against. */
-  async #sendRows(
-    summary: Summary,
-    rows: { key: string; statics: FieldSelection[] },
-    results: Results | undefined,
-  ) {
-    const { studio, uri } = this
-    const controller = (this.#controller = new AbortController())
-    const of = this.kind === 'monitor' || this.kind === 'export' ? results : undefined
-    const revision = { uri, version: summary.version, attachmentId: summary.attachmentId }
-    this.#failure = ''
-    try {
-      const [batches, presentation] = await Promise.all([
-        studio.client.call(
-          'rows',
-          { ...revision, fields: rows.statics, ...(of && { results: of.id }) },
-          controller.signal,
-        ),
-        this.#draws('diagram')
-          ? studio.client.call('presentation', revision, controller.signal)
-          : undefined,
-      ])
-      if (controller.signal.aborted || this.#disposed) return
-      await this.send({
-        kind: 'rows',
-        rows: {
-          revision,
-          schema: summary.schema,
-          fields: rows.statics,
-          counts: summary.counts,
-          ...(presentation && { presentation }),
-          batches,
-        },
-      })
-      this.#base = rows.key
-    } catch (error) {
-      if (controller.signal.aborted || this.#disposed) return
-      // Rows asked for of a case read again since, or of results replaced since, are no failure:
-      // the view is sent those of what shows now.
-      if ((error as { code?: string })?.code === 'stale') return
-      if (of && studio.all.get(uri)?.results?.id !== of.id) return
-      this.#failed.add(rows.key)
-      this.#failure = message(error)
-      studio.report(error)
-    } finally {
-      if (this.#controller === controller) this.#controller = undefined
-    }
-  }
-  /** Whether this view draws `view`, as itself or in a video export. */
-  #draws(view: VideoView): boolean {
-    return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
   }
   /** Whether its page is still loading where VS Code keeps one, on screen or kept while hidden:
    *  replacing it now breaks VS Code's loader. */
@@ -608,7 +477,7 @@ class View {
   dispose() {
     this.#settle()
     this.#disposed = true
-    this.cancel(true)
+    this.cancel()
     for (const file of this.#files.values()) void file.abort().catch(() => {})
     this.#files.clear()
     for (const disposable of this.disposables) disposable.dispose()

@@ -402,16 +402,14 @@ function outputOf(index: Index, name: string, rows: Uint32Array): Field {
   }
 }
 
-/** What `fields` hold, as a selection of the case's rows by id. */
-export function selectionsOf(kase: Case, fields: readonly Field[]): FieldSelection[] {
-  return fields.map((field) => {
-    const table = kase.table(field.index.type)
-    return {
-      from: field.index.type,
-      select: [field.name],
-      rows: { kind: 'ids', ids: Array.from(field.rows, (row) => kase.id(table, row)) },
-    }
-  })
+/** What `fields` hold, as a selection of the rows of the case they were read against: a range when
+ *  the rows run unbroken, as a whole type's do, else their indices. */
+export function selectionsOf(fields: readonly Field[]): FieldSelection[] {
+  return fields.map(({ index, name, axis }) => ({
+    from: index.type,
+    select: [name],
+    rows: { ...axis, index },
+  }))
 }
 
 /** A column name as names match: NFC-normalized, in lower case. */

@@ -132,7 +132,7 @@ export interface Requests {
   locate: { input: Revision & Element; output: SourceRange }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */
-  presentation: { input: Revision; output: Record<string, Positions> }
+  presentation: { input: Revision & { results?: string }; output: Record<string, Positions> }
   /** Rows of the case, or of the case `results` were read against when the query has an `at`. */
   query: {
     input: Revision & { query: Query; results?: string }
@@ -149,9 +149,10 @@ export interface Requests {
   /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
    *  and cancelling it stops the run. */
   run: { input: SimulationRequest; output: Run }
-  /** A GridKit results file read for the case at its revision. */
+  /** A GridKit results file read for the case at its revision, whose source is `text`. It answers
+   *  once the first frames are read, and the rest are read on. */
   open: {
-    input: Revision & { path: string; cacheBytes: number; contingency?: Study }
+    input: Revision & { text: string; path: string; cacheBytes: number; contingency?: Study }
     output: Results
   }
   /** Lets go of the case's results, stopping a run under way. Their files stay. */
@@ -192,6 +193,8 @@ export type FromWorker =
       detail?: string
     }
   | { kind: 'run'; run: Run }
+  /** How far an opened results file has been read. */
+  | { kind: 'results'; uri: string; results: Results }
   /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
    *  where they differ. Without, a line of Studio's own. */
   | {
@@ -250,25 +253,10 @@ export interface Cameras {
   diagram?: unknown
 }
 
-/** The case's rows a view draws, which replace those it holds: what the case is, its schema, the
- *  static fields the view reads, and where the diagram's blocks are arranged. A results file's
- *  samples extend them. The Monitor's, and an export's, are the case the results were read
- *  against. */
-export interface Rows {
-  revision: Revision
-  schema: Schema
-  fields: readonly FieldSelection[]
-  /** Physical row counts, including empty types, independent of the fields projected. */
-  counts: Readonly<Record<string, number>>
-  presentation?: Record<string, Positions>
-  batches: readonly RowBatch[]
-}
-
 export type ToView =
   | { kind: 'state'; state: ViewState }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
-  | { kind: 'rows'; rows: Rows }
   /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack,
    *  and `cancelled` a request let go of, where nothing failed. */
   | {
@@ -294,6 +282,11 @@ export type TransportAction =
 export interface ViewRequests {
   /** Rows of the case, or of the shown results when the query has an `at`. */
   query: { input: RowsQuery; output: RowsBlock[] }
+  /** The static fields a view draws, of a case's revision or of the case results were read
+   *  against. */
+  rows: { input: Requests['rows']['input']; output: RowBatch[] }
+  /** Where the diagram's blocks are arranged in the case at a revision. */
+  presentation: { input: Revision & { results?: string }; output: Record<string, Positions> }
   samples: { input: SamplesInput; output: SampleBatch[] }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
@@ -301,8 +294,8 @@ export interface ViewRequests {
   }
   /** Asks the user where to save a video: a file handle, or null when they cancel. */
   videoOpen: { input: { name: string; format: 'mp4' | 'webm' }; output: number | null }
-  /** Holds the rows `views` draw; resolves with their framing once held. */
-  videoData: { input: { views: readonly VideoView[] }; output: Cameras }
+  /** How the Network and Diagram were last framed, for an export to keep. */
+  cameras: { input: Record<string, never>; output: Cameras }
   videoWrite: { input: { file: number; position: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished video's path. */
   videoClose: { input: { file: number; abort?: boolean }; output: string | null }

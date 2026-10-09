@@ -99,7 +99,11 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "patchedDependencies": {
+      "@latkit/network@0.21.0": "patches/@latkit__network@0.21.0.patch",
+      "@latkit/video@0.6.4": "patches/@latkit__video@0.6.4.patch"
+    }
   },
   "capabilities": {
     "untrustedWorkspaces": {

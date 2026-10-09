@@ -269,8 +269,16 @@ export async function run() {
           done: (_, frames) => painted(diagram, frames),
         })
       }
-      // The Diagram's editor is the active one: closing it leaves the Network's.
-      await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+      // The Diagram's tab closes by name, whichever editor has focus, and leaves the Network's.
+      await vscode.window.tabGroups.close(
+        vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs)
+          .filter(
+            (tab) =>
+              tab.input instanceof vscode.TabInputCustom &&
+              tab.input.viewType === 'gridkitStudio.diagram',
+          ),
+      )
 
       // ── Case panel ──
       const counts = summary().counts

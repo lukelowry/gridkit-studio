@@ -4,6 +4,14 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@latkit/network@0.21.0':
+    hash: e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225
+    path: patches/@latkit__network@0.21.0.patch
+  '@latkit/video@0.6.4':
+    hash: a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290
+    path: patches/@latkit__video@0.6.4.patch
+
 importers:
 
   .:
@@ -22,10 +30,10 @@ importers:
         version: 0.17.0
       '@latkit/network':
         specifier: 0.21.0
-        version: 0.21.0
+        version: 0.21.0(patch_hash=e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225)
       '@latkit/video':
         specifier: 0.6.4
-        version: 0.6.4
+        version: 0.6.4(patch_hash=a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290)
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -2119,13 +2127,13 @@ snapshots:
       '@latkit/model': 4.1.0
       '@webgpu/types': 0.1.74
 
-  '@latkit/network@0.21.0':
+  '@latkit/network@0.21.0(patch_hash=e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225)':
     dependencies:
       '@latkit/gpu': 0.18.0
       '@latkit/model': 4.1.0
       '@webgpu/types': 0.1.74
 
-  '@latkit/video@0.6.4':
+  '@latkit/video@0.6.4(patch_hash=a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290)':
     dependencies:
       '@latkit/gpu': 0.18.0
       '@latkit/model': 4.1.0

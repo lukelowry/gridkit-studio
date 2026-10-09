@@ -111,6 +111,8 @@ export function registerRuns(studio: Sessions) {
               {
                 uri,
                 version: summary.version,
+                // The case as GridKit reads it, saved, which the results are read against.
+                text: document.getText(),
                 program,
                 solver: solver.fsPath,
                 output: output.fsPath,

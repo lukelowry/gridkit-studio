@@ -194,6 +194,8 @@ export class Sessions {
   readonly #told = new Set<string>()
   /** The failed runs already said, so each is said once. */
   readonly #failures = new Set<string>()
+  /** The opened files already said to stop short. */
+  readonly #unread = new Set<string>()
   /** Tell the log how a run starts and ends, and the user, once, why one failed. */
   #narrate(run: Run) {
     if (run.state === 'running') {
@@ -274,12 +276,31 @@ export class Sessions {
           else this.output.appendLine(event.message)
           return
         }
+        if (event.kind === 'results') {
+          // An opened file read on: only the one on show is followed.
+          const session = this.all.get(event.uri)
+          const { results } = event
+          if (!session || session.results?.id !== results.id) return
+          this.show(session, results, false)
+          this.changed.fire(session.uri)
+          if (results.error && !results.growing && !this.#unread.has(results.id)) {
+            this.#unread.add(results.id)
+            this.report(
+              notice(
+                `${results.name} could not be read past ${results.frames.toLocaleString()} ` +
+                  `samples: ${results.error}`,
+                SHOW_OUTPUT,
+              ),
+            )
+          }
+          return
+        }
         const { run } = event
         const session = this.all.get(run.uri)
         if (!session) return
         session.run = run
         // A run's results replace those on show as it starts; a study has none until it ends.
-        this.show(session, run.results)
+        this.show(session, run.results, run.state === 'running')
         this.changed.fire(session.uri)
         this.#narrate(run)
       }),
@@ -366,13 +387,14 @@ export class Sessions {
           .call('open', {
             uri: session.uri,
             version: summary.version,
+            text: document.getText(),
             ...saved,
             cacheBytes: cacheBytesOf(document.uri),
           })
           .then(
             (results) => {
               if (session.results || this.all.get(session.uri) !== session) return
-              this.show(session, results)
+              this.show(session, results, false)
               this.changed.fire(session.uri)
             },
             (error) => {
@@ -382,6 +404,14 @@ export class Sessions {
           )
     }
     return session
+  }
+  /** The case at `uri` as the views read it now: its revision, and its source, which results opened
+   *  are read against. */
+  async revisionOf(uri: string): Promise<{ uri: string; version: number; text: string }> {
+    const entry = this.documents.entries.get(uri)
+    if (!entry) throw new Error('Open the case first.')
+    const { version } = await this.documents.ensure(entry.document)
+    return { uri, version, text: entry.document.getText() }
   }
   current() {
     const session = this.active ? this.all.get(this.active) : undefined
@@ -506,8 +536,10 @@ export class Sessions {
     }
   }
   /** Put `results` on the session's clock: new results reset the span, more frames of the same
-   *  extend it, and none clears it. Another contingency of the shown study keeps the time. */
-  show(session: Session, results: Results | undefined) {
+   *  extend it, and none clears it. Another contingency of the shown study keeps the time. While
+   *  they are `live`, as a run writes them, the playhead follows their frames as they come; a file
+   *  opened and still read through keeps it where it is. */
+  show(session: Session, results: Results | undefined, live = false) {
     const { transport } = session
     const shown = session.results
     if (!results && !shown) return
@@ -519,7 +551,6 @@ export class Sessions {
       void this.persist(session)
       return
     }
-    const live = results.growing
     // The fields are the file's header, which GridKit writes after the run starts.
     if (results.outputs.length && (shown?.id !== results.id || !shown.outputs.length)) {
       session.plots = plotsFor(results, session.plots)

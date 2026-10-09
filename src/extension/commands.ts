@@ -362,13 +362,13 @@ export function registerCommands(studio: Sessions) {
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  /** Show results the worker read for the case. */
+  /** Show results the worker read for the case, and reads on. */
   const show = (session: Session, results: Results) => {
-    studio.show(session, results)
+    studio.show(session, results, false)
     changed(session)
   }
   // A study shows one contingency at a time, chosen from the Monitor's title bar.
-  command('chooseContingency', async ({ session, summary }) => {
+  command('chooseContingency', async ({ session }) => {
     const study = session.results?.contingency
     if (!study) return
     const choice = await vscode.window.showQuickPick(
@@ -379,8 +379,7 @@ export function registerCommands(studio: Sessions) {
     show(
       session,
       await studio.client.call('open', {
-        uri: session.uri,
-        version: summary.version,
+        ...(await studio.revisionOf(session.uri)),
         path: contingencyFile(study, choice.n),
         contingency: { ...study, shown: choice.n },
         cacheBytes: cacheBytesOf(vscode.Uri.parse(session.uri)),
@@ -457,8 +456,7 @@ export function registerCommands(studio: Sessions) {
     show(
       context.session,
       await studio.client.call('open', {
-        uri: context.session.uri,
-        version: context.summary.version,
+        ...(await studio.revisionOf(context.session.uri)),
         path: localPath(selected[0]),
         cacheBytes: cacheBytesOf(selected[0]),
       }),

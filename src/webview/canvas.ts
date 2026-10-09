@@ -14,7 +14,7 @@ import { createClock } from './clock.js'
 import { CanvasGpu } from './gpu.js'
 import { loadBorders } from './network/borders.js'
 import { Recovery } from './recovery.js'
-import { current as currentRows, drawable, receiveRows, type Snapshot } from './rows.js'
+import { current as currentRows, drawable, Rows, type Snapshot, staticNeeds } from './rows.js'
 import { networkNeeds, Samples } from './samples.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
@@ -126,7 +126,7 @@ function boot() {
       at: clock.now(),
       samples: samples.stats(),
       bindings: state.bindings,
-      rows: snapshot?.rows.revision,
+      rows: snapshot?.revision,
       summary: state.summary && { uri: state.summary.uri, version: state.summary.version },
     })
   }
@@ -468,17 +468,31 @@ function boot() {
     else paintNow()
   }
   const clock = createClock(show)
-  receiveRows((next) => {
-    mark('canvas:data')
-    received++
-    snapshot = next
-    if (next.rows.presentation) presented = next.rows.presentation
-    if (current(next)) void render().catch(error)
+  const rows = new Rows({
+    request: (input, signal) => bridge.request('rows', input, signal),
+    presentation: (revision, signal) => bridge.request('presentation', revision, signal),
+    // Rows of the revision on show draw at once.
+    changed: () => {
+      mark('canvas:data')
+      received++
+      snapshot = rows.snapshot
+      if (snapshot?.presentation) presented = snapshot.presentation
+      if (current(snapshot)) void render().catch(error)
+    },
+    report: (reason) => bridge.report(reason),
   })
   bridge.on((message) => {
-    if (message.kind === 'rows') mark('canvas:begin')
-    else if (message.kind === 'state') {
+    if (message.kind === 'state') {
       state = merged(state, message.state)
+      // The rows this state draws: a case read again is asked for once it reads.
+      if (state.summary && !state.stale) {
+        mark('canvas:begin')
+        rows.want(
+          { summary: state.summary },
+          staticNeeds(state.summary, state.bindings, kind === 'network'),
+          kind === 'diagram',
+        )
+      }
       canvas.setAttribute(
         'aria-label',
         state.diagramEditing
@@ -498,6 +512,7 @@ function boot() {
       if (message.command === 'reloadView') {
         drop()
         borderRequest = undefined
+        rows.retry()
         samples.retry()
         return void render().catch(error)
       }

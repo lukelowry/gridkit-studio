@@ -90,8 +90,8 @@ try {
   await verify(target)
   assert.deepEqual(
     (await readdir(join(target, 'dist'))).filter((name) => name.endsWith('.cjs')).sort(),
-    ['extension.cjs', 'worker.cjs'],
-    'Ship only the native extension and worker bundles',
+    ['extension.cjs', 'results.cjs', 'worker.cjs'],
+    'Ship only the native extension and its two worker bundles',
   )
   const entries = process.argv.slice(2)
   if (!entries.length) entries.push('tests/vscode/index.ts')

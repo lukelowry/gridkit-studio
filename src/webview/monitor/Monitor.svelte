@@ -10,7 +10,7 @@
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
-  import { current, receiveRows, type Snapshot } from '../rows.js'
+  import { current, Rows, type Snapshot, staticNeeds } from '../rows.js'
   import { plotNeeds, Samples } from '../samples.js'
   import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
@@ -22,6 +22,12 @@
   let view = $state.raw<ViewState>({})
   /** The case the results were read against, and the samples of them the plots draw. */
   let rows = $state.raw<Snapshot | undefined>()
+  const cases = new Rows({
+    request: (input, signal) => bridge.request('rows', input, signal),
+    presentation: (revision, signal) => bridge.request('presentation', revision, signal),
+    changed: () => (rows = cases.snapshot),
+    report: (reason) => bridge.report(reason),
+  })
   /** Bumped as samples arrive. */
   let held = $state(0)
   const samples = new Samples({
@@ -65,6 +71,16 @@
   const shown = $derived(monitorWindow(results, chosen ?? view.window))
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
+  // The rows of the case the results were read against, which the summary then describes, or
+  // of the case on show while there are none.
+  $effect(() => {
+    const { summary, results } = view
+    if (!summary || (view.stale && !results?.frames)) return
+    cases.want(
+      { summary, ...(results?.frames && { results: results.id }) },
+      staticNeeds(summary, view.bindings, false),
+    )
+  })
   // The plots draw the samples over the times shown; those around them load after, so a pan
   // finds them held.
   $effect(() => {
@@ -106,11 +122,11 @@
           else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
             epoch++
+            cases.retry()
             samples.retry()
           }
         }
       }),
-      receiveRows((next) => (rows = next)),
       watchTheme(() => (colors = theme())),
     ]
     const visibility = () => (hidden = document.hidden)

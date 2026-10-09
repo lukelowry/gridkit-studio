@@ -1,13 +1,12 @@
 <script lang="ts">
-  import type { Positions } from '@latkit/gpu'
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
   import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
-  import { current, receiveRows, type Snapshot } from '../rows.js'
-  import { exportNeeds, Samples } from '../samples.js'
+  import { rowsOnce, staticNeeds } from '../rows.js'
+  import { networkNeeds, plotNeeds, Samples, type SamplesOptions } from '../samples.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -30,16 +29,15 @@
   /** The results the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  /** The case's rows, where it saves its diagram blocks, and its results' samples. */
-  let snapshot: Snapshot | undefined
-  let presentation: Record<string, Positions> = {}
-  /** Called as samples arrive, or an ask for them brings none. */
-  let arrived = () => {}
-  const samples = new Samples({
+  const asking: SamplesOptions = {
     request: (input, signal) => bridge.request('samples', input, signal),
-    changed: () => arrived(),
+    changed: () => {},
     report: (reason) => bridge.report(reason),
-  })
+  }
+  /** The samples the Monitor's part plots, all of the time range; and those the Network's part
+   *  maps, a moment at a time, read a few chunks ahead of the frame drawn. */
+  const plotting = new Samples(asking)
+  const mapping = new Samples(asking)
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
   let cancelled = false
@@ -99,26 +97,29 @@
         status = 'idle'
         return
       }
-      const cameras = await bridge.request('videoData', { views: chosen.views }, signal)
-      const needs = exportNeeds(state, chosen.views)
-      const committed = snapshot
-      if (!committed || !current(committed, state))
-        throw new Error('The export recording changed while its samples were loading.')
-      // Every sample over the time range, before the first frame is drawn.
-      samples.want(state.results, needs, chosen.timeRange)
-      if (needs.length)
-        await new Promise<void>((resolve, reject) => {
-          const abort = () => reject(signal.reason)
-          arrived = () => {
-            if (samples.stuck) reject(new Error('The samples to export could not be read.'))
-            else if (samples.holds(chosen.timeRange)) resolve()
-            else return
-            signal.removeEventListener('abort', abort)
-          }
-          signal.addEventListener('abort', abort, { once: true })
-          arrived()
-        })
-      const rows = committed.data
+      const cameras = await bridge.request('cameras', {}, signal)
+      const { summary, results } = state
+      // The case the results were read against, which the summary then describes.
+      const of = { summary: summary!, ...(results?.frames && { results: results.id }) }
+      const held = await rowsOnce(
+        {
+          request: (input, s) => bridge.request('rows', input, s),
+          presentation: (input, s) => bridge.request('presentation', input, s),
+        },
+        of,
+        staticNeeds(summary!, state.bindings, false),
+        chosen.views.includes('diagram'),
+        signal,
+      )
+      const rows = held.data
+      // The Monitor's part plots the whole time range, so every sample of it comes first.
+      plotting.want(
+        results,
+        chosen.views.includes('monitor') ? plotNeeds(state) : [],
+        chosen.timeRange,
+      )
+      await plotting.until(chosen.timeRange, signal)
+      const mapped = chosen.views.includes('network') ? networkNeeds(state) : []
       const gpu = await owner.get()
       signal.throwIfAborted()
       // Each export follows the device it draws on, which an earlier export may have created.
@@ -136,9 +137,13 @@
         {
           state,
           rows,
-          samples: samples.data(rows),
-          covers: (from, field, window) => samples.covers(from, field, window),
-          presentation,
+          plotted: plotting.data(rows),
+          mapped: async (at, s) => {
+            mapping.want(results, mapped, [at, at], { at, travel: 1 })
+            await mapping.until([at, at], s)
+            return mapping.data(rows)
+          },
+          presentation: held.presentation ?? {},
           cameras,
         },
         output,
@@ -154,9 +159,9 @@
       if (!cancelled)
         bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
-      arrived = () => {}
       // The samples served this export alone.
-      samples.clear()
+      plotting.clear()
+      mapping.clear()
       if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
       bridge.send({ kind: 'busy', busy: false })
     }
@@ -185,10 +190,6 @@
         const offered = viewsOf(view).map(({ value }) => value)
         if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
-      }),
-      receiveRows((next) => {
-        snapshot = next
-        if (next.rows.presentation) presentation = next.rows.presentation
       }),
     ]
     bridge.send({ kind: 'ready' })

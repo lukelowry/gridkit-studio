@@ -1,7 +1,7 @@
 # Ship only the bundles, their assets, and the notices; vsce adds package.json.
 **
 !assets/{gridkit.png,gridkit.svg,monitor.svg,walkthrough.md}
-!dist/{extension,worker}.cjs
+!dist/{extension,worker,results}.cjs
 !dist/webview/*.{js,css,bin}
 !LICENSE
 !README.md

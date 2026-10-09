@@ -110,6 +110,7 @@ describe("GridKit's programs on solver files", () => {
     const request: SimulationRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
+      text,
       program,
       solver: solverPath,
       output: join(folder, sink.file),
@@ -283,6 +284,7 @@ describe("GridKit's programs on solver files", () => {
       {
         uri,
         version: 1,
+        text: await readFile(join(folder, 'IEEE39.case.json'), 'utf8'),
         program: 'DynamicSimulation',
         solver: join(folder, 'IEEE39.solver.json'),
         output: join(folder, 'out.csv'),

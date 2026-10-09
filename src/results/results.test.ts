@@ -146,10 +146,10 @@ describe('native results and ownership', () => {
       () => {},
     )
     // Each output in catalog and row order, matched by name whatever its case, and a column the
-    // case has no output for left unread.
-    expect(results.info.outputs).toEqual([
-      { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } },
-      { from: 'Bus', select: ['Va'], rows: { kind: 'ids', ids: ['Bus/1'] } },
+    // case has no output for left unread. Each names its rows as the case numbers them.
+    expect(results.info.outputs).toMatchObject([
+      { from: 'Bus', select: ['Vm'], rows: { kind: 'range', offset: 0, count: 2 } },
+      { from: 'Bus', select: ['Va'], rows: { kind: 'range', offset: 0, count: 1 } },
     ])
     expect(results.info.domains).toEqual({ Bus: { Vm: [1.1, 1.2], Va: [0.5, 0.5] } })
     const unknown = join(directory, 'unknown.csv')

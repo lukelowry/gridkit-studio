@@ -13,7 +13,7 @@ import {
 
 import { recordedWhole } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
-import type { Results, SamplesInput, VideoView, ViewState } from '../shared/messages.js'
+import type { Results, SamplesInput, ViewState } from '../shared/messages.js'
 
 /** The samples a view holds besides those it needs now, in bytes. */
 export const SAMPLE_BUDGET = 96 << 20
@@ -74,32 +74,6 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
     rows: ids?.length ?? summary.counts[from] ?? 0,
   }))
 })
-
-/** The fields a video export of `views` draws: the Network's and the Monitor's, a field both read
- *  for every row either reads it for. */
-export function exportNeeds(state: ViewState, views: readonly VideoView[]): Need[] {
-  const merged = new Map<string, Need>()
-  for (const need of [
-    ...(views.includes('network') ? networkNeeds(state) : []),
-    ...(views.includes('monitor') ? plotNeeds(state) : []),
-  ]) {
-    const { from, select, rows } = need.selection
-    const key = from + '\n' + select[0]
-    const found = merged.get(key)
-    const ids = (selection: FieldSelection) =>
-      selection.rows?.kind === 'ids' ? selection.rows.ids : undefined
-    if (!found) merged.set(key, need)
-    else if (!rows || !found.selection.rows) merged.set(key, rows ? found : need)
-    else {
-      const union = [...new Set([...(ids(found.selection) ?? []), ...(ids(need.selection) ?? [])])]
-      merged.set(key, {
-        selection: { from, select, rows: { kind: 'ids', ids: union } },
-        rows: union.length,
-      })
-    }
-  }
-  return [...merged.values()]
-}
 
 /** What names a selection of fields and rows, so equal selections compare equal. */
 export function selectionKey({ from, select, rows }: FieldSelection): string {
@@ -186,6 +160,8 @@ export class Samples {
   #flight?: { ask: Ask; controller: AbortController }
   #pumping = false
   #again = false
+  /** Who waits on what the view holds, hearing each change. */
+  readonly #waiters = new Set<() => void>()
   readonly #budget: number
 
   constructor(private readonly options: SamplesOptions) {
@@ -290,6 +266,27 @@ export class Samples {
     return (
       !window || this.#needs.every(({ selection }) => this.#covers(selectionKey(selection), window))
     )
+  }
+
+  /** Settles once every need's samples cover `window`, the one last asked for, or fails once what
+   *  they lack cannot be had. */
+  until(window: Domain, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const done = (settle: () => void) => {
+        this.#waiters.delete(look)
+        signal.removeEventListener('abort', abort)
+        settle()
+      }
+      const look = () => {
+        if (this.holds(this.#results && clip(window, this.#results.domain))) done(resolve)
+        else if (this.stuck) done(() => reject(new Error('The samples could not be read.')))
+      }
+      const abort = () => done(() => reject(signal.reason))
+      if (signal.aborted) return abort()
+      signal.addEventListener('abort', abort, { once: true })
+      this.#waiters.add(look)
+      look()
+    })
   }
 
   /** Whether what the view needs now cannot be had: each ask for what it lacks brought nothing. */
@@ -422,6 +419,12 @@ export class Samples {
     return bytes
   }
 
+  /** Tell the view, and whoever waits, that what it holds changed. */
+  #changed() {
+    this.options.changed()
+    for (const look of [...this.#waiters]) look()
+  }
+
   /** The bytes a chunk of `need` holds: the most one held does, else its times and values. */
   #chunkBytes(key: string, need: Need): number {
     let most = 0
@@ -450,6 +453,8 @@ export class Samples {
       const results = this.#results!
       const controller = new AbortController()
       this.#flight = { ask, controller }
+      // Told once the ask is over, so whoever hears sees whether the view is stuck.
+      let changed = false
       try {
         const batches = await this.options.request(
           {
@@ -466,17 +471,18 @@ export class Samples {
         // An ask that brought nothing is not asked again until something changes, which a view
         // waiting on it hears too.
         if (!this.#take(ask.key, batches)) this.#spent.add(ask.spent)
-        this.options.changed()
+        changed = true
       } catch (error) {
         if (controller.signal.aborted) continue
         this.#spent.add(ask.spent)
         // Results let go of, as when they are cleared or replaced, are no failure.
         if (!cancelled(error) && (error as { code?: string })?.code !== 'results-unavailable')
           this.options.report(error)
-        this.options.changed()
+        changed = true
       } finally {
         if (this.#flight?.controller === controller) this.#flight = undefined
       }
+      if (changed) this.#changed()
     }
   }
 

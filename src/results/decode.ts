@@ -3,14 +3,30 @@
 import { addAbortSignal, type Readable } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
 
-import { failure, type SampleBatch } from '@latkit/model'
+import {
+  failure,
+  type FieldSelection,
+  type Index,
+  type RowAxis,
+  type SampleBatch,
+} from '@latkit/model'
 
-import type { Case, Field, Table } from '../gridkit/index.js'
+import type { Case, Table } from '../gridkit/index.js'
 import { type ArrowField, messages } from './arrow.js'
 import { csvMessages } from './csv.js'
 import { BATCH_BYTES } from './limits.js'
 
 type ResultFormat = 'arrow' | 'csv'
+
+/** One output a results file holds: a field of some rows of a table. */
+export interface Field {
+  readonly name: string
+  /** The physical row numbering `rows` belong to. */
+  readonly index: Index
+  /** Ascending and distinct. */
+  readonly rows: Uint32Array
+  readonly axis: RowAxis
+}
 
 /** Decoded frames, in arrays of their own that nothing writes again. */
 interface Frames {
@@ -37,11 +53,13 @@ interface Plan {
   readonly strides: Int32Array
 }
 
-/** How a run's results read, learned once from their header: its columns, and the column each
- *  output's row reads. Every page reuses it, so a wide run's names are matched once. */
+/** How a results file reads, learned once from its header: its columns, what it holds, and the
+ *  column each output's row reads. Every page reuses it, so a wide run's names are matched once. */
 export interface Layout {
-  fields?: readonly ArrowField[]
-  plan?: Plan
+  /** The header's columns, which a CSV page after the first is read with. */
+  header?: readonly ArrowField[]
+  /** What the header says the file holds, and where. */
+  read?: { readonly fields: readonly Field[]; readonly plan: Plan }
 }
 
 /** One sample batch per output field, all over the same frames. */
@@ -68,33 +86,37 @@ export function samplesOf(fields: readonly Field[], frames: Frames): SampleBatch
   })
 }
 
-/** Reads the results in `source`, publishing each batch of frames as it decodes. Once `layout`
- *  holds a CSV header's columns, a CSV `source` is rows alone; a header alone learns them. */
+/** Reads the results in `source`, publishing each batch of frames as it decodes. The header says
+ *  what the file holds, so a run's file and one opened alone read alike. Once `layout` holds a
+ *  CSV header's columns, a CSV `source` is rows alone; a header alone learns them. */
 export async function readResults(
   source: Readable,
-  outputs: readonly Field[],
   kase: Case,
   reading: Reading,
   format: ResultFormat,
   layout: Layout,
 ): Promise<void> {
   let plan: Plan | undefined
+  let outputs: readonly Field[] = []
+  let perBatch = 1
   let received = 0
   let lastTime = -Infinity
   let yielded = performance.now()
-  const frameBytes = 8 * (1 + outputs.reduce((n, field) => n + field.rows.length, 0))
-  const perBatch = Math.max(1, Math.floor(BATCH_BYTES / frameBytes))
   try {
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
     for await (const message of format === 'csv'
-      ? csvMessages(chunks, layout.fields)
+      ? csvMessages(chunks, layout.header)
       : messages(chunks)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
         if (plan) throw failure('io', 'The results repeat their schema.')
-        layout.fields ??= message.fields
-        plan = layout.plan ??= placementOf(message.fields, outputs, kase)
+        layout.header ??= message.fields
+        layout.read ??= layoutOf(message.fields, kase)
+        plan = layout.read.plan
+        outputs = layout.read.fields
+        const frameBytes = 8 * (1 + outputs.reduce((n, field) => n + field.rows.length, 0))
+        perBatch = Math.max(1, Math.floor(BATCH_BYTES / frameBytes))
         continue
       }
       if (!plan) throw failure('io', 'The results hold a batch before their schema.')
@@ -288,48 +310,98 @@ function copyRows(
 /** The native column of a row's output `field`: `<class>_<identity>_<output>`, a bus by its name,
  *  the output by GridKit's name for it. */
 export function columnName(kase: Case, table: Table, row: number, field: string): string {
-  const identity =
-    table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
-  const source = table.shape.plan.get(field)?.source
-  const output = source?.kind === 'output' ? source.name : field
-  return `${table.shape.type}_${identity}_${output}`
+  return stemOf(kase, table, row) + nativeOutput(table, field)
 }
 
-/** Match complete names case-insensitively; repeated names consume rows in order. */
-function placementOf(fields: readonly ArrowField[], outputs: readonly Field[], kase: Case): Plan {
-  if (fields.length === 0) throw failure('io', 'The results do not start with a time column.')
-  const places = new Map<string, { readonly field: number; readonly position: number }[]>()
-  outputs.forEach((field, f) => {
-    const table = kase.table(field.index.type)
-    field.rows.forEach((row, position) => {
-      const name = fold(columnName(kase, table, row, field.name))
-      const list = places.get(name)
-      if (list === undefined) places.set(name, [{ field: f, position }])
-      else list.push({ field: f, position })
-    })
-  })
-  const doubles = new Uint8Array(fields.length)
-  const columns = outputs.map((field) => new Int32Array(field.rows.length).fill(-1))
-  const taken = new Map<string, number>()
-  fields.forEach((field, column) => {
-    doubles[column] = field.type === 'float64' ? 1 : 0
+/** A row's columns' common start: `<class>_<identity>_`. */
+function stemOf(kase: Case, table: Table, row: number): string {
+  const identity =
+    table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
+  return `${table.shape.type}_${identity}_`
+}
+
+/** GridKit's name for output `field`. */
+function nativeOutput(table: Table, field: string): string {
+  const source = table.shape.plan.get(field)?.source
+  return source?.kind === 'output' ? source.name : field
+}
+
+/** What a results file holds, from its header alone: each output of the case it has a column for,
+ *  matched by complete name, case-insensitively, in catalog and row order, and the column each of
+ *  their rows reads. A name that repeats matches its rows in turn. A column the case has no output
+ *  for is left unread. */
+export function layoutOf(
+  header: readonly ArrowField[],
+  kase: Case,
+): { fields: readonly Field[]; plan: Plan } {
+  if (header.length === 0) throw failure('io', 'The results do not start with a time column.')
+  const named = new Map<string, number[]>()
+  header.forEach((field, column) => {
     if (column === 0) return
     const name = fold(field.name)
-    const count = taken.get(name) ?? 0
-    taken.set(name, count + 1)
-    const place = places.get(name)?.[count]
-    if (place !== undefined) columns[place.field]![place.position] = column
+    const columns = named.get(name)
+    if (columns) columns.push(column)
+    else named.set(name, [column])
   })
+  // A column is `<class>_<identity>_<output>`, so a class no column starts with is passed over.
+  const classes = new Set([...named.keys()].map((name) => name.slice(0, name.indexOf('_'))))
+  const fields: Field[] = []
+  const columns: Int32Array[] = []
+  for (const table of kase.tables.values()) {
+    const type = fold(table.shape.type)
+    if (!table.shape.outputOrder.size || !table.records.length) continue
+    if (!type.includes('_') && !classes.has(type)) continue
+    const stems = Array.from(table.records, (_, row) => fold(stemOf(kase, table, row)))
+    for (const [name] of table.shape.outputOrder) {
+      const output = fold(nativeOutput(table, name))
+      const rows: number[] = []
+      const placed: number[] = []
+      for (let row = 0; row < stems.length; row++) {
+        const column = named.get(stems[row]! + output)?.shift()
+        if (column === undefined) continue
+        rows.push(row)
+        placed.push(column)
+      }
+      if (!rows.length) continue
+      fields.push(outputOf(table.index, name, Uint32Array.from(rows)))
+      columns.push(Int32Array.from(placed))
+    }
+  }
+  if (!fields.length)
+    throw failure('io', 'No result columns match this case. Open the case that wrote them.')
+  const doubles = Uint8Array.from(header, (field) => (field.type === 'float64' ? 1 : 0))
   const strides = Int32Array.from(columns, (placed) => {
-    const first = placed[0] ?? -1
+    const first = placed[0]!
     const stride = placed.length > 1 ? placed[1]! - first : 0
-    return first >= 0 &&
-      stride >= 0 &&
-      placed.every((column, row) => column === first + row * stride)
+    return stride >= 0 && placed.every((column, row) => column === first + row * stride)
       ? stride
       : -1
   })
-  return { doubles, columns, strides }
+  return { fields, plan: { doubles, columns, strides } }
+}
+
+/** Output `name` of `rows` of the table `index` numbers. */
+function outputOf(index: Index, name: string, rows: Uint32Array): Field {
+  return {
+    name,
+    index,
+    rows,
+    axis: rows.every((row, i) => row === rows[0]! + i)
+      ? { kind: 'range', offset: rows[0] ?? 0, count: rows.length }
+      : { kind: 'indices', values: rows },
+  }
+}
+
+/** What `fields` hold, as a selection of the case's rows by id. */
+export function selectionsOf(kase: Case, fields: readonly Field[]): FieldSelection[] {
+  return fields.map((field) => {
+    const table = kase.table(field.index.type)
+    return {
+      from: field.index.type,
+      select: [field.name],
+      rows: { kind: 'ids', ids: Array.from(field.rows, (row) => kase.id(table, row)) },
+    }
+  })
 }
 
 /** A column name as names match: NFC-normalized, in lower case. */

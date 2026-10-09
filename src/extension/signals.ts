@@ -1,10 +1,10 @@
-/** Monitored Signals: a tree of what future runs record, each type's sampled fields checked off
- *  one by one. */
+/** Monitored Signals: what the case's runs record, which is its elements' `mon` lists. A field is
+ *  checked when every element of its type lists it. Checking it makes every one list it, and
+ *  clearing it makes none, as one edit of the case that undo reverses. */
 
-import type { FieldSelection } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import type { Summary } from '../shared/messages.js'
+import type { Mutation, Summary } from '../shared/messages.js'
 import { fieldName, typeName } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
 
@@ -28,31 +28,22 @@ function recordable(summary: Summary): { type: string; fields: string[] }[] {
   })
 }
 
-/** `outputs` with `type` recording exactly `select`. */
-function recording(
-  outputs: readonly FieldSelection[],
-  type: string,
-  select: readonly string[],
-): FieldSelection[] {
-  const others = outputs.filter(({ from }) => from !== type)
-  return select.length ? [...others, { from: type, select: [...select] }] : others
-}
-
-const selected = (outputs: readonly FieldSelection[], type: string) =>
-  outputs.find(({ from }) => from === type)?.select ?? []
+/** How many of `type`'s elements list `field`. */
+const listed = (summary: Summary, type: string, field: string) =>
+  summary.recording.listed[type]?.[field] ?? 0
 
 const checked = (on: boolean) =>
   on ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked
 
+type Change = Extract<Mutation, { kind: 'record' }>
+
 export function registerSignals(studio: Sessions) {
   const changed = new vscode.EventEmitter<void>()
-  /** The active case, its last parsed summary, and what its future runs record. */
+  /** The active case and its last parsed summary. */
   const shown = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
-    return uri && summary
-      ? { uri, summary, outputs: studio.all.get(uri)?.outputs ?? [] }
-      : undefined
+    return uri && summary ? { uri, summary } : undefined
   }
 
   const provider: vscode.TreeDataProvider<Signal> = {
@@ -61,30 +52,35 @@ export function registerSignals(studio: Sessions) {
     getChildren(parent) {
       const now = shown()
       if (!now || parent?.field !== undefined) return []
-      const { uri, summary, outputs } = now
+      const { uri, summary } = now
       const types = recordable(summary)
       if (!parent)
         return types.map(({ type, fields }) => {
           const name = typeName(summary.schema, type)
-          const on = selected(outputs, type).length
+          const total = summary.counts[type] ?? 0
+          const on = fields.filter((field) => listed(summary, type, field) === total).length
           const item = new Signal(type, undefined, name, vscode.TreeItemCollapsibleState.Collapsed)
           item.id = `${uri}\n${type}`
           item.description = `${on}/${fields.length}`
-          item.tooltip = `${on} of ${fields.length} ${name} values recorded`
+          item.tooltip = `${on} of ${fields.length} ${name} values recorded by every ${name}`
           item.accessibilityInformation = { label: `${name}, ${on} of ${fields.length} recorded` }
           return item
         })
-      const on = selected(outputs, parent.type)
       const name = typeName(summary.schema, parent.type)
+      const total = summary.counts[parent.type] ?? 0
       const definitions = summary.schema.types[parent.type]?.fields ?? {}
       return (types.find(({ type }) => type === parent.type)?.fields ?? []).map((field) => {
+        const count = listed(summary, parent.type, field)
         const label = fieldName(definitions[field], field)
         const item = new Signal(parent.type, field, label, vscode.TreeItemCollapsibleState.None)
         item.id = `${uri}\n${parent.type}\n${field}`
         item.checkboxState = {
-          state: checked(on.includes(field)),
+          state: checked(count > 0 && count === total),
           accessibilityInformation: { label: `Record ${name} ${label}` },
         }
+        // When only some list it, the count says how many, and checking it makes every one.
+        if (count > 0 && count < total)
+          item.description = `${count.toLocaleString()} of ${total.toLocaleString()}`
         item.tooltip = definitions[field]?.description ?? `${name} ${label}`
         item.accessibilityInformation = { label: `${name} ${label}` }
         return item
@@ -97,31 +93,36 @@ export function registerSignals(studio: Sessions) {
     manageCheckboxStateManually: true,
     showCollapseAll: true,
   })
-  view.onDidChangeCheckboxState(({ items }) => {
+  /** One edit of the case: each type's elements list `add` and none of `remove`. */
+  const record = (changes: readonly Change[], label: string) => {
     const now = shown()
-    if (!now) return
-    let { outputs } = now
+    if (now && changes.length)
+      void studio.documents
+        .transact(now.uri, now.summary.version, changes, label)
+        .catch((error) => studio.report(error))
+  }
+  view.onDidChangeCheckboxState(({ items }) => {
+    const changes = new Map<
+      string,
+      { kind: 'record'; type: string; add: string[]; remove: string[] }
+    >()
     for (const [{ type, field }, state] of items) {
       if (field === undefined) continue
-      const rest = selected(outputs, type).filter((each) => each !== field)
-      outputs = recording(
-        outputs,
-        type,
-        state === vscode.TreeItemCheckboxState.Checked ? [...rest, field] : rest,
-      )
+      const change = changes.get(type) ?? { kind: 'record' as const, type, add: [], remove: [] }
+      changes.set(type, change)
+      if (state === vscode.TreeItemCheckboxState.Checked) change.add.push(field)
+      else change.remove.push(field)
     }
-    studio.record(now.uri, outputs)
+    record([...changes.values()], 'Change recorded signals')
   })
 
   let revision = ''
-  /** Redraw when the active case, its revision, or its recording changes. */
+  /** Redraw when the active case or its revision changes. */
   const refresh = () => {
     const now = shown()
-    const next = JSON.stringify([now?.uri, now?.summary.version, now?.outputs])
+    const next = JSON.stringify([now?.uri, now?.summary.version])
     if (next === revision) return
     revision = next
-    const count = now?.outputs.reduce((n, { select }) => n + select.length, 0) ?? 0
-    view.description = now ? `${count} selected` : undefined
     view.message =
       now && !recordable(now.summary).length ? 'This case has no recordable signals.' : undefined
     changed.fire()
@@ -131,11 +132,14 @@ export function registerSignals(studio: Sessions) {
   const every = (on: boolean) => () => {
     const now = shown()
     if (now)
-      studio.record(
-        now.uri,
-        on
-          ? recordable(now.summary).map(({ type, fields }) => ({ from: type, select: fields }))
-          : [],
+      record(
+        recordable(now.summary).map(({ type, fields }) => ({
+          kind: 'record',
+          type,
+          add: on ? fields : [],
+          remove: on ? [] : fields,
+        })),
+        on ? 'Record all signals' : 'Record no signals',
       )
   }
   return [

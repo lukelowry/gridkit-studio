@@ -1,4 +1,3 @@
-import type { FieldSelection } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import {
@@ -14,7 +13,7 @@ import type {
   Element,
   Plot,
   SimulationInfo,
-  Summary,
+  Study,
   TableState,
   ViewState,
 } from '../shared/messages.js'
@@ -25,7 +24,6 @@ import {
   validateSettings,
 } from '../shared/preferences.js'
 import { elementType, networkOf, placementOf } from '../shared/schema.js'
-import { PROGRAMS } from '../shared/simulation.js'
 import { Transport } from '../shared/transport.js'
 import { Client } from './client.js'
 import { Documents, isWritable } from './documents.js'
@@ -38,13 +36,7 @@ export interface Session {
   /** The network elements that stand for a selection the network does not draw. */
   anchors?: string[]
   run?: SimulationInfo
-  previous?: SimulationInfo
-  /** Whether Run was pressed and GridKit's run has not yet begun. */
-  launching: boolean
   plots: Plot[]
-  /** Undefined until the first parsed case supplies defaults; an empty array records nothing. */
-  outputs?: FieldSelection[]
-  values: Record<string, unknown>
   /** The case's playhead; views extrapolate it between changes. */
   transport: Transport
   settings: SettingsValues
@@ -53,10 +45,18 @@ export interface Session {
   cameras: Cameras
   table: TableState
 }
-/** Per-case workspace state; `recording` persists `Session.outputs`. */
-type Saved = Partial<Pick<Session, 'bindings' | 'values' | 'plots' | 'table'>> & {
-  recording?: FieldSelection[]
-  simulationId?: string
+/** Per-case workspace state. */
+type Saved = Partial<Pick<Session, 'bindings' | 'plots' | 'table'>> & {
+  /** The results file the Monitor showed, read again when the case first opens. */
+  results?: { path: string; contingency?: Study }
+}
+
+/** The `resultCacheMiB` setting for `uri`, in bytes. */
+export function cacheBytesOf(uri: vscode.Uri) {
+  return (
+    vscode.workspace.getConfiguration('gridkitStudio', uri).get<number>('resultCacheMiB', 256) *
+    (1 << 20)
+  )
 }
 
 /** The display settings for `uri`; an invalid value keeps its default. */
@@ -86,15 +86,6 @@ function settingsFor(uri: vscode.Uri): SettingsValues {
   return result
 }
 
-/** What runs record until the user chooses: each bus's voltage magnitude and angle. */
-export function defaultOutputs({ schema, counts }: Summary): FieldSelection[] {
-  return networkOf(schema).vertices.flatMap((type) => {
-    const fields = schema.types[type]!.fields
-    const select = ['Vm', 'Va'].filter((field) => fields[field]?.sampled === true)
-    return counts[type] && select.length ? [{ from: type, select }] : []
-  })
-}
-
 /** A choice a notification offers: its label, and the command it runs. */
 export interface Offer {
   title: string
@@ -107,22 +98,9 @@ export const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudi
 export const notice = (text: string, ...offers: Offer[]) =>
   Object.assign(new Error(text), { offers })
 
-/** How a run starts, for the log: the case, the program, its times, and a simulation's faults. */
-function opening(info: SimulationInfo): string[] {
-  const program = info.configuration?.program ?? 'DynamicSimulation'
-  const times = info.span
-    ? ` · ${formatNumber(info.span[0])} to ${formatNumber(info.span[1])} s`
-    : ''
-  return [
-    `▶ ${info.name} · ${PROGRAMS[program]}${times}`,
-    ...(program === 'DynamicSimulation'
-      ? (info.configuration?.addedFaults ?? []).map(
-          ({ bus, start, duration }) =>
-            `  Fault at Bus ${bus} from ${formatNumber(start)} s for ${formatNumber(duration)} s`,
-        )
-      : []),
-  ]
-}
+/** How a run starts, for the log: what a shell would run, and its times. */
+const opening = ({ command, name, span }: SimulationInfo) =>
+  `▶ ${command ?? name}${span ? ` · ${formatNumber(span[0])} to ${formatNumber(span[1])} s` : ''}`
 
 /** The plots `run` can draw: those it recorded, else its first recorded signal. */
 export function plotsFor(run: SimulationInfo, plots: readonly Plot[]): Plot[] {
@@ -218,11 +196,10 @@ export class Sessions {
   readonly #failures = new Set<string>()
   /** Tell the log how a run starts and ends, and the user, once, why one failed. */
   #narrate(info: SimulationInfo) {
-    if (info.state === 'preparing') return
     if (info.state === 'running') {
       if (!this.#told.has(info.id)) {
         this.#told.add(info.id)
-        for (const line of opening(info)) this.output.info(line)
+        this.output.info(opening(info))
       }
       return
     }
@@ -243,7 +220,7 @@ export class Sessions {
       this.report(
         notice(
           `${info.name}: ${study.failed.length} of ${study.buses.length} contingencies failed, ` +
-            `at bus ${study.failed.map((n) => study.buses[n]).join(', ')}.`,
+            `at ${study.failed.join(', ')}.`,
           SHOW_OUTPUT,
         ),
       )
@@ -268,11 +245,11 @@ export class Sessions {
     this.documents = new Documents(this.client)
     this.disposables.push(
       this.changed.event(() => this.updateContexts()),
-      // Completed recordings survive worker restarts. Unfinished simulations are interrupted.
+      // A run under way when the worker stops is interrupted. Its file stays.
       this.client.failure.event((error) => {
         this.report(error)
         for (const session of this.all.values()) {
-          if (session.run && ['preparing', 'running'].includes(session.run.state)) {
+          if (session.run?.state === 'running') {
             session.run = { ...session.run, state: 'interrupted', message: error.message }
             session.transport.setLive(false)
           }
@@ -338,7 +315,8 @@ export class Sessions {
       diagramEditing: !!session?.diagramEditing,
       ready: !!entry?.summary && !entry.stale,
       editable: !!entry && !entry.stale && isWritable(entry.document),
-      running: session?.run?.state === 'running' || !!session?.launching,
+      running: session?.run?.state === 'running',
+      contingency: session?.run?.state === 'complete' && !!session.run.contingency,
       hasSamples: (session?.run?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
@@ -358,43 +336,45 @@ export class Sessions {
         uri,
         bindings: saved.bindings ?? {},
         plots: saved.plots ?? [],
-        outputs: saved.recording,
-        values: saved.values ?? {},
         transport: new Transport(() => this.clock.fire(uri)),
-        launching: false,
         diagramEditing: false,
         settings: settingsFor(vscode.Uri.parse(uri)),
         cameras: {},
         table: saved.table ?? {},
       })
-      if (saved.simulationId) {
-        const session = this.all.get(uri)!
-        void this.client.call('getSimulation', { simulationId: saved.simulationId }).then(
-          (info) => {
-            if (
-              info.evicted ||
-              session.run ||
-              this.all.get(uri) !== session ||
-              this.context.workspaceState.get<Saved>('case:' + uri)?.simulationId !==
-                saved.simulationId
-            )
-              return
-            this.show(session, info)
-            this.changed.fire(uri)
-          },
-          (error) => this.output.warn('Could not restore simulation: ' + message(error)),
-        )
-      }
     }
     this.changed.fire(uri)
     return this.all.get(uri)!
   }
+  /** The sessions whose saved results file has been read again, or found gone. */
+  readonly #restored = new WeakSet<Session>()
   async open(document: vscode.TextDocument) {
     const session = this.activate(document.uri.toString())
     const summary = await this.documents.ensure(document)
-    if (session.outputs === undefined) {
-      session.outputs = defaultOutputs(summary)
-      this.changed.fire(session.uri)
+    // Once per session, the file the Monitor last showed is read again. A run started meanwhile
+    // shows instead, and a file that no longer reads is forgotten.
+    if (!this.#restored.has(session)) {
+      this.#restored.add(session)
+      const saved = this.context.workspaceState.get<Saved>('case:' + session.uri)?.results
+      if (saved)
+        void this.client
+          .call('open', {
+            uri: session.uri,
+            version: summary.version,
+            ...saved,
+            cacheBytes: cacheBytesOf(document.uri),
+          })
+          .then(
+            (info) => {
+              if (session.run || this.all.get(session.uri) !== session) return
+              this.show(session, info)
+              this.changed.fire(session.uri)
+            },
+            (error) => {
+              this.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
+              if (!session.run) void this.persist(session)
+            },
+          )
     }
     return session
   }
@@ -404,13 +384,14 @@ export class Sessions {
     return session
   }
   persist(session: Session) {
+    const { run } = session
     const saved: Saved = {
       bindings: session.bindings,
-      values: session.values,
       plots: session.plots,
       table: session.table,
-      recording: session.outputs,
-      simulationId: session.run?.contingency?.study ?? session.run?.id,
+      ...(run && {
+        results: { path: run.path, ...(run.contingency && { contingency: run.contingency }) },
+      }),
     }
     return this.context.workspaceState.update('case:' + session.uri, saved)
   }
@@ -455,11 +436,8 @@ export class Sessions {
       selection: session?.selection,
       anchors: session?.anchors,
       run: session?.run,
-      launching: session?.launching,
-      outputs: session?.outputs,
       plots: session?.plots,
       window: session?.window,
-      values: session?.values,
       table: session?.table,
     }
   }
@@ -524,18 +502,17 @@ export class Sessions {
   show(session: Session, run: SimulationInfo | undefined) {
     const { transport } = session
     const shown = session.run
-    const study = !!run?.contingency && shown?.contingency?.study === run.contingency.study
-    if (shown && run && shown.id !== run.id && !study) session.previous = shown
+    const study = !!run?.contingency && shown?.contingency?.base === run.contingency.base
     session.run = run
     if (!run) {
-      session.previous = undefined
       session.window = undefined
       transport.clear()
       void this.persist(session)
       return
     }
     const live = run.state === 'running'
-    if (shown?.id !== run.id) {
+    // A run's fields are its output's header, which GridKit writes after the run starts.
+    if (run.outputs.length && (shown?.id !== run.id || !shown.outputs.length)) {
       session.plots = plotsFor(run, session.plots)
       this.persist(session)
     }
@@ -562,22 +539,7 @@ export class Sessions {
     session.transport.pause()
     session.transport.seek(t)
   }
-  /** Set what future runs record. Plots of the current run are unaffected; the next run keeps those
-   *  it records. */
-  record(uri: string, outputs: readonly FieldSelection[]) {
-    const session = this.all.get(uri)
-    if (!session) return
-    const recorded = outputs.filter(({ select }) => select.length > 0)
-    session.outputs = recorded
-    // With no run, keep only the plots the next run will record.
-    if (!session.run)
-      session.plots = session.plots.filter((plot) =>
-        recorded.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
-      )
-    this.persist(session)
-    this.changed.fire(uri)
-  }
-  /** Make `field` drive exactly `channels`; a mapped sampled field joins future recordings. */
+  /** Make `field` drive exactly `channels`. */
   bind(
     uri: string,
     field: FieldRef,
@@ -589,15 +551,6 @@ export class Sessions {
     if (!session || !schema) throw new Error('Open a GridKit case first.')
     const allowed = channelsFor(placementOf(networkOf(schema), field.type))
     session.bindings = bound(session.bindings, allowed, field, channels, domain)
-    if (channels.length && schema.types[field.type]?.fields[field.field]?.sampled) {
-      const outputs = session.outputs ?? []
-      const recorded = outputs.find((output) => output.from === field.type)
-      if (!recorded) session.outputs = [...outputs, { from: field.type, select: [field.field] }]
-      else if (!recorded.select.includes(field.field))
-        session.outputs = outputs.map((output) =>
-          output === recorded ? { ...output, select: [...output.select, field.field] } : output,
-        )
-    }
     this.persist(session)
     this.changed.fire(uri)
   }

@@ -2,12 +2,8 @@ import type { Domain, FieldSelection } from '@latkit/model'
 
 import type { Revision } from './messages.js'
 
-/** GridKit's programs a run can start, by the names the Simulation view gives them. */
-export const PROGRAMS = {
-  DynamicSimulation: 'Dynamic simulation',
-  ContingencyAnalysis: 'Contingency analysis',
-} as const
-export type Program = keyof typeof PROGRAMS
+/** GridKit's programs Studio runs on a solver file. */
+export type Program = 'DynamicSimulation' | 'ContingencyAnalysis'
 
 /** Where GridKit runs: installed here, else in a container of an image. */
 export interface GridKit {
@@ -28,60 +24,56 @@ export interface RuntimeProcess {
   container?: { cli: string; name: string }
 }
 
+/** A ContingencyAnalysis study: each contingency's bus, those that wrote a file, the faults GridKit
+ *  reported failed, as it names them, and the one shown. Contingency `n` faults `buses[n]` and
+ *  writes `${base}_${n}${ext}`. */
+export interface Study {
+  base: string
+  ext: string
+  buses: readonly number[]
+  written: readonly number[]
+  failed: readonly string[]
+  shown: number
+}
+
+/** A GridKit results file Studio reads for a case: a run's, as GridKit writes it, or one opened. */
 export interface SimulationInfo {
   id: string
   revision: Revision
   fingerprint: string
   name: string
-  state: 'preparing' | 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
-  /** Metadata remains discoverable after retention removes its recording. */
-  evicted?: boolean
-  /** Honor recordings pinned by earlier versions when applying the disk budget. */
-  retained?: boolean
+  /** What a shell would run for it, as `DynamicSimulation IEEE39.solver.json`. Absent for a file
+   *  opened alone. */
+  command?: string
+  state: 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
+  /** The file it reads. */
   path: string
   format: 'arrow' | 'csv'
   frames: number
   domain: Domain
-  /** The times the run will cover, once its command says. */
+  /** The times the run will cover, as its solver file says. */
   span?: Domain
   /** Finite value ranges over every ingested sample, shared by all views and time windows. */
   domains?: Record<string, Record<string, Domain>>
   message?: string
   started: number
+  /** What the file holds, once its header is read. */
   outputs: readonly FieldSelection[]
-  /** Values validated at launch, never the editor's later settings. Absent for legacy imports. */
-  configuration?: {
-    runtime?:
-      | { kind: 'installed'; program: string }
-      | { kind: 'container'; cli: string; podman: boolean; image: string }
-    values: Record<string, unknown>
-    program: Program
-    options: readonly { name: string; value: number | string }[]
-    addedFaults: readonly {
-      bus: number
-      start: number
-      duration: number
-      resistance: number
-      reactance: number
-    }[]
-  }
-  /** A ContingencyAnalysis study: the bus each contingency faults, those that failed, how many
-   *  have finished, and the one shown. Each contingency shown is a run of its own; GridKit numbers
-   *  their files from `offset`, after the case's own faults. */
-  contingency?: {
-    study: string
-    offset: number
-    buses: readonly number[]
-    failed: readonly number[]
-    done: number
-    shown: number
-  }
+  contingency?: Study
 }
 
+/** A run of `program` on a solver file, with what Studio read of it and of its case. */
 export interface SimulationRequest extends Revision {
-  simulationId?: string
-  values: Record<string, unknown>
-  outputs: readonly FieldSelection[]
+  program: Program
+  /** The .solver.json GridKit runs, in its folder. */
+  solver: string
+  /** Where GridKit writes its samples, and how, as the solver file and its case say. */
+  output: string
+  format: 'arrow' | 'csv'
+  /** When the run ends, for its progress. */
+  tmax: number
+  /** The folder a container mounts. */
+  root: string
   gridkit: GridKit
   cacheBytes: number
 }

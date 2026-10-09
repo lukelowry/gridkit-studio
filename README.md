@@ -28,6 +28,8 @@ To use the default image, pull it first:
 docker pull ghcr.io/lukelowry/gridkit:latest
 ```
 
+To run GridKit, right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes. The case's `mon` lists say what gets recorded, and **Monitored Signals** edits them. **Open Results…** in the Monitor shows output you already have.
+
 ## Features
 
 - Network editor
@@ -43,7 +45,7 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _An IEEE39 generator with its exciter and stabilizer in the diagram_
 
-- Dynamic simulation and contingency analysis
+- Dynamic simulation and contingency analysis from a solver file's menu
 - Monitor for plotting and playing back signals
 
 ![IEEE39 during a fault with voltage magnitude on the network and in the Monitor](docs/media/monitor.png)

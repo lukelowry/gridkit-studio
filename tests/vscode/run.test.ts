@@ -1,5 +1,5 @@
-/** Runs against real GridKit from the views: signals, live samples, playback, a cancelled run,
- *  and a native failure. */
+/** Runs against real GridKit from a solver file's menu: what the case records, live samples,
+ *  playback, a study, a cancelled run, and a native failure. */
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -10,7 +10,17 @@ import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { again, frames, notified, type TestHost, testHost, until, visible, VM } from './harness.js'
+import {
+  again,
+  folder,
+  frames,
+  notified,
+  type TestHost,
+  testHost,
+  until,
+  visible,
+  VM,
+} from './harness.js'
 
 /** Pixels painted in a color, not the grays of axes, text and background. */
 function colored(png: PNG): number {
@@ -24,6 +34,12 @@ function colored(png: PNG): number {
   return count
 }
 
+/** The case's first BusFault from `from` to `to`, as GridKit's events name it. */
+const fault = (from: number, to: number) => [
+  { time: from, type: 'fault_on', element_id: 0 },
+  { time: to, type: 'fault_off', element_id: 0 },
+]
+
 suite('Run', function () {
   // A run of the whole case takes as long as GridKit does.
   this.timeout(600_000)
@@ -31,7 +47,6 @@ suite('Run', function () {
   let bench: TestHost
   let network: Frame
   let monitor: Frame
-  let simulation: Frame
   let end = 0
 
   suiteSetup(async function () {
@@ -40,7 +55,7 @@ suite('Run', function () {
     network = await bench.open('network')
   })
 
-  test('chooses signals from the empty Monitor and runs without seeded plots', async () => {
+  test('records what Monitored Signals checks, and runs from the solver file in place', async () => {
     assert.deepEqual(bench.session.plots, [])
     monitor = await bench.show('monitor')
     // The Monitor's own button brings the native Monitored Signals view back into sight.
@@ -54,7 +69,8 @@ suite('Run', function () {
       'Monitored Signals shown',
     )
     const signals = await bench.signals({ reveal: false })
-    // Clear every signal through the view's own title action.
+    // Record nothing, through the view's own title action: the case's every list goes empty.
+    const listed = () => Object.keys(bench.studio.state(bench.key).summary?.recording.listed ?? {})
     await again(
       async () => {
         await signals.locator('.pane-header').hover()
@@ -63,34 +79,27 @@ suite('Run', function () {
           .click({ timeout: 2000 })
           .catch(() => {})
       },
-      () => !bench.session.outputs?.length,
-      'all monitored fields cleared',
+      () => !listed().length,
+      'the case records nothing',
     )
-    simulation = await bench.view('simulation')
-    // Start says what keeps it from running, and offers to choose what to record.
-    await bench.start()
+    // A run says what keeps it from starting, and offers to choose what to record.
+    bench.run()
     await bench.notice('Choose Signals').click()
     await bench.signals({ reveal: false })
-    assert.equal(bench.session.launching, false)
     assert.equal(bench.studio.errors.splice(0).length, 1)
     await bench.toggleSignal('Bus', 'Vm')
-    await until(() => bench.session.outputs?.length === 1, 'one selected field')
-    await simulation.locator('[data-testid="field-tmax"]').fill('2')
-    await simulation.locator('[data-testid="field-dt_monitor"]').fill('0.01')
-    await until(() => bench.session.values.tmax === 2, 'run settings captured')
+    assert.deepEqual(listed(), ['Bus'])
+    await bench.writeSolver({ tmax: 2, dt_monitor: 0.01, events: [] })
     await vscode.commands.executeCommand('workbench.action.closePanel')
     const { session } = bench
-    const shown = session.run?.id
     const before = await frames(network)
-    await bench.start()
-    // Run itself reveals the Monitor, and nothing else: no terminal takes the panel from it.
+    bench.run()
+    // The run reveals the Monitor, and nothing else: no terminal takes the panel from it.
     monitor = await bench.view('monitor')
-    await until(
-      () => session.run && session.run.id !== shown && session.run.frames > 0,
-      'frames arrive',
-      180_000,
-    )
+    await until(() => session.run && session.run.frames > 0, 'frames arrive', 180_000)
     assert.equal(await bench.panelShown(), 'Monitor')
+    // GridKit reads the files as saved, so the edited case was saved first.
+    assert.equal(bench.document.isDirty, false)
     const followed = session.run!.state !== 'running' || session.transport.state.follow
     await until(() => session.run?.state !== 'running', 'the run ends', 300_000)
     assert.equal(session.run?.state, 'complete', session.run?.message)
@@ -98,6 +107,11 @@ suite('Run', function () {
       Math.abs(session.run.domain[1] - session.run.span![1]) < 1e-9,
       'the run reaches its end',
     )
+    // GridKit wrote where the solver file says, and that is the file the Monitor reads.
+    const written = vscode.Uri.joinPath(folder(), 'IEEE39.csv')
+    await vscode.workspace.fs.stat(written)
+    assert.equal(session.run.path, written.fsPath)
+    assert.equal(session.run.command, 'DynamicSimulation IEEE39.solver.json')
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
@@ -108,7 +122,20 @@ suite('Run', function () {
       async () => /1\.0485/.test(await reading()),
       async () => {
         const { status, follow } = bench.session.transport.state
-        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''}`
+        const plot = await monitor
+          .locator('canvas')
+          .first()
+          .evaluate((canvas) =>
+            (
+              canvas as unknown as { gridkitPlot(): { at?: number; paused: boolean } }
+            ).gridkitPlot(),
+          )
+        const live = await monitor.locator('.lane [role="status"]').getAttribute('aria-live')
+        const focused = (name: string) =>
+          `(document.hasFocus() ? 'has' : 'lacks') + ' focus on ' + document.activeElement?.${name}`
+        const focus = await monitor.evaluate<string>(focused('tagName'))
+        const page = await bench.page.evaluate<string>(focused('className'))
+        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''} at ${bench.session.transport.currentT()}, the plot at ${plot.at}${plot.paused ? ' paused' : ''} with its reading ${live === 'off' ? 'off' : 'on'}, the Monitor ${focus}, the window ${page}, the run ${JSON.stringify({ frames: session.run?.frames, domain: session.run?.domain })}`
       },
     )
     assert.ok(followed, 'The playhead follows a run as it arrives')
@@ -157,63 +184,54 @@ suite('Run', function () {
     await until(() => bench.session.transport.state.status === 'paused', 'pause from the bar')
   })
 
-  test('keeps existing plots when the next run selects different fields', async () => {
+  test('keeps existing plots until the next run, which plots what it recorded', async () => {
     const previous = bench.session.run!.id
-    simulation = await bench.show('simulation')
     await bench.toggleSignal('Bus', 'Va')
     await bench.toggleSignal('Bus', 'Vm')
-    await until(
-      () => bench.session.outputs?.[0]?.select.join() === 'Va',
-      'next run records only angle',
-    )
+    assert.ok(bench.recorded('Bus', 'Va') && !bench.recorded('Bus', 'Vm'))
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Vm' }])
     assert.equal(bench.session.run!.outputs[0]!.select[0], 'Vm')
-    await bench.start()
+    bench.run()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
       'second run completes',
     )
-    assert.equal(bench.session.previous?.id, previous)
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Va' }])
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
   })
 
-  test('analyzes a fault on every bus, and shows each contingency in place', async () => {
-    simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="study-program"]').click()
-    await simulation.locator('[role="option"][data-value="ContingencyAnalysis"]').click()
-    await until(() => bench.session.values.program === 'ContingencyAnalysis', 'analysis chosen')
-    // Every bus is faulted, so the form asks for no bus and shows no fault switch.
-    assert.equal(await simulation.locator('[data-testid="field-fault"]').count(), 0)
-    await simulation.locator('[data-testid="field-tmax"]').fill('0.5')
-    await simulation.locator('[data-testid="field-fault_start"]').fill('0.1')
-    await until(() => bench.session.values.fault_start === 0.1, 'fault timing captured')
+  test('studies each fault in turn, and shows each contingency in place', async () => {
+    await bench.writeSolver({ tmax: 0.5, dt_monitor: 0.01, events: fault(0.1, 0.2) })
     const previous = bench.session.run!.id
-    await bench.start()
+    bench.run('Run Contingency Analysis')
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
-      'the analysis ends',
+      'the study ends',
       300_000,
     )
     const study = bench.session.run!.contingency!
-    assert.equal(study.buses.length, bench.source.buses.length)
-    assert.deepEqual([study.done, study.shown, study.failed], [study.buses.length, 0, []])
-    const before = { run: bench.session.run!.id, previous: bench.session.previous?.id }
-    await simulation.locator('[data-testid="study-contingency"]').click()
-    await simulation.locator('[role="option"][data-value="1"]').click()
+    // One contingency for each fault of the case, each faulting its own bus, the first on show.
+    const faults = (bench.source.devices as { class?: string; ports?: { bus?: number } }[]).filter(
+      (device) => device.class === 'BusFault',
+    )
+    assert.deepEqual(
+      study.buses,
+      faults.map((device) => device.ports!.bus),
+    )
+    assert.deepEqual([study.written, study.shown, study.failed], [faults.map((_, n) => n), 0, []])
+    assert.equal(bench.session.run!.path, join(folder().fsPath, 'IEEE39_0.csv'))
+    const shown = bench.session.run!.id
+    // Another contingency, from the Monitor's title bar, takes the first's place.
+    await bench.title('monitor', 'Show Contingency')
+    const bus = study.buses[1]!
+    await bench.pick(new RegExp(`^Bus ${bus}$`), `Bus ${bus}`)
     await until(() => bench.session.run?.contingency?.shown === 1, 'the second contingency shows')
-    // It takes the study's place: the run before the study stays the previous one.
-    assert.notEqual(bench.session.run!.id, before.run)
-    assert.equal(bench.session.previous?.id, before.previous)
+    assert.notEqual(bench.session.run!.id, shown)
+    assert.equal(bench.session.run!.path, join(folder().fsPath, 'IEEE39_1.csv'))
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
-    await simulation.locator('[data-testid="study-program"]').click()
-    await simulation.locator('[role="option"][data-value="DynamicSimulation"]').click()
-    await until(() => bench.session.values.program === 'DynamicSimulation', 'simulation chosen')
-    await simulation.locator('[data-testid="field-tmax"]').fill('2')
-    await until(() => bench.session.values.tmax === 2, 'end time restored')
   })
 
   test('runs TwoArea with its native Ispdlim values and plots the result', async () => {
@@ -222,19 +240,10 @@ suite('Run', function () {
     )
     await bench.settled()
     assert.deepEqual((await bench.current()).issues, [])
+    if (!bench.recorded('Bus', 'Vm')) await bench.toggleSignal('Bus', 'Vm')
+    await bench.writeSolver({ tmax: 2, dt_monitor: 0.01, events: [] })
     const previous = bench.session.run!.id
-    simulation = await bench.show('simulation')
-    if (
-      !bench.session.outputs?.some(
-        (output) => output.from === 'Bus' && output.select.includes('Vm'),
-      )
-    )
-      await bench.toggleSignal('Bus', 'Vm')
-    await until(
-      () => bench.session.outputs?.some((output) => output.select.includes('Vm')),
-      'voltage recorded',
-    )
-    await bench.start()
+    bench.run()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state !== 'running',
       'TwoArea ends',
@@ -247,13 +256,10 @@ suite('Run', function () {
     await bench.capture('run-twoarea')
   })
 
-  test('follows live samples, stops the native task and keeps partial plots', async () => {
-    simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="field-tmax"]').fill('1000')
-    await simulation.locator('[data-testid="field-dt_monitor"]').fill('0.001')
-    await until(() => bench.session.values.tmax === 1000, 'long run configured')
+  test('follows live samples, stops the run from the Monitor and keeps partial plots', async () => {
+    await bench.writeSolver({ tmax: 1000, dt_monitor: 0.001, events: [] })
     const previous = bench.session.run!.id
-    await bench.start()
+    bench.run()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.frames! > 64,
       'live samples arrive',
@@ -269,19 +275,19 @@ suite('Run', function () {
       )
     await until(
       async () => (await intervals()).every(([start, end]) => start === 0 && end === 1000),
-      'all live plots keep the configured interval',
+      'all live plots keep the solver file’s end time',
     )
     assert.equal((await bench.times())[1], 1000)
     await bench.playback('Go live').click()
     await until(() => bench.session.transport.state.follow, 'follow live again')
     await bench.stop()
-    await until(() => bench.session.run?.state === 'cancelled', 'native task cancelled')
+    await until(() => bench.session.run?.state === 'cancelled', 'the run stopped')
     assert.ok(bench.session.run!.frames > 0)
     assert.ok(bench.session.run!.domain[1] < 1000)
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.ok(
       (await intervals()).every(([start, end]) => start === 0 && end === 1000),
-      'cancellation keeps the configured plot interval',
+      'a stopped run keeps its plot interval',
     )
     assert.equal((await bench.times())[1], 1000)
     await bench.playback('Previous sample').click()
@@ -292,11 +298,9 @@ suite('Run', function () {
   })
 
   test('says once why GridKit could not finish, and runs again once allowed', async () => {
-    simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="field-max_steps"]').fill('1')
-    await until(() => bench.session.values.max_steps === 1, 'one solver step allowed')
+    await bench.writeSolver({ tmax: 0.1, dt_monitor: 0.01, max_steps: 1, events: [] })
     const previous = bench.session.run!.id
-    await bench.start()
+    bench.run()
     const run = await until(() => {
       const { run } = bench.session
       return run?.id !== previous && run?.state === 'failed' ? run : undefined
@@ -309,15 +313,9 @@ suite('Run', function () {
     assert.ok(shown[0]!.includes(why), shown[0])
     assert.equal(bench.studio.errors.splice(0).length, 1)
     assert.equal(await bench.panelShown(), 'Monitor')
-    for (const kind of ['simulation', 'monitor'] as const)
-      assert.ok(!(await (await bench.view(kind)).locator('body').innerText()).includes(why))
-    await simulation.locator('[data-testid="field-max_steps"]').fill('')
-    await simulation.locator('[data-testid="field-tmax"]').fill('0.1')
-    await until(
-      () => bench.session.values.max_steps === undefined && bench.session.values.tmax === 0.1,
-      'run settings captured',
-    )
-    await bench.start()
+    assert.ok(!(await (await bench.view('monitor')).locator('body').innerText()).includes(why))
+    await bench.writeSolver({ tmax: 0.1, dt_monitor: 0.01, events: [] })
+    bench.run()
     await until(
       () => bench.session.run?.id !== run.id && bench.session.run?.state === 'complete',
       'the next run completes',

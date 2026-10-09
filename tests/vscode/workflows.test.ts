@@ -1,6 +1,7 @@
 /** What a user does with a case, end to end against real GridKit: find a bus by name and see it on
- *  the Network, change it and take the change back, fault it and run, read its voltage drop in the
- *  Monitor, and color the Network by that voltage. Each step goes through the views and menus. */
+ *  the Network, change it and take the change back, record its voltage, fault it in the solver file
+ *  and run that, read its voltage drop in the Monitor, and color the Network by that voltage. Each
+ *  step goes through the views, the menus and the files. */
 
 import assert from 'node:assert/strict'
 
@@ -96,36 +97,38 @@ suite('Workflows', function () {
     )
   })
 
-  test('faults it from its menu, runs GridKit, and reads its voltage drop in the Monitor', async () => {
-    await bench.menu(row().locator('th[scope="row"]'), 'Configure Fault')
-    await until(
-      () => bench.session.values.fault === true && bench.session.values.fault_bus === id,
-      'the next run faults the bus',
-    )
+  test('records its voltage, faults it in the solver file, runs that, and reads the drop in the Monitor', async () => {
+    await bench.toggleSignal('Bus', 'Vm')
     await bench.menu(row().locator('th[scope="row"]'), 'Plot Signal')
     await bench.pick('Bus.Vm')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm' && plot.id === id),
       'its voltage plotted',
     )
-    const simulation = await bench.show('simulation')
-    await simulation.locator('[data-testid="field-tmax"]').fill('2')
-    await until(() => bench.session.values.tmax === 2, 'a two-second run')
+    // The fault GridKit's events name: the case's own fault on this bus, by its place among them.
+    const element = (bench.source.devices as { class?: string; ports?: { bus?: number } }[])
+      .filter((device) => device.class === 'BusFault')
+      .findIndex((device) => device.ports?.bus === bus.number)
+    assert.ok(element >= 0, 'the case has a fault on the bus')
+    await bench.writeSolver({
+      tmax: 2,
+      dt_monitor: 0.01,
+      events: [
+        { time: 1, type: 'fault_on', element_id: element },
+        { time: 1.1, type: 'fault_off', element_id: element },
+      ],
+    })
     const before = bench.session.run?.id
-    await bench.start()
+    bench.run()
     await until(
-      () =>
-        bench.session.run?.id !== before &&
-        !['preparing', 'running'].includes(bench.session.run?.state ?? 'preparing'),
+      () => bench.session.run?.id !== before && bench.session.run?.state !== 'running',
       'the run ends',
       300_000,
     )
     const run = bench.session.run!
     assert.equal(run.state, 'complete', run.message)
-    const fault = run.configuration!.addedFaults[0]!
-    assert.equal(fault.bus, bus.number)
-    const steady = await voltage(run.id, Math.max(0, fault.start - 0.05))
-    const faulted = await voltage(run.id, fault.start + fault.duration / 2)
+    const steady = await voltage(run.id, 0.95)
+    const faulted = await voltage(run.id, 1.05)
     assert.ok(faulted < steady - 0.1, `the faulted bus's voltage drops: ${steady} → ${faulted}`)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

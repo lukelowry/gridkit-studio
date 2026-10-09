@@ -3,19 +3,18 @@ import type { ExtensionContext } from 'vscode'
 import { registerCommands } from './commands.js'
 import { registerNavigation } from './navigation.js'
 import { registerPlayback } from './playback.js'
+import { registerRuns } from './runs.js'
 import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
-import { registerTasks } from './tasks.js'
 import { registerViews } from './views.js'
 let studio: Sessions | undefined
 export function activate(context: ExtensionContext) {
   const started = performance.now()
   studio = new Sessions(context)
-  const tasks = registerTasks(studio)
   context.subscriptions.push(
-    tasks.provider,
     ...registerViews(studio),
-    ...registerCommands(studio, tasks),
+    ...registerCommands(studio),
+    ...registerRuns(studio),
     ...registerSignals(studio),
     ...registerNavigation(studio),
     ...registerPlayback(studio),

@@ -3,17 +3,35 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { access, stat, writeFile } from 'node:fs/promises'
+import { access, stat } from 'node:fs/promises'
 import { hostname } from 'node:os'
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+  sep,
+} from 'node:path'
 import { createInterface } from 'node:readline'
 import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/format.js'
 import type { GridKit, Program, RuntimeProcess } from '../shared/messages.js'
 import { readSolverLine, type SolverLine } from './solver.js'
-/** Where a container sees the run's folder. */
-const MOUNT = '/simulation'
+/** Where a container sees the workspace folder. */
+const MOUNT = '/workspace'
+
+/** Where a run happens: GridKit runs `solver` in its folder, as a shell would, and a container
+ *  mounts `root`, which must hold every file the run `touches`. */
+export interface Place {
+  readonly root: string
+  readonly solver: string
+  readonly touches: readonly string[]
+}
 /** The label that names the machine a run's container was started from. */
 const MACHINE = 'gridkit-studio.machine=' + hostname()
 
@@ -202,13 +220,13 @@ export async function available(
   return runtime
 }
 
-/** The container CLI's arguments that run `program` in `image` on the run in `directory`: a
- *  container named `name` and labelled with this machine, removed when it ends, with no network,
+/** The container CLI's arguments that run `program` in `image` on the solver file `place` names:
+ *  a container named `name` and labelled with this machine, removed when it ends, with no network,
  *  from the local image only. */
 export function containerArgs(
   program: Program,
   image: string,
-  directory: string,
+  place: Pick<Place, 'root' | 'solver'>,
   name: string,
   host: {
     readonly platform: NodeJS.Platform
@@ -229,11 +247,12 @@ export function containerArgs(
     MACHINE,
     '--network',
     'none',
-    // SELinux hosts let the container write the folder only once it is labeled for it.
+    // SELinux hosts let a container write a folder only once it is labeled for it. The workspace
+    // is the user's, so its label is shared rather than private to one container.
     '--volume',
-    `${directory}:${MOUNT}${linux ? ':Z' : ''}`,
+    `${place.root}:${MOUNT}${linux ? ':z' : ''}`,
     '--workdir',
-    MOUNT,
+    posix.join(MOUNT, ...relative(place.root, dirname(place.solver)).split(sep)),
     // What the run writes stays the user's own, to read and delete. Docker Desktop and Podman
     // machines on Windows and macOS map ownership themselves.
     ...(linux
@@ -247,7 +266,7 @@ export function containerArgs(
     'OPENBLAS_NUM_THREADS=1',
     image,
     program,
-    'input.json',
+    basename(place.solver),
   ]
 }
 
@@ -259,40 +278,55 @@ function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> 
   })
 }
 
-/** Runs `program` on the `input.json` staged in `directory`, as `gridkit` says. `log` hears each
- *  line it prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. A
+/** Runs `program` on the solver file `place` names, in its folder, as `gridkit` says. `log` hears
+ *  each line it prints, and `lifecycle` the process while it lives. Aborting `signal` stops it. A
  *  ContingencyAnalysis contingency that fails is not the run's failure: `failed` names it. */
 export async function launch(
   gridkit: GridKit,
   program: Program,
-  directory: string,
+  place: Place,
   signal: AbortSignal,
   log: (text: string) => void,
   lifecycle: (process?: RuntimeProcess) => void = () => {},
 ) {
   const runtime = await available(gridkit, program)
   signal.throwIfAborted()
+  if (runtime.kind === 'container')
+    for (const path of [place.solver, ...place.touches]) {
+      const inside = relative(place.root, path)
+      if (inside.startsWith('..') || isAbsolute(inside))
+        throw new Error(
+          `${basename(path)} is outside ${place.root}, the folder GridKit's container mounts.`,
+        )
+    }
+  const folder = dirname(place.solver)
   const container =
     runtime.kind === 'container' ? { cli: runtime.cli, name: containerName() } : undefined
   // Not awaited: a slow engine never delays the run, and this host's runs are never removed.
   if (container) void sweepContainers(container.cli)
   const [command, args] =
     runtime.kind === 'installed'
-      ? [runtime.program, ['input.json']]
+      ? [runtime.program, [basename(place.solver)]]
       : [
           runtime.cli,
           // A relative source would name a volume, not the folder.
-          containerArgs(program, runtime.image, resolve(directory), container!.name, {
-            platform: process.platform,
-            podman: runtime.podman,
-            uid: process.getuid?.(),
-            gid: process.getgid?.(),
-          }),
+          containerArgs(
+            program,
+            runtime.image,
+            { root: resolve(place.root), solver: resolve(place.solver) },
+            container!.name,
+            {
+              platform: process.platform,
+              podman: runtime.podman,
+              uid: process.getuid?.(),
+              gid: process.getgid?.(),
+            },
+          ),
         ]
   if (runtime.kind === 'container')
     log(`Running GridKit from ${runtime.image} with ${runtime.podman ? 'Podman' : 'Docker'}.`)
   const child = spawn(command, args, {
-    cwd: directory,
+    cwd: folder,
     windowsHide: true,
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -326,8 +360,9 @@ export async function launch(
       const text = stripVTControlCharacters(line).slice(0, 8192)
       tail.push(text)
       if (tail.length > 64) tail.shift()
-      const study = /Study failed for fault: (\S+)/.exec(text)
-      if (study) failed.add(study[1]!)
+      // GridKit names a failed contingency by its fault, a name that may hold spaces.
+      const study = /Study failed for fault: (.+)$/.exec(text)
+      if (study) failed.add(study[1]!.trim())
       // A contingency's solver errors are its own, not the run's.
       else if (/\[ERROR\]/i.test(text) && (program === 'DynamicSimulation' || /failed:/.test(text)))
         nativeError ??= readSolverLine(text)
@@ -350,11 +385,7 @@ export async function launch(
     ended = true
     signal.removeEventListener('abort', onAbort)
     await cleanup
-    try {
-      await writeFile(join(directory, 'solver.log'), tail.join('\n') + '\n')
-    } finally {
-      lifecycle()
-    }
+    lifecycle()
   })
   void done.catch(() => {})
   return { done, stop, ended: () => ended, failed: (): ReadonlySet<string> => failed, runtime }

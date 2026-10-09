@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { Case } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
 import { editable } from '../gridkit/edits.js'
-import { parametersOf } from '../gridkit/parameters.js'
+import { recordingOf } from '../gridkit/recording.js'
 import type { Issue, Revision, Summary } from '../shared/messages.js'
 
 /** Reopened documents reuse their immutable source index, decoded fields and diagnostics.
@@ -86,7 +86,7 @@ export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: 
     counts: Object.fromEntries(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
-    parameters: parametersOf(kase.catalog),
+    recording: recordingOf(kase),
     issues: issues ?? [],
     validation: issues ? 'complete' : 'pending',
     parseMs,

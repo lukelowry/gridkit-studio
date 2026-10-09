@@ -6,7 +6,7 @@
  *  again. */
 
 import assert from 'node:assert/strict'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
@@ -47,8 +47,8 @@ const STILL = {
   'network.vertices.labels': true,
   'network.grid': true,
 }
-/** A second of simulation, its frames a hundredth of a second apart. */
-const RUN = { tmax: 1, dt_monitor: 0.01 }
+/** A second of simulation, its frames a hundredth of a second apart, as a solver file says it. */
+const RUN = { tmax: 1, dt_monitor: 0.01, events: [] }
 /** How long playback is timed. */
 const PLAYBACK_MS = 3000
 /** Where seeks land, as parts of the run. */
@@ -238,13 +238,9 @@ export async function run() {
           { timeout: 60_000 },
         )
       }
-      const [{ id: bus }] = await bench.studio.client.call('elements', {
-        uri: key,
-        version: summary().version,
-        type: 'Bus',
-      })
+      const bus = 'Bus/' + JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       // A selection draws again over the rest, glowing. Clearing it draws as before.
-      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus! }))
+      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus }))
       bench.studio.select(key)
 
       // ── Diagram ──
@@ -310,8 +306,8 @@ export async function run() {
       if (!gridkit) continue
 
       // ── A second of simulation, followed live ──
-      bench.studio.record(key, [{ from: 'Bus', select: ['Vm'] }])
-      session.values = RUN
+      await bench.record('Bus', ['Vm'], uri)
+      const solver = await bench.writeSolver(RUN, uri)
       session.plots = [{ from: 'Bus', field: 'Vm' }]
       bench.studio.bind(key, VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
@@ -326,7 +322,7 @@ export async function run() {
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
       started = performance.now()
       const since = () => performance.now() - started
-      await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+      bench.run('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
         settle(() => (ran()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
         network
@@ -383,7 +379,7 @@ export async function run() {
       await playback('frame')
       // A selected bus draws again over the rest in the Network, and fades the other traces in
       // the Monitor.
-      bench.studio.select(key, { id: bus! })
+      bench.studio.select(key, { id: bus })
       await steady(monitor)
       await playback('frame, selected')
       bench.studio.select(key)
@@ -410,7 +406,7 @@ export async function run() {
       })
 
       // ── Plots ──
-      const first = bus!
+      const first = bus
       const lanesBefore = (await plots(monitor)).length
       await time(`monitor ${size} > add plot`, 1, {
         act: () => {

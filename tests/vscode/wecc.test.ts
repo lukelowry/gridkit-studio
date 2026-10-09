@@ -167,7 +167,13 @@ suite('WECC240 run', function () {
 
   test('runs with Va alone, mapped to color and height on a tilted network', async () => {
     const key = uri.toString()
-    bench.studio.record(key, [{ from: 'Bus', select: ['Va'] }])
+    // The case records bus angles alone, as Monitored Signals makes it.
+    await vscode.commands.executeCommand('gridkitStudio.clearSignals')
+    await until(
+      () => !Object.keys(bench.studio.state(key).summary?.recording.listed ?? {}).length,
+      'the case records nothing',
+    )
+    await bench.record('Bus', ['Va'], uri)
     bench.studio.bind(key, VA, ['vertexColor', 'vertexHeight'])
     await network.getByRole('button', { name: 'Tilt', exact: true }).click()
     await until(() => camera()?.projection === 'tilt' && (camera().pitch ?? 0) > 0, 'tilted')
@@ -175,17 +181,20 @@ suite('WECC240 run', function () {
     await network.locator('canvas').hover()
     await bench.page.mouse.wheel(0, -1)
     await until(() => camera().fit === false, 'the camera holds still')
-    // A fault at JOHN DAY 500 kV, the case's own fault bus, cleared after 50 ms, swings the angles.
-    session().values = {
-      tmax: 1,
-      dt_monitor: 0.01,
-      fault: true,
-      fault_bus: 'Bus/4005',
-      fault_start: 0.1,
-      fault_duration: 0.05,
-    }
+    // A fault at JOHN DAY 500 kV, the case's own fault, cleared after 50 ms, swings the angles.
+    const solver = await bench.writeSolver(
+      {
+        tmax: 1,
+        dt_monitor: 0.01,
+        events: [
+          { time: 0.1, type: 'fault_on', element_id: 0 },
+          { time: 0.15, type: 'fault_off', element_id: 0 },
+        ],
+      },
+      uri,
+    )
     const before = await frames(network)
-    await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+    bench.run('Run Dynamic Simulation', solver)
     await until(() => (session().run?.frames ?? 0) > 0, 'frames arrive', 180_000)
     await until(async () => (await frames(network)) > before, 'live Va frames repaint the network')
     await until(() => session().run?.state !== 'running', 'the run ends', 300_000)

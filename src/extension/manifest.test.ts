@@ -68,9 +68,10 @@ describe('native VS Code contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    // The side bar holds the case's panels; Monitored Signals is a native tree, not a webview.
+    // The side bar holds what the case records and its video; Monitored Signals is a native tree,
+    // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
-      ['gridkitStudio.simulation', 'gridkitStudio.signals', 'gridkitStudio.export'],
+      ['gridkitStudio.signals', 'gridkitStudio.export'],
     )
     expect(
       manifest.contributes.views.gridkitStudio.find(
@@ -82,11 +83,15 @@ describe('native VS Code contract', () => {
         (editor: { displayName: string }) => editor.displayName,
       ),
     ).toEqual(['Network', 'Diagram'])
-    expect(
-      manifest.contributes.views.gridkitStudio.find(
-        (view: { id: string }) => view.id === 'gridkitStudio.simulation',
-      ).name,
-    ).toBe('Simulation')
+    // GridKit runs only on the solver file a menu was opened on, as a shell runs it.
+    for (const command of ['gridkitStudio.runSimulation', 'gridkitStudio.runContingencies']) {
+      for (const menu of ['explorer/context', 'editor/context', 'editor/title/context'])
+        expect(manifest.contributes.menus[menu]).toContainEqual(
+          expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
+        )
+      expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
+    }
+    expect(manifest.contributes.taskDefinitions).toBeUndefined()
     // Playback lives in the status bar and the Network's projections in the Network, not the title
     // bars; Fit is the canvas editors' own title action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>

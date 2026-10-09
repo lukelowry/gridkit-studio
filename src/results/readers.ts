@@ -1,4 +1,4 @@
-/** Cancels and drains readers before their retained result files can be removed. */
+/** Tracks who reads each results file, so one let go of cancels and drains its readers first. */
 export class Readers<T extends object> {
   readonly #active = new Map<T, Set<{ controller: AbortController; done: Promise<void> }>>()
   readonly #retired = new WeakSet<T>()

@@ -8,7 +8,7 @@ import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import type { Channel, FieldRef } from '../../src/shared/bindings.js'
-import { idle, pause, type TestHost, testHost, until, visible, VM } from './harness.js'
+import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 const MEDIA = join(process.env.GRIDKIT_TEST_ROOT!, 'docs/media')
 const WINDOW = { width: 1280, height: 800 }
@@ -19,22 +19,55 @@ const FRAMING = { notches: 4, above: 180 }
 /** The most a VS Code extension may read as a document. */
 const DOCUMENT_BYTES = 50 << 20
 
-/** Run the case with `values`, and wait for the run to finish. */
-async function simulate(
-  bench: TestHost,
-  uri: vscode.Uri,
-  values: Record<string, unknown>,
-): Promise<void> {
+/** Run the case at `uri` with the solver file `solver` beside it, from that file's menu, and wait
+ *  for the run to finish. */
+async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promise<void> {
   const session = bench.studio.all.get(uri.toString())!
   const previous = session.run?.id
-  session.values = values
-  await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+  bench.run('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
   await until(
     () => session.run?.id !== previous && session.run?.state !== 'running',
     'the run ends',
     900_000,
   )
   if (session.run?.state !== 'complete') throw new Error(session.run?.message ?? 'The run failed.')
+}
+
+/** A fault on `bus` of the case at `uri` from `from` to `to`, as GridKit's events name it: a
+ *  BusFault device added to the case, last among its faults, whose place the events give. */
+async function faultAt(
+  bench: TestHost,
+  uri: vscode.Uri,
+  bus: string,
+  [from, to]: readonly [number, number],
+  X: number,
+) {
+  const key = uri.toString()
+  const summary = await bench.studio.documents.ensure(
+    bench.studio.documents.entries.get(key)!.document,
+  )
+  const element = summary.counts.BusFault ?? 0
+  await bench.studio.documents.transact(
+    key,
+    summary.version,
+    [
+      {
+        kind: 'add',
+        type: 'BusFault',
+        key: 'screenshot',
+        fields: { 'ports.bus': bus, 'params.state0': false, 'params.R': 0, 'params.X': X },
+      },
+    ],
+    'Add a fault',
+  )
+  await until(
+    () => bench.studio.state(key).summary?.counts.BusFault === element + 1,
+    'the fault added',
+  )
+  return [
+    { time: from, type: 'fault_on', element_id: element },
+    { time: to, type: 'fault_off', element_id: element },
+  ]
 }
 
 /** Save the workbench below its title bar, which names the test host, once `view` settles. */
@@ -157,14 +190,11 @@ export async function run() {
     const path = await outside('ACTIVSg25k')
     const fault = await hub(path)
     const wide = await show(bench, path, VM, ['vertexColor', 'vertexHeight'])
+    await bench.record('Bus', ['Vm'], wide.uri)
     await simulate(bench, wide.uri, {
       tmax: 1,
       dt_monitor: 0.01,
-      fault: true,
-      fault_bus: fault,
-      fault_start: 0.1,
-      fault_duration: 0.1,
-      fault_X: 0.001,
+      events: await faultAt(bench, wide.uri, fault, [0.1, 0.2], 0.001),
     })
     await vscode.commands.executeCommand('workbench.action.closePanel')
     wide.session.transport.seek(0.15)
@@ -198,20 +228,20 @@ export async function run() {
     bench.studio.select(bench.key, undefined)
     await shoot(bench, 'diagram', diagram)
 
-    // IEEE39 during a fault at bus 16: every bus voltage on the network and in the Monitor, which
-    // colors it the same way.
+    // IEEE39 during its own fault at bus 16: every bus voltage on the network and in the Monitor,
+    // which colors it the same way.
     await bench.reset()
     await set('network.colormap', 'thermal')
     const ieee = await bench.open('network')
-    bench.studio.record(bench.key, [{ from: 'Bus', select: ['Vm'] }])
+    await bench.record('Bus', ['Vm'])
     bench.studio.bind(bench.key, VM, ['vertexColor'])
     await simulate(bench, bench.uri, {
       tmax: 5,
       dt_monitor: 0.01,
-      fault: true,
-      fault_bus: 'Bus/16',
-      fault_start: 0.5,
-      fault_duration: 0.1,
+      events: [
+        { time: 0.5, type: 'fault_on', element_id: 0 },
+        { time: 0.6, type: 'fault_off', element_id: 0 },
+      ],
     })
     bench.session.plots = [{ from: VM.type, field: VM.field }]
     bench.studio.changed.fire(bench.key)

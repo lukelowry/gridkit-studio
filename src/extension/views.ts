@@ -37,10 +37,7 @@ const COMMANDS: ReadonlySet<string> = new Set([
   'plot',
   'addPlot',
   'removePlot',
-  'startSimulation',
-  'stopSimulation',
   'chooseSignals',
-  'showContingency',
 ])
 /** How many rows the Case panel's filters leave, by case. */
 const shownRows = new Map<string, number>()
@@ -48,7 +45,7 @@ const shownRows = new Map<string, number>()
 /** What a panel's title says after its name: the case, and what the panel shows of it. The Case
  *  panel's type and filtered count, and the Monitor's run, live here rather than in the panels. */
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
-  const { summary, table, run, launching } = studio.state(uri)
+  const { summary, table, run } = studio.state(uri)
   const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
   if (kind === 'case' && summary && table?.type) {
     parts.push(typeName(summary.schema, table.type))
@@ -57,19 +54,12 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
     if ((table.filter || table.equal) && count !== undefined && shown !== undefined)
       parts.push(`${shown.toLocaleString()} of ${count.toLocaleString()}`)
   }
-  // How far a run has come, or what it left; never how it ended, which only a notification says.
-  if (kind === 'simulation' && launching) parts.push('starting')
-  else if ((kind === 'simulation' || kind === 'monitor') && run) {
+  // What a run left, never how it ended, which only a notification says. How far one has come is
+  // its notification's to say.
+  if (kind === 'monitor' && run) {
     const study = run.contingency
-    if (run.state === 'running' && kind === 'simulation')
-      parts.push(
-        study
-          ? `${study.done.toLocaleString()} of ${study.buses.length.toLocaleString()} contingencies`
-          : run.span && run.span[1] > run.span[0]
-            ? `${Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))}%`
-            : 'starting',
-      )
-    else if (run.frames) parts.push(`${run.frames.toLocaleString()} samples`)
+    if (study) parts.push(`bus ${study.buses[study.shown]}`)
+    if (run.frames) parts.push(`${run.frames.toLocaleString()} samples`)
   }
   return parts.join(' · ')
 }
@@ -86,15 +76,6 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     selection,
     bindings,
     table,
-  ],
-  simulation: ({ uri, stale, error, values, outputs, run, launching }) => [
-    uri,
-    stale,
-    error,
-    values,
-    outputs,
-    run && [run.id, run.state, run.frames, run.domain, run.span, run.message, run.contingency],
-    launching,
   ],
   diagram: ({ uri, stale, error, writable, selection, anchors, bindings, diagramEditing }) => [
     uri,
@@ -370,12 +351,6 @@ class View {
           await this.studio.step(session, message.value === -1 ? -1 : 1)
         return
       }
-      case 'values':
-        if (session && message.uri === this.uri && message.values) {
-          session.values = message.values
-          this.studio.persist(session)
-        }
-        return
       case 'tableState':
         if (!session) return
         session.table = message.table
@@ -490,10 +465,6 @@ class View {
     const entry = studio.documents.entries.get(uri)
     const summary = entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
     if (!summary) throw new DOMException('The case does not read.', 'AbortError')
-    if (method === 'elements') {
-      const { type } = input as ViewRequests['elements']['input']
-      return studio.client.call('elements', { uri, version: summary.version, type }, signal)
-    }
     if (method === 'query') {
       const query = input as ViewRequests['query']['input']
       if (query?.kind !== 'rows') throw new Error('Invalid row query')
@@ -900,7 +871,7 @@ const resolved = new Map<ViewKind, vscode.WebviewView>()
 
 /** Show view `kind` without taking focus from where the user is. One never shown yet can only be
  *  shown by focusing it. */
-export async function showView(kind: 'case' | 'monitor' | 'simulation' | 'export') {
+export async function showView(kind: 'case' | 'monitor' | 'export') {
   const view = resolved.get(kind)
   if (view) view.show(true)
   else await vscode.commands.executeCommand('gridkitStudio.' + kind + '.focus')
@@ -926,7 +897,7 @@ export function registerViews(studio: Sessions) {
         },
       ),
     )
-  for (const kind of ['case', 'monitor', 'simulation', 'export'] as const) {
+  for (const kind of ['case', 'monitor', 'export'] as const) {
     // An export keeps working while its panel is collapsed. The Case panel takes the Monitor's
     // place in the bottom panel, so the Monitor is kept idle rather than destroyed.
     const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'

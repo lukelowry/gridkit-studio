@@ -131,8 +131,8 @@ export function plotBindings(
   }
 }
 
-/** A simulation's configured interval stays fixed, including before its first sample and
- * after cancellation. Imported recordings use their recorded interval. */
+/** A simulation's interval, to its solver file's end time, stays fixed, including before its first
+ * sample and after cancellation. Opened results use their recorded interval. */
 export function monitorWindow(
   run?: Pick<SimulationInfo, 'span' | 'domain'>,
   chosen?: Domain,

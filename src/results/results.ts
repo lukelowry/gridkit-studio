@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, open, rm } from 'node:fs/promises'
-import { dirname, resolve, sep } from 'node:path'
+import { copyFile, mkdir, open } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout } from 'node:timers/promises'
 
@@ -14,12 +14,18 @@ import {
   type SampleBatch,
 } from '@latkit/model'
 
-import type { Case, Field } from '../gridkit/index.js'
+import type { Case } from '../gridkit/index.js'
 import { pageWindow } from '../shared/coverage.js'
 import type { SimulationInfo } from '../shared/messages.js'
 import { parseMessage } from './arrow.js'
-import { csvTimes } from './csv.js'
-import { columnName, type Layout, readResults, samplesOf } from './decode.js'
+import {
+  columnName,
+  type Field,
+  type Layout,
+  readResults,
+  samplesOf,
+  selectionsOf,
+} from './decode.js'
 import { PAGE_BYTES, PROGRESS_MS } from './limits.js'
 
 /** The frame times of a page's batches: the coordinates of those of its first output. */
@@ -104,27 +110,32 @@ export class ResultCache {
   }
 }
 
-/** A run's results: page offsets into its native file, decoded on demand. */
+/** A GridKit results file read for a case: page offsets into it, decoded on demand. Its header
+ *  says what it holds, whether a run is writing it or it was opened alone. */
 export class Results {
   readonly pages: Page[] = []
-  /** Names how this reading cuts the run into pages. Another reading of the same run, as after it
-   *  is loaded again from its file, may cut it elsewhere; its pages only ever grow. */
+  /** Names how this reading cuts the file into pages. Another reading of the same file, as after
+   *  it is opened again, may cut it elsewhere; its pages only ever grow. */
   readonly paging = randomUUID()
   /** The header's bytes: the CSV header line, or the Arrow schema message. */
   #header = new Uint8Array()
-  /** How every page of this run reads, from its header. */
+  /** How every page of this file reads, from its header. */
   readonly #layout: Layout = {}
   #at = 0
   #last = -Infinity
   constructor(
     readonly info: SimulationInfo,
     readonly kase: Case,
-    readonly fields: readonly Field[],
     readonly cache: ResultCache,
-    readonly ownedDirectory?: string,
   ) {
-    // A sibling contingency copies metadata, but must measure its own recording.
+    // Each reading measures, and learns what it holds, from its own file.
     this.info.domains = {}
+    this.info.outputs = []
+  }
+
+  /** What the file holds, once its header is read. */
+  get fields(): readonly Field[] {
+    return this.#layout.read?.fields ?? []
   }
 
   /** Follows the results file as the run writes it, cutting it into pages and publishing each.
@@ -136,23 +147,6 @@ export class Results {
   ) {
     await this.#follow(signal, ended, (start, end, bytes) =>
       this.#append(start, end, bytes, signal, publish),
-    )
-  }
-
-  /** Pages a finished results file as `ingest` would, but measures nothing: for a run whose domains
-   *  were measured as it ran. A CSV page is read only as far as each row's time, and decoded once
-   *  something asks for it. */
-  async index(signal: AbortSignal) {
-    await this.#follow(
-      signal,
-      () => true,
-      async (start, end, bytes) => {
-        const times =
-          this.info.format === 'csv'
-            ? csvTimes(bytes)
-            : timesOf(await this.#decode(bytes, this.info.frames, signal))
-        if (times.length) this.#add(start, end, times)
-      },
     )
   }
 
@@ -238,15 +232,10 @@ export class Results {
     this.cache.drop(this.info.id + ':')
   }
 
-  /** Releases the run, and deletes its folder if it owns one under `scratchRoot`. */
-  async dispose(scratchRoot: string) {
-    this.release()
-    if (this.ownedDirectory) {
-      const target = resolve(this.ownedDirectory)
-      const root = resolve(scratchRoot) + sep
-      if (!target.startsWith(root)) throw new Error('Run cleanup escaped the scratch directory.')
-      await rm(target, { recursive: true, force: true, maxRetries: 3 })
-    }
+  /** Tells the views, through `info.outputs`, what the file holds, once its header says. */
+  #learned() {
+    if (!this.info.outputs.length && this.fields.length)
+      this.info.outputs = selectionsOf(this.kase, this.fields)
   }
 
   /** Follows the results file until `ended` and it has nothing more, handing `page` each page of it:
@@ -334,12 +323,12 @@ export class Results {
             // Read alone, the header gives the layout every page is read with.
             await readResults(
               Readable.from([this.#header]),
-              this.fields,
               this.kase,
               { signal, publish: () => {} },
               'csv',
               this.#layout,
             )
+            this.#learned()
             start += scan
             pending = pending.subarray(scan)
             scan = 0
@@ -382,7 +371,6 @@ export class Results {
     const batches: SampleBatch[] = []
     await readResults(
       Readable.from(this.info.format === 'csv' ? [bytes] : [this.#header, bytes]),
-      this.fields,
       this.kase,
       {
         signal,
@@ -395,6 +383,7 @@ export class Results {
       this.info.format,
       this.#layout,
     )
+    this.#learned()
     return batches
   }
 

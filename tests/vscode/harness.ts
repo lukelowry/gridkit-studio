@@ -3,13 +3,13 @@
 
 import assert from 'node:assert/strict'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { defaultOutputs, type Sessions } from '../../src/extension/sessions.js'
-import { gridkitOf } from '../../src/extension/tasks.js'
+import { gridkitOf } from '../../src/extension/runs.js'
+import type { Sessions } from '../../src/extension/sessions.js'
 import { available } from '../../src/gridkit/index.js'
 import type { SimulationInfo, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
@@ -18,7 +18,19 @@ const TIMEOUT = 30_000
 
 /** The title bars `title` runs commands from: a panel or side bar view's, or the custom editor's
  *  in front. */
-export type TitleBar = 'case' | 'monitor' | 'simulation' | 'signals' | 'export' | 'editor'
+export type TitleBar = 'case' | 'monitor' | 'signals' | 'export' | 'editor'
+
+/** A solver file's members, besides the case it names. */
+export type Solver = Record<string, unknown>
+
+/** The solver file `name.solver.json` for the case `name.case.json` beside it: its own members,
+ *  writing its samples to `name.csv`. */
+export const solverText = (name: string, solver: Solver) =>
+  JSON.stringify(
+    { system_model_file: name + '.case.json', output_file: name + '.csv', ...solver },
+    null,
+    4,
+  ) + '\n'
 
 /** What a right-click on a canvas view aims at: the element `on`, where the view draws it now. That
  *  is found again before each try, as a view may move between finding it and the click. */
@@ -205,12 +217,13 @@ const PANELS = {
   case: 'gridkitStudio.openCasePanel',
   monitor: 'gridkitStudio.openMonitor',
   export: 'gridkitStudio.exportVideo',
-  simulation: 'gridkitStudio.simulation.focus',
 } as const
 
 export class TestHost {
   /** The case's source as the suites found it, and as each suite starts. */
   readonly text: string
+  /** The solver file beside the case, as the suites found it, and as each suite starts. */
+  readonly solverText: string
   /** That source, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
@@ -234,8 +247,10 @@ export class TestHost {
     readonly document: vscode.TextDocument,
     /** Where screenshots and the report are written. */
     readonly output: string,
+    solver: string,
   ) {
     this.text = document.getText()
+    this.solverText = solver
     this.source = JSON.parse(this.text)
     this.report = {
       vscodeVersion: vscode.version,
@@ -265,7 +280,11 @@ export class TestHost {
     await mkdir(join(output, 'playwright'), { recursive: true })
     await mkdir(join(output, 'tests'), { recursive: true })
     const document = await vscode.workspace.openTextDocument(uri)
-    const bench = new TestHost(installed, browser, page, document, output)
+    const solver = await readFile(
+      vscode.Uri.joinPath(folder(), 'IEEE39.solver.json').fsPath,
+      'utf8',
+    )
+    const bench = new TestHost(installed, browser, page, document, output, solver)
     bench.report.openCaseMs = openCaseMs
     return bench
   }
@@ -282,6 +301,10 @@ export class TestHost {
   }
   get session() {
     return this.studio.all.get(this.key)!
+  }
+  /** The solver file beside the case, which runs it. */
+  get solver(): vscode.Uri {
+    return vscode.Uri.joinPath(folder(), 'IEEE39.solver.json')
   }
 
   /** Every frame of every VS Code page, webviews' included. */
@@ -340,8 +363,52 @@ export class TestHost {
     return this.view(kind)
   }
 
-  /** Monitored Signals, the native tree of what the next run records, once it shows. Unless
-   *  `reveal` is false, its own command shows it first. */
+  /** Whether every element of `type` lists `field` in the case `uri` as the worker last read it. */
+  recorded(type: string, field: string, uri = this.uri): boolean {
+    const summary = this.studio.state(uri.toString()).summary
+    const count = summary?.recording.listed[type]?.[field] ?? 0
+    return count > 0 && count === summary?.counts[type]
+  }
+
+  /** Make every element of `type` in the case `uri` list `fields` among its outputs and no other,
+   *  as Monitored Signals does, and wait for the case to read so. */
+  async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
+    const key = uri.toString()
+    const summary = await this.studio.documents.ensure(
+      this.studio.documents.entries.get(key)!.document,
+    )
+    const definitions = summary.schema.types[type]!.fields
+    const sampled = Object.keys(definitions).filter((field) => definitions[field]!.sampled)
+    await this.studio.documents.transact(
+      key,
+      summary.version,
+      [{ kind: 'record', type, add: fields, remove: sampled.filter((f) => !fields.includes(f)) }],
+      'Record ' + fields.join(', '),
+    )
+    await until(
+      () =>
+        sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
+        !this.studio.state(key).stale,
+      `${type} records ${fields.join(', ')}`,
+    )
+  }
+
+  /** Write the solver file beside the case `uri`, its members `solver`. */
+  async writeSolver(solver: Solver, uri = this.uri): Promise<vscode.Uri> {
+    const name = basename(uri.path).replace(/\.case\.json$/i, '')
+    const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(solverText(name, solver)))
+    // An editor holding the file reads it again.
+    await until(
+      async () =>
+        (await vscode.workspace.openTextDocument(file)).getText() === solverText(name, solver),
+      name + '.solver.json read again',
+    )
+    return file
+  }
+
+  /** Monitored Signals, the native tree of what the case records, once it shows. Unless `reveal`
+   *  is false, its own command shows it first. */
   async signals({ reveal = true } = {}): Promise<Locator> {
     if (reveal) await vscode.commands.executeCommand('gridkitStudio.signals.focus')
     const pane = this.page.locator('.pane', {
@@ -366,10 +433,9 @@ export class TestHost {
     const box = signals
       .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
       .getByRole('checkbox')
-    // Done once what the next run records changes, not once the box looks it: a tree drawn again
-    // for another case can change the box when no click took.
-    const recorded = () =>
-      !!this.session.outputs?.some(({ from, select }) => from === type && select.includes(field))
+    // Done once what the case records changes, not once the box looks it: a tree drawn again for
+    // another case can change the box when no click took.
+    const recorded = () => this.recorded(type, field)
     const was = recorded()
     // A box the pointer rests on shows its state in a hover over the row below: the pointer leaves
     // before and after each click, so no hover covers the next box.
@@ -527,15 +593,15 @@ export class TestHost {
     await until(() => this.session.table.type === type, 'the Case panel shows ' + type)
   }
 
-  /** Start a run from the Simulation view's title bar, once no run holds it. What keeps a run from
-   *  starting is said in a notification. */
-  start(): Promise<void> {
-    return this.title('simulation', 'Start Simulation')
+  /** Run the solver file `solver` from its Explorer menu, as `item` names the program: what a user
+   *  does to run GridKit. What keeps a run from starting is said in a notification. */
+  run(item = 'Run Dynamic Simulation', solver = this.solver): void {
+    this.explorer(solver, item)
   }
 
-  /** Stop the run from the Simulation view's title bar. */
+  /** Stop the run from the Monitor's title bar. */
   stop(): Promise<void> {
-    return this.title('simulation', 'Stop Simulation')
+    return this.title('monitor', 'Stop Simulation')
   }
 
   /** Choose `item` from the Explorer's menu on the file `uri`. */
@@ -771,11 +837,11 @@ export class TestHost {
   }
 
   /** A run to play: a second of every bus's voltage, each a little out of step with the last,
-   *  imported once, with the first bus's plotted. */
+   *  opened once, with the first bus's plotted. */
   results(): Promise<SimulationInfo> {
-    return (this.#results ??= this.#import())
+    return (this.#results ??= this.#open())
   }
-  async #import(): Promise<SimulationInfo> {
+  async #open(): Promise<SimulationInfo> {
     const csv = vscode.Uri.joinPath(this.uri, '..', 'Synthetic waveform.csv')
     const { buses } = this.source
     await vscode.workspace.fs.writeFile(
@@ -789,14 +855,14 @@ export class TestHost {
           ).join(''),
       ),
     )
-    const run = await this.studio.client.call('import', {
+    const run = await this.studio.client.call('open', {
       uri: this.key,
       version: (await this.current()).version,
       path: csv.fsPath,
       cacheBytes: 32 << 20,
     })
     assert.equal(run.state, 'complete', run.message)
-    await until(() => this.session.run?.id === run.id, 'the imported run on show')
+    this.studio.show(this.session, run)
     this.plot()
     return run
   }
@@ -825,18 +891,28 @@ export class TestHost {
   async reset(): Promise<void> {
     // A prompt a test left asking holds its command open, and would take the next one's keys.
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
-    if (this.session?.run?.state === 'running')
-      await this.studio.client.call('stop', { uri: this.key })
+    // A run under way is let go of, which stops it.
+    if (this.session?.run?.state === 'running') {
+      await this.studio.client.call('clear', { uri: this.key })
+      await until(() => this.session.run?.state !== 'running', 'the run stops')
+    }
     if (this.document.getText() !== this.text) await this.replace(this.text)
     if (this.document.isDirty) await this.document.save()
+    const solver = await vscode.workspace.openTextDocument(this.solver)
+    if (solver.getText() !== this.solverText) {
+      await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
+      await until(
+        async () =>
+          (await vscode.workspace.openTextDocument(this.solver)).getText() === this.solverText,
+        'the solver file as found',
+      )
+    }
     await this.open('network')
     await this.settled()
     await vscode.commands.executeCommand('workbench.action.closeEditorsInOtherGroups')
     await vscode.commands.executeCommand('workbench.action.closeOtherEditors')
     const { session } = this
     this.studio.select(this.key)
-    session.values = {}
-    session.outputs = defaultOutputs(await this.current())
     session.plots = []
     session.bindings = {}
     session.diagramEditing = false
@@ -850,16 +926,16 @@ export class TestHost {
     this.studio.changed.fire(this.key)
   }
 
-  /** Keep what every view showed when `test` failed, with the files of its runs. */
+  /** Keep what every view showed when `test` failed, with the files of its run. */
   async failed(test: string): Promise<void> {
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
-    for (const run of [this.session?.run, this.session?.previous]) {
-      if (!run) continue
+    const run = this.session?.run
+    if (run) {
       const directory = join(this.output, 'tests', name, run.id)
       await mkdir(directory, { recursive: true })
-      for (const file of ['case.json', 'input.json', 'solver.log'])
-        await cp(join(dirname(run.path), file), join(directory, file)).catch(() => {})
+      for (const file of [run.path, this.uri.fsPath, this.solver.fsPath])
+        await cp(file, join(directory, basename(file))).catch(() => {})
       await writeFile(join(directory, 'run.json'), JSON.stringify(run, null, 2))
     }
     for (const frame of this.#frames()) {
@@ -900,6 +976,8 @@ export async function testHost(): Promise<TestHost> {
 
 /** What VS Code says of the test profile itself, which `--disable-extensions` causes. */
 const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
+/** A run's own progress, which says how far it has come rather than that anything failed. */
+const PROGRESS = /^(DynamicSimulation|ContingencyAnalysis) /
 
 /** The notifications VS Code shows, which are then cleared. Studio shows one only when something
  *  the user asked for fails, so a test that sees one expected it or found a fault. */
@@ -911,7 +989,7 @@ export async function notifications(): Promise<string[]> {
     .filter({ visible: true })
     .allInnerTexts()
   if (shown.length) await vscode.commands.executeCommand('notifications.clearAll')
-  return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()))
+  return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()))
 }
 
 /** Wait for VS Code to show notifications, then clear them. */

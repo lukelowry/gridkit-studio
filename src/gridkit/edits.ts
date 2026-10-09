@@ -7,10 +7,15 @@ import { message } from '../shared/format.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { FieldPlan } from './definition.js'
-import { realText } from './staging.js'
 
 const decoder = new TextDecoder()
 const checkpoints = new WeakMap<Case, { bytes: number[]; chars: number[] }>()
+
+/** A real as GridKit reads one: always with a fraction or an exponent, so 0 is 0.0. */
+export function realText(value: number): string {
+  const text = JSON.stringify(value)
+  return /[.eE]/.test(text) ? text : `${text}.0`
+}
 
 /** The UTF-16 offset of `byte` in the case's file, as VS Code counts. Checkpoints every 4 KiB fall on
  *  code-point boundaries, so only the bytes past one are decoded. */

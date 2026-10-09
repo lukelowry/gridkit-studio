@@ -6,8 +6,6 @@ import { setTimeout } from 'node:timers/promises'
 
 import {
   blockBuffers,
-  type NumericArray,
-  type NumericColumn,
   type Publication,
   read,
   type SampleBatch,
@@ -16,14 +14,13 @@ import {
 } from '@latkit/model'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { Case, catalog, selections } from '../gridkit/index.js'
+import { Case, catalog } from '../gridkit/index.js'
 import type { SimulationInfo } from '../shared/messages.js'
 import { type Layout, readResults } from './decode.js'
 import { PAGE_BYTES, PROGRESS_MS } from './limits.js'
 import { ResultCache, Results } from './results.js'
 
 const HEADER = 'time,Bus_A_Vm\n'
-const outputs = [{ from: 'Bus', select: ['Vm'] }]
 const signal = new AbortController().signal
 let kase: Case
 let directory: string
@@ -40,12 +37,12 @@ beforeAll(async () => {
 })
 afterAll(() => rm(directory, { recursive: true, force: true }))
 
-/** A run of the CSV results at `path`. */
-function results(path: string, cache = new ResultCache()): Results {
+/** A reading of the CSV results at `path` for `of`. */
+function results(path: string, cache = new ResultCache(), of = kase): Results {
   const info: SimulationInfo = {
     id: crypto.randomUUID(),
     revision: { uri: 'file:///case', version: 1 },
-    fingerprint: kase.version,
+    fingerprint: of.version,
     name: 'test',
     state: 'complete',
     path,
@@ -53,9 +50,9 @@ function results(path: string, cache = new ResultCache()): Results {
     frames: 0,
     domain: [0, 0],
     started: 0,
-    outputs,
+    outputs: [],
   }
-  return new Results(info, kase, selections(kase, outputs), cache)
+  return new Results(info, of, cache)
 }
 
 /** Ingests `run` while its file grows, until `end` says the writer is done. */
@@ -76,10 +73,6 @@ function following(run: Results) {
     },
   }
 }
-
-/** `numbers` as one string, which compares at once where an array compares number by number. */
-const text = (numbers: NumericArray) =>
-  Buffer.from(numbers.buffer, numbers.byteOffset, numbers.byteLength).toString('base64')
 
 /** Each page's columns of `run`'s Vm. */
 async function columns(run: Results) {
@@ -111,13 +104,11 @@ describe('native results and ownership', () => {
   })
 
   it('reads every page of a run with the layout its header gave the first', async () => {
-    const fields = selections(kase, outputs)
     const layout: Layout = {}
     const page = async (text: string) => {
       const values: number[] = []
       await readResults(
         Readable.from([Buffer.from(text)]),
-        fields,
         kase,
         {
           signal,
@@ -131,10 +122,41 @@ describe('native results and ownership', () => {
       return values
     }
     expect(await page('time,Bus_A_Vm\n0,1.5\n')).toEqual([1.5])
-    const plan = layout.plan
+    const read = layout.read
     // A later page is rows alone: the header is not read, or matched name by name, again.
     expect(await page('0.01,1.25\n')).toEqual([1.25])
-    expect(layout.plan).toBe(plan)
+    expect(layout.read).toBe(read)
+  })
+
+  it('learns what a file holds from its header, whatever order GridKit wrote it in', async () => {
+    const two = await Case.parse(
+      '{"buses":[{"class":"Bus","number":1,"name":"A"},{"class":"Bus","number":2,"name":"B"}]}',
+      catalog,
+    )
+    const path = join(directory, 'header.csv')
+    await writeFile(path, 'time,Bus_B_Vm,Bus_A_Va,"Other_x_y",bus_a_vm\n0,1.2,0.5,9,1.1\n')
+    const run = results(path, new ResultCache(), two)
+    await run.ingest(
+      signal,
+      () => true,
+      async () => {},
+    )
+    // Each output in catalog and row order, matched by name whatever its case, and a column the
+    // case has no output for left unread.
+    expect(run.info.outputs).toEqual([
+      { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } },
+      { from: 'Bus', select: ['Va'], rows: { kind: 'ids', ids: ['Bus/1'] } },
+    ])
+    expect(run.info.domains).toEqual({ Bus: { Vm: [1.1, 1.2], Va: [0.5, 0.5] } })
+    const unknown = join(directory, 'unknown.csv')
+    await writeFile(unknown, 'time,Other_x_y\n0,1\n')
+    await expect(
+      results(unknown, new ResultCache(), two).ingest(
+        signal,
+        () => true,
+        async () => {},
+      ),
+    ).rejects.toThrow('No result columns match this case')
   })
 
   it('keeps the batches it publishes: a page is decoded once', async () => {
@@ -245,28 +267,6 @@ describe('native results and ownership', () => {
       expect(run.step(at, 1)).toBe(times.find((time) => time > at) ?? 0.04)
       expect(run.step(at, -1)).toBe(times.findLast((time) => time < at) ?? 0)
     }
-  })
-
-  it('reopens a kept run from its times alone, paged and read as a full ingest', async () => {
-    const full = results(large.path)
-    await full.ingest(
-      signal,
-      () => true,
-      async () => {},
-    )
-    const indexed = results(large.path)
-    await indexed.index(signal)
-    const pages = (run: Results) => run.pages.map((page) => ({ ...page, times: text(page.times) }))
-    expect(pages(indexed)).toEqual(pages(full))
-    expect(indexed.info.frames).toBe(full.info.frames)
-    expect(indexed.info.domain).toEqual(full.info.domain)
-    // It measures nothing: the kept run's manifest holds its domains.
-    expect(indexed.info.domains).toEqual({})
-    const values = async (run: Results) =>
-      (await columns(run)).map((page) =>
-        page.map((column) => ({ ...column, values: text((column as NumericColumn).values) })),
-      )
-    expect(await values(indexed)).toEqual(await values(full))
   })
 
   it('evicts within budget and reloads exact native-file windows', async () => {

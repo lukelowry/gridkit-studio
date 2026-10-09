@@ -37,7 +37,6 @@ const builds = [
     entryPoints: {
       canvas: 'src/webview/canvas.ts',
       case: 'src/webview/case.ts',
-      simulation: 'src/webview/simulation.ts',
       monitor: 'src/webview/monitor.ts',
       export: 'src/webview/export.ts',
     },

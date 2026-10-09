@@ -2,7 +2,7 @@ import { Readable } from 'node:stream'
 
 import { describe, expect, it } from 'vitest'
 
-import { csvMessages, csvTimes } from './csv.js'
+import { csvMessages } from './csv.js'
 
 /** Every number of the rows in `text`, read under a header of `width` columns. */
 async function numbers(text: string, width: number): Promise<number[]> {
@@ -51,14 +51,5 @@ describe('CSV results', () => {
     await expect(messages(Buffer.from('t,a\n0,'), Buffer.from([0xff, 0x31, 0x0a]))).rejects.toThrow(
       'The CSV results are not valid UTF-8.',
     )
-  })
-
-  it('reads each row time as the rows are read, and nothing after it', async () => {
-    const text = '0,1,2\r\n\n 0.5 ,1,2\n"1",x\n  \n1.5'
-    expect(Array.from(csvTimes(Buffer.from(text)))).toEqual([0, 0.5, 1, 1.5])
-    expect(() => csvTimes(Buffer.from('0,1\ninf,1\n'))).toThrow(
-      'A CSV frame must have a finite time.',
-    )
-    expect(() => csvTimes(Buffer.from('0x1,1\n'))).toThrow('CSV frame 1, column 1 is not a number.')
   })
 })

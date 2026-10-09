@@ -158,12 +158,12 @@ export class Case {
     /** The catalog's types, with the classes and fields this case has that it does not know. */
     readonly schema: Schema,
     readonly tables: ReadonlyMap<string, Table>,
-    /** The file as read; a simulation's case file is written from it. */
+    /** The file as read. */
     readonly file: Uint8Array,
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
     /** The top-level object's closing brace. */
     readonly close: number,
-    /** The case's own `monitors` member, which a simulation's case file replaces. */
+    /** The case's own `monitors` member: where GridKit writes what the case records. */
     readonly monitors: Member | undefined,
     /** Every field the catalog does not know, where it is first. */
     readonly found: readonly FoundField[],

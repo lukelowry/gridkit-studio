@@ -5,7 +5,6 @@ import type {
   DataBatch,
   Domain,
   FieldSelection,
-  Parameters,
   Query,
   QueryBlock,
   RowsBlock,
@@ -14,15 +13,16 @@ import type {
   Value,
 } from '@latkit/model'
 
-import type { RuntimeProcess, SimulationInfo, SimulationRequest } from './simulation.js'
+import type { RuntimeProcess, SimulationInfo, SimulationRequest, Study } from './simulation.js'
+import type { Sink } from './study.js'
 export type {
   GridKit,
   Program,
   RuntimeProcess,
   SimulationInfo,
   SimulationRequest,
+  Study,
 } from './simulation.js'
-export { PROGRAMS } from './simulation.js'
 
 import type { Bindings } from './bindings.js'
 import type { SampleCoverage } from './coverage.js'
@@ -60,12 +60,6 @@ export interface Element {
   field?: string
 }
 
-/** An element as a form offers it. */
-interface ElementChoice {
-  id: string
-  name: string
-}
-
 export interface Summary extends Revision {
   creation?: Record<string, { keyType: string; required: string[] }>
   /** The fields of each type the user can edit. */
@@ -77,7 +71,9 @@ export interface Summary extends Revision {
   /** The field each type's elements are known by: a bus's `number`, a device's `id`. */
   identities: Record<string, string>
   counts: Record<string, number>
-  parameters: Parameters
+  /** What the case records: how many of each type's elements list each output, and the monitor
+   *  GridKit writes to, if the case has one. */
+  recording: { listed: Record<string, Record<string, number>>; monitor?: Sink }
   issues: Issue[]
   /** Pending diagnostics never mean that the model has passed validation. */
   validation: 'pending' | 'complete'
@@ -98,13 +94,12 @@ export type Mutation =
   | { kind: 'set'; id: string; field: string; value: Value }
   | { kind: 'move'; id: string; position: readonly [number, number] | null }
   | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
+  /** Every element of `type` lists the outputs in `add` and none in `remove`. */
+  | { kind: 'record'; type: string; add: readonly string[]; remove: readonly string[] }
 
 /** What the extension asks of the data worker. */
 export interface Requests {
-  prepareSimulation: { input: SimulationRequest; output: SimulationInfo }
-  getSimulation: { input: { simulationId: string }; output: SimulationInfo }
   describeSimulation: { input: { simulationId: string }; output: Summary }
-  stopSimulation: { input: { simulationId: string }; output: null }
   shutdown: { input: Record<string, never>; output: null }
   /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
   anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
@@ -119,8 +114,6 @@ export interface Requests {
   context: { input: Revision & { offset: number }; output: SourceContext }
   symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
   locate: { input: Revision & Element; output: SourceRange }
-  /** Every element of a type, for a form that picks one. */
-  elements: { input: Revision & { type: string }; output: ElementChoice[] }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */
   presentation: { input: Revision; output: Record<string, Positions> }
@@ -146,15 +139,18 @@ export interface Requests {
   }
   /** The next sample time from `at` in `direction`; the run's first or last time when none. */
   step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
+  /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
+   *  and cancelling it stops the run. */
   run: { input: SimulationRequest; output: SimulationInfo }
-  /** Shows contingency `shown` of the study `run` belongs to, in its place. */
-  contingency: { input: { run: string; shown: number }; output: SimulationInfo }
-  stop: { input: { uri: string }; output: null }
-  /** Drops the case's runs. */
+  /** A GridKit results file read for the case at its revision. */
+  open: {
+    input: Revision & { path: string; cacheBytes: number; contingency?: Study }
+    output: SimulationInfo
+  }
+  /** Lets go of the case's runs, stopping one under way. Their files stay. */
   clear: { input: { uri: string }; output: null }
   /** Drops the case and its runs. */
   release: { input: { uri: string; attachmentId?: string }; output: null }
-  import: { input: Revision & { path: string; cacheBytes: number }; output: SimulationInfo }
   export: { input: { run: string; path: string }; output: null }
   stats: {
     input: Record<string, never>
@@ -200,7 +196,7 @@ export type FromWorker =
       raw?: string
     }
 
-export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'simulation' | 'export'
+export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'export'
 
 /** A view a video export can draw. */
 export type VideoView = 'network' | 'diagram' | 'monitor'
@@ -226,7 +222,6 @@ export interface ViewState {
   version?: number
   writable?: boolean
   settings?: SettingsValues
-  values?: Record<string, unknown>
   table?: TableState
   diagramEditing?: boolean
   bindings?: Bindings
@@ -238,10 +233,6 @@ export interface ViewState {
   /** The network elements that stand for a selection the network does not draw. */
   anchors?: string[]
   run?: SimulationInfo
-  /** Whether Run was pressed and GridKit's run has not yet begun. */
-  launching?: boolean
-  /** What future runs record. */
-  outputs?: readonly FieldSelection[]
   plots?: Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
   window?: Domain
@@ -307,8 +298,6 @@ export type TransportAction =
 export interface ViewRequests {
   /** Rows of the case, or of the shown run when the query has an `at`. */
   query: { input: RowsQuery; output: RowsBlock[] }
-  /** Every element of a type, for a parameter that names one. */
-  elements: { input: { type: string }; output: ElementChoice[] }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
     output: void
@@ -346,7 +335,6 @@ export type FromView =
     }
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
-  | { kind: 'values'; uri: string; values: Record<string, unknown> }
   /** What the Case panel shows, and how many rows its filters leave. */
   | { kind: 'tableState'; table: TableState; shown: number }
   | { kind: 'busy'; busy: boolean }

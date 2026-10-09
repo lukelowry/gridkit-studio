@@ -8,7 +8,7 @@ Copyright (c) 2026 Luke Lowery. MIT License.
 
 ## GridKit Server
 
-The catalog compiler, parser, staging and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
+The catalog compiler, parser and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
 
 ## jsonc-parser
 

@@ -22,9 +22,21 @@ export async function run() {
     const session = bench.studio.all.get(key)!
     const source = JSON.parse(await readFile(uri.fsPath, 'utf8'))
     const id = `Bus/${source.buses[0].number}`
-    bench.studio.record(key, [{ from: 'Bus', select: ['Vm', 'Va'] }])
-    session.values = { tmax: 10, dt_monitor: 0.01 }
-    await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+    await bench.record('Bus', ['Vm', 'Va'], uri)
+    bench.run(
+      'Run Dynamic Simulation',
+      await bench.writeSolver(
+        {
+          tmax: 10,
+          dt_monitor: 0.01,
+          events: [
+            { time: 1, type: 'fault_on', element_id: 0 },
+            { time: 1.15, type: 'fault_off', element_id: 0 },
+          ],
+        },
+        uri,
+      ),
+    )
     await until(
       () => session.run?.state === 'complete' || session.run?.state === 'failed',
       '10k GridKit completes',

@@ -18,9 +18,18 @@ export async function run() {
       () => bench.session.settings['accessibility.motion'] === 'full',
       'Full motion enabled',
     )
-    bench.studio.record(bench.key, [{ from: 'Bus', select: ['Vm', 'Va'] }])
-    bench.session.values = { tmax: 2, dt_monitor: 0.005 }
-    await vscode.commands.executeCommand('gridkitStudio.startSimulation', bench.uri)
+    await bench.record('Bus', ['Vm', 'Va'])
+    bench.run(
+      'Run Dynamic Simulation',
+      await bench.writeSolver({
+        tmax: 2,
+        dt_monitor: 0.005,
+        events: [
+          { time: 0.5, type: 'fault_on', element_id: 0 },
+          { time: 0.6, type: 'fault_off', element_id: 0 },
+        ],
+      }),
+    )
     await until(() => bench.session.run?.state === 'complete', 'GridKit completes', 180_000)
     // Two whole-case plots plus eight individual traces force a scrollable panel.
     bench.session.plots = [

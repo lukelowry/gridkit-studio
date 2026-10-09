@@ -1,40 +1,38 @@
-/** GridKit's own DynamicSimulation, run as Studio runs it: GRIDKIT_PATH names an install, else the
- *  one on PATH, else Studio's default image or GRIDKIT_IMAGE runs in Docker or Podman. */
+/** GridKit's own programs, run as Studio runs them: on a solver file, in its folder, with the case it
+ *  names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default image
+ *  or GRIDKIT_IMAGE runs in Docker or Podman. */
 
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readdir, readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import {
-  type Arguments,
-  type FieldSelection,
-  type Parameters,
-  read,
-  rowAt,
-  rowCount,
-  sampleAt,
-  type SampleWindow,
-} from '@latkit/model'
+import { read, rowAt, rowCount, sampleAt, type SampleWindow } from '@latkit/model'
+import { applyEdits, modify } from 'jsonc-parser'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import manifest from '../../package.json'
+import { apply } from '../../src/gridkit/edits.js'
 import {
   available,
   Case,
   catalog,
-  contingencyFile,
   diagnose,
+  recordingOf,
   type Runtime,
-  Simulation,
+  simulate,
 } from '../../src/gridkit/index.js'
-import { ResultCache } from '../../src/results/index.js'
+import { recordEdits } from '../../src/gridkit/recording.js'
+import { ResultCache, type Results } from '../../src/results/index.js'
 import type {
   GridKit,
+  Program,
   RuntimeProcess,
   SimulationInfo,
   SimulationRequest,
 } from '../../src/shared/messages.js'
+import { contingencyFile, outputOf, readSolver } from '../../src/shared/study.js'
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',
@@ -48,87 +46,24 @@ const gridkit: GridKit = {
   cli: process.env.GRIDKIT_CONTAINER_CLI ?? '',
 }
 
-describe('DynamicSimulation', () => {
+/** A fault on the case's first BusFault from 0.05 s to 0.1 s, as GridKit's events name it. */
+const FAULT = [
+  { time: 0.05, type: 'fault_on', element_id: 0 },
+  { time: 0.1, type: 'fault_off', element_id: 0 },
+]
+
+describe("GridKit's programs on solver files", () => {
   let root: string
-  let kase: Case
   let runtime: Runtime
 
   beforeAll(async () => {
     await mkdir('output/simulation', { recursive: true })
-    root = await mkdtemp('output/simulation/run-')
-    console.log('Simulation inputs, results and logs:', root)
+    root = resolve(await mkdtemp('output/simulation/run-'))
+    console.log('Simulation folders:', root)
     // Without GridKit there is nothing to test, and that is a failure said once.
     runtime = await available(gridkit)
     console.log('GridKit runs', runtime)
-    kase = await Case.parse(await readFile('cases/IEEE39.case.json', 'utf8'), catalog)
   })
-
-  /** Run `model` into its own folder under `name`, until it ends or `signal` aborts. `publish`
-   *  hears each block of frames, and may stop the run. */
-  async function run(
-    name: string,
-    values: SimulationRequest['values'],
-    signal: AbortSignal,
-    {
-      publish = () => {},
-      model = kase,
-      outputs = [{ from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1', 'Bus/2'] } }],
-      using = gridkit,
-    }: {
-      publish?: (stop: (reason: Error) => void) => void
-      model?: Case
-      outputs?: readonly FieldSelection[]
-      using?: GridKit
-    } = {},
-  ) {
-    const directory = join(root, name)
-    await mkdir(directory)
-    const format = 'csv'
-    const request: SimulationRequest = {
-      uri: 'file:///test.case.json',
-      version: 1,
-      values,
-      outputs,
-      gridkit: using,
-      cacheBytes: 1 << 20,
-    }
-    const info: SimulationInfo = {
-      id: name,
-      revision: request,
-      fingerprint: model.version,
-      name: model.name,
-      state: 'running',
-      path: join(directory, 'results.' + format),
-      format,
-      frames: 0,
-      domain: [0, 0],
-      started: Date.now(),
-      outputs: request.outputs,
-    }
-    let owned: RuntimeProcess | undefined
-    let released = false
-    const simulation = new Simulation(
-      model,
-      request,
-      directory,
-      new ResultCache(1 << 20),
-      info,
-      (process) => {
-        if (process) owned = process
-        else released = true
-      },
-    )
-    const controller = new AbortController()
-    const done = simulation.run(values as Arguments<Parameters>, {
-      signal: AbortSignal.any([signal, controller.signal]),
-      outputs: request.outputs,
-      maxBlockBytes: 256 << 10,
-      publish: async () => publish((reason) => controller.abort(reason)),
-      progress: () => {},
-      log: () => {},
-    })
-    return { simulation, info, done, owned: () => owned, released: () => released }
-  }
 
   /** A case's buses in file order, which are the rows Studio reads them back as. */
   async function busesOf(name: string) {
@@ -137,10 +72,87 @@ describe('DynamicSimulation', () => {
       .buses
   }
 
+  /** Runs `program` on a solver file written into a folder of its own, `name`, beside a copy of
+   *  case `model` whose `mon` lists `record` writes. Reads the output where the solver file and the
+   *  case say, as Studio does, until the run ends or `signal` aborts. `publish` hears each page of
+   *  samples, and may stop the run. */
+  async function run(
+    name: string,
+    model: string,
+    solver: Record<string, unknown>,
+    signal: AbortSignal,
+    {
+      program = 'DynamicSimulation',
+      record = (kase: Case, text: string) => apply(text, recordEdits(kase, 'Bus', ['Vm'], [])),
+      publish = () => {},
+      using = gridkit,
+      mount = root,
+    }: {
+      program?: Program
+      record?: (kase: Case, text: string) => string
+      publish?: (stop: (reason: Error) => void) => void
+      using?: GridKit
+      mount?: string
+    } = {},
+  ) {
+    const folder = join(root, name)
+    await mkdir(folder)
+    const release = await readFile(`cases/${model}.case.json`, 'utf8')
+    const text = record(await Case.parse(release, catalog), release)
+    const casePath = join(folder, `${model}.case.json`)
+    await writeFile(casePath, text)
+    const solverPath = join(folder, `${model}.solver.json`)
+    const solverText = JSON.stringify({ system_model_file: `${model}.case.json`, ...solver })
+    await writeFile(solverPath, solverText)
+    const kase = await Case.parse(text, catalog, `${model}.case.json`)
+    const study = readSolver(`${model}.solver.json`, solverText)
+    const sink = outputOf(`${model}.solver.json`, study, recordingOf(kase).monitor)
+    const request: SimulationRequest = {
+      uri: pathToFileURL(casePath).href,
+      version: 1,
+      program,
+      solver: solverPath,
+      output: join(folder, sink.file),
+      format: sink.format,
+      tmax: study.tmax,
+      root: mount,
+      gridkit: using,
+      cacheBytes: 1 << 20,
+    }
+    const info: SimulationInfo = {
+      id: name,
+      revision: request,
+      fingerprint: kase.version,
+      name: kase.name,
+      state: 'running',
+      path: request.output,
+      format: sink.format,
+      frames: 0,
+      domain: [0, 0],
+      span: [0, study.tmax],
+      started: Date.now(),
+      outputs: [],
+    }
+    let owned: RuntimeProcess | undefined
+    let released = false
+    const controller = new AbortController()
+    const done = simulate(kase, request, info, new ResultCache(1 << 20), {
+      signal: AbortSignal.any([signal, controller.signal]),
+      reading: () => {},
+      publish: async () => publish((reason) => controller.abort(reason)),
+      log: () => {},
+      lifecycle: (process) => {
+        if (process) owned = process
+        else released = true
+      },
+    })
+    return { kase, folder, info, done, owned: () => owned, released: () => released }
+  }
+
   /** What Studio reads back of `field` for each recorded bus over `window`. */
-  async function readBack(simulation: Simulation, field: string, window: SampleWindow) {
+  async function readBack(results: Results, field: string, window: SampleWindow) {
     const found: { row: number; t: number; value: number | null }[] = []
-    const data = await simulation.results!.data(undefined, new AbortController().signal)
+    const data = await results.data(undefined, new AbortController().signal)
     for await (const block of read(data, { kind: 'samples', from: 'Bus', select: [field], window }))
       for (let frame = 0; frame < block.coordinates.length; frame++)
         for (let i = 0; i < rowCount(block.rows); i++)
@@ -153,19 +165,20 @@ describe('DynamicSimulation', () => {
   }
 
   for (const name of ['IEEE39', 'TwoArea', 'WECC240'])
-    it(`${name}: runs from the case's power flow, and every sample reads back`, async ({
+    it(`${name}: writes where its solver file says, from the case's power flow, and every sample reads back`, async ({
       signal,
     }) => {
-      const model = await Case.read(`cases/${name}.case.json`, kase.catalog)
-      expect(diagnose(model)).toEqual([])
-      const { simulation, info, done, released } = await run(
+      expect(diagnose(await Case.read(`cases/${name}.case.json`, catalog))).toEqual([])
+      const { folder, info, done, released } = await run(
         name,
-        { tmax: 0.1, dt_monitor: 0.01 },
+        name,
+        { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
         signal,
-        { model, outputs: [{ from: 'Bus', select: ['Vm', 'Va'] }] },
+        { record: (kase, text) => apply(text, recordEdits(kase, 'Bus', ['Vm', 'Va'], [])) },
       )
-      await done
+      const results = await done
       expect(released()).toBe(true)
+      await access(join(folder, 'out.csv'))
       expect(info.domain[0]).toBe(0)
       expect(info.domain[1]).toBeCloseTo(0.1, 9)
       const initial = (await busesOf(name)).map(({ init }) => ({
@@ -174,54 +187,53 @@ describe('DynamicSimulation', () => {
       }))
       for (const field of ['Vm', 'Va'] as const) {
         // Every bus, at least once a monitor step, and every value a number.
-        const samples = await readBack(simulation, field, { kind: 'range', between: info.domain })
+        const samples = await readBack(results, field, { kind: 'range', between: info.domain })
         expect(new Set(samples.map(({ row }) => row)).size).toBe(initial.length)
         expect(samples.every(({ value }) => Number.isFinite(value))).toBe(true)
         const times = [...new Set(samples.map(({ t }) => t))].sort((a, b) => a - b)
         expect(times.every((t, i) => !i || t - times[i - 1]! <= 0.01 + 1e-9)).toBe(true)
         // Each bus starts where the case's power flow left it.
-        const start = await readBack(simulation, field, { kind: 'at', value: 0 })
+        const start = await readBack(results, field, { kind: 'at', value: 0 })
         expect(start).toHaveLength(initial.length)
         for (const { row, value } of start) expect(value).toBeCloseTo(initial[row]![field], 3)
       }
     })
 
-  it('records only the buses and fields it was asked for', async ({ signal }) => {
-    const { simulation, info, done } = await run(
-      'selected',
-      { tmax: 0.1, dt_monitor: 0.01 },
-      signal,
-      { outputs: [{ from: 'Bus', select: ['Va', 'Vm'], rows: { kind: 'ids', ids: ['Bus/2'] } }] },
-    )
-    await done
+  it('records what the case lists, and nothing it does not', async ({ signal }) => {
     const row = (await busesOf('IEEE39')).findIndex((bus) => bus.number === 2)
+    const { info, done } = await run(
+      'listed',
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
+      signal,
+      {
+        record: (_, text) =>
+          applyEdits(text, modify(text, ['buses', row, 'mon'], ['Va', 'Vm'], {})),
+      },
+    )
+    const results = await done
     for (const field of ['Va', 'Vm']) {
-      const samples = await readBack(simulation, field, { kind: 'range', between: info.domain })
+      const samples = await readBack(results, field, { kind: 'range', between: info.domain })
       expect(new Set(samples.map(({ row }) => row))).toEqual(new Set([row]))
     }
+    // The case's own lists record on: its machines' speeds.
+    expect(info.outputs.some(({ from }) => from !== 'Bus')).toBe(true)
   })
 
   it('sags the faulted bus while the fault lasts', async ({ signal }) => {
-    const { simulation, info, done } = await run(
+    const { kase, info, done } = await run(
       'fault',
-      {
-        tmax: 0.2,
-        dt_monitor: 0.01,
-        fault: true,
-        fault_bus: 'Bus/1',
-        fault_start: 0.05,
-        fault_duration: 0.05,
-        fault_R: 0,
-        fault_X: 0.01,
-      },
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.2, dt_monitor: 0.01, events: FAULT },
       signal,
     )
-    await done
+    const results = await done
     expect(info.domain[1]).toBeCloseTo(0.2, 9)
-    const row = (await busesOf('IEEE39')).findIndex((bus) => bus.number === 1)
-    const samples = (
-      await readBack(simulation, 'Vm', { kind: 'range', between: info.domain })
-    ).filter((sample) => sample.row === row)
+    const faults = kase.table('BusFault')
+    const bus = kase.cell(faults, 'ports.bus', 0) as number
+    const samples = (await readBack(results, 'Vm', { kind: 'range', between: info.domain })).filter(
+      (sample) => sample.row === bus,
+    )
     expect(samples.every(({ value }) => Number.isFinite(value))).toBe(true)
     const lowest = (from: number, to: number) =>
       Math.min(...samples.filter(({ t }) => t >= from && t <= to).map(({ value }) => value!))
@@ -229,48 +241,74 @@ describe('DynamicSimulation', () => {
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
   })
 
-  it('faults every bus in turn, one result file each, and shows one whose bus sags', async ({
+  it('studies each fault in turn, one file each beside the solver file, and shows the first', async ({
     signal,
   }) => {
-    const { simulation, info, done } = await run(
+    const { kase, folder, info, done } = await run(
       'contingencies',
-      {
-        program: 'ContingencyAnalysis',
-        tmax: 0.2,
-        dt_monitor: 0.01,
-        fault_start: 0.05,
-        fault_duration: 0.05,
-        fault_R: 0,
-        fault_X: 0.01,
-      },
+      'IEEE39',
+      { output_file: 'study.csv', tmax: 0.2, dt_monitor: 0.01, events: FAULT },
       signal,
-      { outputs: [{ from: 'Bus', select: ['Vm'] }] },
+      { program: 'ContingencyAnalysis' },
     )
-    await done
-    const buses = await busesOf('IEEE39')
+    const results = await done
+    const faults = kase.table('BusFault')
+    const buses = kase.table('Bus')
+    const faulted = Array.from(faults.records, (_, row) => kase.cell(faults, 'ports.bus', row))
     const study = info.contingency!
-    expect(study.buses).toEqual(buses.map((bus) => bus.number))
-    expect(study.done).toBe(buses.length)
-    expect(study.failed).not.toContain(study.shown)
-    const written = await readdir(dirname(info.path))
-    buses.forEach((_, i) => expect(written).toContain(contingencyFile(study.offset + i)))
-    const row = buses.findIndex((bus) => bus.number === study.buses[study.shown])
-    const faulted = (
-      await readBack(simulation, 'Vm', { kind: 'range', between: [0.05, 0.1] })
-    ).filter((sample) => sample.row === row)
-    expect(Math.min(...faulted.map(({ value }) => value!))).toBeLessThan(0.8)
+    expect(study.buses).toEqual(faulted.map((row) => kase.native(buses, row as number)))
+    expect(study.written).toEqual(faulted.map((_, n) => n))
+    expect(study.failed).toEqual([])
+    expect(study.shown).toBe(0)
+    for (const n of study.written) await access(contingencyFile(study, n))
+    expect(info.path).toBe(join(folder, 'study_0.csv'))
+    const sagged = (await readBack(results, 'Vm', { kind: 'range', between: [0.05, 0.1] })).filter(
+      (sample) => sample.row === faulted[0],
+    )
+    expect(Math.min(...sagged.map(({ value }) => value!))).toBeLessThan(0.8)
   })
 
-  it('refuses a results format before starting a process: runs write CSV only', async ({
-    signal,
-  }) => {
-    const { done, owned } = await run('unsupported', { output_format: 'arrow' }, signal)
-    await expect(done).rejects.toThrow()
-    expect(owned()).toBeUndefined()
+  it('never reads what the last run of a solver file wrote', async ({ signal }) => {
+    const solver = { output_file: 'out.csv', dt_monitor: 0.01, events: [] }
+    const first = await run('again', 'IEEE39', { ...solver, tmax: 0.1 }, signal)
+    await first.done
+    expect(first.info.domain[1]).toBeCloseTo(0.1, 9)
+    // The same folder and output, read again by a shorter run.
+    const folder = join(root, 'again')
+    await writeFile(
+      join(folder, 'IEEE39.solver.json'),
+      JSON.stringify({ system_model_file: 'IEEE39.case.json', ...solver, tmax: 0.05 }),
+    )
+    const kase = first.kase
+    const info: SimulationInfo = { ...first.info, id: 'again-2', frames: 0, domain: [0, 0] }
+    const results = await simulate(
+      kase,
+      {
+        uri: pathToFileURL(join(folder, 'IEEE39.case.json')).href,
+        version: 1,
+        program: 'DynamicSimulation',
+        solver: join(folder, 'IEEE39.solver.json'),
+        output: join(folder, 'out.csv'),
+        format: 'csv',
+        tmax: 0.05,
+        root,
+        gridkit,
+        cacheBytes: 1 << 20,
+      },
+      info,
+      new ResultCache(1 << 20),
+      { signal, reading: () => {}, publish: async () => {}, log: () => {} },
+    )
+    expect(results.info.domain[1]).toBeCloseTo(0.05, 9)
   })
 
-  it('says why GridKit could not finish, keeps its log, and runs again', async ({ signal }) => {
-    const failed = await run('failure', { tmax: 0.1, dt_monitor: 0.01, max_steps: 1 }, signal)
+  it('says why GridKit could not finish, and runs again', async ({ signal }) => {
+    const failed = await run(
+      'failure',
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, max_steps: 1, events: [] },
+      signal,
+    )
     const error = await failed.done.then(
       () => undefined,
       (error: unknown) => error,
@@ -278,8 +316,12 @@ describe('DynamicSimulation', () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message.trim()).not.toBe('')
     expect(failed.released()).toBe(true)
-    expect((await readFile(join(root, 'failure', 'solver.log'), 'utf8')).trim()).not.toBe('')
-    const retry = await run('retry', { tmax: 0.1, dt_monitor: 0.01 }, signal)
+    const retry = await run(
+      'retry',
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
+      signal,
+    )
     await retry.done
     expect(retry.info.domain[1]).toBeCloseTo(0.1, 9)
   })
@@ -291,24 +333,40 @@ describe('DynamicSimulation', () => {
     if (runtime.kind !== 'container') skip()
     const { cli } = runtime as Extract<Runtime, { kind: 'container' }>
     const image = 'ghcr.io/lukelowry/gridkit:studio-never-pulls'
-    const { done, owned } = await run('unpulled', { tmax: 0.1 }, signal, {
-      using: { ...gridkit, image },
-    })
+    const { done, owned } = await run(
+      'unpulled',
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.1, events: [] },
+      signal,
+      { using: { ...gridkit, image } },
+    )
     await expect(done).rejects.toThrow(image)
     expect(owned()).toBeUndefined()
     await expect(promisify(execFile)(cli, ['image', 'inspect', image])).rejects.toThrow()
   })
 
-  it('refuses an empty signal selection before starting a process', async ({ signal }) => {
-    const { done, owned } = await run('empty', {}, signal, { outputs: [] })
-    await expect(done).rejects.toThrow()
+  it('keeps a container to the folder it mounts, before starting a process', async ({
+    signal,
+    skip,
+  }) => {
+    if (runtime.kind !== 'container') skip()
+    const elsewhere = resolve(await mkdtemp('output/simulation/elsewhere-'))
+    const { done, owned } = await run(
+      'outside',
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 0.1, events: [] },
+      signal,
+      { mount: elsewhere },
+    )
+    await expect(done).rejects.toThrow('outside')
     expect(owned()).toBeUndefined()
   })
 
   it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
     const { info, done, owned, released } = await run(
       'cancel',
-      { tmax: 1000, dt_monitor: 0.001 },
+      'IEEE39',
+      { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
       signal,
       { publish: (stop) => stop(new Error('Cancelled by the test')) },
     )

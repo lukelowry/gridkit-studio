@@ -20,38 +20,11 @@ beforeAll(async () => {
     mainFields: ['module', 'main'],
   })
 })
-/** A worker on a scratch directory of its own, every batch it sends kept. A batch is acknowledged
+/** A worker with a folder of files of its own, every batch it sends kept. A batch is acknowledged
  *  as it arrives only while `acknowledge` is on. */
-async function start(storage?: string, fault?: 'copy' | 'cleanup') {
-  const scratch = await mkdtemp(join(tmpdir(), 'gridkit-worker-test-'))
-  const worker = new Worker(
-    fault
-      ? `
-    const { workerData } = require('node:worker_threads')
-    const fs = require('node:fs/promises')
-    if (workerData.fault === 'copy') {
-      fs.copyFile = async () => { throw Object.assign(new Error('Import copy refused'), { code: 'EACCES' }) }
-    } else {
-      const remove = fs.rm
-      fs.rm = async (path, options) => {
-        if (String(path).endsWith('results.csv')) throw Object.assign(new Error('Recording is busy'), { code: 'EBUSY' })
-        return remove(path, options)
-      }
-    }
-    require(workerData.entry)
-  `
-      : entry,
-    {
-      eval: !!fault,
-      workerData: {
-        scratch,
-        storage,
-        fault,
-        entry,
-        ...(fault === 'cleanup' ? { storageBytes: 0 } : {}),
-      },
-    },
-  )
+async function start(folder?: string) {
+  const scratch = folder ?? (await mkdtemp(join(tmpdir(), 'gridkit-worker-test-')))
+  const worker = new Worker(entry)
   let next = 0
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
   const batches: Extract<FromWorker, { kind: 'batch' }>[] = []
@@ -73,7 +46,7 @@ async function start(storage?: string, fault?: 'copy' | 'cleanup') {
     },
     async stop() {
       await worker.terminate()
-      await rm(scratch, { recursive: true, force: true })
+      if (!folder) await rm(scratch, { recursive: true, force: true })
     },
   }
   worker.on('message', (message: FromWorker) => {
@@ -93,19 +66,17 @@ async function start(storage?: string, fault?: 'copy' | 'cleanup') {
   return rig
 }
 describe('real worker protocol', () => {
-  it('opens, draws and validates without reading saved-result storage', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'gridkit-storage-unavailable-'))
-    const storage = join(root, 'not-a-directory')
-    await writeFile(storage, 'unavailable storage')
-    const rig = await start(storage)
+  it('opens, draws and validates a case', async () => {
+    const rig = await start()
     rig.acknowledge = true
     try {
       const revision = { uri: 'file:///independent.case.json', version: 1, attachmentId: 'one' }
       const summary = await rig.call('parse', {
         ...revision,
-        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+        text: '{"buses":[{"class":"Bus","number":1,"name":"one","mon":["Vm"]}]}',
       }).done
       expect(summary.validation).toBe('pending')
+      expect(summary.recording).toEqual({ listed: { Bus: { Vm: 1 } } })
       await rig.call('batches', { ...revision, fields: [{ from: 'Bus', select: ['name'] }] }).done
       expect(rig.batches).toHaveLength(1)
       expect(await rig.call('validate', revision).done).toEqual([])
@@ -114,7 +85,6 @@ describe('real worker protocol', () => {
       )
     } finally {
       await rig.stop()
-      await rm(root, { recursive: true, force: true })
     }
   })
 
@@ -133,7 +103,7 @@ describe('real worker protocol', () => {
         path,
         'time,Bus_one_Vm\n' + Array.from({ length: frames }, (_, i) => `${i},${i % 3}\n`).join(''),
       )
-      const run = await rig.call('import', { ...revision, path, cacheBytes: 64 << 20 }).done
+      const run = await rig.call('open', { ...revision, path, cacheBytes: 64 << 20 }).done
       expect(run.domains).toEqual({ Bus: { Vm: [0, 2] } })
       rig.batches.length = 0
       await rig.call('batches', {
@@ -157,38 +127,36 @@ describe('real worker protocol', () => {
       await rig.stop()
     }
   })
-  it.each(['copy', 'cleanup'] as const)(
-    'preserves source files and imported recordings after %s failure',
-    async (fault) => {
-      const rig = await start(undefined, fault)
-      try {
-        const revision = { uri: 'file:///failure.case.json', version: 1 }
-        await rig.call('parse', {
-          ...revision,
-          text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
-        }).done
-        const path = join(rig.scratch, 'original.csv')
-        const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
-        await writeFile(path, source)
-        const input = { ...revision, path, cacheBytes: 16 << 20 }
-        if (fault === 'copy') {
-          await expect(rig.call('import', input).done).rejects.toMatchObject({ code: 'EACCES' })
-          expect(await rig.call('runs', { uri: revision.uri }).done).toEqual([])
-        } else {
-          await rig.call('import', input).done
-          const info = await rig.call('import', input).done
-          expect(info.state).toBe('complete')
-          expect(info.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
-          const exported = join(rig.scratch, 'exported.csv')
-          await rig.call('export', { run: info.id, path: exported }).done
-          expect(await readFile(exported, 'utf8')).toContain('0.8')
-        }
-        expect(await readFile(path, 'utf8')).toBe(source)
-      } finally {
-        await rig.stop()
-      }
-    },
-  )
+
+  it('reads a results file where it is, says what it holds, and never changes it', async () => {
+    const rig = await start()
+    try {
+      const revision = { uri: 'file:///in-place.case.json', version: 1 }
+      await rig.call('parse', {
+        ...revision,
+        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
+      }).done
+      const path = join(rig.scratch, 'original.csv')
+      const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
+      await writeFile(path, source)
+      const info = await rig.call('open', { ...revision, path, cacheBytes: 16 << 20 }).done
+      expect(info).toMatchObject({ state: 'complete', path, frames: 3 })
+      expect(info.outputs).toEqual([
+        { from: 'Bus', select: ['Vm'], rows: { kind: 'ids', ids: ['Bus/1'] } },
+      ])
+      expect(info.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
+      const exported = join(rig.scratch, 'exported.csv')
+      await rig.call('export', { run: info.id, path: exported }).done
+      expect(await readFile(exported, 'utf8')).toContain('0.8')
+      await rig.call('clear', { uri: revision.uri }).done
+      expect(await rig.call('runs', { uri: revision.uri }).done).toEqual([])
+      // Clearing lets go of the results; the file is the user's, and stays as it was.
+      expect(await readFile(path, 'utf8')).toBe(source)
+    } finally {
+      await rig.stop()
+    }
+  })
+
   it('rejects stale attachments without releasing a reopened case', async () => {
     const rig = await start()
     try {
@@ -211,52 +179,46 @@ describe('real worker protocol', () => {
       await rig.stop()
     }
   })
-  it('restores recordings in a fresh worker without a case editor', async () => {
-    const storage = await mkdtemp(join(tmpdir(), 'gridkit-persistence-'))
-    let rig = await start(storage)
+
+  it('reads the same file again in a fresh worker, as a reload does', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'gridkit-reload-'))
+    const revision = { uri: 'file:///reloaded.case.json', version: 1 }
+    const text = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
+    const csv = join(folder, 'results.csv')
+    await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
+    let rig = await start(folder)
     try {
-      const revision = { uri: 'file:///retained.case.json', version: 1 }
-      await rig.call('parse', {
-        ...revision,
-        text: '{"buses":[{"class":"Bus","number":1,"name":"one"}]}',
-      }).done
-      const csv = join(rig.scratch, 'original.csv')
-      await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
-      const info = await rig.call('import', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
-      const exported = join(storage, 'exported.csv')
-      const input = { run: info.id, path: exported }
-      await rig.call('export', input).done
+      await rig.call('parse', { ...revision, text }).done
+      const first = await rig.call('open', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
+      const exported = join(folder, 'exported.csv')
+      await rig.call('export', { run: first.id, path: exported }).done
       const measured = await readFile(exported, 'utf8')
-      await rig.call('release', { uri: revision.uri }).done
-      await rig.call('export', input).done
-      expect(await readFile(exported, 'utf8')).toEqual(measured)
       await rig.stop()
-      rig = await start(storage)
-      expect(await rig.call('getSimulation', { simulationId: info.id }).done).toMatchObject({
-        id: info.id,
+      rig = await start(folder)
+      await rig.call('parse', { ...revision, text }).done
+      const again = await rig.call('open', { ...revision, path: csv, cacheBytes: 16 << 20 }).done
+      expect(again).toMatchObject({
+        frames: first.frames,
+        domain: first.domain,
+        domains: first.domains,
+        outputs: first.outputs,
       })
-      await rig.call('export', input).done
+      await rig.call('export', { run: again.id, path: exported }).done
       expect(await readFile(exported, 'utf8')).toEqual(measured)
-      // Paged again from its times, the run keeps the domains it measured, and steps as it did.
-      expect((await rig.call('runs', { uri: revision.uri }).done)[0]).toMatchObject({
-        frames: info.frames,
-        domain: info.domain,
-        domains: info.domains,
-      })
-      expect(await rig.call('step', { run: info.id, at: 0, direction: 1 }).done).toBe(1)
-      expect(await rig.call('describeSimulation', { simulationId: info.id }).done).toMatchObject({
-        fingerprint: info.fingerprint,
+      expect(await rig.call('step', { run: again.id, at: 0, direction: 1 }).done).toBe(1)
+      expect(await rig.call('describeSimulation', { simulationId: again.id }).done).toMatchObject({
+        fingerprint: again.fingerprint,
       })
       await rig.call('clear', { uri: revision.uri }).done
-      await expect(rig.call('export', input).done).rejects.toMatchObject({
-        code: 'results-evicted',
-        simulationId: info.id,
-      })
+      await expect(
+        rig.call('export', { run: again.id, path: exported }).done,
+      ).rejects.toMatchObject({ code: 'results-unavailable', simulationId: again.id })
     } finally {
       await rig.stop()
-      await rm(storage, { recursive: true, force: true })
+      await rm(folder, { recursive: true, force: true })
     }
   })
+
   it('waits for consumption acknowledgements and cancels an unconsumed stream', async () => {
     const rig = await start()
     const { worker, batches, call, stop } = rig
@@ -312,6 +274,7 @@ describe('real worker protocol', () => {
       await stop()
     }
   })
+
   it('sends a view the pages it asks for, and no others', async () => {
     const rig = await start()
     const { scratch, batches, call, stop } = rig
@@ -329,13 +292,13 @@ describe('real worker protocol', () => {
         `time,Bus_${name}_Vm\n` +
           Array.from({ length: count }, (_, i) => `${i / 100},${1 + (i % 200) / 1000}\n`).join(''),
       )
-      const run = await call('import', { ...revision, path, cacheBytes: 64 << 20 }).done
+      const run = await call('open', { ...revision, path, cacheBytes: 64 << 20 }).done
       expect(run).toMatchObject({ state: 'complete', frames: count })
-      // Results that cannot be read fail the import, and take no run's place.
+      // Results that cannot be read fail to open, and take no run's place.
       const broken = join(scratch, 'broken.csv')
       await writeFile(broken, `time,Bus_${name}_Vm\n0,1\n0.01\n`)
       await expect(
-        call('import', { ...revision, path: broken, cacheBytes: 32 << 20 }).done,
+        call('open', { ...revision, path: broken, cacheBytes: 32 << 20 }).done,
       ).rejects.toThrow(/does not match its header/)
       expect((await call('runs', { uri: revision.uri }).done).map(({ id }) => id)).toEqual([run.id])
       const stream = { ...revision, fields: run.outputs, run: run.id, includeStatic: false }
@@ -389,7 +352,7 @@ describe('real worker protocol', () => {
       await call('clear', { uri: revision.uri }).done
       await rejected
       expect(await call('stats', {}).done).toMatchObject({ runs: 0, cacheBytes: 0 })
-      await expect(call('batches', stream).done).rejects.toThrow(/retained recording/)
+      await expect(call('batches', stream).done).rejects.toThrow(/no longer read/)
     } finally {
       await stop()
     }

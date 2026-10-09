@@ -1,12 +1,10 @@
-import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
 import type { DataBatch } from '@latkit/model'
-import { type CancellationToken, EventEmitter, type ExtensionContext, workspace } from 'vscode'
+import { type CancellationToken, EventEmitter, type ExtensionContext } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
-import { scratchFolder, sweep } from '../results/scratch.js'
 import type { FromWorker, Method, Requests, RuntimeProcess } from '../shared/messages.js'
 
 /** Run `run` with a signal that aborts when `token` is cancelled. */
@@ -26,8 +24,6 @@ export async function cancellable<T>(
 
 export class Client {
   #worker?: Worker
-  /** The folder the worker keeps its runs in, deleted with it. */
-  #scratch?: string
   #next = 0
   #disposed = false
   /** The GridKit process the worker runs for each case, terminated here if the worker dies. */
@@ -48,24 +44,8 @@ export class Client {
   constructor(private readonly context: ExtensionContext) {}
   #get() {
     if (this.#worker) return this.#worker
-    const root = join(this.context.globalStorageUri.fsPath, 'runs')
-    const scratch = (this.#scratch = scratchFolder(root))
-    // Runs left behind by windows that closed without cleaning up, or by an earlier worker here.
-    void sweep(root, scratch)
     const worker = (this.#worker = new Worker(
       join(this.context.extensionPath, 'dist', 'worker.cjs'),
-      {
-        workerData: {
-          scratch,
-          storage: join(
-            (this.context.storageUri ?? this.context.globalStorageUri).fsPath,
-            'results',
-          ),
-          storageBytes:
-            workspace.getConfiguration('gridkitStudio').get<number>('resultStorageMiB', 4096) *
-            (1 << 20),
-        },
-      },
     ))
     const failed = (error: Error) => {
       if (this.#worker !== worker) return
@@ -74,10 +54,8 @@ export class Client {
       const owned = [...this.#owned.values()]
       this.#owned.clear()
       this.#cleanup = Promise.all(owned.map(terminateRuntime))
-        .then(async () => {
-          await worker.terminate()
-          await rm(scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
-        })
+        .then(() => worker.terminate())
+        .then(() => {})
         .finally(() => {
           this.#cleanup = undefined
         })
@@ -175,9 +153,6 @@ export class Client {
     this.#owned.clear()
     await this.#cleanup
     await worker?.terminate()
-    // A window's runs end with it.
-    if (worker && this.#scratch)
-      await rm(this.#scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
     this.event.dispose()
     this.failure.dispose()
   }

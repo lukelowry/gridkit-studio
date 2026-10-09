@@ -1,136 +1,120 @@
-import { readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
+/** One run of GridKit on a solver file, in its folder, as a shell runs it. A DynamicSimulation is
+ *  read while it writes its output. A ContingencyAnalysis shows the first contingency it wrote once
+ *  it ends. */
 
-import { type Arguments, type Command, type CommandContext, type Parameters } from '@latkit/model'
+import { readdir, rm } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { type ResultCache, Results } from '../results/index.js'
-import type { RuntimeProcess, SimulationInfo, SimulationRequest } from '../shared/messages.js'
+import type {
+  RuntimeProcess,
+  SimulationInfo,
+  SimulationRequest,
+  Study,
+} from '../shared/simulation.js'
+import { contingencyFile } from '../shared/study.js'
 import type { Case } from './case.js'
-import { type Field, parametersOf, type SimulationCommand } from './parameters.js'
-import { preflight } from './preflight.js'
 import { launch } from './runtime.js'
-import { caseFile, faultOrdinal, inputOf, monitorsOf } from './staging.js'
 
-/** The file ContingencyAnalysis writes for its fault `ordinal` from the sink `results.csv`, as
- *  GridKit names it: `name + "_" + fault_id + ext`. */
-export const contingencyFile = (ordinal: number) => `results_${ordinal}.csv`
+export interface RunContext {
+  readonly signal: AbortSignal
+  /** Hears each Results the run reads, as soon as it reads it, so views can query it as it fills. */
+  readonly reading: (results: Results) => void
+  /** Hears each page of samples read. */
+  readonly publish: () => Promise<void>
+  readonly log: (message: string) => void
+  readonly lifecycle?: (process?: RuntimeProcess) => void
+}
 
-/** One run of a case, staged in `directory` and read as GridKit writes it: a DynamicSimulation, or
- *  a ContingencyAnalysis that faults every bus in turn, one contingency of which shows. */
-export class Simulation implements Command {
-  readonly parameters
-  results?: Results
-  constructor(
-    readonly kase: Case,
-    readonly request: SimulationRequest,
-    readonly directory: string,
-    readonly cache: ResultCache,
-    readonly info: SimulationInfo,
-    readonly lifecycle?: (process?: RuntimeProcess) => void,
-  ) {
-    this.parameters = parametersOf(kase.catalog)
-  }
-  async run(input: Arguments<Parameters>, context: CommandContext): Promise<void> {
-    context.signal.throwIfAborted()
-    const { values, command, outputs, faults } = preflight(this.kase, input, context.outputs)
-    this.info.configuration = {
-      values: structuredClone(values),
-      program: command.program,
-      options: command.options.map(({ option, value }) => ({ name: option.id, value })),
-      addedFaults: structuredClone(command.faults),
-    }
-    this.info.span = [command.domain[0], command.domain[1]]
-    const ordinal = faultOrdinal(this.kase)
-    await writeFile(
-      join(this.directory, 'case.json'),
-      caseFile(this.kase, monitorsOf(this.kase, outputs), faults.text),
-    )
-    await writeFile(join(this.directory, 'input.json'), inputOf(command, 'case.json', ordinal))
-    const process = await launch(
-      this.request.gridkit,
-      command.program,
-      this.directory,
-      context.signal,
-      (message) => context.log({ severity: 'info', message }),
-      this.lifecycle,
-    )
-    this.info.configuration.runtime = process.runtime
-    try {
-      if (command.program === 'ContingencyAnalysis')
-        await this.#study(command, faults.ids, ordinal, outputs, process, context)
-      else {
-        this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)
-        await this.results.ingest(context.signal, process.ended, async (batches) => {
-          await context.publish(batches)
-          context.progress({
-            completed: this.info.domain[1],
-            total: command.domain[1],
-            domain: this.info.domain,
-          })
-        })
-        await process.done
-        if (!this.info.frames) throw new Error('DynamicSimulation produced no samples.')
-      }
-    } catch (error) {
-      context.signal.throwIfAborted()
-      // A native error is more useful than the missing result file it caused.
-      if (process.ended()) await process.done
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        throw new Error(
-          `${command.program} produced no results. See ${join(this.directory, 'solver.log')}.`,
-        )
-      throw error
-    } finally {
-      await process.stop()
-      await process.done.catch(() => {})
-    }
-  }
+/** The bus each contingency of a study of `kase` faults, in GridKit's order. Until ORNL/GridKit#611
+ *  GridKit faults each BusFault device of the case in turn; since, a case has none, and it faults
+ *  each bus. */
+function contingencyBuses(kase: Case): number[] {
+  const buses = kase.table(kase.catalog.bus)
+  const faults = kase.tables.get('BusFault')
+  if (!faults?.records.length)
+    return Array.from(buses.records, (_, row) => kase.native(buses, row) as number)
+  return Array.from(faults.records, (_, row) => {
+    const bus = kase.cell(faults, 'ports.bus', row)
+    return typeof bus === 'number' ? (kase.native(buses, bus) as number) : NaN
+  })
+}
 
-  /** Counts each contingency's file as GridKit finishes it, then shows the first that succeeded.
-   *  The case's own faults come first in GridKit's order, so contingency `n` is fault
-   *  `ordinal + n`. */
-  async #study(
-    command: SimulationCommand,
-    ids: readonly string[],
-    ordinal: number,
-    outputs: readonly Field[],
-    process: Awaited<ReturnType<typeof launch>>,
-    context: CommandContext,
-  ) {
-    const count = command.faults.length
-    const contingency = {
-      study: this.info.id,
-      offset: ordinal,
-      buses: command.faults.map(({ bus }) => bus),
-      failed: [] as number[],
-      done: 0,
-      shown: 0,
-    }
-    this.info.contingency = contingency
-    const progress = () =>
-      context.progress({ completed: contingency.done, total: count, domain: this.info.domain })
-    // GridKit writes one file after another; the newest is still being written.
-    while (!process.ended()) {
-      await delay(250, undefined, { signal: context.signal })
-      const written = (await readdir(this.directory)).filter((name) => {
-        const match = /^results_(\d+)\.csv$/.exec(name)
-        return match !== null && Number(match[1]) >= ordinal
-      }).length
-      if (written - 1 > contingency.done) {
-        contingency.done = written - 1
-        progress()
-      }
+export async function simulate(
+  kase: Case,
+  request: SimulationRequest,
+  info: SimulationInfo,
+  cache: ResultCache,
+  context: RunContext,
+): Promise<Results> {
+  const { program, solver, output, root, gridkit } = request
+  const folder = dirname(solver)
+  // GridKit names a study's files from its output's stem alone, so they land where it runs.
+  const ext = extname(output)
+  const files = { base: join(folder, basename(output, ext)), ext }
+  const stem = basename(files.base) + '_'
+  /** The contingencies whose files are in the folder now. */
+  const written = async () =>
+    (await readdir(folder))
+      .flatMap((name) => {
+        const n =
+          name.startsWith(stem) && name.endsWith(ext)
+            ? name.slice(stem.length, name.length - ext.length)
+            : ''
+        return /^\d+$/.test(n) ? [Number(n)] : []
+      })
+      .sort((a, b) => a - b)
+  // Studio reads what GridKit writes, so what this program is about to write over goes first:
+  // GridKit would write over it anyway, and nothing the last run left can pass for this run's.
+  const stale =
+    program === 'DynamicSimulation'
+      ? [output]
+      : (await written()).map((n) => contingencyFile(files, n))
+  await Promise.all(stale.map((file) => rm(file, { force: true })))
+  const process = await launch(
+    gridkit,
+    program,
+    { root, solver, touches: [fileURLToPath(request.uri), output] },
+    context.signal,
+    context.log,
+    context.lifecycle,
+  )
+  try {
+    if (program === 'DynamicSimulation') {
+      const results = new Results(info, kase, cache)
+      context.reading(results)
+      await results.ingest(context.signal, process.ended, context.publish)
+      await process.done
+      if (!info.frames)
+        throw new Error(`DynamicSimulation wrote no samples to ${basename(output)}.`)
+      return results
     }
     await process.done
-    contingency.failed = ids.flatMap((id, n) => (process.failed().has(id) ? [n] : []))
-    contingency.done = count
-    const shown = ids.findIndex((_, n) => !contingency.failed.includes(n))
-    if (shown < 0) throw new Error('Every contingency failed. See the solver log.')
-    contingency.shown = shown
-    this.info.path = join(this.directory, contingencyFile(ordinal + shown))
-    this.results = new Results(this.info, this.kase, outputs, this.cache, this.directory)
-    await this.results.ingest(context.signal, () => true, context.publish)
-    progress()
+    const contingencies = await written()
+    if (!contingencies.length) throw new Error('No contingency wrote results.')
+    const study: Study = {
+      ...files,
+      buses: contingencyBuses(kase),
+      written: contingencies,
+      failed: [...process.failed()],
+      shown: contingencies[0]!,
+    }
+    info.contingency = study
+    info.path = contingencyFile(study, study.shown)
+    const results = new Results(info, kase, cache)
+    context.reading(results)
+    await results.ingest(context.signal, () => true, context.publish)
+    return results
+  } catch (error) {
+    context.signal.throwIfAborted()
+    // A native error is more useful than the missing file it caused.
+    if (process.ended()) await process.done
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new Error(`${program} wrote no ${basename(output)}.`)
+    throw error
+  } finally {
+    await process.stop()
+    await process.done.catch(() => {})
   }
 }

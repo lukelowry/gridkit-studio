@@ -97,8 +97,9 @@ describe('where GridKit runs', () => {
 })
 
 describe('a container run', () => {
+  const place = { root: '/work', solver: '/work/studies/IEEE39.solver.json' }
   const run = (platform: NodeJS.Platform, podman: boolean) =>
-    containerArgs('DynamicSimulation', 'gridkit:latest', '/runs/run-1', 'gridkit-studio-1', {
+    containerArgs('DynamicSimulation', 'gridkit:latest', place, 'gridkit-studio-1', {
       platform,
       podman,
       uid: 1000,
@@ -117,27 +118,31 @@ describe('a container run', () => {
     ).toEqual(['gridkit-studio-2147483646-abcdef01'])
   })
 
-  it('runs DynamicSimulation on the run folder, never pulling, with no network', () => {
+  it('runs the solver file in its folder of the mounted workspace, never pulling, with no network', () => {
     const args = run('win32', false)
     expect(args.slice(0, 2)).toEqual(['run', '--rm'])
     expect(args.join(' ')).toContain(
       `--pull never --name gridkit-studio-1 --label gridkit-studio.machine=${hostname()} --network none`,
     )
-    expect(args.join(' ')).toContain('--volume /runs/run-1:/simulation --workdir /simulation')
-    expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'input.json'])
+    expect(args.join(' ')).toContain('--volume /work:/workspace --workdir /workspace/studies')
+    expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'IEEE39.solver.json'])
     expect(
-      containerArgs('ContingencyAnalysis', 'gridkit:latest', '/runs', 'n', {
-        platform: 'win32',
-        podman: false,
-      }).slice(-2),
-    ).toEqual(['ContingencyAnalysis', 'input.json'])
+      containerArgs(
+        'ContingencyAnalysis',
+        'gridkit:latest',
+        { root: '/work', solver: '/work/IEEE39.solver.json' },
+        'n',
+        { platform: 'win32', podman: false },
+      ),
+    ).toEqual(expect.arrayContaining(['--workdir', '/workspace', 'ContingencyAnalysis']))
     expect(args).not.toContain('--user')
   })
 
   it('leaves what a run writes readable by the user on Linux, for Docker and rootless Podman alike', () => {
     const docker = run('linux', false).join(' ')
     expect(docker).toContain('--user 1000:100')
-    expect(docker).toContain('/runs/run-1:/simulation:Z')
+    // The workspace is the user's, so its SELinux label is shared, not private to one container.
+    expect(docker).toContain('/work:/workspace:z')
     const podman = run('linux', true).join(' ')
     expect(podman).toContain('--userns keep-id')
     expect(podman).not.toContain('--user ')

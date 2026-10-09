@@ -14,7 +14,7 @@ describe('mapping readiness', () => {
     editable: {},
     identities: {},
     counts: { Bus: 2 },
-    parameters: {},
+    recording: { listed: {} },
     issues: [],
     validation: 'pending',
     parseMs: 0,

@@ -1,7 +1,7 @@
 /** The catalog as a Schema, with each table's plan for the parser. A field is named by its path in
  *  the record, `params.kv` or `init.Vr`; a sampled output by GridKit's name for it, `Vm`. */
 
-import type { Bounds, DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
+import type { DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
 import { failure } from '@latkit/model'
 
 import models from './catalog.json'
@@ -10,7 +10,6 @@ export interface Catalog {
   /** As read; part of every case's version. */
   readonly text: string
   readonly bus: string
-  readonly options: readonly OptionSpec[]
   /** Every table by type. */
   readonly shapes: ReadonlyMap<string, Shape>
   /** The tables records fill, by code: the bus, the signal, then each device class. */
@@ -49,18 +48,6 @@ interface PortSpec {
   readonly name: string
   readonly kind: 'bus' | 'signal'
   readonly direction: 'in' | 'out' | 'both'
-}
-
-export interface OptionSpec {
-  readonly id: string
-  readonly label: string
-  readonly description?: string
-  readonly type: 'real' | 'integer' | 'choice'
-  readonly unit?: string
-  readonly bounds?: Bounds
-  readonly default?: number | string
-  readonly optional?: boolean
-  readonly choices?: readonly { readonly id: string; readonly label: string }[]
 }
 
 export type ArrayName = 'buses' | 'signals' | 'devices'
@@ -119,7 +106,6 @@ export function catalogOf(json: unknown): Catalog {
   const raw = json as {
     bus: ClassSpec
     classes: readonly ClassSpec[]
-    options: readonly OptionSpec[]
   }
   const codes = [
     shapeOf(raw.bus, 'bus', raw.bus.name),
@@ -138,7 +124,7 @@ export function catalogOf(json: unknown): Catalog {
     axis: { name: 'time', unit: 's' },
     types,
   }
-  return { text, bus: raw.bus.name, options: raw.options, shapes, codes, schema }
+  return { text, bus: raw.bus.name, shapes, codes, schema }
 }
 
 function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {

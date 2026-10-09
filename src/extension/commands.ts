@@ -12,8 +12,7 @@ import {
 import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
-import type { Element, Plot, Summary } from '../shared/messages.js'
-import { problemsOf, type Values } from '../shared/parameters.js'
+import type { Element, Plot, SimulationInfo, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
 import {
   elementType,
@@ -23,11 +22,11 @@ import {
   typeName,
   unitOf,
 } from '../shared/schema.js'
+import { contingencyFile } from '../shared/study.js'
 import type { LoopMode } from '../shared/transport.js'
 import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
-import { notice, type Session, type Sessions } from './sessions.js'
-import { cacheBytesOf, type Tasks } from './tasks.js'
+import { cacheBytesOf, type Session, type Sessions } from './sessions.js'
 
 /** What a command acts on: its case, and the element and field it was invoked on. */
 interface Context {
@@ -53,7 +52,7 @@ function rangeOf(text: string): [number, number] | undefined {
     : undefined
 }
 
-export function registerCommands(studio: Sessions, tasks: Tasks) {
+export function registerCommands(studio: Sessions) {
   const registrations: vscode.Disposable[] = []
   /** The case and target an argument names: a native menu context, a webview target, or a case
    *  URI. */
@@ -363,35 +362,30 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  // Start says, in one notification, what keeps a run from starting. A second press while the first
-  // run starts, as a double click makes, asks for the same run.
-  register('startSimulation', async (value, supplied) => {
-    const { uri } = targetOf(value, supplied)
-    if (tasks.active(uri)) return
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    const session = studio.all.get(uri) ?? (await studio.open(document))
-    const summary = await studio.documents.ensure(document).catch(() => undefined)
-    if (!summary)
-      throw notice(
-        `${document.uri.path.split('/').at(-1)} has problems to fix before it can run.`,
-        {
-          title: 'Show Problems',
-          command: 'workbench.actions.view.problems',
-        },
-      )
-    if (!session.outputs?.length)
-      throw notice('Choose at least one signal to record before starting.', {
-        title: 'Choose Signals',
-        command: 'gridkitStudio.chooseSignals',
-      })
-    const [problem] = Object.values(problemsOf(summary.parameters, session.values as Values))
-    if (problem) throw new Error(problem)
-    await tasks.simulate(uri)
-  })
-  register('stopSimulation', (value, supplied) => tasks.stop(targetOf(value, supplied).uri))
-  command('showContingency', async ({ session }, value) => {
-    if (session.run?.contingency && typeof value === 'number')
-      await studio.client.call('contingency', { run: session.run.id, shown: value })
+  /** Show results the worker read for the case. */
+  const show = (session: Session, info: SimulationInfo) => {
+    studio.show(session, info)
+    changed(session)
+  }
+  // A study shows one contingency at a time, chosen from the Monitor's title bar.
+  command('chooseContingency', async ({ session, summary }) => {
+    const study = session.run?.contingency
+    if (!study) return
+    const choice = await vscode.window.showQuickPick(
+      study.written.map((n) => ({ label: `Bus ${study.buses[n]}`, n })),
+      { title: 'Show contingency', placeHolder: `Showing bus ${study.buses[study.shown]}` },
+    )
+    if (!choice || choice.n === study.shown) return
+    show(
+      session,
+      await studio.client.call('open', {
+        uri: session.uri,
+        version: summary.version,
+        path: contingencyFile(study, choice.n),
+        contingency: { ...study, shown: choice.n },
+        cacheBytes: cacheBytesOf(vscode.Uri.parse(session.uri)),
+      }),
+    )
   })
   command('clearResults', async ({ session }) => {
     // The views let go of the runs before they go, and of the run a running run's end reports.
@@ -411,13 +405,12 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     await showPlot(studio, context.session, plot, context.element)
   }
   command('plot', plot)
-  // From the Monitor's title: a signal the run on show records, else the next run will, of every
-  // element.
+  // From the Monitor's title: a signal the results on show hold, of every element.
   command('addPlot', async (context) => {
     const { schema } = context.summary
     const { session } = context
     const choice = await vscode.window.showQuickPick(
-      (session.run?.outputs ?? session.outputs ?? []).flatMap(({ from, select }) =>
+      (session.run?.outputs ?? []).flatMap(({ from, select }) =>
         select.map((field) => ({
           label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
           from,
@@ -454,24 +447,22 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
       changed(context.session)
     }
   })
-  command('addFault', async ({ session, element, type }) => {
-    session.values.fault = true
-    if (element && type === 'Bus') session.values.fault_bus = element.id
-    changed(session)
-    await focus(session, 'simulation')
-  })
-  command('importResults', async (context) => {
+  // Any GridKit results file, read for the case as a run's own is.
+  command('openResults', async (context) => {
     const selected = await vscode.window.showOpenDialog({
       filters: { 'GridKit results': ['arrow', 'csv'] },
       canSelectMany: false,
     })
     if (!selected?.[0]) return
-    await studio.client.call('import', {
-      uri: context.session.uri,
-      version: context.summary.version,
-      path: localPath(selected[0]),
-      cacheBytes: cacheBytesOf(selected[0]),
-    })
+    show(
+      context.session,
+      await studio.client.call('open', {
+        uri: context.session.uri,
+        version: context.summary.version,
+        path: localPath(selected[0]),
+        cacheBytes: cacheBytesOf(selected[0]),
+      }),
+    )
     await plot(context)
   })
   command('exportCsv', async (context) => {
@@ -801,12 +792,6 @@ export function registerCommands(studio: Sessions, tasks: Tasks) {
     command(id, () =>
       vscode.commands.executeCommand('workbench.action.openSettings', 'gridkitStudio.' + category),
     )
-  register('simulationSettings', () =>
-    vscode.commands.executeCommand(
-      'workbench.action.openSettings',
-      '@id:gridkitStudio.gridkitPath,gridkitStudio.gridkitImage,gridkitStudio.containerCli',
-    ),
-  )
   command('disconnectPort', async (context) => {
     if (!context.element || !context.field) return
     await studio.documents.transact(

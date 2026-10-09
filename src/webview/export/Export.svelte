@@ -4,12 +4,10 @@
   import { onMount } from 'svelte'
 
   import type { VideoView, ViewState } from '../../shared/messages.js'
-  import { pagesOver } from '../../shared/pages.js'
-  import { currentStream } from '../../shared/streams.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
-  import { exportNeeds, PageStore } from '../pages.js'
-  import { receive, type Snapshot } from '../stream.js'
+  import { current, receiveRows, type Snapshot } from '../rows.js'
+  import { exportNeeds, Samples } from '../samples.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -29,16 +27,19 @@
   let status = $state<'idle' | 'running' | 'done' | 'cancelled'>('idle')
   /** Where the last video was written. */
   let saved = $state('')
-  /** The run the time range came from, and whether the user has edited it since. */
+  /** The results the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  /** The streamed case, where it saves its diagram blocks, and the pages of its run's samples. */
+  /** The case's rows, where it saves its diagram blocks, and its results' samples. */
   let snapshot: Snapshot | undefined
   let presentation: Record<string, Positions> = {}
-  let settled = 0
-  const store = new PageStore((want) => bridge.send({ kind: 'want', ...want, settled }))
-  /** Called as pages arrive. */
+  /** Called as samples arrive, or an ask for them brings none. */
   let arrived = () => {}
+  const samples = new Samples({
+    request: (input, signal) => bridge.request('samples', input, signal),
+    changed: () => arrived(),
+    report: (reason) => bridge.report(reason),
+  })
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
   let cancelled = false
@@ -46,7 +47,7 @@
   const id = $props.id()
 
   const busy = $derived(status === 'running')
-  const range = $derived(view.run?.domain)
+  const range = $derived(view.results?.domain)
   const views = $derived(viewsOf(view))
   const ready = $derived(exportable(settings, view))
   const percent = $derived(
@@ -99,31 +100,25 @@
         return
       }
       const cameras = await bridge.request('videoData', { views: chosen.views }, signal)
-      const run = state.run?.id
       const needs = exportNeeds(state, chosen.views)
       const committed = snapshot
-      if (
-        !committed ||
-        !currentStream(committed.begin, state) ||
-        (needs.length > 0 && store.run !== run)
-      )
+      if (!committed || !current(committed, state))
         throw new Error('The export recording changed while its samples were loading.')
-      // Every page over the time range, before the first frame is drawn.
-      const required = pagesOver(store.pages, chosen.timeRange)
-      store.want(run, needs, required)
+      // Every sample over the time range, before the first frame is drawn.
+      samples.want(state.results, needs, chosen.timeRange)
       if (needs.length)
         await new Promise<void>((resolve, reject) => {
           const abort = () => reject(signal.reason)
           arrived = () => {
-            if (!store.holds(required)) return
+            if (samples.stuck) reject(new Error('The samples to export could not be read.'))
+            else if (samples.holds(chosen.timeRange)) resolve()
+            else return
             signal.removeEventListener('abort', abort)
-            resolve()
           }
           signal.addEventListener('abort', abort, { once: true })
           arrived()
         })
-      const { rows } = committed
-      const samples = store.data(rows, run)
+      const rows = committed.data
       const gpu = await owner.get()
       signal.throwIfAborted()
       // Each export follows the device it draws on, which an earlier export may have created.
@@ -138,7 +133,14 @@
       await exportVideo(
         gpu,
         chosen,
-        { state, rows, samples, presentation, cameras },
+        {
+          state,
+          rows,
+          samples: samples.data(rows),
+          covers: (from, field, window) => samples.covers(from, field, window),
+          presentation,
+          cameras,
+        },
         output,
         signal,
         (made) => (progress = made),
@@ -153,8 +155,8 @@
         bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
       arrived = () => {}
-      // The pages served this export alone.
-      store.clear()
+      // The samples served this export alone.
+      samples.clear()
       if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
       bridge.send({ kind: 'busy', busy: false })
     }
@@ -166,34 +168,27 @@
         if (message.kind !== 'state') return
         view = merged(view, message.state)
         appearance(view.settings)
-        const run = view.run
-        // The time range follows the run until the user edits it.
-        if (run && run.domain[1] > run.domain[0] && (run.id !== seeded || !touched) && !busy) {
-          if (run.id !== seeded) touched = false
-          seeded = run.id
+        const { results } = view
+        // The time range follows the results until the user edits it.
+        if (
+          results &&
+          results.domain[1] > results.domain[0] &&
+          (results.id !== seeded || !touched) &&
+          !busy
+        ) {
+          if (results.id !== seeded) touched = false
+          seeded = results.id
           const [start, end] = settings.timeRange
-          if (start !== run.domain[0] || end !== run.domain[1])
-            change({ timeRange: [run.domain[0], run.domain[1]] })
+          if (start !== results.domain[0] || end !== results.domain[1])
+            change({ timeRange: [results.domain[0], results.domain[1]] })
         }
         const offered = viewsOf(view).map(({ value }) => value)
         if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
       }),
-      bridge.on((message) => {
-        if (message.kind === 'pages')
-          store.list(message.run, message.paging, message.from, message.pages)
-      }),
-      receive({
-        rows: (next) => {
-          snapshot = next
-          if (next.begin.base && next.begin.presentation) presentation = next.begin.presentation
-        },
-        pages: ({ begin, samples }) => {
-          store.insert(begin.simulationId, begin.paging, samples, begin.stream)
-          arrived()
-        },
-        accept: (begin) => currentStream(begin, view),
-        settled: (stream) => (settled = stream),
+      receiveRows((next) => {
+        snapshot = next
+        if (next.rows.presentation) presentation = next.rows.presentation
       }),
     ]
     bridge.send({ kind: 'ready' })

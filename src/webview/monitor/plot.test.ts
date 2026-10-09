@@ -2,26 +2,26 @@ import { colormaps } from '@latkit/gpu'
 import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
-import type { SimulationInfo } from '../../shared/simulation.js'
+import type { Results } from '../../shared/simulation.js'
 import { axisLabel, axisName, holds, monitorWindow, plotBindings, plotOptions } from './plot.js'
 
 describe('the window a plot shows', () => {
   it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {
-    for (const state of ['running', 'complete', 'cancelled'] as const)
+    for (const growing of [true, false])
       for (const end of [0, 0.1, 3, 9.99, 10]) {
-        const run = { state, span: [0, 10] as const, domain: [0, end] as const }
-        expect(monitorWindow(run)).toEqual([0, 10])
-        expect(monitorWindow(run, [2, 4])).toEqual([2, 4])
+        const results = { growing, span: [0, 10] as const, domain: [0, end] as const }
+        expect(monitorWindow(results)).toEqual([0, 10])
+        expect(monitorWindow(results, [2, 4])).toEqual([2, 4])
       }
   })
-  it('uses recorded bounds for imports and a nonzero initial axis', () => {
+  it('uses the recorded bounds of results opened, and a nonzero initial axis', () => {
     expect(monitorWindow({ domain: [2, 7] })).toEqual([2, 7])
     expect(monitorWindow()).toEqual([0, 1])
   })
 })
 
-it('colors a mapped trace by the value it plots, over the run’s recorded range', () => {
-  const run = { domains: { Bus: { Vm: [0.5, 1.5] } } } as unknown as SimulationInfo
+it('colors a mapped trace by the value it plots, over the results’ recorded range', () => {
+  const results = { domains: { Bus: { Vm: [0.5, 1.5] } } } as unknown as Results
   const binding = { type: 'Bus', field: 'Vm' }
   for (const id of [undefined, 'Bus/1']) {
     const { traces } = plotBindings(
@@ -29,7 +29,7 @@ it('colors a mapped trace by the value it plots, over the run’s recorded range
       { ...binding, id },
       { vertexColor: binding },
       undefined,
-      run,
+      results,
     )
     // Colored by its own field, with no rows of its own: the plot keeps only where lines lie.
     expect(traces.plotted!.color).toMatchObject({ field: 'Vm', domain: [0.5, 1.5] })
@@ -40,7 +40,7 @@ it('colors a mapped trace by the value it plots, over the run’s recorded range
     binding,
     { vertexColor: { ...binding, domain: [0, 2] } },
     undefined,
-    run,
+    results,
   )
   expect(traces.plotted!.color).toMatchObject({ domain: [0, 2] })
 })
@@ -61,7 +61,7 @@ it('changes only a trace’s color when live extrema or the colormap change', ()
   const config = (range: [number, number], palette: 'batlow' | 'viridis') =>
     plotBindings(reader({ 'network.colormap': palette }), field, bindings, undefined, {
       domains: { Bus: { Vm: range } },
-    } as unknown as SimulationInfo).traces.plotted!
+    } as unknown as Results).traces.plotted!
   const before = config([1, 1], 'batlow')
   const after = config([0.2, 1.8], 'viridis')
   expect({ ...after, color: undefined }).toEqual({ ...before, color: undefined })

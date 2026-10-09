@@ -6,23 +6,19 @@ import { readdir, rm } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { type ResultCache, Results } from '../results/index.js'
-import type {
-  RuntimeProcess,
-  SimulationInfo,
-  SimulationRequest,
-  Study,
-} from '../shared/simulation.js'
+import { described, type ResultCache, ResultsFile } from '../results/index.js'
+import type { Run, RuntimeProcess, SimulationRequest, Study } from '../shared/simulation.js'
 import { contingencyFile } from '../shared/study.js'
 import type { Case } from './case.js'
 import { launch } from './runtime.js'
 
 export interface RunContext {
   readonly signal: AbortSignal
-  /** Hears each Results the run reads, as soon as it reads it, so views can query it as it fills. */
-  readonly reading: (results: Results) => void
-  /** Hears each page of samples read. */
-  readonly publish: () => Promise<void>
+  /** Hears of each results file the run reads, as soon as it reads it, so views can ask it for
+   *  frames as it fills. */
+  readonly reading: (file: ResultsFile) => void
+  /** Hears of each run of frames read. */
+  readonly progress: () => Promise<void>
   readonly log: (message: string) => void
   readonly lifecycle?: (process?: RuntimeProcess) => void
 }
@@ -41,14 +37,15 @@ function contingencyBuses(kase: Case): number[] {
   })
 }
 
+/** Runs `request` on `kase`, and reads what it writes into `run.results`. */
 export async function simulate(
   kase: Case,
   request: SimulationRequest,
-  info: SimulationInfo,
+  run: Run,
   cache: ResultCache,
   context: RunContext,
-): Promise<Results> {
-  const { program, solver, output, root, gridkit } = request
+): Promise<ResultsFile> {
+  const { program, solver, output, root, gridkit, format } = request
   const folder = dirname(solver)
   // GridKit names a study's files from its output's stem alone, so they land where it runs.
   const ext = extname(output)
@@ -80,15 +77,21 @@ export async function simulate(
     context.log,
     context.lifecycle,
   )
+  /** The file at `path`, read as the run's results. */
+  const reading = (path: string, more: Parameters<typeof described>[3]) => {
+    const file = new ResultsFile(described(kase, request, path, { format, ...more }), kase, cache)
+    run.results = file.info
+    context.reading(file)
+    return file
+  }
   try {
     if (program === 'DynamicSimulation') {
-      const results = new Results(info, kase, cache)
-      context.reading(results)
-      await results.ingest(context.signal, process.ended, context.publish)
+      const file = reading(output, { growing: true, span: [0, request.tmax] })
+      await file.ingest(context.signal, process.ended, context.progress)
       await process.done
-      if (!info.frames)
+      if (!file.info.frames)
         throw new Error(`DynamicSimulation wrote no samples to ${basename(output)}.`)
-      return results
+      return file
     }
     await process.done
     const contingencies = await written()
@@ -100,12 +103,9 @@ export async function simulate(
       failed: [...process.failed()],
       shown: contingencies[0]!,
     }
-    info.contingency = study
-    info.path = contingencyFile(study, study.shown)
-    const results = new Results(info, kase, cache)
-    context.reading(results)
-    await results.ingest(context.signal, () => true, context.publish)
-    return results
+    const file = reading(contingencyFile(study, study.shown), { contingency: study })
+    await file.ingest(context.signal, () => true, context.progress)
+    return file
   } catch (error) {
     context.signal.throwIfAborted()
     // A native error is more useful than the missing file it caused.

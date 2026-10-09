@@ -1,4 +1,4 @@
-/** Render selected views from a fixed run snapshot into a video file. */
+/** Render selected views from a fixed snapshot of results into a video file. */
 
 import { createDiagram } from '@latkit/diagram'
 import { createComposition, type Gpu, type Positions, type View } from '@latkit/gpu'
@@ -8,7 +8,6 @@ import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
 import { recordedWhole } from '../../shared/bindings.js'
-import { coversInterval } from '../../shared/coverage.js'
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
@@ -46,12 +45,13 @@ export const DEFAULTS: VideoSettings = {
   quality: 'high',
 }
 
-/** What the export draws: the view state, the case and its run's samples, where the case saves
- *  its diagram blocks, and each view's camera. */
+/** What the export draws: the view state, the case and its results' samples, whether those
+ *  cover a field over a window, where the case saves its diagram blocks, and each view's camera. */
 interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
   readonly samples: Data
+  readonly covers: (from: string, field: string, window: Domain) => boolean
   readonly presentation: Readonly<Record<string, Positions>>
   readonly cameras: Cameras
 }
@@ -72,17 +72,19 @@ export function viewsOf(state: ViewState): { value: VideoView; label: string }[]
   ]
 }
 
-/** The plots of `state` its run recorded, which the Monitor's part of a video draws. */
-export function plotsOf({ run, plots = [] }: ViewState): Plot[] {
+/** The plots of `state` its results hold, which the Monitor's part of a video draws. */
+export function plotsOf({ results, plots = [] }: ViewState): Plot[] {
   return plots.filter((plot) =>
-    run?.outputs.some((output) => output.from === plot.from && output.select.includes(plot.field)),
+    results?.outputs.some(
+      (output) => output.from === plot.from && output.select.includes(plot.field),
+    ),
   )
 }
 
-/** Whether the export can start: a case with a recorded run, a view, a signal for the Monitor's
- *  part, a time range within the run, an even size up to 4K and a positive speed. */
+/** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
+ *  time range within the results, an even size up to 4K and a positive speed. */
 export function exportable(settings: VideoSettings, state: ViewState): boolean {
-  const range = state.run?.domain
+  const range = state.results?.domain
   if (!state.summary || !range || !(range[1] > range[0])) return false
   if (settings.views.length === 0) return false
   if (settings.views.includes('monitor') && plotsOf(state).length === 0) return false
@@ -106,7 +108,7 @@ export function exportable(settings: VideoSettings, state: ViewState): boolean {
 export async function exportVideo(
   gpu: Gpu,
   settings: VideoSettings,
-  { state, rows, samples, presentation, cameras }: VideoInputs,
+  { state, rows, samples, covers, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
   signal: AbortSignal,
   onProgress: (progress: VideoProgress) => void,
@@ -126,12 +128,15 @@ export async function exportVideo(
       if (view === 'network') {
         for (const { type, field } of Object.values(state.bindings ?? {})) {
           if (
-            !state.run ||
+            !state.results ||
             !rows.schema.types[type]?.fields[field]?.sampled ||
-            !recordedWhole(state.run.outputs, state.summary?.counts[type] ?? 0, { type, field })
+            !recordedWhole(state.results.outputs, state.summary?.counts[type] ?? 0, {
+              type,
+              field,
+            })
           )
             continue
-          if (!coversInterval(samples, type, field, settings.timeRange))
+          if (!covers(type, field, settings.timeRange))
             throw new Error(
               `Export samples do not cover ${type}.${field} over the requested interval.`,
             )
@@ -188,8 +193,12 @@ export async function exportVideo(
                   preferences,
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,
-                  plotRows(samples, state.run, { type: plot.from, field: plot.field, id: plot.id }),
-                  state.run,
+                  plotRows(samples, state.results, {
+                    type: plot.from,
+                    field: plot.field,
+                    id: plot.id,
+                  }),
+                  state.results,
                 ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,

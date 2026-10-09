@@ -15,7 +15,7 @@ import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
 import type { Bindings } from '../../shared/bindings.js'
 import { intersectRows, recordedSelection } from '../../shared/coverage.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
-import type { SimulationInfo } from '../../shared/simulation.js'
+import type { Results } from '../../shared/simulation.js'
 import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
@@ -23,10 +23,10 @@ type Plotted = { type: string; field: string; id?: string }
 /** The same physical rows drive drawing, selection, keyboard readings and export. */
 export function plotRows(
   source: Data,
-  run: SimulationInfo | undefined,
+  results: Results | undefined,
   plot: Plotted,
 ): FieldSelection['rows'] {
-  const recorded = recordedSelection(source, run?.outputs ?? [], plot.type, plot.field)
+  const recorded = recordedSelection(source, results?.outputs ?? [], plot.type, plot.field)
   if (!plot.id) return recorded
   const table = source.tables[plot.type]!
   return {
@@ -38,7 +38,7 @@ export function plotRows(
   }
 }
 
-/** Caps each plot's history textures; the complete run is held outside the plot. */
+/** Caps each plot's history textures; the complete results are held outside the plot. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 
 /** The single trace key, so another field replaces the trace in place. */
@@ -81,7 +81,7 @@ export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem
 const MARGIN_PX = [8, 12, 0, 0] as const
 
 /** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
- *  every row. A plot added to the Monitor waits for the stream that holds them. */
+ *  every row. A plot added to the Monitor waits for the samples it asks for. */
 export function holds(sampled: readonly FieldSelection[], { type, field, id }: Plotted): boolean {
   return sampled.some(
     ({ from, select, rows }) =>
@@ -104,13 +104,13 @@ export function plotBindings(
   { type, field, id }: Plotted,
   bindings: Bindings = {},
   rows?: FieldSelection['rows'],
-  run?: SimulationInfo,
+  results?: Results,
 ): Pick<MonitorConfig, 'traces'> {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
   )
-  // The run's whole range, measured as it was read: the plot never reads it.
-  const domain = mapped?.domain ?? run?.domains?.[type]?.[field]
+  // The whole range of the results, measured as they were read: the plot never reads it.
+  const domain = mapped?.domain ?? results?.domains?.[type]?.[field]
   return {
     traces: {
       [TRACE]: {
@@ -133,12 +133,9 @@ export function plotBindings(
 
 /** A simulation's interval, to its solver file's end time, stays fixed, including before its first
  * sample and after cancellation. Opened results use their recorded interval. */
-export function monitorWindow(
-  run?: Pick<SimulationInfo, 'span' | 'domain'>,
-  chosen?: Domain,
-): Domain {
+export function monitorWindow(results?: Pick<Results, 'span' | 'domain'>, chosen?: Domain): Domain {
   if (chosen) return chosen
-  const range = run?.span ?? run?.domain
+  const range = results?.span ?? results?.domain
   return range && range[1] > range[0] ? range : [range?.[0] ?? 0, (range?.[0] ?? 0) + 1]
 }
 

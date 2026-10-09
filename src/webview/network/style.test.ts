@@ -1,7 +1,7 @@
 import { appendData, createData, textColumn } from '@latkit/model'
 import { expect, it, vi } from 'vitest'
 
-import type { SimulationInfo, Summary, ViewState } from '../../shared/messages.js'
+import type { Results, Summary, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { plotBindings } from '../monitor/plot.js'
 import { networkConfig } from './style.js'
@@ -37,17 +37,17 @@ it('uses the same global normalization in Network and Monitor whatever pages are
   )
   const kase = { data, version: 'one' }
   const field = { type: 'Bus', field: 'Vm' }
-  for (const state of ['running', 'complete'] as const) {
-    const run = {
-      state,
+  for (const growing of [true, false]) {
+    const results = {
+      growing,
       fingerprint: kase.version,
       outputs: [{ from: 'Bus', select: ['Vm'] }],
       domain: [0, 10],
       span: [0, 10],
       domains: { Bus: { Vm: [0.5, 2] } },
-    } as unknown as SimulationInfo
+    } as unknown as Results
     const view: ViewState = {
-      run,
+      results,
       summary: { fingerprint: kase.version, counts: { Bus: 1 } } as unknown as Summary,
       bindings: { vertexColor: field, vertexHeight: field, vertexSize: field },
     }
@@ -75,7 +75,7 @@ it('uses the same global normalization in Network and Monitor whatever pages are
       for (const channel of ['color', 'z', 'radiusPx'] as const)
         expect(config.vertices.Bus![channel]).toMatchObject({ domain: [0.5, 2] })
       expect(
-        plotBindings(reader(), field, view.bindings, undefined, run).traces.plotted!.color,
+        plotBindings(reader(), field, view.bindings, undefined, results).traces.plotted!.color,
       ).toMatchObject({ domain: [0.5, 2] })
       const fixed = networkConfig(
         kase.data,

@@ -11,7 +11,7 @@ import * as vscode from 'vscode'
 import { gridkitOf } from '../../src/extension/runs.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { available } from '../../src/gridkit/index.js'
-import type { SimulationInfo, ViewKind } from '../../src/shared/messages.js'
+import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
 
 const TIMEOUT = 30_000
@@ -237,7 +237,7 @@ export class TestHost {
   readonly vscodeErrors: string[] = []
   /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
-  #results?: Promise<SimulationInfo>
+  #results?: Promise<Results>
 
   private constructor(
     readonly extension: vscode.Extension<{ studio: Sessions }>,
@@ -836,12 +836,12 @@ export class TestHost {
     await this.settled()
   }
 
-  /** A run to play: a second of every bus's voltage, each a little out of step with the last,
+  /** Results to play: a second of every bus's voltage, each a little out of step with the last,
    *  opened once, with the first bus's plotted. */
-  results(): Promise<SimulationInfo> {
+  results(): Promise<Results> {
     return (this.#results ??= this.#open())
   }
-  async #open(): Promise<SimulationInfo> {
+  async #open(): Promise<Results> {
     const csv = vscode.Uri.joinPath(this.uri, '..', 'Synthetic waveform.csv')
     const { buses } = this.source
     await vscode.workspace.fs.writeFile(
@@ -855,16 +855,15 @@ export class TestHost {
           ).join(''),
       ),
     )
-    const run = await this.studio.client.call('open', {
+    const results = await this.studio.client.call('open', {
       uri: this.key,
       version: (await this.current()).version,
       path: csv.fsPath,
       cacheBytes: 32 << 20,
     })
-    assert.equal(run.state, 'complete', run.message)
-    this.studio.show(this.session, run)
+    this.studio.show(this.session, results)
     this.plot()
-    return run
+    return results
   }
 
   /** Plot the first bus's voltage in the Monitor. */
@@ -926,17 +925,17 @@ export class TestHost {
     this.studio.changed.fire(this.key)
   }
 
-  /** Keep what every view showed when `test` failed, with the files of its run. */
+  /** Keep what every view showed when `test` failed, with the files of its results. */
   async failed(test: string): Promise<void> {
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
-    const run = this.session?.run
-    if (run) {
-      const directory = join(this.output, 'tests', name, run.id)
+    const { run, results } = this.session ?? {}
+    if (run || results) {
+      const directory = join(this.output, 'tests', name, results?.id ?? run!.id)
       await mkdir(directory, { recursive: true })
-      for (const file of [run.path, this.uri.fsPath, this.solver.fsPath])
-        await cp(file, join(directory, basename(file))).catch(() => {})
-      await writeFile(join(directory, 'run.json'), JSON.stringify(run, null, 2))
+      for (const file of [results?.path, this.uri.fsPath, this.solver.fsPath])
+        if (file) await cp(file, join(directory, basename(file))).catch(() => {})
+      await writeFile(join(directory, 'run.json'), JSON.stringify({ run, results }, null, 2))
     }
     for (const frame of this.#frames()) {
       const text = await frame
@@ -976,8 +975,9 @@ export async function testHost(): Promise<TestHost> {
 
 /** What VS Code says of the test profile itself, which `--disable-extensions` causes. */
 const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
-/** A run's own progress, which says how far it has come rather than that anything failed. */
-const PROGRESS = /^(DynamicSimulation|ContingencyAnalysis) /
+/** A run's own progress, which says how far it has come rather than that anything failed. A
+ *  notice that a run failed names it the same way. */
+const PROGRESS = /^(DynamicSimulation|ContingencyAnalysis) (?!.*\bfailed\b)/
 
 /** The notifications VS Code shows, which are then cleared. Studio shows one only when something
  *  the user asked for fails, so a test that sees one expected it or found a fault. */

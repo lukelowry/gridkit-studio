@@ -12,7 +12,7 @@ import {
 import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
-import type { Element, Plot, SimulationInfo, Summary } from '../shared/messages.js'
+import type { Element, Plot, Results, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
 import {
   elementType,
@@ -363,13 +363,13 @@ export function registerCommands(studio: Sessions) {
       )
   })
   /** Show results the worker read for the case. */
-  const show = (session: Session, info: SimulationInfo) => {
-    studio.show(session, info)
+  const show = (session: Session, results: Results) => {
+    studio.show(session, results)
     changed(session)
   }
   // A study shows one contingency at a time, chosen from the Monitor's title bar.
   command('chooseContingency', async ({ session, summary }) => {
-    const study = session.run?.contingency
+    const study = session.results?.contingency
     if (!study) return
     const choice = await vscode.window.showQuickPick(
       study.written.map((n) => ({ label: `Bus ${study.buses[n]}`, n })),
@@ -388,7 +388,7 @@ export function registerCommands(studio: Sessions) {
     )
   })
   command('clearResults', async ({ session }) => {
-    // The views let go of the runs before they go, and of the run a running run's end reports.
+    // The views let go of the results before they go, and of those a running run's end reports.
     studio.show(session, undefined)
     changed(session)
     await studio.client.call('clear', { uri: session.uri })
@@ -410,7 +410,7 @@ export function registerCommands(studio: Sessions) {
     const { schema } = context.summary
     const { session } = context
     const choice = await vscode.window.showQuickPick(
-      (session.run?.outputs ?? []).flatMap(({ from, select }) =>
+      (session.results?.outputs ?? []).flatMap(({ from, select }) =>
         select.map((field) => ({
           label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
           from,
@@ -466,10 +466,10 @@ export function registerCommands(studio: Sessions) {
     await plot(context)
   })
   command('exportCsv', async (context) => {
-    if (!context.session.run) throw new Error('There are no results to export.')
+    const { results } = context.session
+    if (!results) throw new Error('There are no results to export.')
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
-    if (path)
-      await studio.client.call('export', { run: context.session.run.id, path: localPath(path) })
+    if (path) await studio.client.call('export', { results: results.id, path: localPath(path) })
   })
   register('showOutput', () => studio.output.show())
   command('performance', async (context) => {
@@ -557,7 +557,7 @@ export function registerCommands(studio: Sessions) {
   command('monitorWindow', async ({ session }) => {
     const range = await askRange(
       'Time window [s]',
-      (session.window ?? session.run?.domain)?.join(', '),
+      (session.window ?? session.results?.domain)?.join(', '),
     )
     if (!range) return
     session.window = range

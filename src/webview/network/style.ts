@@ -104,29 +104,29 @@ export function networkConfig(
   }
 }
 
-/** Where a bound field's values come from: undefined for the case's own data, the run for a field
- *  it recorded for every row, else null. Colors span all recorded times, including when the view
- *  holds only some of the run's pages; the view draws only times its pages cover. */
+/** Where a bound field's values come from: undefined for the case's own data, the results for a
+ *  field they hold for every row, else null. Colors span all recorded times, including when the
+ *  view holds only some of the results' samples; the view draws only times its samples cover. */
 function sampledFrom(
   source: Data,
-  { run, summary }: ViewState,
+  { results, summary }: ViewState,
 ): (field: FieldRef) => Sampled | null | undefined {
   return ({ type, field }) => {
-    // A binding can arrive before the stream carrying its field; it draws once the field does.
+    // A binding can arrive before the samples of its field; it draws once they do.
     const held = (data: Data) => (data.tables[type]?.fields[field]?.length ?? 0) > 0
     if (source.schema.types[type]?.fields[field]?.sampled !== true)
       return held(source) ? undefined : null
     if (
-      !run ||
-      run.fingerprint !== summary?.fingerprint ||
-      !recordedWhole(run.outputs, summary.counts[type] ?? 0, { type, field }) ||
+      !results ||
+      results.fingerprint !== summary?.fingerprint ||
+      !recordedWhole(results.outputs, summary.counts[type] ?? 0, { type, field }) ||
       !held(source)
     )
       return null
     return {
       source,
-      domain: run.domains?.[type]?.[field] ?? {
-        window: { kind: 'range', between: run.span ?? run.domain },
+      domain: results.domains?.[type]?.[field] ?? {
+        window: { kind: 'range', between: results.span ?? results.domain },
       },
     }
   }

@@ -1,5 +1,5 @@
 /** Real GridKit replay past what the Network holds at once, two fields mapped, including delayed
- *  commits, a scrub through times not yet held, and trace clicks. */
+ *  samples, a scrub through times not yet held, and trace clicks. */
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -7,11 +7,11 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import { rowsOf } from '../../src/shared/cells.js'
-import { SAMPLE_BUDGET } from '../../src/webview/pages.js'
+import { SAMPLE_BUDGET } from '../../src/webview/samples.js'
 import { notifications, pause, testHost, until, visible, VM } from '../vscode/harness.js'
 
-/** What the Network's pages hold. */
-type Held = { listed: number; held: number; bytes: number }
+/** What the Network holds of the results: chunks, and their bytes. */
+type Held = { held: number; bytes: number }
 
 export async function run() {
   const bench = await testHost()
@@ -43,8 +43,9 @@ export async function run() {
       240_000,
     )
     assert.equal(session.run!.state, 'complete', session.run!.message)
+    const results = session.results!
     assert.ok(
-      2 * source.buses.length * session.run!.frames * 8 > SAMPLE_BUDGET,
+      2 * source.buses.length * results.frames * 8 > SAMPLE_BUDGET,
       'The two mapped fields must exceed what the Network holds at once',
     )
     session.transport.pause()
@@ -67,19 +68,21 @@ export async function run() {
       'both plots render',
       60_000,
     )
-    const held = () => network.evaluate<Held>('gridkitStats().pages')
+    const held = () => network.evaluate<Held>('gridkitStats().samples')
+    const chunks = Math.ceil(results.frames / results.chunk)
     await until(async () => {
-      const { listed, held: pages } = await held()
-      return pages > 0 && pages < listed
-    }, 'network holds part of the run')
+      const { held: some } = await held()
+      return some > 0 && some < 2 * chunks
+    }, 'network holds part of the results')
+    // Each reply of samples comes late, as from a busy worker.
     await network.evaluate(`(() => {
       window.originalNetworkCanvas = document.querySelector('canvas');
-      window.windowCommits = 0;
+      window.delayed = 0;
       window.addEventListener('message', event => {
         const m = event.data;
-        if (m?.kind !== 'end' || m.delayedForTest) return;
+        if (m?.kind !== 'reply' || m.delayedForTest || m.value?.[0]?.kind !== 'samples') return;
         event.stopImmediatePropagation();
-        window.windowCommits++;
+        window.delayed++;
         setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: { ...m, delayedForTest: true } })), 120);
       }, true);
     })()`)
@@ -113,7 +116,7 @@ export async function run() {
     }
     await seek(0.2)
     for (const at of [8.5, 0.1, 7.8, 1.2, 9.6, 0]) await seek(at)
-    // Once the pages around a moment are held, moving among them waits on no sample.
+    // Once the chunks around a moment are held, moving among them waits on no sample.
     await seek(8.5)
     await until(
       async () => {
@@ -121,7 +124,7 @@ export async function run() {
         await pause(500)
         return (await held()).held === before
       },
-      'the pages around 8.5 held',
+      'the chunks around 8.5 held',
       60_000,
     )
     /** Count the frames the Network waits on samples, until `waited` stops counting. */
@@ -138,7 +141,7 @@ export async function run() {
       network.evaluate<number>('(cancelAnimationFrame(window.looking), window.waited)')
     await waiting()
     for (const at of [8.3, 8.7, 8.1, 8.5]) await seek(at)
-    assert.equal(await waited(), 0, 'Moving among held pages waits on no sample')
+    assert.equal(await waited(), 0, 'Moving among held chunks waits on no sample')
     // A scrub through times it may not hold presents them on its way, not only where it rests. It
     // lasts a few of the slowest loads above, so a load it lets finish shows before it ends.
     const load = Math.max(...samples.map((sample) => sample.elapsedMs))
@@ -164,12 +167,12 @@ export async function run() {
       'A scrub presents the times it passes, not only where it rests',
     )
     await seek(4.5)
-    const windowCommits = await network.evaluate<number>('window.windowCommits')
-    assert.ok(windowCommits >= 1, 'Must exercise a delayed cache miss')
+    const delayed = await network.evaluate<number>('window.delayed')
+    assert.ok(delayed >= 1, 'Must exercise a delayed cache miss')
     const query = await bench.studio.client.call('query', {
       uri: key,
       version: bench.studio.state(key).summary!.version,
-      run: session.run!.id,
+      results: results.id,
       query: {
         kind: 'rows',
         from: 'Bus',
@@ -231,9 +234,9 @@ export async function run() {
       join(bench.output, 'tests', 'windowed-playback.json'),
       JSON.stringify(
         {
-          frames: session.run!.frames,
+          frames: results.frames,
           rows: source.buses.length,
-          windowCommits,
+          delayed,
           samples,
           scrubbed: new Set(scrubbed).size,
           held: await held(),
@@ -247,7 +250,7 @@ export async function run() {
       ),
     )
     console.log(
-      `10k replay passed: ${session.run!.frames} frames, delayed page commits, rapid seeks, a scrub, real trace click, fixed intervals; no errors.`,
+      `10k replay passed: ${results.frames} frames, delayed samples, rapid seeks, a scrub, real trace click, fixed intervals; no errors.`,
     )
   } catch (error) {
     console.error('Studio errors:', JSON.stringify(bench.studio.errors))

@@ -2,32 +2,32 @@
 
 import type { Positions } from '@latkit/gpu'
 import type {
-  DataBatch,
   Domain,
   FieldSelection,
   Query,
   QueryBlock,
+  RowBatch,
   RowsBlock,
   RowsQuery,
+  SampleBatch,
   Schema,
   Value,
 } from '@latkit/model'
 
-import type { RuntimeProcess, SimulationInfo, SimulationRequest, Study } from './simulation.js'
+import type { Results, Run, RuntimeProcess, SimulationRequest, Study } from './simulation.js'
 import type { Sink } from './study.js'
 export type {
   GridKit,
   Program,
+  Results,
+  Run,
   RuntimeProcess,
-  SimulationInfo,
   SimulationRequest,
   Study,
 } from './simulation.js'
 
 import type { Bindings } from './bindings.js'
-import type { SampleCoverage } from './coverage.js'
 import type { Failure } from './errors.js'
-import type { PageEntry, PageRange, Want } from './pages.js'
 import type { SettingsValues } from './preferences.js'
 import type { ClockState, LoopMode } from './transport.js'
 
@@ -97,13 +97,29 @@ export type Mutation =
   /** Every element of `type` lists the outputs in `add` and none in `remove`. */
   | { kind: 'record'; type: string; add: readonly string[]; remove: readonly string[] }
 
+/** Frames of one field of a results file that a view asks for: those over `window` it lacks. */
+export interface SamplesInput {
+  results: string
+  /** One field, of the rows a view draws; without rows, of every row the file holds. */
+  field: FieldSelection
+  /** The times wanted, with the frames either side that reach them. */
+  window: Domain
+  /** The frames of each chunk the view holds: chunk `k`'s first `held[k]`. */
+  held: Readonly<Record<number, number>>
+  /** The chunks nearest `at` come first. While a playhead plays at `travel`, the time behind it
+   *  counts several times over. */
+  near?: { at: number; travel: number }
+  /** About the most bytes the reply holds; it holds one chunk's frames at least. */
+  bytes: number
+}
+
 /** What the extension asks of the data worker. */
 export interface Requests {
-  describeSimulation: { input: { simulationId: string }; output: Summary }
+  /** The case a results file is read against, as it was then. */
+  describeResults: { input: { results: string }; output: Summary }
   shutdown: { input: Record<string, never>; output: null }
   /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
   anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
-  runs: { input: { uri: string }; output: SimulationInfo[] }
   parse: {
     input: Revision &
       ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
@@ -117,47 +133,38 @@ export interface Requests {
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */
   presentation: { input: Revision; output: Record<string, Positions> }
+  /** Rows of the case, or of the case `results` were read against when the query has an `at`. */
   query: {
-    input: Revision & { query: Query; run?: string }
+    input: Revision & { query: Query; results?: string }
     output: QueryBlock[]
   }
-  batches: {
-    input: Revision & {
-      fields?: readonly FieldSelection[]
-      run?: string
-      /** The run's pages to send, as `paging` cut them; absent, all of them. */
-      pages?: PageRange
-      paging?: string
-      includeStatic?: boolean
-    }
-    output: { coverage: readonly SampleCoverage[] }
+  /** The case's static `fields`, of the case `results` were read against when they are named. */
+  rows: {
+    input: Revision & { fields: readonly FieldSelection[]; results?: string }
+    output: RowBatch[]
   }
-  /** The run's pages from `from` on, and how it is cut into them. */
-  pages: {
-    input: { run: string; from: number }
-    output: { paging: string; pages: PageEntry[] }
-  }
-  /** The next sample time from `at` in `direction`; the run's first or last time when none. */
-  step: { input: { run: string; at: number; direction: -1 | 1 }; output: number }
+  samples: { input: SamplesInput; output: SampleBatch[] }
+  /** The next sample time from `at` in `direction`; the first or last time when none. */
+  step: { input: { results: string; at: number; direction: -1 | 1 }; output: number }
   /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
    *  and cancelling it stops the run. */
-  run: { input: SimulationRequest; output: SimulationInfo }
+  run: { input: SimulationRequest; output: Run }
   /** A GridKit results file read for the case at its revision. */
   open: {
     input: Revision & { path: string; cacheBytes: number; contingency?: Study }
-    output: SimulationInfo
+    output: Results
   }
-  /** Lets go of the case's runs, stopping one under way. Their files stay. */
+  /** Lets go of the case's results, stopping a run under way. Their files stay. */
   clear: { input: { uri: string }; output: null }
-  /** Drops the case and its runs. */
+  /** Drops the case and its results. */
   release: { input: { uri: string; attachmentId?: string }; output: null }
-  export: { input: { run: string; path: string }; output: null }
+  export: { input: { results: string; path: string }; output: null }
   stats: {
     input: Record<string, never>
     output: {
       cacheBytes: number
       sessions: number
-      runs: number
+      results: number
       memory: { heapUsed: number; arrayBuffers: number }
     }
   }
@@ -169,7 +176,7 @@ export type Request = {
   [K in Method]: { kind: 'request'; id: number; method: K; input: Requests[K]['input'] }
 }[Method]
 
-export type ToWorker = Request | { kind: 'cancel'; id: number } | { kind: 'ack'; id: number }
+export type ToWorker = Request | { kind: 'cancel'; id: number }
 
 export type FromWorker =
   | { kind: 'process'; uri: string; process?: RuntimeProcess }
@@ -184,8 +191,7 @@ export type FromWorker =
       defect?: boolean
       detail?: string
     }
-  | { kind: 'batch'; id: number; batches: readonly DataBatch[] }
-  | { kind: 'run'; info: SimulationInfo }
+  | { kind: 'run'; run: Run }
   /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
    *  where they differ. Without, a line of Studio's own. */
   | {
@@ -232,7 +238,7 @@ export interface ViewState {
   selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
   anchors?: string[]
-  run?: SimulationInfo
+  results?: Results
   plots?: Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
   window?: Domain
@@ -244,36 +250,25 @@ export interface Cameras {
   diagram?: unknown
 }
 
-/** Opens a stream, which an `end` of the same `stream` closes: the case's rows, which replace those
- *  the view holds and carry what the case is, its schema and where the diagram's blocks are
- *  arranged; or pages of a run's samples, which the view holds beside those it has. */
-export type Begin = Stream &
-  (
-    | { base: true; schema: Schema; presentation?: Record<string, Positions> }
-    | { base: false; simulationId: string; pages: PageRange; paging: string }
-  )
-
-interface Stream {
-  /** The fields the stream carries: the rows' static fields, or the pages' sampled ones. */
-  fields: readonly FieldSelection[]
-  simulationId?: string
-  kind: 'begin'
-  stream: number
+/** The case's rows a view draws, which replace those it holds: what the case is, its schema, the
+ *  static fields the view reads, and where the diagram's blocks are arranged. A results file's
+ *  samples extend them. The Monitor's, and an export's, are the case the results were read
+ *  against. */
+export interface Rows {
   revision: Revision
+  schema: Schema
+  fields: readonly FieldSelection[]
   /** Physical row counts, including empty types, independent of the fields projected. */
   counts: Readonly<Record<string, number>>
+  presentation?: Record<string, Positions>
+  batches: readonly RowBatch[]
 }
 
 export type ToView =
   | { kind: 'state'; state: ViewState }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
-  /** The pages run `run`, cut as `paging` names, has published from `from` on. */
-  | { kind: 'pages'; run: string; paging: string; from: number; pages: readonly PageEntry[] }
-  | Begin
-  | { kind: 'batch'; stream: number; sequence: number; batches: readonly DataBatch[] }
-  /** Closes a stream with the samples it holds, which the view checks before it commits. */
-  | { kind: 'end'; stream: number; coverage: readonly SampleCoverage[] }
+  | { kind: 'rows'; rows: Rows }
   /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack,
    *  and `cancelled` a request let go of, where nothing failed. */
   | {
@@ -281,6 +276,7 @@ export type ToView =
       id: number
       value?: unknown
       error?: string
+      code?: string
       defect?: boolean
       cancelled?: boolean
       detail?: string
@@ -296,8 +292,9 @@ export type TransportAction =
 
 /** What a view asks of the extension. */
 export interface ViewRequests {
-  /** Rows of the case, or of the shown run when the query has an `at`. */
+  /** Rows of the case, or of the shown results when the query has an `at`. */
   query: { input: RowsQuery; output: RowsBlock[] }
+  samples: { input: SamplesInput; output: SampleBatch[] }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
     output: void
@@ -313,26 +310,12 @@ export interface ViewRequests {
 
 export type FromView =
   | { kind: 'ready' }
-  | { kind: 'ack'; stream: number; sequence: number }
-  /** Data was assembled and accepted, or rejected without changing the committed snapshot. */
-  | { kind: 'commit'; stream: number; error?: Failure }
   | { kind: 'cancel'; id: number }
   | { kind: 'request'; id: number; method: keyof ViewRequests; input: unknown }
   | { kind: 'command'; command: string; value?: unknown }
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: Domain }
-  /** The pages of run `run`, cut as `paging` names, the view lacks, in the order it needs them, the
-   *  first `required` of them for what it shows now; `settled` is the last stream it had settled
-   *  when it asked. */
-  | {
-      kind: 'want'
-      run: string
-      paging: string
-      wants: readonly Want[]
-      required: number
-      settled: number
-    }
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   /** What the Case panel shows, and how many rows its filters leave. */

@@ -316,17 +316,20 @@ export async function run() {
       await listen(network)
       await listen(monitor)
       const previous = session.run?.id
-      /** The stream the Network painted last: the run's samples come on a later one. */
-      const unsampled = (await network.evaluate<{ stream?: number }>('gridkitStats()')).stream ?? 0
+      /** What the Network painted last had come: the run's samples come after. */
+      const unsampled =
+        (await network.evaluate<{ received?: number }>('gridkitStats()')).received ?? 0
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
+      /** What the run started here wrote, as read so far. */
+      const wrote = () => ran()?.results
       started = performance.now()
       const since = () => performance.now() - started
       bench.run('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
-        settle(() => (ran()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
+        settle(() => (wrote()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
         network
-          .waitForFunction('(stream) => gridkitStats()?.stream > stream', unsampled, {
+          .waitForFunction('(received) => gridkitStats()?.received > received', unsampled, {
             polling: 'raf',
             timeout: 300_000,
           })
@@ -354,7 +357,7 @@ export async function run() {
 
       // ── Playback ──
       const { transport } = session
-      const span = session.run!.domain
+      const span = session.results!.domain
       await steady(monitor)
       transport.setLoop('wrap')
       /** The time between frames each view presents while playing: one display frame at best. */
@@ -422,7 +425,7 @@ export async function run() {
       })
       // A new range colors the drawn lines again, and draws none of them.
       const recolored = await steady(monitor)
-      const range = session.run!.domains!.Bus!.Vm!
+      const range = session.results!.domains!.Bus!.Vm!
       await time(`monitor ${size} > recolor`, RUNS, {
         ready: () => plots(monitor),
         act: (i) =>
@@ -442,7 +445,7 @@ export async function run() {
             await bench.studio.client.call('query', {
               uri: key,
               version: summary().version,
-              run: session.run!.id,
+              results: session.results!.id,
               query: {
                 kind: 'rows',
                 from: 'Bus',

@@ -376,10 +376,10 @@ suite('Monitor menus', () => {
     await bench.answer('0.2, 0.4')
     await until(async () => (await plotted()).x.join() === '0.2,0.4', 'the window narrowed')
     await bench.title('monitor', 'Fit Recorded Time')
-    const run = bench.session.run!
+    const results = bench.session.results!
     await until(
-      async () => (await plotted()).x.join() === (run.span ?? run.domain).join(),
-      'the whole run shown',
+      async () => (await plotted()).x.join() === (results.span ?? results.domain).join(),
+      'every recorded time shown',
     )
     assert.equal(bench.session.window, undefined)
   })
@@ -436,11 +436,11 @@ suite('Monitor menus', () => {
   })
 
   test('opens results from the title bar, and plots one of their signals', async () => {
-    const before = bench.session.run!.id
+    const before = bench.session.results!.id
     await bench.title('monitor', 'Open Results')
     await bench.dialog(vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath)
     await bench.pick('Bus.Vm')
-    await until(() => bench.session.run?.id !== before, 'the opened results on show')
+    await until(() => bench.session.results?.id !== before, 'the opened results on show')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm'),
       'its voltage plotted',
@@ -450,7 +450,7 @@ suite('Monitor menus', () => {
 
   test('clears the results from the title bar, and playback leaves the status bar', async () => {
     await bench.title('monitor', 'Clear Results')
-    await until(() => !bench.session.run, 'no results')
+    await until(() => !bench.session.results, 'no results')
     await visible(monitor, '.c-empty')
     await until(async () => (await bench.playback('Play').count()) === 0, 'playback gone')
   })

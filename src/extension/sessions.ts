@@ -12,7 +12,8 @@ import type {
   Cameras,
   Element,
   Plot,
-  SimulationInfo,
+  Results,
+  Run,
   Study,
   TableState,
   ViewState,
@@ -35,7 +36,10 @@ export interface Session {
   selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
   anchors?: string[]
-  run?: SimulationInfo
+  /** The case's latest run of GridKit. */
+  run?: Run
+  /** The results file the views draw: a run's, or one opened. */
+  results?: Results
   plots: Plot[]
   /** The case's playhead; views extrapolate it between changes. */
   transport: Transport
@@ -98,16 +102,12 @@ export const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudi
 export const notice = (text: string, ...offers: Offer[]) =>
   Object.assign(new Error(text), { offers })
 
-/** How a run starts, for the log: what a shell would run, and its times. */
-const opening = ({ command, name, span }: SimulationInfo) =>
-  `▶ ${command ?? name}${span ? ` · ${formatNumber(span[0])} to ${formatNumber(span[1])} s` : ''}`
-
-/** The plots `run` can draw: those it recorded, else its first recorded signal. */
-export function plotsFor(run: SimulationInfo, plots: readonly Plot[]): Plot[] {
+/** The plots `results` can draw: those of fields they hold, else their first field. */
+export function plotsFor(results: Results, plots: readonly Plot[]): Plot[] {
   const kept = plots.filter((plot) =>
-    run.outputs.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
+    results.outputs.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
   )
-  const first = run.outputs.find(({ select }) => select.length > 0)
+  const first = results.outputs.find(({ select }) => select.length > 0)
   return kept.length || !first ? kept : [{ from: first.from, field: first.select[0]! }]
 }
 
@@ -195,39 +195,40 @@ export class Sessions {
   /** The failed runs already said, so each is said once. */
   readonly #failures = new Set<string>()
   /** Tell the log how a run starts and ends, and the user, once, why one failed. */
-  #narrate(info: SimulationInfo) {
-    if (info.state === 'running') {
-      if (!this.#told.has(info.id)) {
-        this.#told.add(info.id)
-        this.output.info(opening(info))
+  #narrate(run: Run) {
+    if (run.state === 'running') {
+      if (!this.#told.has(run.id)) {
+        this.#told.add(run.id)
+        this.output.info(`▶ ${run.command}`)
       }
       return
     }
-    const told = this.#told.delete(info.id)
-    if (info.state === 'failed') {
-      if (this.#failures.has(info.id)) return
-      this.#failures.add(info.id)
-      const why = info.message ?? 'GridKit stopped'
+    const told = this.#told.delete(run.id)
+    if (run.state === 'failed') {
+      if (this.#failures.has(run.id)) return
+      this.#failures.add(run.id)
+      const why = run.message ?? 'GridKit stopped'
       this.report(
-        notice(`${info.name} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
+        notice(`${run.command} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
       )
       return
     }
     if (!told) return
-    const samples = `${info.frames.toLocaleString()} samples`
-    const study = info.contingency
-    if (info.state === 'complete' && study?.failed.length)
+    const { results } = run
+    const samples = `${(results?.frames ?? 0).toLocaleString()} samples`
+    const study = results?.contingency
+    if (run.state === 'complete' && study?.failed.length)
       this.report(
         notice(
-          `${info.name}: ${study.failed.length} of ${study.buses.length} contingencies failed, ` +
+          `${run.command}: ${study.failed.length} of ${study.buses.length} contingencies failed, ` +
             `at ${study.failed.join(', ')}.`,
           SHOW_OUTPUT,
         ),
       )
-    else if (info.state === 'complete') this.output.info(`■ ${info.name} finished · ${samples}`)
+    else if (run.state === 'complete') this.output.info(`■ ${run.command} finished · ${samples}`)
     else
       this.output.info(
-        `■ ${info.name} stopped at t = ${formatNumber(info.domain[1])} s · ${samples}`,
+        `■ ${run.command} stopped at t = ${formatNumber(results?.domain[1] ?? 0)} s · ${samples}`,
       )
   }
   /** Register command `id`, reporting why it fails. */
@@ -249,8 +250,10 @@ export class Sessions {
       this.client.failure.event((error) => {
         this.report(error)
         for (const session of this.all.values()) {
-          if (session.run?.state === 'running') {
+          if (session.run?.state === 'running')
             session.run = { ...session.run, state: 'interrupted', message: error.message }
+          if (session.results?.growing) {
+            session.results = { ...session.results, growing: false }
             session.transport.setLive(false)
           }
           this.changed.fire(session.uri)
@@ -271,12 +274,14 @@ export class Sessions {
           else this.output.appendLine(event.message)
           return
         }
-        const { info } = event
-        const session = this.all.get(info.revision.uri)
+        const { run } = event
+        const session = this.all.get(run.uri)
         if (!session) return
-        this.show(session, info)
+        session.run = run
+        // A run's results replace those on show as it starts; a study has none until it ends.
+        this.show(session, run.results)
         this.changed.fire(session.uri)
-        this.#narrate(info)
+        this.#narrate(run)
       }),
       // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
       vscode.workspace.onDidRenameFiles(({ files }) => {
@@ -316,8 +321,8 @@ export class Sessions {
       ready: !!entry?.summary && !entry.stale,
       editable: !!entry && !entry.stale && isWritable(entry.document),
       running: session?.run?.state === 'running',
-      contingency: session?.run?.state === 'complete' && !!session.run.contingency,
-      hasSamples: (session?.run?.frames ?? 0) > 0,
+      contingency: !!session?.results?.contingency,
+      hasSamples: (session?.results?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
       caseFiltered: !!(session?.table.filter || session?.table.equal),
@@ -365,14 +370,14 @@ export class Sessions {
             cacheBytes: cacheBytesOf(document.uri),
           })
           .then(
-            (info) => {
-              if (session.run || this.all.get(session.uri) !== session) return
-              this.show(session, info)
+            (results) => {
+              if (session.results || this.all.get(session.uri) !== session) return
+              this.show(session, results)
               this.changed.fire(session.uri)
             },
             (error) => {
               this.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
-              if (!session.run) void this.persist(session)
+              if (!session.results) void this.persist(session)
             },
           )
     }
@@ -384,13 +389,16 @@ export class Sessions {
     return session
   }
   persist(session: Session) {
-    const { run } = session
+    const { results } = session
     const saved: Saved = {
       bindings: session.bindings,
       plots: session.plots,
       table: session.table,
-      ...(run && {
-        results: { path: run.path, ...(run.contingency && { contingency: run.contingency }) },
+      ...(results && {
+        results: {
+          path: results.path,
+          ...(results.contingency && { contingency: results.contingency }),
+        },
       }),
     }
     return this.context.workspaceState.update('case:' + session.uri, saved)
@@ -435,7 +443,7 @@ export class Sessions {
       error: entry?.error,
       selection: session?.selection,
       anchors: session?.anchors,
-      run: session?.run,
+      results: session?.results,
       plots: session?.plots,
       window: session?.window,
       table: session?.table,
@@ -497,42 +505,43 @@ export class Sessions {
       this.report(error)
     }
   }
-  /** Put `run` on the session's clock: a new run resets the span, more frames of the same run
+  /** Put `results` on the session's clock: new results reset the span, more frames of the same
    *  extend it, and none clears it. Another contingency of the shown study keeps the time. */
-  show(session: Session, run: SimulationInfo | undefined) {
+  show(session: Session, results: Results | undefined) {
     const { transport } = session
-    const shown = session.run
-    const study = !!run?.contingency && shown?.contingency?.base === run.contingency.base
-    session.run = run
-    if (!run) {
+    const shown = session.results
+    if (!results && !shown) return
+    const study = !!results?.contingency && shown?.contingency?.base === results.contingency.base
+    session.results = results
+    if (!results) {
       session.window = undefined
       transport.clear()
       void this.persist(session)
       return
     }
-    const live = run.state === 'running'
-    // A run's fields are its output's header, which GridKit writes after the run starts.
-    if (run.outputs.length && (shown?.id !== run.id || !shown.outputs.length)) {
-      session.plots = plotsFor(run, session.plots)
+    const live = results.growing
+    // The fields are the file's header, which GridKit writes after the run starts.
+    if (results.outputs.length && (shown?.id !== results.id || !shown.outputs.length)) {
+      session.plots = plotsFor(results, session.plots)
       this.persist(session)
     }
-    // A run's span starts with its first frames.
-    if (shown?.id !== run.id || (shown.frames === 0 && run.frames > 0)) {
+    // The span starts with the first frames.
+    if (shown?.id !== results.id || (shown.frames === 0 && results.frames > 0)) {
       const at = transport.currentT()
       session.window = undefined
-      transport.setSpan(run.domain, { live })
+      transport.setSpan(results.domain, { live })
       if (study) transport.seek(at)
       return
     }
-    transport.extend(run.domain[1])
-    if (transport.noteHead(run.domain[1])) this.clock.fire(session.uri)
+    transport.extend(results.domain[1])
+    if (transport.noteHead(results.domain[1])) this.clock.fire(session.uri)
     transport.setLive(live)
   }
-  /** Step one frame through the shown run, then pause. */
+  /** Step one frame through the shown results, then pause. */
   async step(session: Session, direction: 1 | -1) {
-    if (!session.run) return
+    if (!session.results) return
     const t = await this.client.call('step', {
-      run: session.run.id,
+      results: session.results.id,
       at: session.transport.currentT(),
       direction,
     })

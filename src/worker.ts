@@ -1,17 +1,15 @@
+import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { basename } from 'node:path'
 import { parentPort } from 'node:worker_threads'
 
 import {
   blockBuffers,
-  type DataBatch,
   failure,
   type QueryBlock,
   read,
-  rowCount,
+  type RowBatch,
   selectBatches,
-  selectRows,
-  staticFields,
 } from '@latkit/model'
 
 import { diagnoseAsync } from './gridkit/edits.js'
@@ -28,42 +26,36 @@ import {
 } from './gridkit/index.js'
 import { anchors } from './gridkit/inspection.js'
 import { solverLine } from './gridkit/solver.js'
-import { PROGRESS_MS, ResultCache, Results } from './results/index.js'
+import { described, PROGRESS_MS, ResultCache, ResultsFile } from './results/index.js'
 import { Readers } from './results/readers.js'
-import { intersectRows, recordedSelection, type SampleCoverage } from './shared/coverage.js'
 import { failureOf } from './shared/errors.js'
 import { defect, detail, message } from './shared/format.js'
 import type {
   FromWorker,
   Request,
   Requests,
+  Results,
   Revision,
-  SimulationInfo,
+  Run,
   SimulationRequest,
   Summary,
   ToWorker,
 } from './shared/messages.js'
-import { packets, sendAhead } from './worker/batches.js'
 import { CaseCache, summarize } from './worker/cases.js'
 
 const port = parentPort!
 const BLOCK_BYTES = 256 << 10
-/** A run's samples stream in blocks this large, several to a packet. The view keeps each block as a
- *  page of its own, so a few large blocks are less for it to keep than many small ones. */
-const SAMPLE_BLOCK_BYTES = 4 << 20
-const PACKET_BYTES = 8 << 20
 const cases = new Map<string, { kase: Case; summary: Summary; generation: object }>()
 const sources = new CaseCache()
 const parses = new Map<string, object>()
 const attachments = new Map<string, string | undefined>()
 const mirrors = new Map<string, { version: number; text: string }>()
 const operations = new Map<number, AbortController>()
-const acknowledgements = new Map<number, () => void>()
 /** Each case's run under way. */
-const running = new Map<string, { controller: AbortController; done: Promise<SimulationInfo> }>()
+const running = new Map<string, { controller: AbortController; done: Promise<Run> }>()
 /** The results files read for each case, the one shown first. */
-const histories = new Map<string, Results[]>()
-const readers = new Readers<Results>()
+const histories = new Map<string, ResultsFile[]>()
+const readers = new Readers<ResultsFile>()
 const cache = new ResultCache()
 const cacheLimit = (value: number) => {
   if (!Number.isFinite(value) || value < 16 << 20 || value > 2048 * (1 << 20))
@@ -89,78 +81,43 @@ const get = (revision: Revision) => {
     })
   return entry
 }
-const findRun = (id: string, uri?: string) => {
-  for (const [key, runs] of histories) {
+const find = (id: string, uri?: string) => {
+  for (const [key, files] of histories) {
     if (uri !== undefined && key !== uri) continue
-    const run = runs.find((run) => run.info.id === id)
-    if (run) return run
+    const file = files.find((file) => file.info.id === id)
+    if (file) return file
   }
   throw Object.assign(new Error('These results are no longer read. Open them again.'), {
     code: 'results-unavailable',
-    simulationId: id,
   })
 }
 
-/** Sends `batches` for request `id`; resolves once the view acknowledges them. */
-async function emit(id: number, batches: readonly DataBatch[], signal: AbortSignal) {
-  signal.throwIfAborted()
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup()
-      reject(failure('timeout', 'View stopped consuming data.'))
-    }, 30000)
-    const cleanup = () => {
-      clearTimeout(timeout)
-      signal.removeEventListener('abort', abort)
-      acknowledgements.delete(id)
-    }
-    const abort = () => {
-      cleanup()
-      reject(signal.reason)
-    }
-    acknowledgements.set(id, () => {
-      cleanup()
-      resolve()
-    })
-    signal.addEventListener('abort', abort, { once: true })
-    send({ kind: 'batch', id, batches }, blockBuffers(batches))
-  })
-}
-/** Keeps `run` as the case's shown results. Decoded pages are bounded by ResultCache; past eight
- *  results read, the oldest no view reads and no case shows are let go. Their files stay. */
-function retain(uri: string, run: Results) {
-  const runs = histories.get(uri) ?? []
-  runs.unshift(run)
-  histories.set(uri, runs)
+/** Keeps `file` as the case's shown results. Decoded chunks are bounded by ResultCache; past eight
+ *  files read, the oldest no view reads and no case shows are let go. The files stay. */
+function retain(uri: string, file: ResultsFile) {
+  const files = histories.get(uri) ?? []
+  files.unshift(file)
+  histories.set(uri, files)
   const loaded = [...histories.values()].flat().sort((a, b) => a.info.started - b.info.started)
   for (const old of loaded.slice(0, Math.max(0, loaded.length - 8))) {
-    const runs = histories.get(old.info.revision.uri)!
-    if (old === runs[0] || old.info.state === 'running' || readers.busy(old)) continue
-    runs.splice(runs.indexOf(old), 1)
+    const files = histories.get(old.info.revision.uri)!
+    if (old === files[0] || old.info.growing || readers.busy(old)) continue
+    files.splice(files.indexOf(old), 1)
     old.release()
   }
 }
 
 /** Runs GridKit as `input` says and reads what it writes. The request is the run, so cancelling
  *  it stops the run. Why it could not start is thrown; how it ended is in what it returns. */
-async function runCase(input: SimulationRequest, signal: AbortSignal): Promise<SimulationInfo> {
+async function runCase(input: SimulationRequest, signal: AbortSignal): Promise<Run> {
   const { kase } = get(input)
   if (running.has(input.uri)) throw failure('conflict', `${kase.name} is already running.`)
   cache.limit = cacheLimit(input.cacheBytes)
-  const info: SimulationInfo = {
-    id: crypto.randomUUID(),
+  const run: Run = {
+    id: randomUUID(),
+    uri: input.uri,
     command: `${input.program} ${basename(input.solver)}`,
-    revision: { uri: input.uri, version: input.version },
-    fingerprint: kase.version,
-    name: kase.name,
     state: 'running',
-    path: input.output,
-    format: input.format,
-    frames: 0,
-    domain: [0, 0],
-    span: [0, input.tmax],
-    started: Date.now(),
-    outputs: [],
   }
   const controller = new AbortController()
   const cancel = () => controller.abort(new Error('Simulation cancelled.'))
@@ -174,13 +131,16 @@ async function runCase(input: SimulationRequest, signal: AbortSignal): Promise<S
     /** Whether GridKit has said why the run stops; the errors after restate it as it unwinds. */
     let said = false
     try {
-      send({ kind: 'run', info })
-      await simulate(kase, input, info, cache, {
+      send({ kind: 'run', run })
+      await simulate(kase, input, run, cache, {
         signal: controller.signal,
-        reading: (results) => retain(input.uri, results),
-        publish: async () => {
+        reading: (file) => {
+          retain(input.uri, file)
+          send({ kind: 'run', run })
+        },
+        progress: async () => {
           if (performance.now() - lastProgress > PROGRESS_MS) {
-            send({ kind: 'run', info })
+            send({ kind: 'run', run })
             lastProgress = performance.now()
           }
         },
@@ -206,20 +166,21 @@ async function runCase(input: SimulationRequest, signal: AbortSignal): Promise<S
         },
         lifecycle: (process) => send({ kind: 'process', uri: input.uri, process }),
       })
-      info.state = 'complete'
+      run.state = 'complete'
     } catch (error) {
-      info.state = controller.signal.aborted
+      run.state = controller.signal.aborted
         ? controller.signal.reason?.interrupted
           ? 'interrupted'
           : 'cancelled'
         : 'failed'
-      info.message = message(error)
+      run.message = message(error)
       if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
     } finally {
+      if (run.results) run.results.growing = false
       // The run's last state goes out whatever its cleanup meets, so it never stays running.
-      send({ kind: 'run', info })
+      send({ kind: 'run', run })
     }
-    return info
+    return run
   })()
   running.set(input.uri, { controller, done })
   try {
@@ -232,45 +193,36 @@ async function runCase(input: SimulationRequest, signal: AbortSignal): Promise<S
 
 /** A GridKit results file read for the case: Open Results…, a session restored after a reload,
  *  or another contingency of a study. Its header says what it holds. It answers only its caller. */
-async function openResults(input: Requests['open']['input'], signal: AbortSignal) {
+async function openResults(
+  input: Requests['open']['input'],
+  signal: AbortSignal,
+): Promise<Results> {
   const { kase } = get(input)
   cache.limit = cacheLimit(input.cacheBytes)
-  const info: SimulationInfo = {
-    id: crypto.randomUUID(),
-    revision: { uri: input.uri, version: input.version },
-    fingerprint: kase.version,
-    name: basename(input.path),
-    state: 'complete',
-    path: input.path,
-    format: extname(input.path).toLowerCase() === '.csv' ? 'csv' : 'arrow',
-    frames: 0,
-    domain: [0, 0],
-    started: (await stat(input.path)).mtimeMs,
-    outputs: [],
-    ...(input.contingency && { contingency: input.contingency }),
-  }
-  const results = new Results(info, kase, cache)
-  await readers.use([results], signal, (s) =>
-    results.ingest(
+  const file = new ResultsFile(
+    described(kase, input, input.path, {
+      started: (await stat(input.path)).mtimeMs,
+      ...(input.contingency && { contingency: input.contingency }),
+    }),
+    kase,
+    cache,
+  )
+  await readers.use([file], signal, (s) =>
+    file.ingest(
       s,
       () => true,
-      async () => {},
+      () => {},
     ),
   )
-  retain(input.uri, results)
-  return info
+  retain(input.uri, file)
+  return file.info
 }
 
 async function dispatch(request: Request, signal: AbortSignal): Promise<unknown> {
   switch (request.method) {
-    case 'describeSimulation': {
-      const result = findRun(request.input.simulationId)
-      return summarize(
-        result.kase,
-        result.info.revision,
-        0,
-        await diagnoseAsync(result.kase, signal),
-      )
+    case 'describeResults': {
+      const file = find(request.input.results)
+      return summarize(file.kase, file.info.revision, 0, await diagnoseAsync(file.kase, signal))
     }
     case 'shutdown':
       for (const { controller } of running.values())
@@ -283,8 +235,6 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return null
     case 'anchors':
       return anchors(get(request.input).kase, request.input, signal)
-    case 'runs':
-      return (histories.get(request.input.uri) ?? []).map((run) => run.info)
     case 'parse': {
       const { uri, version, attachmentId } = request.input
       const previous = mirrors.get(uri)
@@ -318,15 +268,11 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return issues
     }
     case 'query': {
-      const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
-      const kase = run?.kase ?? get(request.input).kase
-      const query = request.input.query
-      const data = run
-        ? await run.data(
-            query.kind === 'rows' && query.at !== undefined ? [query.at, query.at] : undefined,
-            signal,
-          )
-        : kase.data
+      const { query, results, uri } = request.input
+      const file = results ? find(results, uri) : undefined
+      const kase = file?.kase ?? get(request.input).kase
+      const at = query.kind === 'rows' ? query.at : undefined
+      const data = file && at !== undefined ? await file.data([at, at], signal) : kase.data
       const blocks: QueryBlock[] = []
       for await (const block of read(data, query, {
         signal,
@@ -336,85 +282,29 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         blocks.push(block)
       return blocks
     }
-    case 'batches': {
-      const input = request.input
-      const run = request.input.run ? findRun(request.input.run, request.input.uri) : undefined
-      const kase = run?.kase ?? get(request.input).kase
-      const fields = request.input.fields ?? staticFields(kase.schema)
+    case 'rows': {
+      const { fields, results, uri } = request.input
+      const kase = results ? find(results, uri).kase : get(request.input).kase
+      // A field the case samples comes with a results file, never with the rows.
       const statics = fields
-        .map((f) => ({
-          ...f,
-          select: f.select.filter((name) => !kase.schema.types[f.from]!.fields[name]!.sampled),
+        .map((field) => ({
+          ...field,
+          select: field.select.filter(
+            (name) => !kase.schema.types[field.from]!.fields[name]!.sampled,
+          ),
         }))
-        .filter((f) => f.select.length > 0)
-      // One bounded stream for both rows and samples. Freeze its end before yielding to
-      // the solver so a growing recording cannot postpone the view's commit indefinitely.
-      const endPage = run?.pages.length ?? 0
-      // Pages are named by how one reading of the run cut it; another reading cuts it elsewhere.
-      if (run && input.paging !== undefined && input.paging !== run.paging)
-        throw failure('conflict', 'The run was paged again: its pages are asked for anew.')
-      const [firstPage, lastPage] = input.pages
-        ? [Math.max(0, input.pages[0]), Math.min(endPage, input.pages[1])]
-        : [0, endPage]
-      const sampled = fields.filter((f) =>
-        f.select.some((name) => kase.schema.types[f.from]?.fields[name]?.sampled),
-      )
-      const coverage: SampleCoverage[] = []
-      if (run && firstPage < lastPage) {
-        const first = run.pages[firstPage]!
-        const last = run.pages[lastPage - 1]!
-        for (const field of sampled)
-          for (const name of field.select) {
-            if (!kase.schema.types[field.from]?.fields[name]?.sampled) continue
-            const table = kase.data.tables[field.from]!
-            const rows = intersectRows(
-              selectRows(table, field.rows),
-              selectRows(table, recordedSelection(kase.data, run.info.outputs, field.from, name)),
-            )
-            if (rowCount(rows))
-              coverage.push({
-                from: field.from,
-                field: name,
-                rows: { ...rows, index: table.index },
-                first: first.first,
-                count: last.first + last.count - first.first,
-                domain: [first.domain[0], last.domain[1]],
-              })
-          }
-      }
-      async function* selected(): AsyncGenerator<DataBatch> {
-        if (input.includeStatic !== false)
-          yield* selectBatches(kase.data, statics, {
-            signal,
-            maxBlockBytes: BLOCK_BYTES,
-            buffers: 'owned',
-          })
-        if (!run) return
-        for (let pages = firstPage; pages < lastPage; pages++) {
-          const data = await run.pageData(pages, signal)
-          for await (const batch of selectBatches(data, sampled, {
-            signal,
-            maxBlockBytes: SAMPLE_BLOCK_BYTES,
-            buffers: 'owned',
-          }))
-            if (batch.kind === 'samples') yield batch
-        }
-      }
-      // The next packet is prepared while the view consumes this one.
-      await sendAhead(packets(selected(), signal, PACKET_BYTES), (packet) =>
-        emit(request.id, packet, signal),
-      )
-      return { coverage }
+        .filter((field) => field.select.length > 0)
+      const batches: RowBatch[] = []
+      for await (const batch of selectBatches(kase.data, statics, {
+        signal,
+        maxBlockBytes: BLOCK_BYTES,
+        buffers: 'owned',
+      }))
+        if (batch.kind === 'rows') batches.push(batch)
+      return batches
     }
-    case 'pages': {
-      const run = findRun(request.input.run)
-      return {
-        paging: run.paging,
-        pages: run.pages
-          .slice(request.input.from)
-          .map(({ first, count, domain }) => ({ first, count, domain })),
-      }
-    }
+    case 'samples':
+      return find(request.input.results).samples(request.input, signal)
     case 'complete':
       return completionsAt(catalog, request.input.text, request.input.offset)
     case 'context':
@@ -435,7 +325,7 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       return symbols
     }
     case 'step':
-      return findRun(request.input.run).step(request.input.at, request.input.direction)
+      return find(request.input.results).step(request.input.at, request.input.direction)
     case 'transact':
       return transaction(get(request.input).kase, request.input.mutations)
     case 'presentation':
@@ -463,16 +353,16 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
       const active = running.get(uri)
       active?.controller.abort(new Error('Simulation cancelled.'))
       await active?.done
-      const results = histories.get(uri) ?? []
+      const files = histories.get(uri) ?? []
       histories.delete(uri)
-      for (const result of results) {
-        await readers.retire(result)
-        result.release()
+      for (const file of files) {
+        await readers.retire(file)
+        file.release()
       }
       return null
     }
     case 'export':
-      await findRun(request.input.run).exportCsv(request.input.path, signal)
+      await find(request.input.results).exportCsv(request.input.path, signal)
       return null
     case 'stats':
       return {
@@ -482,16 +372,19 @@ async function dispatch(request: Request, signal: AbortSignal): Promise<unknown>
         },
         cacheBytes: cache.bytes,
         sessions: cases.size,
-        runs: [...histories.values()].reduce((n, runs) => n + runs.length, 0),
+        results: [...histories.values()].reduce((n, files) => n + files.length, 0),
       }
   }
 }
 
+/** What a reply carries in buffers of its own, which go to the extension without a copy. */
+const TRANSFERRED: ReadonlySet<string> = new Set(['query', 'rows', 'samples'])
+
 async function handle(request: Request, signal: AbortSignal) {
   const input = request.input
   const targets =
-    'run' in input && typeof input.run === 'string'
-      ? [findRun(input.run, 'uri' in input ? input.uri : undefined)]
+    'results' in input && typeof input.results === 'string'
+      ? [find(input.results, 'uri' in input ? input.uri : undefined)]
       : []
   try {
     return await readers.use(targets, signal, (s) => dispatch(request, s))
@@ -501,7 +394,6 @@ async function handle(request: Request, signal: AbortSignal) {
   }
 }
 port.on('message', (request: ToWorker) => {
-  if (request.kind === 'ack') return acknowledgements.get(request.id)?.()
   if (request.kind === 'cancel') return operations.get(request.id)?.abort(new Error('Cancelled'))
   const controller = new AbortController()
   operations.set(request.id, controller)
@@ -519,7 +411,7 @@ port.on('message', (request: ToWorker) => {
       try {
         send(
           { kind: 'result', id: request.id, value },
-          request.method === 'query' ? blockBuffers(value) : [],
+          TRANSFERRED.has(request.method) ? blockBuffers(value) : [],
         )
       } catch (error) {
         // A value that cannot cross to the extension is a defect, answered as one.

@@ -8,16 +8,14 @@ import type { Positions } from '@latkit/gpu'
 import { type Data, type Item, itemId } from '@latkit/model'
 import type { Network, Projection } from '@latkit/network'
 
-import type { Begin, Element, ViewState } from '../shared/messages.js'
-import { pagesAt } from '../shared/pages.js'
-import { currentStream, drawable } from '../shared/streams.js'
+import type { Element, ViewState } from '../shared/messages.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { CanvasGpu } from './gpu.js'
 import { loadBorders } from './network/borders.js'
-import { networkNeeds, PageStore, timeReady } from './pages.js'
 import { Recovery } from './recovery.js'
-import { receive, type Snapshot } from './stream.js'
+import { current as currentRows, drawable, receiveRows, type Snapshot } from './rows.js'
+import { networkNeeds, Samples } from './samples.js'
 import { appearance, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
 
@@ -57,16 +55,24 @@ function boot() {
   let diagramStyles: typeof import('./diagram/style.js') | undefined
   let view: Network | Diagram | undefined
   let state: ViewState = {}
-  /** The case's rows, as last committed. */
+  /** The case's rows, as last sent. */
   let snapshot: Snapshot | undefined
-  /** The rows with the run's pages the view holds, which it draws; and those it last drew. */
+  /** The rows with the samples the view holds, which it draws; and those it last drew. */
   let data: Data | undefined
   let painted: Data | undefined
   let presentedAt: number | undefined
-  /** The last stream the view settled, and the one whose data it last drew. */
-  let settled = 0
-  let drawnStream: number | undefined
-  const pages = new PageStore((want) => bridge.send({ kind: 'want', ...want, settled }))
+  /** How many times rows or samples have come, and how many the last frame drew. */
+  let received = 0
+  let drawn: number | undefined
+  const samples = new Samples({
+    request: (input, signal) => bridge.request('samples', input, signal),
+    // Samples draw when the time shown needs them.
+    changed: () => {
+      received++
+      show(clock.now())
+    },
+    report: (reason) => bridge.report(reason),
+  })
   /** Where the case saves its diagram blocks. */
   let presented: Record<string, Positions> = {}
   let closed = false
@@ -94,10 +100,10 @@ function boot() {
   let sync = () => {}
 
   const keyOf = (element?: Element | null) => (element?.id ?? '') + ':' + (element?.field ?? '')
-  /** Whether a stream's case is the one to draw. The Network waits for the samples its mappings
+  /** Whether rows are of the case to draw. The Network waits for the static fields its mappings
    *  read; the Diagram maps nothing, so its rows are enough. */
-  const current = (begin: Begin | undefined) =>
-    kind === 'network' ? drawable(begin, state) : currentStream(begin, state) && !state.stale
+  const current = (rows: Snapshot | undefined) =>
+    kind === 'network' ? drawable(rows, state) : currentRows(rows, state) && !state.stale
   /** A case that has never read draws nothing and stops waiting; one that stops reading keeps its
    *  last valid revision. Neither says so here: Problems lists why, as for any file. */
   const say = () => {
@@ -115,10 +121,13 @@ function boot() {
     bridge.report(reason, {
       view: kind,
       phase: 'draw',
-      stream: drawnStream,
-      run: state.run?.id,
+      received: drawn,
+      results: state.results?.id,
       at: clock.now(),
-      pages: pages.stats(),
+      samples: samples.stats(),
+      bindings: state.bindings,
+      rows: snapshot?.rows.revision,
+      summary: state.summary && { uri: state.summary.uri, version: state.summary.version },
     })
   }
   const drop = () => {
@@ -178,7 +187,7 @@ function boot() {
   }
   const networkConfig = (rows: Data) =>
     networkStyles!.networkConfig(rows, data ?? rows, state, geographic, borders, labelled)
-  const diagramConfig = ({ rows }: Snapshot) => diagramStyles!.diagramConfig(rows, state, presented)
+  const diagramConfig = ({ data }: Snapshot) => diagramStyles!.diagramConfig(data, state, presented)
   const orbit = () => {
     if (kind !== 'network' || !view || state.settings?.['accessibility.motion'] === 'reduce') return
     const network = view as Network
@@ -214,17 +223,17 @@ function boot() {
   }
   function paintNow() {
     if (!view || !snapshot || closed) return
-    // State arrives before the matching row stream. Keep the last valid frame until both
-    // refer to the same revision, rather than applying new row selections to old tables.
-    if (!current(snapshot.begin)) return
+    // State arrives before the matching rows. Keep the last valid frame until both refer to the
+    // same revision, rather than applying new row selections to old tables.
+    if (!current(snapshot)) return
     const at = clock.now()
     if (kind === 'network' && !ready(at)) return
     appearance(state.settings)
     try {
       if (kind === 'diagram') (view as Diagram).set(diagramConfig(snapshot), { replace: true })
-      else (view as Network).set({ ...networkConfig(snapshot.rows), at }, { replace: true })
+      else (view as Network).set({ ...networkConfig(snapshot.data), at }, { replace: true })
       painted = data
-      drawnStream = Math.max(snapshot.begin.stream, data === snapshot.rows ? 0 : pages.stream)
+      drawn = received
     } catch (reason) {
       return error(reason)
     }
@@ -242,7 +251,7 @@ function boot() {
     }
   }
   function selection(force = false) {
-    if (!view || !current(snapshot?.begin)) return
+    if (!view || !current(snapshot)) return
     const key = keyOf(state.selection)
     const anchors = state.anchors?.join('\n') ?? ''
     const moved = key !== selectionKey || anchors !== anchorKey
@@ -349,21 +358,21 @@ function boot() {
     try {
       const [gpu] = await Promise.all([owner.get(lost), rendererReady])
       mark('canvas:gpu')
-      if (closed || !snapshot || !current(snapshot.begin)) return
+      if (closed || !snapshot || !current(snapshot)) return
       if (kind === 'network') {
         const at = clock.now()
         if (!ready(at) || !networkModule || !networkStyles) return
         mark('canvas:module')
-        if (located !== snapshot.rows) {
-          geographic = networkModule.isGeographic(snapshot.rows)
-          located = snapshot.rows
+        if (located !== snapshot.data) {
+          geographic = networkModule.isGeographic(snapshot.data)
+          located = snapshot.data
         }
         if (!view) {
           preferredProjection = networkModule.projectionOf(
             state.settings?.['network.camera.projection'] ?? 'flat',
             geographic,
           )
-          const first = { ...networkConfig(snapshot.rows), at }
+          const first = { ...networkConfig(snapshot.data), at }
           view = networkModule.mountNetwork(
             gpu,
             canvas,
@@ -377,7 +386,7 @@ function boot() {
       } else {
         if (!diagramModule || !diagramStyles) return
         // A case with no directed signal components has nothing to draw here.
-        const empty = !diagramModule.diagrammed(snapshot.rows)
+        const empty = !diagramModule.diagrammed(snapshot.data)
         host.toggleAttribute('data-empty', empty)
         if (empty) {
           drop()
@@ -413,20 +422,27 @@ function boot() {
       }
     }
   }
-  /** Whether the Network holds what it maps at `at`. It asks for the pages that time needs, then
-   *  those nearest it, and draws from the pages it holds once they cover it. */
+  /** Whether the Network holds what it maps at `at`: rows of this revision, and the samples its
+   *  mappings read over that time. */
+  function covered(at: number): boolean {
+    if (!drawable(snapshot, state)) return false
+    const { results, summary } = state
+    if (!results?.frames || results.fingerprint !== summary?.fingerprint) return true
+    if (at < results.domain[0] || at > results.domain[1]) return false
+    return networkNeeds(state).every(({ selection }) =>
+      samples.covers(selection.from, selection.select[0]!, [at, at]),
+    )
+  }
+  /** Whether the Network can draw `at`. It asks for the samples that time needs, then those
+   *  nearest it, and draws from the samples it holds once they cover it. */
   function ready(at: number): boolean {
-    const domain = state.run?.domain
-    const unavailable = domain && (at < domain[0] || at > domain[1])
-    const needs = networkNeeds(state)
-    const run = state.run?.id
-    if (needs.length && !unavailable) {
-      const played = clock.state
-      const travel = played.status === 'playing' ? played.rate * played.direction : 0
-      pages.want(run, needs, pagesAt(pages.pages, at), { at, travel })
-    } else pages.want(run, needs, [0, 0])
-    if (snapshot) data = pages.data(snapshot.rows, run)
-    const available = timeReady(data, snapshot?.begin, state, at)
+    const { results } = state
+    const unavailable = results && (at < results.domain[0] || at > results.domain[1])
+    const played = clock.state
+    const travel = played.status === 'playing' ? played.rate * played.direction : 0
+    samples.want(results, networkNeeds(state), unavailable ? undefined : [at, at], { at, travel })
+    if (snapshot) data = samples.data(snapshot.data)
+    const available = covered(at)
     const status = unavailable ? 'unavailable' : available ? 'ready' : 'buffering'
     if (host.dataset.availability !== status) {
       host.setAttribute('aria-busy', String(status === 'buffering'))
@@ -452,32 +468,16 @@ function boot() {
     else paintNow()
   }
   const clock = createClock(show)
-  receive({
-    rows: (next) => {
-      mark('canvas:data')
-      const changedRows = snapshot?.rows !== next.rows
-      snapshot = next
-      if (next.begin.base && next.begin.presentation) presented = next.begin.presentation
-      if (current(next.begin)) {
-        if (!view || changedRows) void render().catch(error)
-        else paint()
-      }
-    },
-    // Pages draw when the time shown needs them.
-    pages: ({ begin, samples }) => {
-      pages.insert(begin.simulationId, begin.paging, samples, begin.stream)
-      show(clock.now())
-    },
-    accept: (begin) => (begin.base ? current(begin) : currentStream(begin, state)),
-    settled: (stream) => (settled = stream),
+  receiveRows((next) => {
+    mark('canvas:data')
+    received++
+    snapshot = next
+    if (next.rows.presentation) presented = next.rows.presentation
+    if (current(next)) void render().catch(error)
   })
   bridge.on((message) => {
-    if (message.kind === 'begin') mark('canvas:begin')
-    else if (message.kind === 'pages') {
-      if (kind !== 'network') return
-      pages.list(message.run, message.paging, message.from, message.pages)
-      show(clock.now())
-    } else if (message.kind === 'state') {
+    if (message.kind === 'rows') mark('canvas:begin')
+    else if (message.kind === 'state') {
       state = merged(state, message.state)
       canvas.setAttribute(
         'aria-label',
@@ -498,6 +498,7 @@ function boot() {
       if (message.command === 'reloadView') {
         drop()
         borderRequest = undefined
+        samples.retry()
         return void render().catch(error)
       }
       if (!view) return
@@ -523,8 +524,8 @@ function boot() {
       ...owner.gpu?.stats(),
       at: presentedAt,
       requestedAt: clock.now(),
-      stream: drawnStream,
-      pages: pages.stats(),
+      received: drawn,
+      samples: samples.stats(),
       availability: host.dataset.availability,
     }
   // What the view shows selected, and where its camera is, so tests can follow a selection made

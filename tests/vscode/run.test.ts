@@ -96,21 +96,20 @@ suite('Run', function () {
     bench.run()
     // The run reveals the Monitor, and nothing else: no terminal takes the panel from it.
     monitor = await bench.view('monitor')
-    await until(() => session.run && session.run.frames > 0, 'frames arrive', 180_000)
+    await until(() => (session.results?.frames ?? 0) > 0, 'frames arrive', 180_000)
     assert.equal(await bench.panelShown(), 'Monitor')
     // GridKit reads the files as saved, so the edited case was saved first.
     assert.equal(bench.document.isDirty, false)
     const followed = session.run!.state !== 'running' || session.transport.state.follow
     await until(() => session.run?.state !== 'running', 'the run ends', 300_000)
     assert.equal(session.run?.state, 'complete', session.run?.message)
-    assert.ok(
-      Math.abs(session.run.domain[1] - session.run.span![1]) < 1e-9,
-      'the run reaches its end',
-    )
+    const results = session.results!
+    assert.ok(Math.abs(results.domain[1] - results.span![1]) < 1e-9, 'the run reaches its end')
+    assert.equal(results.growing, false)
     // GridKit wrote where the solver file says, and that is the file the Monitor reads.
     const written = vscode.Uri.joinPath(folder(), 'IEEE39.csv')
     await vscode.workspace.fs.stat(written)
-    assert.equal(session.run.path, written.fsPath)
+    assert.equal(results.path, written.fsPath)
     assert.equal(session.run.command, 'DynamicSimulation IEEE39.solver.json')
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
@@ -135,7 +134,7 @@ suite('Run', function () {
           `(document.hasFocus() ? 'has' : 'lacks') + ' focus on ' + document.activeElement?.${name}`
         const focus = await monitor.evaluate<string>(focused('tagName'))
         const page = await bench.page.evaluate<string>(focused('className'))
-        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''} at ${bench.session.transport.currentT()}, the plot at ${plot.at}${plot.paused ? ' paused' : ''} with its reading ${live === 'off' ? 'off' : 'on'}, the Monitor ${focus}, the window ${page}, the run ${JSON.stringify({ frames: session.run?.frames, domain: session.run?.domain })}`
+        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''} at ${bench.session.transport.currentT()}, the plot at ${plot.at}${plot.paused ? ' paused' : ''} with its reading ${live === 'off' ? 'off' : 'on'}, the Monitor ${focus}, the window ${page}, the results ${JSON.stringify({ frames: session.results?.frames, domain: session.results?.domain })}`
       },
     )
     assert.ok(followed, 'The playhead follows a run as it arrives')
@@ -145,15 +144,15 @@ suite('Run', function () {
       'Native traces must be painted, not just axes and a playhead',
     )
     bench.report.run = {
-      frames: session.run!.frames,
-      domain: session.run!.domain,
+      frames: results.frames,
+      domain: results.domain,
       painted: (await frames(network)) - before,
     }
   })
 
   test('rests at the end of the finished run, the Monitor on show again', async () => {
-    const { run, transport } = bench.session
-    end = run!.domain[1]
+    const { results, transport } = bench.session
+    end = results!.domain[1]
     assert.equal(transport.state.follow, false)
     assert.equal(transport.currentT(), end)
     monitor = await bench.view('monitor')
@@ -190,7 +189,7 @@ suite('Run', function () {
     await bench.toggleSignal('Bus', 'Vm')
     assert.ok(bench.recorded('Bus', 'Va') && !bench.recorded('Bus', 'Vm'))
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Vm' }])
-    assert.equal(bench.session.run!.outputs[0]!.select[0], 'Vm')
+    assert.equal(bench.session.results!.outputs[0]!.select[0], 'Vm')
     bench.run()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
@@ -210,7 +209,7 @@ suite('Run', function () {
       'the study ends',
       300_000,
     )
-    const study = bench.session.run!.contingency!
+    const study = bench.session.results!.contingency!
     // One contingency for each fault of the case, each faulting its own bus, the first on show.
     const faults = (bench.source.devices as { class?: string; ports?: { bus?: number } }[]).filter(
       (device) => device.class === 'BusFault',
@@ -220,15 +219,18 @@ suite('Run', function () {
       faults.map((device) => device.ports!.bus),
     )
     assert.deepEqual([study.written, study.shown, study.failed], [faults.map((_, n) => n), 0, []])
-    assert.equal(bench.session.run!.path, join(folder().fsPath, 'IEEE39_0.csv'))
-    const shown = bench.session.run!.id
+    assert.equal(bench.session.results!.path, join(folder().fsPath, 'IEEE39_0.csv'))
+    const shown = bench.session.results!.id
     // Another contingency, from the Monitor's title bar, takes the first's place.
     await bench.title('monitor', 'Show Contingency')
     const bus = study.buses[1]!
     await bench.pick(new RegExp(`^Bus ${bus}$`), `Bus ${bus}`)
-    await until(() => bench.session.run?.contingency?.shown === 1, 'the second contingency shows')
-    assert.notEqual(bench.session.run!.id, shown)
-    assert.equal(bench.session.run!.path, join(folder().fsPath, 'IEEE39_1.csv'))
+    await until(
+      () => bench.session.results?.contingency?.shown === 1,
+      'the second contingency shows',
+    )
+    assert.notEqual(bench.session.results!.id, shown)
+    assert.equal(bench.session.results!.path, join(folder().fsPath, 'IEEE39_1.csv'))
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.equal(await monitor.locator('.c-note--error').count(), 0)
@@ -248,9 +250,9 @@ suite('Run', function () {
       () => bench.session.run?.id !== previous && bench.session.run?.state !== 'running',
       'TwoArea ends',
     )
-    const { run } = bench.session
+    const { run, results } = bench.session
     assert.equal(run?.state, 'complete', run?.message)
-    assert.ok(Math.abs(run.domain[1] - run.span![1]) < 1e-9, 'the run reaches its end')
+    assert.ok(Math.abs(results!.domain[1] - results!.span![1]) < 1e-9, 'the run reaches its end')
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     await bench.capture('run-twoarea')
@@ -261,7 +263,7 @@ suite('Run', function () {
     const previous = bench.session.run!.id
     bench.run()
     await until(
-      () => bench.session.run?.id !== previous && bench.session.run?.frames! > 64,
+      () => bench.session.run?.id !== previous && (bench.session.results?.frames ?? 0) > 64,
       'live samples arrive',
     )
     assert.equal(bench.session.run?.state, 'running')
@@ -282,8 +284,9 @@ suite('Run', function () {
     await until(() => bench.session.transport.state.follow, 'follow live again')
     await bench.stop()
     await until(() => bench.session.run?.state === 'cancelled', 'the run stopped')
-    assert.ok(bench.session.run!.frames > 0)
-    assert.ok(bench.session.run!.domain[1] < 1000)
+    assert.ok(bench.session.results!.frames > 0)
+    assert.ok(bench.session.results!.domain[1] < 1000)
+    assert.equal(bench.session.results!.growing, false)
     await visible(monitor, 'canvas[data-rendered=true]')
     assert.ok(
       (await intervals()).every(([start, end]) => start === 0 && end === 1000),
@@ -292,7 +295,7 @@ suite('Run', function () {
     assert.equal((await bench.times())[1], 1000)
     await bench.playback('Previous sample').click()
     await until(
-      () => bench.session.transport.currentT() < bench.session.run!.domain[1],
+      () => bench.session.transport.currentT() < bench.session.results!.domain[1],
       'partial results remain playable',
     )
   })

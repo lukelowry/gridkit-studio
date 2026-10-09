@@ -8,7 +8,7 @@ import { setup, suite, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { plotsFor, type Sessions } from '../../src/extension/sessions.js'
-import type { SimulationInfo } from '../../src/shared/messages.js'
+import type { Results } from '../../src/shared/messages.js'
 import { extension, folder, until } from './harness.js'
 
 suite('Sessions', () => {
@@ -55,11 +55,13 @@ suite('Sessions', () => {
   })
 
   test('a new run keeps the plots it recorded, else plots its first signal', () => {
-    const run = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as SimulationInfo
+    const results = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as Results
     const vm = { from: 'Bus', field: 'Vm' }
-    assert.deepEqual(plotsFor(run, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
-    assert.deepEqual(plotsFor(run, [{ from: 'Gen', field: 'Pg' }]), [{ from: 'Bus', field: 'Va' }])
-    assert.deepEqual(plotsFor({ outputs: [] } as unknown as SimulationInfo, [vm]), [])
+    assert.deepEqual(plotsFor(results, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
+    assert.deepEqual(plotsFor(results, [{ from: 'Gen', field: 'Pg' }]), [
+      { from: 'Bus', field: 'Va' },
+    ])
+    assert.deepEqual(plotsFor({ outputs: [] } as unknown as Results, [vm]), [])
   })
 
   test('forgets cases deleted while it was closed, and keeps those that exist', async () => {
@@ -96,8 +98,8 @@ suite('Sessions', () => {
       return studio.open(document)
     }
     const restored = await reopen()
-    await until(() => restored.run?.path === csv.fsPath, 'the file read again')
-    assert.equal(restored.run!.frames, 3)
+    await until(() => restored.results?.path === csv.fsPath, 'the file read again')
+    assert.equal(restored.results!.frames, 3)
     await vscode.workspace.fs.delete(csv)
     const forgetting = await reopen()
     await until(
@@ -106,6 +108,6 @@ suite('Sessions', () => {
           .results,
       'a file that is gone is forgotten',
     )
-    assert.equal(forgetting.run, undefined)
+    assert.equal(forgetting.results, undefined)
   })
 })

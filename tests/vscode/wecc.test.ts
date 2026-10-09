@@ -83,7 +83,7 @@ suite('WECC240 run', function () {
     const version = bench.studio.state(uri.toString()).summary!.version
     for (let offset = 0; offset < buses.length; offset += 100) {
       const query = {
-        kind: 'rows',
+        kind: 'rows' as const,
         from: 'Bus',
         select: ['Va'],
         ids: true,
@@ -94,9 +94,9 @@ suite('WECC240 run', function () {
       const blocks = (await bench.studio.client.call('query', {
         uri: uri.toString(),
         version,
-        run: session().run!.id,
+        results: session().results!.id,
         query,
-      } as never)) as RowsBlock[]
+      })) as RowsBlock[]
       for (const block of blocks) {
         const column = block.columns.Va as unknown as { offset: number; values: ArrayLike<number> }
         for (let i = 0; i < rowCount(block.rows); i++)
@@ -195,17 +195,17 @@ suite('WECC240 run', function () {
     )
     const before = await frames(network)
     bench.run('Run Dynamic Simulation', solver)
-    await until(() => (session().run?.frames ?? 0) > 0, 'frames arrive', 180_000)
+    await until(() => (session().results?.frames ?? 0) > 0, 'frames arrive', 180_000)
     await until(async () => (await frames(network)) > before, 'live Va frames repaint the network')
     await until(() => session().run?.state !== 'running', 'the run ends', 300_000)
-    const run = session().run!
-    assert.equal(run.state, 'complete', run.message)
+    const { run, results } = session()
+    assert.equal(run!.state, 'complete', run!.message)
     assert.deepEqual(
-      run.outputs.map(({ from, select }) => [from, select]),
+      results!.outputs.map(({ from, select }) => [from, select]),
       [['Bus', ['Va']]],
     )
-    assert.ok(recordedWhole(run.outputs, buses.length, VA), 'a binding draws every bus')
-    assert.ok(Math.abs(run.domain[1] - 1) < 1e-9, `the run ends at ${run.domain[1]}`)
+    assert.ok(recordedWhole(results!.outputs, buses.length, VA), 'a binding draws every bus')
+    assert.ok(Math.abs(results!.domain[1] - 1) < 1e-9, `the run ends at ${results!.domain[1]}`)
     // Run shows the Monitor; the network is read at full height, the same for every frame.
     await vscode.commands.executeCommand('workbench.action.closePanel')
     shown.set('tilt 0', await at(0))

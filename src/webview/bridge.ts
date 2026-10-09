@@ -88,6 +88,7 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
       entry?.reject(
         Object.assign(new Error(message.error), {
           detail: message.detail,
+          ...(message.code && { code: message.code }),
           ...(message.defect && { defect: true }),
         }),
       )

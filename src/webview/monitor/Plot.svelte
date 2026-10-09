@@ -13,7 +13,6 @@
   import { onMount } from 'svelte'
 
   import { rowsOf } from '../../shared/cells.js'
-  import { coversTime } from '../../shared/coverage.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
   import { reader } from '../../shared/preferences.js'
   import { fieldName, typeName } from '../../shared/schema.js'
@@ -42,6 +41,7 @@
     view,
     source,
     sampled,
+    covers,
     t,
     shown,
     theme,
@@ -55,10 +55,12 @@
   }: {
     plot: Plot
     view: ViewState
-    /** The case with the run's frames so far; a new snapshot each time frames arrive. */
+    /** The case with the frames read so far; a new snapshot each time frames arrive. */
     source: Data | undefined
     /** The fields, and their rows, whose samples `source` holds. */
     sampled: readonly FieldSelection[]
+    /** Whether the samples held cover `window` of `from`'s `field`. */
+    covers: (from: string, field: string, window: Domain) => boolean
     /** The playhead. */
     t: number
     /** The window every plot shows. */
@@ -85,9 +87,9 @@
       : `${typeName(schema, plot.from)} · ${fieldName(definition, plot.field)}` +
           (plot.id ? ` · ${plot.id.slice(plot.from.length + 1)}` : ''),
   )
-  /** Whether the run on show recorded the plotted field. */
+  /** Whether the results on show hold the plotted field. */
   const recorded = $derived(
-    view.run?.outputs.some(
+    view.results?.outputs.some(
       (output) => output.from === plot.from && output.select.includes(plot.field),
     ) ?? false,
   )
@@ -113,7 +115,7 @@
   )
   const rows = $derived(
     source && source.tables[plot.from]
-      ? plotRows(source, view.run, { type: plot.from, field: plot.field, id: plot.id })
+      ? plotRows(source, view.results, { type: plot.from, field: plot.field, id: plot.id })
       : undefined,
   )
   const bindings = $derived(
@@ -122,7 +124,7 @@
       { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
       view.bindings,
       rows,
-      view.run,
+      view.results,
     ),
   )
 
@@ -138,7 +140,13 @@
       epoch++
     },
     (error) =>
-      bridge.report(error, { view: 'monitor', phase: 'draw', plot, run: view.run?.id, at: t }),
+      bridge.report(error, {
+        view: 'monitor',
+        phase: 'draw',
+        plot,
+        results: view.results?.id,
+        at: t,
+      }),
   )
   let windowUpdate = 0
   let previousFit: boolean | undefined
@@ -325,7 +333,7 @@
     const at = t
     const snapshot = source
     const selection = rows
-    if (!snapshot || !coversTime(snapshot, plot.from, plot.field, at, selection)) {
+    if (!snapshot || !covers(plot.from, plot.field, [at, at])) {
       sample = null
       return
     }
@@ -449,7 +457,7 @@
     onfocusin={() => (inspecting = true)}
     onfocusout={() => (inspecting = false)}
   >
-    {#if recorded && source && view.run?.frames && streamed}
+    {#if recorded && source && view.results?.frames && streamed}
       {#key `${generation}:${epoch}`}
         <CanvasHost
           {mount}
@@ -459,7 +467,7 @@
       {/key}
     {:else}
       <div class="c-empty lane__empty">
-        {#if view.run?.state === 'running' || (recorded && view.run?.frames)}
+        {#if view.results?.growing || (recorded && view.results?.frames)}
           <p class="c-empty__text">Waiting for samples…</p>
         {/if}
       </div>

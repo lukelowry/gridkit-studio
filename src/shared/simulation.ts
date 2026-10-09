@@ -36,30 +36,46 @@ export interface Study {
   shown: number
 }
 
-/** A GridKit results file Studio reads for a case: a run's, as GridKit writes it, or one opened. */
-export interface SimulationInfo {
+/** A GridKit results file read for a case: what the views draw, whether a run writes it or it was
+ *  opened. Its frames only grow while a run writes it, and no frame read ever changes. */
+export interface Results {
   id: string
+  /** The case revision it is read against, and that case's content. */
   revision: Revision
   fingerprint: string
+  /** The file's name. */
   name: string
-  /** What a shell would run for it, as `DynamicSimulation IEEE39.solver.json`. Absent for a file
-   *  opened alone. */
-  command?: string
-  state: 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
-  /** The file it reads. */
   path: string
   format: 'arrow' | 'csv'
-  frames: number
-  domain: Domain
-  /** The times the run will cover, as its solver file says. */
-  span?: Domain
-  /** Finite value ranges over every ingested sample, shared by all views and time windows. */
-  domains?: Record<string, Record<string, Domain>>
-  message?: string
-  started: number
   /** What the file holds, once its header is read. */
   outputs: readonly FieldSelection[]
+  frames: number
+  domain: Domain
+  /** Finite value ranges over every frame read, shared by all views and time windows. */
+  domains?: Record<string, Record<string, Domain>>
+  /** Frames per chunk, from the header's width, 0 before it is read. Chunk `k` holds frames
+   *  `k * chunk` up to `(k + 1) * chunk`, so every process cuts the file alike. */
+  chunk: number
+  /** Whether a run still writes it. */
+  growing: boolean
+  /** The times a run will cover, as its solver file says. */
+  span?: Domain
+  /** The study it is one contingency of. */
   contingency?: Study
+  started: number
+}
+
+/** A run of one of GridKit's programs on a solver file, and what it wrote, as read so far. A study
+ *  has written nothing to show until it ends. */
+export interface Run {
+  id: string
+  /** The case it runs. */
+  uri: string
+  /** What a shell would run, as `DynamicSimulation IEEE39.solver.json`. */
+  command: string
+  state: 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
+  message?: string
+  results?: Results
 }
 
 /** A run of `program` on a solver file, with what Studio read of it and of its case. */

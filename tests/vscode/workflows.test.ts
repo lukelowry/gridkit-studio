@@ -27,12 +27,12 @@ suite('Workflows', function () {
       .locator('tbody tr')
       .filter({ has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${bus.number}$`) }) })
   const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
-  /** The bus's recorded voltage at time `t` of run `run`. */
-  async function voltage(run: string, t: number): Promise<number> {
+  /** The bus's recorded voltage at time `t` of `results`. */
+  async function voltage(results: string, t: number): Promise<number> {
     const blocks = await bench.studio.client.call('query', {
       uri: bench.key,
       version: (await bench.current()).version,
-      run,
+      results,
       query: {
         kind: 'rows',
         from: 'Bus',
@@ -127,8 +127,8 @@ suite('Workflows', function () {
     )
     const run = bench.session.run!
     assert.equal(run.state, 'complete', run.message)
-    const steady = await voltage(run.id, 0.95)
-    const faulted = await voltage(run.id, 1.05)
+    const steady = await voltage(run.results!.id, 0.95)
+    const faulted = await voltage(run.results!.id, 1.05)
     assert.ok(faulted < steady - 0.1, `the faulted bus's voltage drops: ${steady} → ${faulted}`)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

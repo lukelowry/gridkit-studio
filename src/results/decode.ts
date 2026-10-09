@@ -14,7 +14,7 @@ import {
 import type { Case, Table } from '../gridkit/index.js'
 import { type ArrowField, messages } from './arrow.js'
 import { csvMessages } from './csv.js'
-import { BATCH_BYTES } from './limits.js'
+import { CHUNK_BYTES } from './limits.js'
 
 type ResultFormat = 'arrow' | 'csv'
 
@@ -39,7 +39,10 @@ interface Frames {
 
 interface Reading {
   readonly signal: AbortSignal
-  /** Keeps `frames` as they are: each batch is decoded into arrays of its own. */
+  /** The frame the source starts at, which `publish` hears frames counted from. */
+  readonly first?: number
+  /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
+   *  from one chunk into the next. */
   readonly publish: (frames: Frames) => void | Promise<void>
 }
 
@@ -60,6 +63,12 @@ export interface Layout {
   header?: readonly ArrowField[]
   /** What the header says the file holds, and where. */
   read?: { readonly fields: readonly Field[]; readonly plan: Plan }
+}
+
+/** Frames per chunk of a file holding `fields`: as many as CHUNK_BYTES of decoded frames hold. */
+export function chunkFrames(fields: readonly Field[]): number {
+  const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.rows.length, 0))
+  return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
 }
 
 /** One sample batch per output field, all over the same frames. */
@@ -98,7 +107,8 @@ export async function readResults(
 ): Promise<void> {
   let plan: Plan | undefined
   let outputs: readonly Field[] = []
-  let perBatch = 1
+  let chunk = 1
+  const first = reading.first ?? 0
   let received = 0
   let lastTime = -Infinity
   let yielded = performance.now()
@@ -115,8 +125,7 @@ export async function readResults(
         layout.read ??= layoutOf(message.fields, kase)
         plan = layout.read.plan
         outputs = layout.read.fields
-        const frameBytes = 8 * (1 + outputs.reduce((n, field) => n + field.rows.length, 0))
-        perBatch = Math.max(1, Math.floor(BATCH_BYTES / frameBytes))
+        chunk = chunkFrames(outputs)
         continue
       }
       if (!plan) throw failure('io', 'The results hold a batch before their schema.')
@@ -129,9 +138,10 @@ export async function readResults(
         message.kind === 'batch'
           ? arrowInput(message.body, message.batch.buffers, length, plan)
           : undefined
-      for (let from = 0; from < length; from += perBatch) {
+      for (let from = 0, count = 0; from < length; from += count) {
         reading.signal.throwIfAborted()
-        const count = Math.min(perBatch, length - from)
+        // Up to the next chunk's first frame.
+        count = Math.min(length - from, chunk - ((first + received + from) % chunk))
         const time = decoded?.times
         for (let t = from; t < from + count; t++) {
           const value = message.kind === 'rows' ? message.values[t * message.width]! : time![t]!
@@ -153,7 +163,7 @@ export async function readResults(
           copyColumns(decoded!, values, from, count)
         }
         const published = reading.publish({
-          firstFrame: received + from,
+          firstFrame: first + received + from,
           count,
           coordinates,
           values,

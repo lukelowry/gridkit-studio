@@ -1,19 +1,17 @@
-<!-- One lane per plotted signal of the run on show. Plots are added from the view's title bar,
-  which also names the run, and played from the status bar. -->
+<!-- One lane per plotted signal of the results on show. Plots are added from the view's title
+  bar, which also names the results, and played from the status bar. -->
 <script lang="ts">
   import type { Data, Domain, FieldSelection } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
-  import { pagesOver } from '../../shared/pages.js'
-  import { currentStream } from '../../shared/streams.js'
   import { type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
-  import { PageStore, plotNeeds } from '../pages.js'
   import { Recovery } from '../recovery.js'
-  import { receive, type Snapshot } from '../stream.js'
+  import { current, receiveRows, type Snapshot } from '../rows.js'
+  import { plotNeeds, Samples } from '../samples.js'
   import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
@@ -22,12 +20,15 @@
   const WINDOW_MS = 120
 
   let view = $state.raw<ViewState>({})
-  /** The run's case, and the pages of its samples the plots draw. */
+  /** The case the results were read against, and the samples of them the plots draw. */
   let rows = $state.raw<Snapshot | undefined>()
-  let settled = 0
-  const store = new PageStore((want) => bridge.send({ kind: 'want', ...want, settled }))
-  /** Bumped as pages arrive or the run lists more. */
+  /** Bumped as samples arrive. */
   let held = $state(0)
+  const samples = new Samples({
+    request: (input, signal) => bridge.request('samples', input, signal),
+    changed: () => held++,
+    report: (reason) => bridge.report(reason),
+  })
   let source = $state.raw<Data | undefined>()
   let sampled = $state.raw<readonly FieldSelection[]>([])
   /** The clock as of its last change. */
@@ -59,25 +60,23 @@
     if (!paused) t = clock.now()
   })
 
-  const run = $derived(view.run)
+  const results = $derived(view.results)
   const plots = $derived(view.plots ?? [])
-  const shown = $derived(monitorWindow(run, chosen ?? view.window))
+  const shown = $derived(monitorWindow(results, chosen ?? view.window))
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
-  // The plots draw the pages over the times shown; those around them load after, so a pan
+  // The plots draw the samples over the times shown; those around them load after, so a pan
   // finds them held.
   $effect(() => {
     void held
     const span = shown
-    const current = rows && currentStream(rows.begin, view) ? rows : undefined
-    const needs = plotNeeds(view)
-    store.want(view.run?.id, needs, pagesOver(store.pages, span), {
-      at: (span[0] + span[1]) / 2,
-      travel: 0,
-    })
-    source = current && store.data(current.rows, view.run?.id)
-    sampled = store.sampled(view.run?.id)
+    samples.want(view.results, plotNeeds(view), span, { at: (span[0] + span[1]) / 2, travel: 0 })
+    source = rows && current(rows, view) ? samples.data(rows.data) : undefined
+    sampled = samples.sampled()
   })
+  /** Whether the samples held cover `window` of `from`'s `field`. */
+  const covers = (from: string, field: string, window: Domain) =>
+    samples.covers(from, field, window)
 
   /** Every plot follows `bounds` at once; the extension hears once they rest. */
   function turn(bounds: Domain) {
@@ -96,8 +95,8 @@
           const before = view
           view = merged(view, incoming.state)
           appearance(view.settings)
-          // Another run resets the window; one the extension set replaces the user's.
-          if (view.run?.id !== before.run?.id) {
+          // Other results reset the window; one the extension set replaces the user's.
+          if (view.results?.id !== before.results?.id) {
             clearTimeout(telling)
             chosen = told = undefined
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
@@ -107,21 +106,11 @@
           else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
             epoch++
+            samples.retry()
           }
-        } else if (incoming.kind === 'pages') {
-          store.list(incoming.run, incoming.paging, incoming.from, incoming.pages)
-          held++
         }
       }),
-      receive({
-        rows: (next) => (rows = next),
-        pages: ({ begin, samples }) => {
-          store.insert(begin.simulationId, begin.paging, samples, begin.stream)
-          held++
-        },
-        accept: (begin) => currentStream(begin, view),
-        settled: (stream) => (settled = stream),
-      }),
+      receiveRows((next) => (rows = next)),
       watchTheme(() => (colors = theme())),
     ]
     const visibility = () => (hidden = document.hidden)
@@ -132,6 +121,7 @@
       clearTimeout(telling)
       for (const stop of stops) stop()
       clock.stop()
+      samples.clear()
       recovery.dispose()
       owner.dispose()
     }
@@ -139,11 +129,11 @@
 </script>
 
 <div class="monitor">
-  {#if plots.length === 0 || !run}
+  {#if plots.length === 0 || !results}
     <div class="c-empty monitor__empty">
       {#if !view.summary}
         <p class="c-empty__text">Loading case…</p>
-      {:else if !run}
+      {:else if !results}
         <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
           Choose monitored signals
         </button>
@@ -157,6 +147,7 @@
           {view}
           {source}
           {sampled}
+          {covers}
           {t}
           {shown}
           theme={colors}

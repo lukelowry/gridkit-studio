@@ -1,7 +1,6 @@
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import type { DataBatch } from '@latkit/model'
 import { type CancellationToken, EventEmitter, type ExtensionContext } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
@@ -35,7 +34,6 @@ export class Client {
     {
       resolve(value: unknown): void
       reject(error: Error): void
-      consume?(batches: readonly DataBatch[]): Promise<void>
       cleanup(): void
     }
   >()
@@ -83,30 +81,18 @@ export class Client {
       if (message.kind === 'run' || message.kind === 'log') return this.event.fire(message)
       const pending = this.#pending.get(message.id)
       if (!pending) return
-      if (message.kind === 'batch') {
-        void (pending.consume?.(message.batches) ?? Promise.resolve()).then(
-          () => worker.postMessage({ kind: 'ack', id: message.id }),
-          (error) => {
-            worker.postMessage({ kind: 'cancel', id: message.id })
-            pending.reject(error)
-            pending.cleanup()
-            this.#pending.delete(message.id)
-          },
+      pending.cleanup()
+      this.#pending.delete(message.id)
+      if (message.kind === 'error')
+        pending.reject(
+          Object.assign(new Error(message.problem.message), {
+            ...message.problem,
+            offset: message.offset,
+            length: message.length,
+            ...(message.defect && { defect: true, detail: message.detail }),
+          }),
         )
-      } else {
-        pending.cleanup()
-        this.#pending.delete(message.id)
-        if (message.kind === 'error')
-          pending.reject(
-            Object.assign(new Error(message.problem.message), {
-              ...message.problem,
-              offset: message.offset,
-              length: message.length,
-              ...(message.defect && { defect: true, detail: message.detail }),
-            }),
-          )
-        else pending.resolve(message.value)
-      }
+      else pending.resolve(message.value)
     })
     return worker
   }
@@ -114,11 +100,10 @@ export class Client {
     method: K,
     input: Requests[K]['input'],
     signal?: AbortSignal,
-    consume?: (batches: readonly DataBatch[]) => Promise<void>,
   ): Promise<Requests[K]['output']> {
     if (this.#disposed) return Promise.reject(new Error('Studio is closed.'))
     if (signal?.aborted) return Promise.reject(signal.reason)
-    if (this.#cleanup) return this.#cleanup.then(() => this.call(method, input, signal, consume))
+    if (this.#cleanup) return this.#cleanup.then(() => this.call(method, input, signal))
     const worker = this.#get()
     const id = ++this.#next
     return new Promise((resolve, reject) => {
@@ -132,7 +117,6 @@ export class Client {
       this.#pending.set(id, {
         resolve: (value) => resolve(value as Requests[K]['output']),
         reject,
-        consume,
         cleanup,
       })
       signal?.addEventListener('abort', abort, { once: true })

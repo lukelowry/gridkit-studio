@@ -119,11 +119,11 @@ export async function run() {
     const firstShown = performance.now()
     await shows(0)
     report.first = performance.now() - firstShown
-    report.frames = session.run!.frames
-    report.domain = session.run!.domain
+    report.frames = session.results!.frames
+    report.domain = session.results!.domain
 
     /** Seconds of the run, as it recorded them. */
-    const [start, end] = session.run!.domain
+    const [start, end] = session.results!.domain
     const at = (part: number) => start + part * (end - start)
 
     // Seeks far from anything shown.

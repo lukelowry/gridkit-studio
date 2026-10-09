@@ -8,7 +8,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import * as vscode from 'vscode'
 
 import { formatNumber } from '../shared/format.js'
-import type { GridKit, Program, SimulationInfo } from '../shared/messages.js'
+import type { GridKit, Program, Run } from '../shared/messages.js'
 import { outputOf, readSolver } from '../shared/study.js'
 import { cacheBytesOf, notice, type Sessions } from './sessions.js'
 import { showView } from './views.js'
@@ -35,9 +35,10 @@ const near = (solver: vscode.Uri, path: string) =>
 
 /** How far a run has come, in percent and in words. A study runs its contingencies at once, so
  *  only a simulation counts. */
-function progressOf(program: Program, { state, span, domain }: SimulationInfo) {
+function progressOf(program: Program, { state, results }: Run) {
   if (program === 'ContingencyAnalysis') return { percent: 0, message: 'Faulting each bus' }
-  if (state !== 'running' || !span || !(span[1] > span[0]))
+  const { span, domain, frames } = results ?? {}
+  if (state !== 'running' || !frames || !span || !domain || !(span[1] > span[0]))
     return { percent: 0, message: 'Starting' }
   return {
     percent: (100 * (domain[1] - span[0])) / (span[1] - span[0]),
@@ -97,8 +98,8 @@ export function registerRuns(studio: Sessions) {
           const listening = [
             token.onCancellationRequested(() => stop.abort()),
             studio.client.event.event((event) => {
-              if (event.kind !== 'run' || event.info.revision.uri !== uri) return
-              const { percent, message } = progressOf(program, event.info)
+              if (event.kind !== 'run' || event.run.uri !== uri) return
+              const { percent, message } = progressOf(program, event.run)
               progress.report({ increment: percent - shown, message })
               shown = percent
             }),

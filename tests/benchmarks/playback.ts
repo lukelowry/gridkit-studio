@@ -5,6 +5,7 @@ import { join } from 'node:path'
 
 import * as vscode from 'vscode'
 
+import type { SamplesInput } from '../../src/shared/messages.js'
 import { pause, testHost, until, VIEWPORT, visible, VM } from '../vscode/harness.js'
 
 export async function run() {
@@ -82,7 +83,7 @@ export async function run() {
     transport.pause()
     const after = samples.at(-1)!
     const report = {
-      result: { frames: bench.session.run!.frames, domain: bench.session.run!.domain },
+      results: { frames: bench.session.results!.frames, domain: bench.session.results!.domain },
       plots: after.map((plot, i) => ({
         visible: plot.visible,
         frames: plot.frames - before[i]!.frames,
@@ -110,7 +111,7 @@ export async function run() {
         )
       assert.deepEqual(
         after[i]!.camera.x,
-        bench.session.run!.span,
+        bench.session.results!.span,
         'Configured interval stays fixed',
       )
     }
@@ -142,22 +143,22 @@ export async function run() {
     const domain = () =>
       monitor.evaluate(`document.querySelector('canvas').gridkitPlot().traces.plotted.color.domain`)
     const range = await domain()
-    assert.deepEqual(range, bench.session.run!.domains?.Bus?.Vm)
+    assert.deepEqual(range, bench.session.results!.domains?.Bus?.Vm)
     // Config changes precede presentation. Let the one-time switch to coverage finish.
     await until(async () => {
       const plot = (await sample())[0]!
       return plot.segments > unmapped && !plot.refining
     }, 'mapped history finishes')
     const normalized = (await sample())[0]!
-    const originalRun = bench.session.run!
+    const original = bench.session.results!
     const originalPixels = await monitor.locator('canvas').first().screenshot()
     for (let i = 1; i <= 12; i++) {
       const next = [0.4 - i * 0.01, 1.6 + i * 0.01]
-      bench.session.run = {
-        ...originalRun,
+      bench.session.results = {
+        ...original,
         domains: {
-          ...originalRun.domains,
-          Bus: { ...originalRun.domains?.Bus, Vm: next as [number, number] },
+          ...original.domains,
+          Bus: { ...original.domains?.Bus, Vm: next as [number, number] },
         },
       }
       bench.studio.changed.fire(bench.key)
@@ -183,7 +184,7 @@ export async function run() {
     }
     const recoloredPixels = await monitor.locator('canvas').first().screenshot()
     assert.notDeepEqual(recoloredPixels, originalPixels, 'Cached history visibly recolors')
-    bench.session.run = originalRun
+    bench.session.results = original
     bench.studio.changed.fire(bench.key)
     await until(
       async () => JSON.stringify(await domain()) === JSON.stringify(range),
@@ -209,7 +210,8 @@ export async function run() {
       'Palette changes reuse history too',
     )
 
-    // A field's pages go with its last plot, and come again with a new one.
+    // A field's samples go with its last plot, and come again with a new one. An ask for them that
+    // fails is said once, and asked again when the Monitor is reloaded.
     const allPlots = bench.session.plots
     const withoutVa = async () => {
       bench.session.plots = allPlots.filter((p) => p.field !== 'Va')
@@ -220,117 +222,36 @@ export async function run() {
       )
     }
     await withoutVa()
-    // Corrupt one received batch. The view must reject the commit; the host must send the same
-    // pages again by itself, though this completed run has no new frames.
-    await monitor.evaluate(`(() => {
-      window.streamAttempts = [];
-      window.streamEnds = [];
-      let corrupt = true;
-      window.streamFault = event => {
-        const m = event.data;
-        if (m?.kind === 'begin') window.streamAttempts.push({ stream: m.stream, base: m.base, pages: m.pages });
-        if (m?.kind === 'end') window.streamEnds.push(m.stream);
-        if (m?.kind === 'batch' && corrupt) {
-          corrupt = false;
-          // An extra stale-sequence batch poisons assembly without preventing the real
-          // batch's receipt. This specifically tests commit rejection, not batch timeout.
-          window.dispatchEvent(new MessageEvent('message', { data: { ...m, sequence: 0 } }));
-        }
-      };
-      window.addEventListener('message', window.streamFault, true);
-    })()`)
-    bench.session.plots = allPlots
-    bench.studio.changed.fire(bench.key)
-    await until(
-      () =>
-        monitor.evaluate<boolean>(
-          `window.streamAttempts.length >= 2 && window.streamEnds.includes(window.streamAttempts.at(-1).stream) && document.querySelector('canvas').gridkitPlot()?.visible && !document.querySelector('canvas').gridkitPlot()?.refining`,
-        ),
-      async () =>
-        'rejected commit retries: ' +
-        JSON.stringify({
-          attempts: await monitor.evaluate('window.streamAttempts'),
-          plots: await sample(),
-          errors: bench.studio.errors,
-        }),
-    )
-    type Attempt = { base: boolean; pages?: [number, number] }
-    /** What a stream brought, besides its number. */
-    const asked = ({ base, pages }: Attempt) => ({ base, pages })
-    const attempts = await monitor.evaluate<Attempt[]>('window.streamAttempts')
-    // A rejected stream changed nothing, so the same pages come again: a page held is held once.
-    assert.equal(attempts[0]!.base, false, 'The plot asks for pages alone')
-    assert.deepEqual(asked(attempts[1]!), asked(attempts[0]!), 'Retry sends the rejected pages')
-    await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
-    await withoutVa()
-    // Fail after every batch was acknowledged but before final commit. The completed run
-    // must still be retried. Lost commit receipts themselves are covered by StreamDelivery.
-    await monitor.evaluate(`(() => {
-      window.streamAttempts = [];
-      window.streamEnds = [];
-      window.streamFault = event => {
-        const m = event.data;
-        if (m?.kind === 'begin') {
-          window.streamAttempts.push({ stream: m.stream, base: m.base, pages: m.pages });
-        }
-        if (m?.kind === 'end') window.streamEnds.push(m.stream);
-      };
-      window.addEventListener('message', window.streamFault, true);
-    })()`)
     const originalCall = bench.studio.client.call
-    let failBeforeCommit = true
+    let failing = true
     bench.studio.client.call = (async (...args: Parameters<typeof originalCall>) => {
-      const result = await originalCall.apply(bench.studio.client, args)
-      if (args[0] === 'batches' && failBeforeCommit) {
-        failBeforeCommit = false
-        throw Object.assign(new Error('Injected pre-commit timeout'), { code: 'timeout' })
+      const [method, input] = args
+      if (method === 'samples' && failing && (input as SamplesInput).field.select[0] === 'Va') {
+        failing = false
+        throw Object.assign(new Error('Injected read failure'), { code: 'io' })
       }
-      return result
+      return originalCall.apply(bench.studio.client, args)
     }) as typeof originalCall
     try {
       bench.session.plots = allPlots
       bench.studio.changed.fire(bench.key)
-      await until(
-        async () =>
-          (await monitor.evaluate<boolean>(
-            'window.streamAttempts.length >= 2 && window.streamEnds.includes(window.streamAttempts.at(-1).stream)',
-          )) &&
-          (await sample()).filter((p) => p.visible).every((p) => p.historyBytes > 0 && !p.refining),
-        async () =>
-          'pre-commit timeout recovery: ' +
-          JSON.stringify({
-            attempts: await monitor.evaluate('window.streamAttempts'),
-            plots: (await sample()).map((p) => ({
-              frames: p.frames,
-              visible: p.visible,
-              refining: p.refining,
-            })),
-            errors: bench.studio.errors,
-          }),
-      )
+      await until(() => bench.studio.errors.length > 0, 'the failed ask said')
     } finally {
       bench.studio.client.call = originalCall
     }
-    const timedOut = await monitor.evaluate<Attempt[]>('window.streamAttempts')
-    // A stream stopped before its end left the view as it was, so it is asked for again as it was.
-    assert.deepEqual(
-      asked(timedOut[1]!),
-      asked(timedOut[0]!),
-      'Retry asks again for what never committed',
+    const said = bench.studio.errors.splice(0)
+    assert.ok(
+      said.every((error) => /Injected read failure/.test(error)),
+      said.join('\n'),
     )
-    await monitor.evaluate(`window.removeEventListener('message', window.streamFault, true)`)
-    assert.deepEqual(
-      bench.studio.errors,
-      [],
-      'Transient stream rejection is recovered without a terminal error',
+    bench.studio.action.fire({ uri: bench.key, view: 'monitor', command: 'retryMonitor' })
+    await until(
+      async () =>
+        (await sample()).filter((p) => p.visible).every((p) => p.historyBytes > 0 && !p.refining),
+      async () => 'the Va plot drawn again: ' + JSON.stringify(await sample()),
     )
-    bench.report.normalization = {
-      changes: 12,
-      segments: 0,
-      modelQueries: 0,
-      commitAttempts: attempts,
-      timeoutAttempts: timedOut,
-    }
+    assert.deepEqual(bench.studio.errors, [], 'A reloaded Monitor reads its samples')
+    bench.report.normalization = { changes: 12, segments: 0, modelQueries: 0 }
     await seek(1.5)
     await bench.page.setViewportSize({ width: 1200, height: 800 })
     await seek(0.4)

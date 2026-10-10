@@ -376,14 +376,18 @@ export function registerCommands(studio: Sessions) {
       { title: 'Show contingency', placeHolder: `Showing bus ${study.buses[study.shown]}` },
     )
     if (!choice || choice.n === study.shown) return
+    const { solver } = session.results ?? {}
     show(
       session,
-      await studio.client.results.call('open', {
-        ...(await studio.revisionOf(session.uri)),
-        path: contingencyFile(study, choice.n),
-        contingency: { ...study, shown: choice.n },
-        cacheBytes: cacheBytesOf(vscode.Uri.parse(session.uri)),
-      }),
+      await studio.withCase(session.uri, (source) =>
+        studio.client.results.call('open', {
+          ...source,
+          path: contingencyFile(study, choice.n),
+          contingency: { ...study, shown: choice.n },
+          ...(solver && { solver }),
+          cacheBytes: cacheBytesOf(vscode.Uri.parse(session.uri)),
+        }),
+      ),
     )
   })
   command('clearResults', async ({ session }) => {
@@ -455,11 +459,13 @@ export function registerCommands(studio: Sessions) {
     if (!selected?.[0]) return
     show(
       context.session,
-      await studio.client.results.call('open', {
-        ...(await studio.revisionOf(context.session.uri)),
-        path: localPath(selected[0]),
-        cacheBytes: cacheBytesOf(selected[0]),
-      }),
+      await studio.withCase(context.session.uri, (source) =>
+        studio.client.results.call('open', {
+          ...source,
+          path: localPath(selected[0]!),
+          cacheBytes: cacheBytesOf(selected[0]!),
+        }),
+      ),
     )
     await plot(context)
   })

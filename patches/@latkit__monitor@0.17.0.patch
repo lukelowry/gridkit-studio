@@ -1,0 +1,87 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index aed857e77a712360777d56d2f539bf51653195e2..cc9d69556878f0057b01561c8ae9478851e42078 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -44,6 +44,9 @@ interface AxisOptions {
+     readonly format?: 'auto' | 'fixed' | 'scientific' | 'engineering';
+     readonly precision?: number;
+     readonly grid?: boolean;
++    /** Whether its ticks are labelled; without labels the axis keeps its line and grid, and the time
++     *  axis leaves no room for them below the plot. True by default. */
++    readonly labels?: boolean;
+ }
+ /** How a monitor draws, beyond the shared view style; every option has a default. */
+ interface MonitorStyle {
+@@ -58,6 +61,8 @@ interface MonitorStyle {
+     /** The playhead at `at`. */
+     readonly cursorColor?: RGBA;
+     readonly paddingPx?: Insets;
++    /** Lines around the whole plot, in the axis color, not only along its axes. */
++    readonly frame?: boolean;
+ }
+ interface Limits {
+     /** Rows the traces draw together. */
+diff --git a/dist/index.js b/dist/index.js
+index 72612d7d60ec80d5ee3fbd1572fd4a51d0a2a0cf..ce34ad4037c1131ca166e663052287b6839443fc 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -41,6 +41,7 @@ import { kit } from "@latkit/gpu";
+ var DEFAULTS = Object.freeze({
+   xAxis: {},
+   yAxis: {},
++  frame: false,
+   traceColor: [0.23, 0.72, 0.88, 0.7],
+   traceWidthPx: 1.25,
+   axisColor: [0.48, 0.58, 0.67, 0.8],
+@@ -761,11 +762,13 @@ function format(value, step, axis2) {
+ function plot(view, options) {
+   const [top, right, bottom, left] = insets(options.paddingPx), size = options.fontSizePx;
+   const x = left + (options.yAxis === null ? 0 : Math.max(64, size * 7)), y = top + (options.yAxis?.label ? size * 1.8 : 0);
++  // Room below for the tick labels, and for the caption only when the axis has one.
++  const below = options.xAxis === null || options.xAxis.labels === false ? 0 : size * (options.xAxis.label ? 3 : 1.8);
+   return {
+     x,
+     y,
+     width: Math.max(1, view.width - x - right),
+-    height: Math.max(1, view.height - y - bottom - (options.xAxis === null ? 0 : size * 3))
++    height: Math.max(1, view.height - y - bottom - below)
+   };
+ }
+ function onPlot(p, point) {
+@@ -805,11 +808,12 @@ async function axes(gpu, view, x, y, options, signal, text) {
+     for (const tick of t.items) {
+       const px = kit5.scaleValue(tick.value, sx);
+       if (axis2.grid !== false) line(px, area.y, px, area.y + area.height, options.gridColor);
++      if (axis2.labels === false) continue;
+       const value = tick.label ?? String(tick.value);
+       await label("x" + value, value, [px, area.y + area.height + size * 0.5], "center", "top", 3);
+     }
+     const caption = [axis2.label, t.offset ? "+" + String(t.offset) : ""].filter(Boolean).join("  ");
+-    if (caption)
++    if (caption && axis2.labels !== false)
+       await label(
+         "x caption",
+         caption,
+@@ -824,6 +828,7 @@ async function axes(gpu, view, x, y, options, signal, text) {
+     for (const tick of t.items) {
+       const py = kit5.scaleValue(tick.value, sy);
+       if (axis2.grid !== false) line(area.x, py, area.x + area.width, py, options.gridColor);
++      if (axis2.labels === false) continue;
+       const value = tick.label ?? String(tick.value);
+       await label("y" + value, value, [area.x - 8, py], "end", "middle");
+     }
+@@ -837,6 +842,14 @@ async function axes(gpu, view, x, y, options, signal, text) {
+         "alphabetic"
+       );
+   }
++  // A frame closes the plot on the sides its axes leave open.
++  if (options.frame) {
++    const right = area.x + area.width, bottom = area.y + area.height;
++    line(area.x, area.y, right, area.y, options.axisColor);
++    line(right, area.y, right, bottom, options.axisColor);
++    if (options.xAxis === null) line(area.x, bottom, right, bottom, options.axisColor);
++    if (options.yAxis === null) line(area.x, area.y, area.x, bottom, options.axisColor);
++  }
+   return {
+     plot: area,
+     text: text.flush(),

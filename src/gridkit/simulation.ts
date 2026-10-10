@@ -2,7 +2,7 @@
  *  read while it writes its output. A ContingencyAnalysis shows the first contingency it wrote once
  *  it ends. */
 
-import { readdir, rm } from 'node:fs/promises'
+import { mkdir, readdir, rm } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -69,6 +69,8 @@ export async function simulate(
       ? [output]
       : (await written()).map((n) => contingencyFile(files, n))
   await Promise.all(stale.map((file) => rm(file, { force: true })))
+  // GridKit opens its output without making the folder it names.
+  if (program === 'DynamicSimulation') await mkdir(dirname(output), { recursive: true })
   const process = await launch(
     gridkit,
     program,
@@ -79,7 +81,11 @@ export async function simulate(
   )
   /** The file at `path`, read as the run's results. */
   const reading = (path: string, more: Parameters<typeof described>[3]) => {
-    const file = new ResultsFile(described(kase, request, path, { format, ...more }), kase, cache)
+    const file = new ResultsFile(
+      described(kase, request, path, { format, solver, ...more }),
+      kase,
+      cache,
+    )
     run.results = file.info.id
     context.reading(file)
     return file

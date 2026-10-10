@@ -114,13 +114,20 @@ export interface SamplesInput {
 }
 
 /** How much memory a worker holds. */
-export interface Memory {
+interface Memory {
   heapUsed: number
   arrayBuffers: number
 }
 
+/** The case a request of the results worker reads, at its revision, by its content's fingerprint.
+ *  Its source comes only when the worker has yet to read that content. */
+export interface CaseSource extends Revision {
+  fingerprint: string
+  text?: string
+}
+
 /** The results a request reads, by their id. */
-export interface OfResults {
+interface OfResults {
   results: string
 }
 
@@ -157,10 +164,10 @@ export interface ResultsApi {
   /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
    *  and cancelling it stops the run. */
   run: { input: RunRequest; output: Run }
-  /** A GridKit results file read for the case at its revision, whose source is `text`. It answers
-   *  once the first frames are read, and the rest are read on. */
+  /** A GridKit results file read for the case, which `solver`'s run wrote when it names one. It
+   *  answers once the first frames are read, and the rest are read on. */
   open: {
-    input: Revision & { text: string; path: string; cacheBytes: number; contingency?: Study }
+    input: CaseSource & { path: string; solver?: string; cacheBytes: number; contingency?: Study }
     output: Results
   }
   /** The case the results were read against, as it was then. */
@@ -204,7 +211,6 @@ export type WorkerEvent =
       raw?: string
     }
 
-export type ToWorker = Request | Cancel
 export type FromWorker = Reply | WorkerEvent
 
 export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'export'

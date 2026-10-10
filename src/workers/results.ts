@@ -12,7 +12,7 @@ import { catalog, presentation, simulate } from '../gridkit/index.js'
 import { solverLine } from '../gridkit/solver.js'
 import { described, PROGRESS_MS, ResultCache, ResultsFile } from '../results/index.js'
 import { defect, detail, message } from '../shared/format.js'
-import type { ResultsApi, Revision, Run } from '../shared/messages.js'
+import type { CaseSource, ResultsApi, Run } from '../shared/messages.js'
 import { CaseCache, summarize } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
 import { send, serve } from './serve.js'
@@ -30,9 +30,17 @@ const cacheLimit = (value: number) => {
   return value
 }
 const nameOf = (uri: string) => uri.split('/').at(-1) ?? 'Case'
-/** The case whose source is `text`, as the extension read it at `revision`. */
-const caseOf = ({ uri, text }: Revision & { text: string }, signal: AbortSignal) =>
-  sources.parse(text, catalog, nameOf(uri), signal)
+/** The case `source` names: one read before, by its fingerprint, else its text, which the extension
+ *  sends again when asked. */
+async function caseOf({ uri, fingerprint, text }: CaseSource, signal: AbortSignal) {
+  const known = sources.find(fingerprint, nameOf(uri))
+  if (known) return known
+  if (text === undefined)
+    throw Object.assign(new Error('The results worker has yet to read this case.'), {
+      code: 'needs-source',
+    })
+  return sources.parse(text, catalog, nameOf(uri), signal)
+}
 
 /** What tells the extension how far `file` has been read: at most every PROGRESS_MS, unless `now`. */
 function teller(uri: string, file: ResultsFile) {
@@ -151,6 +159,7 @@ async function openResults(input: ResultsApi['open']['input'], signal: AbortSign
       growing: true,
       started: (await stat(input.path)).mtimeMs,
       ...(input.contingency && { contingency: input.contingency }),
+      ...(input.solver && { solver: input.solver }),
     }),
     kase,
     cache,

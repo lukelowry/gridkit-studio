@@ -25,7 +25,7 @@ const SAMPLE_BYTES = 8
 
 /** One field of results a view draws, and the rows it selects; without rows, every row the file
  *  holds. `rows` counts them. */
-export interface Need {
+interface Need {
   readonly selection: FieldSelection
   readonly rows: number
 }
@@ -82,7 +82,7 @@ export function selectionKey({ from, select, rows }: FieldSelection): string {
 }
 
 /** Where a view looks, and how fast its playhead moves through time. */
-export interface Near {
+interface Near {
   readonly at: number
   readonly travel: number
 }

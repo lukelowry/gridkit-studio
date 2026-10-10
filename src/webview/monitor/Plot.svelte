@@ -1,4 +1,5 @@
-<!-- One plotted signal: frames append as they arrive, and hover seeks while paused. -->
+<!-- One plotted signal under a header naming it: frames append as they arrive, and hover seeks while
+  paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
   import {
@@ -25,7 +26,6 @@
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
   import {
-    axisLabel,
     holds,
     PLOT_LIMITS,
     plotBindings,
@@ -33,6 +33,7 @@
     plotRows,
     sameSelection,
     sameWindow,
+    traceCount,
     traceSelection,
   } from './plot.js'
 
@@ -50,6 +51,7 @@
     gpu,
     paused,
     generation,
+    ticks,
     onframe,
     onwindow,
   }: {
@@ -72,6 +74,8 @@
     gpu: () => Promise<Gpu>
     paused: boolean
     generation: number
+    /** Whether its time ticks are labelled: the last of the plots, which share one time axis. */
+    ticks: boolean
     onframe: () => void
     /** The user panned or zoomed this plot to `bounds`. */
     onwindow: (bounds: Domain) => void
@@ -81,11 +85,13 @@
   const schema = $derived(view.summary?.schema)
   const definition = $derived(schema?.types[plot.from]?.fields[plot.field])
   const unit = $derived(definition?.unit ? ` ${definition.unit}` : '')
+  /** The type, the element when it plots one, and the field: "Bus 16 · Va". */
   const name = $derived(
     schema === undefined
       ? plot.field
-      : `${typeName(schema, plot.from)} · ${fieldName(definition, plot.field)}` +
-          (plot.id ? ` · ${plot.id.slice(plot.from.length + 1)}` : ''),
+      : typeName(schema, plot.from) +
+          (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
+          ` · ${fieldName(definition, plot.field)}`,
   )
   /** Whether the results on show hold the plotted field. */
   const recorded = $derived(
@@ -98,26 +104,19 @@
     holds(sampled, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
   )
   const settings = $derived(reader(view.settings))
-  /** The name runs up the value axis, beside its ticks, over the height the plot draws in: under
-   *  the top padding, and above the time axis's ticks and caption. */
-  const axis = $derived({
-    shown: settings.get('monitor.yAxis.visible'),
-    below: settings.get('monitor.xAxis.visible') ? 3 * settings.get('monitor.fontSizePx') : 0,
-  })
   const style = $derived(
-    plotOptions(
-      settings,
-      theme.palette,
-      theme.font,
-      axisLabel(schema?.axis),
-      fieldName(definition, plot.field),
-    ),
+    plotOptions(settings, theme.palette, theme.font, {
+      ticks,
+      ...(settings.get('monitor.yAxis.label') && { caption: fieldName(definition, plot.field) }),
+    }),
   )
   const rows = $derived(
     source && source.tables[plot.from]
       ? plotRows(source, view.results, { type: plot.from, field: plot.field, id: plot.id })
       : undefined,
   )
+  /** How many traces the plot draws, once its case's rows are held. */
+  const traces = $derived(source && rows ? traceCount(source, plot.from, rows) : undefined)
   const bindings = $derived(
     plotBindings(
       settings,
@@ -430,28 +429,30 @@
 </script>
 
 <section class="lane" aria-labelledby={`${id}-name`} bind:this={lane}>
-  <h2 class="lane__name" id={`${id}-name`} title={name} style:inset-block-end={axis.below + 'px'}>
-    {name}
-  </h2>
-  <button
-    type="button"
-    class="c-icon-btn lane__close"
-    title="Remove plot"
-    aria-label={`Remove ${name}`}
-    onclick={() =>
-      bridge.command('removePlot', {
-        uri: view.summary?.uri,
-        version: view.summary?.version,
-        origin: 'monitor',
-        plot,
-      })}
-  >
-    <Icon name="close" />
-  </button>
+  <header class="lane__head">
+    <h2 class="lane__name" id={`${id}-name`} title={name}>{name}</h2>
+    {#if traces !== undefined}
+      <span class="lane__count">{traces.toLocaleString()} {traces === 1 ? 'trace' : 'traces'}</span>
+    {/if}
+    <button
+      type="button"
+      class="c-icon-btn lane__close"
+      title="Remove plot"
+      aria-label={`Remove ${name}`}
+      onclick={() =>
+        bridge.command('removePlot', {
+          uri: view.summary?.uri,
+          version: view.summary?.version,
+          origin: 'monitor',
+          plot,
+        })}
+    >
+      <Icon name="close" />
+    </button>
+  </header>
   <!-- svelte-ignore a11y_no_static_element_interactions (The canvas inside takes focus; its keys bubble here.) -->
   <div
     class="lane__surface"
-    class:lane__surface--bare={!axis.shown}
     aria-describedby={`${id}-keys`}
     onkeydown={key}
     onfocusin={() => (inspecting = true)}
@@ -492,42 +493,49 @@
 </section>
 
 <style>
+  /* The plots share the Monitor's height alike, down to a size they stay readable at. */
   .lane {
-    position: relative;
     display: flex;
+    flex: 1 1 0;
     flex-direction: column;
     min-inline-size: 0;
-    min-block-size: 10rem;
+    min-block-size: 7rem;
     background: var(--color-surface-1);
   }
 
-  /* The signal's name reads up the value axis at the lane's left edge, in the gutter the plot
-     leaves for its ticks. */
-  .lane__name {
-    position: absolute;
-    z-index: 1;
-    inset-block-start: var(--spacing-sm);
-    inset-inline-start: var(--spacing-2xs);
-    overflow: hidden;
+  /* The signal's name, with its unit, and how many traces it draws, in a line above the plot. */
+  .lane__head {
+    display: flex;
+    gap: var(--spacing-xs);
+    align-items: baseline;
+    min-inline-size: 0;
+    padding-block: var(--spacing-2xs) 0;
+    padding-inline: var(--spacing-sm) var(--spacing-2xs);
     color: var(--color-text-2);
     font-size: var(--text-sm);
-    font-weight: 600;
-    line-height: 1.2;
-    text-align: center;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    /* Its box spans the lane above the plot: the pointer reaches the traces beneath. */
-    pointer-events: none;
+    line-height: 1.5rem;
   }
 
-  /* Shown while the pointer or focus is on the lane, over the plot's top right corner. */
+  .lane__name {
+    overflow: hidden;
+    margin: 0;
+    color: var(--color-text-1);
+    font-size: inherit;
+    font-weight: 600;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .lane__count {
+    flex: none;
+    margin-inline-start: auto;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Shown while the pointer or focus is on the lane. */
   .lane__close {
-    position: absolute;
-    z-index: 1;
-    inset-block-start: var(--spacing-2xs);
-    inset-inline-end: var(--spacing-2xs);
+    flex: none;
+    align-self: center;
     min-width: 1.5rem;
     min-height: 1.5rem;
     opacity: 0;
@@ -542,11 +550,6 @@
     position: relative;
     flex: 1;
     min-block-size: 0;
-  }
-
-  /* Without a value axis there is no gutter, so the name takes a column of its own. */
-  .lane__surface--bare {
-    padding-inline-start: calc(var(--text-sm) * 1.2 + var(--spacing-xs));
   }
 
   .lane__empty {

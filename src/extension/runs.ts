@@ -1,16 +1,17 @@
 /** GridKit's programs, run on a .solver.json from its menu as a shell runs them:
  *  `DynamicSimulation IEEE39.solver.json` in the solver file's folder. The solver file names the
  *  case, whose Monitor shows the run. A notification says how far it has come, and cancelling it
- *  stops the run. */
+ *  stops the run. The same menu shows what a solver file's last run wrote, and the Monitor runs the
+ *  solver file of the results it shows again. */
 
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
 import { formatNumber } from '../shared/format.js'
 import type { GridKit, Program, Results } from '../shared/messages.js'
-import { outputOf, readSolver } from '../shared/study.js'
 import { cacheBytesOf, notice, type Sessions } from './sessions.js'
+import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
 import { showView } from './views.js'
 
 /** The GridKit install the settings name for the case at `uri`; a relative path resolves against
@@ -27,11 +28,15 @@ export function gridkitOf(uri: vscode.Uri): GridKit {
   }
 }
 
-const nameOf = (uri: vscode.Uri) => uri.path.split('/').at(-1)!
+/** Where Problems lists why a case cannot be read. */
+const PROBLEMS = { title: 'Show Problems', command: 'workbench.actions.view.problems' }
 
-/** `path` as GridKit reads it in the solver file `solver`: relative to its folder unless absolute. */
-const near = (solver: vscode.Uri, path: string) =>
-  isAbsolute(path) ? vscode.Uri.file(path) : vscode.Uri.joinPath(solver, '..', path)
+/** The solver file a menu was opened on, which must be on this machine. */
+function solverOf(target: unknown, doing: string): vscode.Uri {
+  if (!(target instanceof vscode.Uri) || target.scheme !== 'file')
+    throw new Error(`Right-click a .solver.json on this machine to ${doing}.`)
+  return target
+}
 
 /** How far a run has come, by the `results` it has written so far, in percent and in words. A
  *  study runs its contingencies at once, so only a simulation counts. */
@@ -50,13 +55,10 @@ export function registerRuns(studio: Sessions) {
   /** Each case's run, from its menu until it ends. Aborting one stops it. */
   const runs = new Map<string, AbortController>()
 
-  const run = (program: Program) => async (solver: unknown) => {
-    if (!(solver instanceof vscode.Uri) || solver.scheme !== 'file')
-      throw new Error('Right-click a .solver.json on this machine to run it.')
+  const run = (program: Program) => async (target: unknown) => {
+    const solver = solverOf(target, 'run it')
     if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
-    const input = await vscode.workspace.openTextDocument(solver)
-    const study = readSolver(nameOf(solver), input.getText())
-    const model = near(solver, study.model)
+    const { document: input, study, model } = await solverAt(solver)
     const uri = model.toString()
     if (runs.has(uri)) throw new Error(`${nameOf(model)} is already running.`)
     const stop = new AbortController()
@@ -71,17 +73,13 @@ export function registerRuns(studio: Sessions) {
       // GridKit accepts it is GridKit's to say.
       const summary = await studio.documents.ensure(document).catch(() => undefined)
       if (!summary)
-        throw notice(`${nameOf(model)} has problems to fix before it can run.`, {
-          title: 'Show Problems',
-          command: 'workbench.actions.view.problems',
-        })
+        throw notice(`${nameOf(model)} has problems to fix before it can run.`, PROBLEMS)
       if (!Object.keys(summary.recording.listed).length)
         throw notice(`${nameOf(model)} records nothing.`, {
           title: 'Choose Signals',
           command: 'gridkitStudio.chooseSignals',
         })
-      const sink = outputOf(nameOf(solver), study, summary.recording.monitor)
-      const output = near(solver, sink.file)
+      const { uri: output, format } = writtenBy(solver, study, summary)
       // A run removes the file it writes before it starts, so that file must not be one it reads.
       if ([solver, model].some((file) => file.toString() === output.toString()))
         throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
@@ -114,27 +112,27 @@ export function registerRuns(studio: Sessions) {
           ]
           try {
             // The call is the run. It settles when the run ends, and aborting it stops the run.
-            await studio.client.results.call(
-              'run',
-              {
-                uri,
-                version: summary.version,
-                // The case as GridKit reads it, saved, which the results are read against.
-                text: document.getText(),
-                program,
-                solver: solver.fsPath,
-                output: output.fsPath,
-                format: sink.format,
-                tmax: study.tmax,
-                // What a container mounts: the solver file's workspace folder.
-                root: (
-                  vscode.workspace.getWorkspaceFolder(solver)?.uri ??
-                  vscode.Uri.joinPath(solver, '..')
-                ).fsPath,
-                gridkit: gridkitOf(model),
-                cacheBytes: cacheBytesOf(model),
-              },
-              stop.signal,
+            // The case is as GridKit reads it, saved, which the results are read against.
+            await studio.withCase(uri, (source) =>
+              studio.client.results.call(
+                'run',
+                {
+                  ...source,
+                  program,
+                  solver: solver.fsPath,
+                  output: output.fsPath,
+                  format,
+                  tmax: study.tmax,
+                  // What a container mounts: the solver file's workspace folder.
+                  root: (
+                    vscode.workspace.getWorkspaceFolder(solver)?.uri ??
+                    vscode.Uri.joinPath(solver, '..')
+                  ).fsPath,
+                  gridkit: gridkitOf(model),
+                  cacheBytes: cacheBytesOf(model),
+                },
+                stop.signal,
+              ),
             )
           } finally {
             for (const each of listening) each.dispose()
@@ -146,9 +144,41 @@ export function registerRuns(studio: Sessions) {
     }
   }
 
+  /** Shows what a solver file's last simulation wrote, read against its case, without running it. */
+  const show = async (target: unknown) => {
+    const solver = solverOf(target, 'show its results')
+    const { study, model } = await solverAt(solver)
+    const document = await vscode.workspace.openTextDocument(model)
+    const summary = await studio.documents.ensure(document).catch(() => undefined)
+    if (!summary)
+      throw notice(`${nameOf(model)} has problems to fix before its results can be read.`, PROBLEMS)
+    const { uri: output } = writtenBy(solver, study, summary)
+    if (!(await exists(output)))
+      throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
+    const session = await studio.open(document)
+    await showView('monitor')
+    const results = await studio.withCase(session.uri, (source) =>
+      studio.client.results.call('open', {
+        ...source,
+        path: output.fsPath,
+        solver: solver.fsPath,
+        cacheBytes: cacheBytesOf(model),
+      }),
+    )
+    studio.show(session, results, false)
+    studio.changed.fire(session.uri)
+  }
+
   return [
     studio.command('gridkitStudio.runSimulation', run('DynamicSimulation')),
     studio.command('gridkitStudio.runContingencies', run('ContingencyAnalysis')),
     studio.command('gridkitStudio.stopSimulation', () => runs.get(studio.active ?? '')?.abort()),
+    studio.command('gridkitStudio.showResults', show),
+    // The solver file of the results on show, run as they were: a study's again as a study.
+    studio.command('gridkitStudio.runAgain', () => {
+      const { solver, contingency } = studio.current().results ?? {}
+      if (!solver) throw new Error('These results were not written by a run of a solver file.')
+      return run(contingency ? 'ContingencyAnalysis' : 'DynamicSimulation')(vscode.Uri.file(solver))
+    }),
   ]
 }

@@ -8,6 +8,7 @@ import {
   type FieldSelection,
   itemKey,
   rowAt,
+  rowCount,
   selectRows,
 } from '@latkit/model'
 import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
@@ -76,9 +77,16 @@ export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem
   return a.length === b.length && a.every((item, i) => traceKey(item) === traceKey(b[i]!))
 }
 
-/** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the
- *  last time label's overhang; the axis labels pad the bottom and left. */
-const MARGIN_PX = [8, 12, 0, 0] as const
+/** Padding past the plot's frame [top, right, bottom, left]: `--spacing-sm`, `--spacing-md` for the
+ *  last time label's overhang, and `--spacing-2xs` so the frame's bottom line is never clipped; the
+ *  value labels pad the left. */
+const MARGIN_PX = [8, 12, 4, 0] as const
+
+/** How many traces `rows` of `type` draw. */
+export function traceCount(source: Data, type: string, rows: FieldSelection['rows']): number {
+  const table = source.tables[type]
+  return table ? rowCount(selectRows(table, rows)) : 0
+}
 
 /** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
  *  every row. A plot added to the Monitor waits for the samples it asks for. */
@@ -139,13 +147,14 @@ export function monitorWindow(results?: Pick<Results, 'span' | 'domain'>, chosen
   return range && range[1] > range[0] ? range : [range?.[0] ?? 0, (range?.[0] ?? 0) + 1]
 }
 
-/** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. */
+/** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. A plot
+ *  is framed. Its time ticks are labelled only with `ticks`, as on the last of plots stacked over one
+ *  time axis; `time` captions that axis and `caption` the values, where nothing else names them. */
 export function plotOptions(
   s: SettingsReader,
   palette: Palette | null,
   font: string | null,
-  axis: string,
-  valueLabel: string,
+  { ticks, time, caption }: { ticks: boolean; time?: string; caption?: string },
 ): Partial<MonitorConfig> {
   const xPrecision = s.get('monitor.xAxis.precision')
   const yPrecision = s.get('monitor.yAxis.precision')
@@ -155,9 +164,11 @@ export function plotOptions(
     fontSizePx: s.get('monitor.fontSizePx'),
     ...(family && { font: { family } }),
     paddingPx: [...MARGIN_PX],
+    frame: true,
     xAxis: s.get('monitor.xAxis.visible')
       ? {
-          label: axis,
+          label: ticks ? (time ?? '') : '',
+          labels: ticks,
           grid: s.get('monitor.xAxis.grid'),
           minSpacingPx: s.get('monitor.xAxis.minSpacingPx'),
           format: s.get('monitor.xAxis.format'),
@@ -166,7 +177,7 @@ export function plotOptions(
       : false,
     yAxis: s.get('monitor.yAxis.visible')
       ? {
-          label: s.get('monitor.yAxis.label') ? valueLabel : '',
+          label: caption ?? '',
           grid: s.get('monitor.yAxis.grid'),
           minSpacingPx: s.get('monitor.yAxis.minSpacingPx'),
           format: s.get('monitor.yAxis.format'),

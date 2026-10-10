@@ -83,11 +83,9 @@ suite('Sessions', () => {
       csv,
       new TextEncoder().encode(`time,Bus_${buses[0]!.name}_Vm\n0,1\n0.5,0.9\n1,1\n`),
     )
-    const info = await studio.client.results.call('open', {
-      ...(await studio.revisionOf(session.uri)),
-      path: csv.fsPath,
-      cacheBytes: 16 << 20,
-    })
+    const info = await studio.withCase(session.uri, (source) =>
+      studio.client.results.call('open', { ...source, path: csv.fsPath, cacheBytes: 16 << 20 }),
+    )
     studio.show(session, info)
     await studio.persist(session)
     /** The case opened again, as after a reload: a session of its own, read anew. */

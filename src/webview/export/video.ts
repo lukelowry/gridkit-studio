@@ -11,7 +11,7 @@ import type { VideoProgress, VideoWrite } from '@latkit/video'
 
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
-import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
+import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
@@ -76,7 +76,7 @@ export function viewsOf(state: ViewState): { value: VideoView; label: string }[]
 }
 
 /** The plots of `state` its results hold, which the Monitor's part of a video draws. */
-export function plotsOf({ results, plots = [] }: ViewState): Plot[] {
+function plotsOf({ results, plots = [] }: ViewState): Plot[] {
   return plots.filter((plot) =>
     results?.outputs.some(
       (output) => output.from === plot.from && output.select.includes(plot.field),
@@ -177,17 +177,22 @@ export async function exportVideo(
         const plots = plotsOf(state)
         if (plots.length === 0) throw new Error('No recorded signal to export.')
         cells.push(
-          plots.map((plot) => {
+          plots.map((plot, i) => {
             const definition = rows.schema.types[plot.from]?.fields[plot.field]
+            // Nothing beside a video names its plots, so each names itself as the Monitor's
+            // header does; the last, over the time axis they share, labels and captions its ticks.
+            const name =
+              typeName(rows.schema, plot.from) +
+              (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
+              ` · ${fieldName(definition, plot.field)}`
+            const last = i === plots.length - 1
             return keep(
               createMonitor(gpu, {
-                ...plotOptions(
-                  preferences,
-                  colors,
-                  face,
-                  axisLabel(rows.schema.axis),
-                  fieldName(definition, plot.field),
-                ),
+                ...plotOptions(preferences, colors, face, {
+                  ticks: last,
+                  caption: name,
+                  ...(last && { time: axisLabel(rows.schema.axis) }),
+                }),
                 ...still,
                 canvas: null,
                 source: plotted,

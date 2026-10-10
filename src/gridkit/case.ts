@@ -73,7 +73,7 @@ export interface Table {
 }
 
 /** A field the catalog does not know, and the first row that has it. */
-export interface FoundField {
+interface FoundField {
   readonly type: string
   readonly field: string
   readonly row: number

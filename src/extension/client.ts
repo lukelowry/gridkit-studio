@@ -30,7 +30,7 @@ export async function cancellable<T>(
 
 /** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
  *  One listener's failure leaves the others theirs. */
-export class Emitter<T> {
+class Emitter<T> {
   readonly #listeners = new Set<(value: T) => void>()
   readonly event = (listener: (value: T) => void) => {
     this.#listeners.add(listener)
@@ -59,7 +59,7 @@ interface Owner {
 }
 
 /** A worker of the extension's, started when first asked and again after it stops. */
-export class Thread<A extends Api<A>> {
+class Thread<A extends Api<A>> {
   /** Hears why the worker stopped, each time it does. */
   readonly failure = new Emitter<Error>()
   #worker?: Worker

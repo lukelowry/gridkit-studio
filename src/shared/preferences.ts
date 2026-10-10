@@ -294,7 +294,7 @@ export const SETTINGS = [
         'Least gap between time ticks.'),
       choice('monitor.xAxis.format', 'Time format', 'auto', FORMATS),
       num('monitor.xAxis.precision', 'Time decimals', null, [0, 15, 1]),
-      num('monitor.yAxis.minSpacingPx', 'Value spacing', 40, [8, 400, 1],
+      num('monitor.yAxis.minSpacingPx', 'Value spacing', 24, [8, 400, 1],
         'Least gap between value ticks.'),
       choice('monitor.yAxis.format', 'Value format', 'auto', FORMATS,
         'Auto writes very large and small values with exponents.'),
@@ -317,7 +317,7 @@ export const SETTINGS = [
       bool('monitor.camera.fit', 'Fit values', true,
         'Keep the value axis fitted to the data in view.'),
       num('monitor.animationMs', 'Easing', 0, [0, 2000, 50], 'Duration of axis moves.'),
-      num('monitor.fitPaddingPx', 'Fit padding', 32, [0, 200, 1],
+      num('monitor.fitPaddingPx', 'Fit padding', 8, [0, 200, 1],
         'Space kept around the values when they are fitted.'),
     ]),
     group('Selection', [
@@ -466,8 +466,8 @@ type ValueOf<D extends Definition> = D extends { kind: 'number' }
   : D['default']
 
 export type SettingsValues = { [D in Definition as D['id']]: ValueOf<D> }
-export type SettingKey = keyof SettingsValues
-export type SettingsDocument = Partial<SettingsValues>
+type SettingKey = keyof SettingsValues
+type SettingsDocument = Partial<SettingsValues>
 export interface SettingsReader {
   get<K extends SettingKey>(key: K): SettingsValues[K]
 }

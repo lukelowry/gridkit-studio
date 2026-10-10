@@ -24,10 +24,10 @@ export type TitleBar = 'case' | 'monitor' | 'signals' | 'export' | 'editor'
 export type Solver = Record<string, unknown>
 
 /** The solver file `name.solver.json` for the case `name.case.json` beside it: its own members,
- *  writing its samples to `name.csv`. */
+ *  writing its samples to `output/name.csv`, as the samples' solver files do. */
 export const solverText = (name: string, solver: Solver) =>
   JSON.stringify(
-    { system_model_file: name + '.case.json', output_file: name + '.csv', ...solver },
+    { system_model_file: name + '.case.json', output_file: 'output/' + name + '.csv', ...solver },
     null,
     4,
   ) + '\n'
@@ -863,11 +863,13 @@ export class TestHost {
           ).join(''),
       ),
     )
-    const results = await this.studio.client.results.call('open', {
-      ...(await this.studio.revisionOf(this.key)),
-      path: csv.fsPath,
-      cacheBytes: 32 << 20,
-    })
+    const results = await this.studio.withCase(this.key, (source) =>
+      this.studio.client.results.call('open', {
+        ...source,
+        path: csv.fsPath,
+        cacheBytes: 32 << 20,
+      }),
+    )
     this.studio.show(this.session, results)
     await until(
       () => this.session.results?.id === results.id && !this.session.results.growing,

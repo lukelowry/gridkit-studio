@@ -82,6 +82,7 @@ describe('the workers the extension asks', () => {
       const open = client.results.call('open', {
         uri: 'file:///one',
         version: 1,
+        fingerprint: '',
         text: ONE,
         path: 'any.csv',
         cacheBytes: 16 << 20,

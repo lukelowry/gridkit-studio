@@ -10,11 +10,13 @@ import {
 import { cancelled, defect, detail, formatNumber, message } from '../shared/format.js'
 import type {
   Cameras,
+  CaseSource,
   Element,
   Plot,
   Results,
   Run,
   Study,
+  Summary,
   TableState,
   ViewState,
 } from '../shared/messages.js'
@@ -28,6 +30,7 @@ import { elementType, networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
 import { Client } from './client.js'
 import { Documents, isWritable } from './documents.js'
+import { exists, solverAt, writtenBy } from './solvers.js'
 
 export interface Session {
   uri: string
@@ -51,8 +54,9 @@ export interface Session {
 }
 /** Per-case workspace state. */
 type Saved = Partial<Pick<Session, 'bindings' | 'plots' | 'table'>> & {
-  /** The results file the Monitor showed, read again when the case first opens. */
-  results?: { path: string; contingency?: Study }
+  /** The results file the Monitor showed, read again when the case first opens, and the solver
+   *  file whose run wrote it. */
+  results?: { path: string; solver?: string; contingency?: Study }
 }
 
 /** The `resultCacheMiB` setting for `uri`, in bytes. */
@@ -91,12 +95,12 @@ function settingsFor(uri: vscode.Uri): SettingsValues {
 }
 
 /** A choice a notification offers: its label, and the command it runs. */
-export interface Offer {
+interface Offer {
   title: string
   command: string
 }
 /** The log, where every failed run and every defect points. */
-export const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudio.showOutput' }
+const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudio.showOutput' }
 
 /** An error to report as `text`, offering `offers`. */
 export const notice = (text: string, ...offers: Offer[]) =>
@@ -350,6 +354,7 @@ export class Sessions {
       editable: !!entry && !entry.stale && isWritable(entry.document),
       running: session?.run?.state === 'running',
       contingency: !!session?.results?.contingency,
+      fromSolver: !!session?.results?.solver,
       hasSamples: (session?.results?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
@@ -384,41 +389,65 @@ export class Sessions {
   async open(document: vscode.TextDocument) {
     const session = this.activate(document.uri.toString())
     const summary = await this.documents.ensure(document)
-    // Once per session, the file the Monitor last showed is read again. A run started meanwhile
-    // shows instead, and a file that no longer reads is forgotten.
+    // Once per session, the file the Monitor last showed is read again: a simulation's from where
+    // its solver file writes now, when that file is there. A run started meanwhile shows instead,
+    // and a file that no longer reads is forgotten.
     if (!this.#restored.has(session)) {
       this.#restored.add(session)
       const saved = this.context.workspaceState.get<Saved>('case:' + session.uri)?.results
       if (saved)
-        void this.client.results
-          .call('open', {
-            uri: session.uri,
-            version: summary.version,
-            text: document.getText(),
-            ...saved,
-            cacheBytes: cacheBytesOf(document.uri),
-          })
-          .then(
-            (results) => {
-              if (session.results || this.all.get(session.uri) !== session) return
-              this.show(session, results, false)
-              this.changed.fire(session.uri)
-            },
-            (error) => {
-              this.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
-              if (!session.results) void this.persist(session)
-            },
+        void (async () => {
+          const path =
+            (saved.solver && !saved.contingency && (await this.#writes(saved.solver, summary))) ||
+            saved.path
+          return this.withCase(session.uri, (source) =>
+            this.client.results.call('open', {
+              ...source,
+              ...saved,
+              path,
+              cacheBytes: cacheBytesOf(document.uri),
+            }),
           )
+        })().then(
+          (results) => {
+            if (session.results || this.all.get(session.uri) !== session) return
+            this.show(session, results, false)
+            this.changed.fire(session.uri)
+          },
+          (error) => {
+            this.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
+            if (!session.results) void this.persist(session)
+          },
+        )
     }
     return session
   }
-  /** The case at `uri` as the views read it now: its revision, and its source, which results opened
-   *  are read against. */
-  async revisionOf(uri: string): Promise<{ uri: string; version: number; text: string }> {
+  /** The file the solver file at `path` writes for the case `summary` reads, when it names that
+   *  case and the file is there. */
+  async #writes(path: string, summary: Summary): Promise<string | undefined> {
+    try {
+      const solver = vscode.Uri.file(path)
+      const { study, model } = await solverAt(solver)
+      if (model.toString() !== summary.uri) return undefined
+      const { uri } = writtenBy(solver, study, summary)
+      return (await exists(uri)) ? uri.fsPath : undefined
+    } catch {
+      return undefined
+    }
+  }
+  /** Asks the results worker `call` of the case at `uri` as it reads now: by its fingerprint, and
+   *  with its source too only when the worker has yet to read it. A large case crosses once. */
+  async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
     const entry = this.documents.entries.get(uri)
     if (!entry) throw new Error('Open the case first.')
-    const { version } = await this.documents.ensure(entry.document)
-    return { uri, version, text: entry.document.getText() }
+    const { version, fingerprint } = await this.documents.ensure(entry.document)
+    const source = { uri, version, fingerprint }
+    try {
+      return await call(source)
+    } catch (error) {
+      if ((error as { code?: unknown } | null)?.code !== 'needs-source') throw error
+      return call({ ...source, text: entry.document.getText() })
+    }
   }
   current() {
     const session = this.active ? this.all.get(this.active) : undefined
@@ -434,6 +463,7 @@ export class Sessions {
       ...(results && {
         results: {
           path: results.path,
+          ...(results.solver && { solver: results.solver }),
           ...(results.contingency && { contingency: results.contingency }),
         },
       }),

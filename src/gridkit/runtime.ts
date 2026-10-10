@@ -27,7 +27,7 @@ const MOUNT = '/workspace'
 
 /** Where a run happens: GridKit runs `solver` in its folder, as a shell would, and a container
  *  mounts `root`, which must hold every file the run `touches`. */
-export interface Place {
+interface Place {
   readonly root: string
   readonly solver: string
   readonly touches: readonly string[]

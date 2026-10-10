@@ -12,7 +12,7 @@ View, edit, and simulate [GridKit](https://github.com/ORNL/GridKit) power-system
 
 ## Install
 
-Download the VSIX from [Releases](https://github.com/lukelowry/gridkit-studio/releases) and install it with **Extensions: Install from VSIX…**, then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
+Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
 
 ## GridKit
 
@@ -28,7 +28,16 @@ To use the default image, pull it first:
 docker pull ghcr.io/lukelowry/gridkit:latest
 ```
 
-To run GridKit, right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes. The case's `mon` lists say what gets recorded, and **Monitored Signals** edits them. **Open Results…** in the Monitor shows output you already have.
+To work inside a container instead, with GridKit on `PATH`, save this as `.devcontainer/devcontainer.json` in your project and run **Dev Containers: Reopen in Container**:
+
+```json
+{
+  "image": "ghcr.io/lukelowry/gridkit:latest",
+  "customizations": { "vscode": { "extensions": ["lukelowery.gridkit-studio"] } }
+}
+```
+
+To run GridKit, right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes. The case's `mon` lists say what gets recorded, and **Monitored Signals** edits them. **Show Results** on a solver file shows what its last run wrote, and **Run Again** in the Monitor runs that solver file again. **Open Results…** in the Monitor shows any other output you have.
 
 ## Features
 

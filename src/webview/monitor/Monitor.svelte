@@ -1,5 +1,6 @@
-<!-- One lane per plotted signal of the results on show. Plots are added from the view's title
-  bar, which also names the results, and played from the status bar. -->
+<!-- One lane per plotted signal of the results on show, stacked over one time axis that the last
+  labels. Plots are added from the view's title bar, which also names the results, and played from
+  the status bar. -->
 <script lang="ts">
   import type { Data, Domain, FieldSelection } from '@latkit/model'
   import { onMount } from 'svelte'
@@ -148,7 +149,7 @@
     </div>
   {:else}
     <div class="monitor__lanes" data-testid="monitor-lanes">
-      {#each plots as plot (keyOf(plot))}
+      {#each plots as plot, i (keyOf(plot))}
         <Plot
           {plot}
           {view}
@@ -163,6 +164,7 @@
           {gpu}
           {paused}
           generation={epoch}
+          ticks={i === plots.length - 1}
           onframe={() => recovery.presented()}
           onwindow={turn}
         />
@@ -185,15 +187,14 @@
     flex: 1;
   }
 
-  /* Side by side while there is room; the 1px gap shows the border color as hairlines. */
+  /* One above another, sharing the time axis; the 1px gap shows the border color as hairlines. */
   .monitor__lanes {
-    display: grid;
+    display: flex;
     flex: 1;
-    grid-template-columns: repeat(auto-fit, minmax(min(26rem, 100%), 1fr));
-    grid-auto-rows: minmax(10rem, 1fr);
+    flex-direction: column;
     gap: 1px;
     min-block-size: 0;
-    overflow: auto;
+    overflow-y: auto;
     background: var(--color-border);
   }
 </style>

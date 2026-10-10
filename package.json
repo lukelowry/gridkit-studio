@@ -102,7 +102,8 @@
     ],
     "patchedDependencies": {
       "@latkit/network@0.21.0": "patches/@latkit__network@0.21.0.patch",
-      "@latkit/video@0.6.4": "patches/@latkit__video@0.6.4.patch"
+      "@latkit/video@0.6.4": "patches/@latkit__video@0.6.4.patch",
+      "@latkit/monitor@0.17.0": "patches/@latkit__monitor@0.17.0.patch"
     }
   },
   "capabilities": {
@@ -259,6 +260,19 @@
         "category": "GridKit Studio",
         "icon": "$(run-all)",
         "enablement": "isWorkspaceTrusted"
+      },
+      {
+        "command": "gridkitStudio.showResults",
+        "title": "Show Results",
+        "category": "GridKit Studio",
+        "icon": "$(graph-line)"
+      },
+      {
+        "command": "gridkitStudio.runAgain",
+        "title": "Run Again",
+        "category": "GridKit Studio",
+        "icon": "$(debug-rerun)",
+        "enablement": "isWorkspaceTrusted && gridkitStudio.fromSolver && !gridkitStudio.running"
       },
       {
         "command": "gridkitStudio.stopSimulation",
@@ -712,6 +726,11 @@
           "group": "gridkit@1"
         },
         {
+          "command": "gridkitStudio.showResults",
+          "when": "resourceFilename =~ /.solver.json$/i",
+          "group": "gridkit@2"
+        },
+        {
           "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
@@ -739,6 +758,11 @@
           "group": "gridkit@1"
         },
         {
+          "command": "gridkitStudio.showResults",
+          "when": "resourceFilename =~ /.solver.json$/i",
+          "group": "gridkit@2"
+        },
+        {
           "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
@@ -764,6 +788,11 @@
           "command": "gridkitStudio.runContingencies",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@1"
+        },
+        {
+          "command": "gridkitStudio.showResults",
+          "when": "resourceFilename =~ /.solver.json$/i",
+          "group": "gridkit@2"
         }
       ],
       "view/title": [
@@ -810,6 +839,11 @@
         {
           "command": "gridkitStudio.stopSimulation",
           "when": "view == gridkitStudio.monitor && gridkitStudio.running",
+          "group": "navigation@0"
+        },
+        {
+          "command": "gridkitStudio.runAgain",
+          "when": "view == gridkitStudio.monitor && gridkitStudio.fromSolver && !gridkitStudio.running",
           "group": "navigation@0"
         },
         {
@@ -1094,6 +1128,14 @@
         {
           "command": "gridkitStudio.runContingencies",
           "when": "false"
+        },
+        {
+          "command": "gridkitStudio.showResults",
+          "when": "false"
+        },
+        {
+          "command": "gridkitStudio.runAgain",
+          "when": "gridkitStudio.fromSolver"
         },
         {
           "command": "gridkitStudio.stopSimulation",
@@ -2084,7 +2126,7 @@
             "maximum": 15
           },
           "gridkitStudio.monitor.yAxis.minSpacingPx": {
-            "default": 40,
+            "default": 24,
             "scope": "resource",
             "markdownDescription": "Ticks — Value spacing. Least gap between value ticks.",
             "type": "integer",
@@ -2195,7 +2237,7 @@
             "maximum": 2000
           },
           "gridkitStudio.monitor.fitPaddingPx": {
-            "default": 32,
+            "default": 8,
             "scope": "resource",
             "markdownDescription": "Scale — Fit padding. Space kept around the values when they are fitted.",
             "type": "integer",

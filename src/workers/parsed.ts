@@ -19,6 +19,17 @@ export class CaseCache {
     readonly count = 4,
   ) {}
 
+  /** The case `name` whose content `fingerprint` names, when it is held. */
+  find(fingerprint: string, name: string): Case | undefined {
+    for (const [key, entry] of this.#entries)
+      if (entry.kase.version === fingerprint && entry.kase.name === name) {
+        this.#entries.delete(key)
+        this.#entries.set(key, entry)
+        return entry.kase
+      }
+    return undefined
+  }
+
   async parse(text: string, catalog: Catalog, name: string, signal: AbortSignal): Promise<Case> {
     signal.throwIfAborted()
     const key = createHash('sha256')

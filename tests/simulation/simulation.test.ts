@@ -110,6 +110,7 @@ describe("GridKit's programs on solver files", () => {
     const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
+      fingerprint: kase.version,
       text,
       program,
       solver: solverPath,
@@ -176,14 +177,15 @@ describe("GridKit's programs on solver files", () => {
       const { folder, done, released } = await run(
         name,
         name,
-        { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
+        // A folder GridKit would not make itself.
+        { output_file: 'output/out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
         signal,
         { record: (kase, text) => apply(text, recordEdits(kase, 'Bus', ['Vm', 'Va'], [])) },
       )
       const results = await done
       const { info } = results
       expect(released()).toBe(true)
-      await access(join(folder, 'out.csv'))
+      await access(join(folder, 'output', 'out.csv'))
       expect(info.domain[0]).toBe(0)
       expect(info.domain[1]).toBeCloseTo(0.1, 9)
       const initial = (await busesOf(name)).map(({ init }) => ({
@@ -294,6 +296,7 @@ describe("GridKit's programs on solver files", () => {
       {
         uri,
         version: 1,
+        fingerprint: kase.version,
         text: await readFile(join(folder, 'IEEE39.case.json'), 'utf8'),
         program: 'DynamicSimulation',
         solver: join(folder, 'IEEE39.solver.json'),

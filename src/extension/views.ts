@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { basename } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import type { RowsBlock, RowsQuery } from '@latkit/model'
@@ -49,6 +50,7 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   // What a run left, never how it ended, which only a notification says. How far one has come is
   // its notification's to say.
   if (kind === 'monitor' && results) {
+    if (results.solver) parts.push(basename(results.solver))
     const study = results.contingency
     if (study) parts.push(`bus ${study.buses[study.shown]}`)
     if (results.frames) parts.push(`${results.frames.toLocaleString()} samples`)

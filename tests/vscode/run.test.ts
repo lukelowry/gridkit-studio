@@ -107,7 +107,7 @@ suite('Run', function () {
     assert.ok(Math.abs(results.domain[1] - results.span![1]) < 1e-9, 'the run reaches its end')
     assert.equal(results.growing, false)
     // GridKit wrote where the solver file says, and that is the file the Monitor reads.
-    const written = vscode.Uri.joinPath(folder(), 'IEEE39.csv')
+    const written = vscode.Uri.joinPath(folder(), 'output', 'IEEE39.csv')
     await vscode.workspace.fs.stat(written)
     assert.equal(results.path, written.fsPath)
     assert.equal(session.run.command, 'DynamicSimulation IEEE39.solver.json')

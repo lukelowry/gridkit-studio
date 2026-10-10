@@ -1,6 +1,6 @@
 import type { Domain, FieldSelection } from '@latkit/model'
 
-import type { Revision } from './messages.js'
+import type { CaseSource, Revision } from './messages.js'
 
 /** GridKit's programs Studio runs on a solver file. */
 export type Program = 'DynamicSimulation' | 'ContingencyAnalysis'
@@ -64,6 +64,8 @@ export interface Results {
   span?: Domain
   /** The study it is one contingency of. */
   contingency?: Study
+  /** The solver file whose run wrote it, when one did. */
+  solver?: string
   /** When it was written, as near as Studio knows: when its run began, or an opened file's last
    *  change. The oldest are let go first. */
   started: number
@@ -83,10 +85,9 @@ export interface Run {
   results?: string
 }
 
-/** A run of `program` on a solver file, with what Studio read of it and of its case. */
-export interface RunRequest extends Revision {
-  /** The case's source at its revision, which the results are read against. */
-  text: string
+/** A run of `program` on a solver file, with what Studio read of it and of its case, which the
+ *  results are read against. */
+export interface RunRequest extends CaseSource {
   program: Program
   /** The .solver.json GridKit runs, in its folder. */
   solver: string

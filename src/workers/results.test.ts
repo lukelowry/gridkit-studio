@@ -68,7 +68,7 @@ describe('the results worker', () => {
   it('sends a view every frame of a file once and in order, a chunk at a time', async () => {
     const rig = await start<ResultsApi>(script)
     try {
-      const revision = { uri: 'file:///chunks.case.json', version: 1, text: ONE }
+      const revision = { uri: 'file:///chunks.case.json', version: 1, fingerprint: '', text: ONE }
       const path = join(rig.scratch, 'many.csv')
       const frames = 600_000
       await waveform(path, frames)
@@ -103,6 +103,7 @@ describe('the results worker', () => {
       const opened = await rig.call('open', {
         uri: 'file:///long.case.json',
         version: 1,
+        fingerprint: '',
         text: ONE,
         path,
         cacheBytes: 64 << 20,
@@ -134,6 +135,7 @@ describe('the results worker', () => {
       const opened = await rig.call('open', {
         uri: 'file:///late.case.json',
         version: 1,
+        fingerprint: '',
         text: ONE,
         path,
         cacheBytes: 64 << 20,
@@ -147,10 +149,37 @@ describe('the results worker', () => {
     }
   })
 
+  it('reads a case it read before by its fingerprint alone, and asks for the source of another', async () => {
+    const rig = await start<ResultsApi>(script)
+    try {
+      const path = join(rig.scratch, 'small.csv')
+      await waveform(path, 3)
+      const revision = { uri: 'file:///known.case.json', version: 1, path, cacheBytes: 16 << 20 }
+      await expect(rig.call('open', { ...revision, fingerprint: 'unread' })).rejects.toMatchObject({
+        code: 'needs-source',
+      })
+      const first = await rig.call('open', { ...revision, fingerprint: 'unread', text: ONE })
+      // The results carry the case's own fingerprint, which reads it again without its source.
+      const again = await rig.call('open', {
+        ...revision,
+        version: 2,
+        fingerprint: first.fingerprint,
+      })
+      expect(again.fingerprint).toBe(first.fingerprint)
+    } finally {
+      await rig.stop()
+    }
+  })
+
   it('keeps nothing of an open let go of before it answers', async () => {
     const rig = await start<ResultsApi>(script)
     try {
-      const revision = { uri: 'file:///cancelled.case.json', version: 1, text: ONE }
+      const revision = {
+        uri: 'file:///cancelled.case.json',
+        version: 1,
+        fingerprint: '',
+        text: ONE,
+      }
       const large = join(rig.scratch, 'large.csv')
       await waveform(large, 700_000)
       const small = join(rig.scratch, 'small.csv')
@@ -181,7 +210,7 @@ describe('the results worker', () => {
   it('reads a results file where it is, says what it holds, and never changes it', async () => {
     const rig = await start<ResultsApi>(script)
     try {
-      const revision = { uri: 'file:///in-place.case.json', version: 1, text: ONE }
+      const revision = { uri: 'file:///in-place.case.json', version: 1, fingerprint: '', text: ONE }
       const path = join(rig.scratch, 'original.csv')
       const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
       await writeFile(path, source)
@@ -217,7 +246,7 @@ describe('the results worker', () => {
 
   it('reads the same file again in a fresh worker, as a reload does', async () => {
     const folder = await mkdtemp(join(tmpdir(), 'gridkit-reload-'))
-    const revision = { uri: 'file:///reloaded.case.json', version: 1, text: ONE }
+    const revision = { uri: 'file:///reloaded.case.json', version: 1, fingerprint: '', text: ONE }
     const csv = join(folder, 'results.csv')
     await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
     let rig = await start<ResultsApi>(script, folder)
@@ -260,7 +289,7 @@ describe('the results worker', () => {
     const { scratch, call, stop } = rig
     try {
       const text = await readFile('cases/TwoArea.case.json', 'utf8')
-      const revision = { uri: 'file:///test.case.json', version: 1, text }
+      const revision = { uri: 'file:///test.case.json', version: 1, fingerprint: '', text }
       // 700,000 frames of one bus's voltage: a few chunks of results.
       const path = join(scratch, 'waveform.csv')
       const name = JSON.parse(text).buses[0].name

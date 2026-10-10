@@ -97,15 +97,22 @@ it('names the time axis in sentence case, and leaves the values to the signal me
   expect(axisName({ name: 'time', unit: 's' })).toBe('Time')
   expect(axisLabel({ name: 'time', unit: 's' })).toBe('Time (s)')
   expect(axisLabel(undefined)).toBe('Coordinate')
-  expect(plotOptions(reader(), null, null, 'Time (s)', '')).toMatchObject({
-    xAxis: { label: 'Time (s)' },
-    yAxis: {},
+  expect(plotOptions(reader(), null, null, { ticks: true, time: 'Time (s)' })).toMatchObject({
+    xAxis: { label: 'Time (s)', labels: true },
+    yAxis: { label: '' },
   })
+})
+
+it('frames each plot, and labels the time ticks of the last of those stacked over one axis', () => {
+  const above = plotOptions(reader(), null, null, { ticks: false, time: 'Time (s)' })
+  expect(above).toMatchObject({ frame: true, xAxis: { label: '', labels: false, grid: true } })
+  const last = plotOptions(reader(), null, null, { ticks: true, caption: 'Bus · Vm' })
+  expect(last).toMatchObject({ frame: true, xAxis: { labels: true }, yAxis: { label: 'Bus · Vm' } })
 })
 
 it('draws every trace in the chosen color and width', () => {
   const s = reader({ 'monitor.traceColor': '#ff0000', 'monitor.traceWidthPx': 2 })
-  expect(plotOptions(s, null, null, '', '')).toMatchObject({
+  expect(plotOptions(s, null, null, { ticks: true })).toMatchObject({
     traceColor: [1, 0, 0, 1],
     traceWidthPx: 2,
   })

@@ -196,8 +196,9 @@ export class Sessions {
   readonly #failures = new Set<string>()
   /** The opened files already said to stop short. */
   readonly #unread = new Set<string>()
-  /** Tell the log how a run starts and ends, and the user, once, why one failed. */
-  #narrate(run: Run) {
+  /** Tell the log how a run starts and ends, and the user, once, why one failed. `results` are
+   *  what it wrote, as read. */
+  #narrate(run: Run, results?: Results) {
     if (run.state === 'running') {
       if (!this.#told.has(run.id)) {
         this.#told.add(run.id)
@@ -216,7 +217,6 @@ export class Sessions {
       return
     }
     if (!told) return
-    const { results } = run
     const samples = `${(results?.frames ?? 0).toLocaleString()} samples`
     const study = results?.contingency
     if (run.state === 'complete' && study?.failed.length)
@@ -244,12 +244,14 @@ export class Sessions {
     })
   }
   constructor(readonly context: vscode.ExtensionContext) {
-    this.client = new Client(context)
+    this.client = new Client(vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath)
     this.documents = new Documents(this.client)
     this.disposables.push(
       this.changed.event(() => this.updateContexts()),
-      // A run under way when the worker stops is interrupted. Its file stays.
-      this.client.failure.event((error) => {
+      // Either worker stopping is said. A run under way when the results worker stops is
+      // interrupted; its file stays.
+      this.client.cases.failure.event((error) => this.report(error)),
+      this.client.results.failure.event((error) => {
         this.report(error)
         for (const session of this.all.values()) {
           if (session.run?.state === 'running')
@@ -277,11 +279,13 @@ export class Sessions {
           return
         }
         if (event.kind === 'results') {
-          // An opened file read on: only the one on show is followed.
+          // A file read on: the one on show, or the one a running run writes, which takes its
+          // place and is followed live.
           const session = this.all.get(event.uri)
           const { results } = event
-          if (!session || session.results?.id !== results.id) return
-          this.show(session, results, false)
+          const writing = session?.run?.state === 'running' && session.run.results === results.id
+          if (!session || (!writing && session.results?.id !== results.id)) return
+          this.show(session, results, writing)
           this.changed.fire(session.uri)
           if (results.error && !results.growing && !this.#unread.has(results.id)) {
             this.#unread.add(results.id)
@@ -299,10 +303,13 @@ export class Sessions {
         const session = this.all.get(run.uri)
         if (!session) return
         session.run = run
-        // A run's results replace those on show as it starts; a study has none until it ends.
-        this.show(session, run.results, run.state === 'running')
+        const shown = run.results !== undefined && session.results?.id === run.results
+        // A run's results replace those on show as it starts, and follow its head until it ends.
+        // A study has none until it ends.
+        if (run.state === 'running' && !run.results) this.show(session, undefined)
+        else if (run.state !== 'running' && shown) session.transport.setLive(false)
         this.changed.fire(session.uri)
-        this.#narrate(run)
+        this.#narrate(run, shown ? session.results : undefined)
       }),
       // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
       vscode.workspace.onDidRenameFiles(({ files }) => {
@@ -383,7 +390,7 @@ export class Sessions {
       this.#restored.add(session)
       const saved = this.context.workspaceState.get<Saved>('case:' + session.uri)?.results
       if (saved)
-        void this.client
+        void this.client.results
           .call('open', {
             uri: session.uri,
             version: summary.version,
@@ -498,7 +505,7 @@ export class Sessions {
     if (!id || !entry?.summary || entry.stale) return
     const { version } = entry.summary
     try {
-      await this.client.call('query', {
+      await this.client.cases.call('query', {
         uri,
         version,
         query: {
@@ -522,7 +529,7 @@ export class Sessions {
     const drawn = [...network.vertices, ...network.edges.map((edge) => edge.type)]
     if (drawn.includes(elementType(id))) return
     try {
-      const anchors = await this.client.call('anchors', {
+      const anchors = await this.client.cases.call('anchors', {
         uri: session.uri,
         version: entry.summary.version,
         id,
@@ -571,7 +578,7 @@ export class Sessions {
   /** Step one frame through the shown results, then pause. */
   async step(session: Session, direction: 1 | -1) {
     if (!session.results) return
-    const t = await this.client.call('step', {
+    const t = await this.client.results.call('step', {
       results: session.results.id,
       at: session.transport.currentT(),
       direction,

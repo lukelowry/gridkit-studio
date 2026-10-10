@@ -16,7 +16,7 @@ export interface GridKit {
   readonly cli: string
 }
 
-/** A running simulation, which the extension stops if the data worker cannot. */
+/** A running simulation, which the extension stops if the results worker cannot. */
 export interface RuntimeProcess {
   pid: number
   executable: string
@@ -64,11 +64,13 @@ export interface Results {
   span?: Domain
   /** The study it is one contingency of. */
   contingency?: Study
+  /** When it was written, as near as Studio knows: when its run began, or an opened file's last
+   *  change. The oldest are let go first. */
   started: number
 }
 
-/** A run of one of GridKit's programs on a solver file, and what it wrote, as read so far. A study
- *  has written nothing to show until it ends. */
+/** A run of one of GridKit's programs on a solver file. A study has written nothing to show until it
+ *  ends. */
 export interface Run {
   id: string
   /** The case it runs. */
@@ -77,11 +79,12 @@ export interface Run {
   command: string
   state: 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
   message?: string
-  results?: Results
+  /** The results it writes, by their id, once it begins to. */
+  results?: string
 }
 
 /** A run of `program` on a solver file, with what Studio read of it and of its case. */
-export interface SimulationRequest extends Revision {
+export interface RunRequest extends Revision {
   /** The case's source at its revision, which the results are read against. */
   text: string
   program: Program

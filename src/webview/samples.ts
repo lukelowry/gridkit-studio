@@ -13,7 +13,8 @@ import {
 
 import { recordedWhole } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
-import type { Results, SamplesInput, ViewState } from '../shared/messages.js'
+import type { Results, ViewState } from '../shared/messages.js'
+import type { Asker } from './asker.js'
 
 /** The samples a view holds besides those it needs now, in bytes. */
 export const SAMPLE_BUDGET = 96 << 20
@@ -121,17 +122,6 @@ interface Ask {
   readonly spent: string
 }
 
-export interface SamplesOptions {
-  /** Asks the worker, through the extension, for what one need lacks. */
-  readonly request: (input: SamplesInput, signal: AbortSignal) => Promise<SampleBatch[]>
-  /** Hears each change in what the view holds. */
-  readonly changed: () => void
-  /** Tells the user why samples could not be read. */
-  readonly report: (reason: unknown) => void
-  /** The bytes held besides those needed now. */
-  readonly budget?: number
-}
-
 /** The chunks of one results file a view holds, by need. */
 export class Samples {
   #results?: Results
@@ -162,11 +152,14 @@ export class Samples {
   #again = false
   /** Who waits on what the view holds, hearing each change. */
   readonly #waiters = new Set<() => void>()
-  readonly #budget: number
 
-  constructor(private readonly options: SamplesOptions) {
-    this.#budget = options.budget ?? SAMPLE_BUDGET
-  }
+  /** Asks the worker, through `asker`, for what each need lacks, and tells `changed` of each
+   *  change in what the view holds, which keeps `budget` bytes besides those needed now. */
+  constructor(
+    private readonly asker: Asker,
+    private readonly changed: () => void,
+    private readonly budget = SAMPLE_BUDGET,
+  ) {}
 
   /** The results the view holds samples of. */
   get results(): string | undefined {
@@ -398,7 +391,7 @@ export class Samples {
     if (!near) return undefined
     // The need holding least goes first, a share of a reply at a time, so the fields a view draws
     // together reach as far around it as each other.
-    const room = this.#budget - this.#bytes
+    const room = this.budget - this.#bytes
     const share = Math.min(REPLY_BYTES, room) / this.#needs.length
     const least = this.#needs
       .map((need) => ({ need, key: selectionKey(need.selection) }))
@@ -420,8 +413,8 @@ export class Samples {
   }
 
   /** Tell the view, and whoever waits, that what it holds changed. */
-  #changed() {
-    this.options.changed()
+  #tell() {
+    this.changed()
     for (const look of [...this.#waiters]) look()
   }
 
@@ -454,9 +447,10 @@ export class Samples {
       const controller = new AbortController()
       this.#flight = { ask, controller }
       // Told once the ask is over, so whoever hears sees whether the view is stuck.
-      let changed = false
+      let tell = false
       try {
-        const batches = await this.options.request(
+        const batches = await this.asker.request(
+          'samples',
           {
             results: results.id,
             field: ask.need.selection,
@@ -471,18 +465,18 @@ export class Samples {
         // An ask that brought nothing is not asked again until something changes, which a view
         // waiting on it hears too.
         if (!this.#take(ask.key, batches)) this.#spent.add(ask.spent)
-        changed = true
+        tell = true
       } catch (error) {
         if (controller.signal.aborted) continue
         this.#spent.add(ask.spent)
         // Results let go of, as when they are cleared or replaced, are no failure.
         if (!cancelled(error) && (error as { code?: string })?.code !== 'results-unavailable')
-          this.options.report(error)
-        changed = true
+          this.asker.report(error)
+        tell = true
       } finally {
         if (this.#flight?.controller === controller) this.#flight = undefined
       }
-      if (changed) this.#changed()
+      if (tell) this.#tell()
     }
   }
 
@@ -527,7 +521,7 @@ export class Samples {
       taken = true
     }
     this.#runs.delete(key)
-    if (taken && this.#bytes > this.#budget) this.#evict()
+    if (taken && this.#bytes > this.budget) this.#evict()
     return taken
   }
 
@@ -543,7 +537,7 @@ export class Samples {
     far.sort((a, b) => away(b.chunk.domain, at) - away(a.chunk.domain, at))
     let dropped = false
     for (const { key, k, chunk } of far) {
-      if (this.#bytes <= this.#budget) break
+      if (this.#bytes <= this.budget) break
       this.#held.get(key)!.delete(k)
       this.#runs.delete(key)
       this.#bytes -= chunk.bytes

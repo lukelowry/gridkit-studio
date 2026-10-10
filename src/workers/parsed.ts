@@ -1,3 +1,5 @@
+/** The cases the workers parse, and what they tell the extension of one. */
+
 import { createHash } from 'node:crypto'
 
 import { Case } from '../gridkit/case.js'

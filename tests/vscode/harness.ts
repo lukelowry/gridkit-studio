@@ -839,10 +839,16 @@ export class TestHost {
   /** Results to play: a second of every bus's voltage, each a little out of step with the last,
    *  opened once, with the first bus's plotted. */
   results(): Promise<Results> {
-    return (this.#results ??= this.#open())
+    return (this.#results ??= this.waveform('Synthetic waveform.csv', 100, 1).then((results) => {
+      this.plot()
+      return results
+    }))
   }
-  async #open(): Promise<Results> {
-    const csv = vscode.Uri.joinPath(this.uri, '..', 'Synthetic waveform.csv')
+
+  /** Results of `frames` frames over `seconds`, every bus's voltage a little out of step with the
+   *  last, written beside the case as `name` and shown once they are read. */
+  async waveform(name: string, frames: number, seconds: number): Promise<Results> {
+    const csv = vscode.Uri.joinPath(this.uri, '..', name)
     const { buses } = this.source
     await vscode.workspace.fs.writeFile(
       csv,
@@ -850,19 +856,24 @@ export class TestHost {
         ['time', ...buses.map((bus) => 'Bus_' + bus.name + '_Vm')] +
           '\n' +
           Array.from(
-            { length: 100 },
-            (_, i) => [i / 100, ...buses.map((_, k) => 1 + 0.1 * Math.sin(i / 10 + k))] + '\n',
+            { length: frames },
+            (_, i) =>
+              [(i * seconds) / frames, ...buses.map((_, k) => 1 + 0.1 * Math.sin(i / 10 + k))] +
+              '\n',
           ).join(''),
       ),
     )
-    const results = await this.studio.client.call('open', {
+    const results = await this.studio.client.results.call('open', {
       ...(await this.studio.revisionOf(this.key)),
       path: csv.fsPath,
       cacheBytes: 32 << 20,
     })
     this.studio.show(this.session, results)
-    this.plot()
-    return results
+    await until(
+      () => this.session.results?.id === results.id && !this.session.results.growing,
+      name + ' read',
+    )
+    return this.session.results!
   }
 
   /** Plot the first bus's voltage in the Monitor. */
@@ -891,7 +902,7 @@ export class TestHost {
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
     // A run under way is let go of, which stops it.
     if (this.session?.run?.state === 'running') {
-      await this.studio.client.call('clear', { uri: this.key })
+      await this.studio.client.results.call('clear', { uri: this.key })
       await until(() => this.session.run?.state !== 'running', 'the run stops')
     }
     if (this.document.getText() !== this.text) await this.replace(this.text)
@@ -948,7 +959,7 @@ export class TestHost {
   /** Write the report and let go of the window; a page that threw fails the run. */
   async finish(): Promise<void> {
     try {
-      this.report.worker = await this.studio.client.call('stats', {})
+      this.report.worker = await this.studio.client.stats()
       this.report.pageErrors = this.errors
       this.report.vscodeErrors = this.vscodeErrors
       await writeFile(

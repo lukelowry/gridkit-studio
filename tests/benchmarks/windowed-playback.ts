@@ -169,9 +169,7 @@ export async function run() {
     await seek(4.5)
     const delayed = await network.evaluate<number>('window.delayed')
     assert.ok(delayed >= 1, 'Must exercise a delayed cache miss')
-    const query = await bench.studio.client.call('query', {
-      uri: key,
-      version: bench.studio.state(key).summary!.version,
+    const query = await bench.studio.client.results.call('query', {
       results: results.id,
       query: {
         kind: 'rows',

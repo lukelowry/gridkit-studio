@@ -83,7 +83,7 @@ suite('Sessions', () => {
       csv,
       new TextEncoder().encode(`time,Bus_${buses[0]!.name}_Vm\n0,1\n0.5,0.9\n1,1\n`),
     )
-    const info = await studio.client.call('open', {
+    const info = await studio.client.results.call('open', {
       ...(await studio.revisionOf(session.uri)),
       path: csv.fsPath,
       cacheBytes: 16 << 20,

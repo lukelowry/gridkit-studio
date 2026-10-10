@@ -29,8 +29,8 @@ import type {
   GridKit,
   Program,
   Run,
+  RunRequest,
   RuntimeProcess,
-  SimulationRequest,
 } from '../../src/shared/messages.js'
 import { contingencyFile, outputOf, readSolver } from '../../src/shared/study.js'
 
@@ -107,7 +107,7 @@ describe("GridKit's programs on solver files", () => {
     const kase = await Case.parse(text, catalog, `${model}.case.json`)
     const study = readSolver(`${model}.solver.json`, solverText)
     const sink = outputOf(`${model}.solver.json`, study, recordingOf(kase).monitor)
-    const request: SimulationRequest = {
+    const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
       text,
@@ -123,10 +123,12 @@ describe("GridKit's programs on solver files", () => {
     const job: Run = { id: name, uri: request.uri, command: program, state: 'running' }
     let owned: RuntimeProcess | undefined
     let released = false
+    /** The results file the run reads, once it begins to. */
+    let read: ResultsFile | undefined
     const controller = new AbortController()
     const done = simulate(kase, request, job, new ResultCache(1 << 20), {
       signal: AbortSignal.any([signal, controller.signal]),
-      reading: () => {},
+      reading: (file) => (read = file),
       progress: async () => progress((reason) => controller.abort(reason)),
       log: () => {},
       lifecycle: (process) => {
@@ -134,7 +136,15 @@ describe("GridKit's programs on solver files", () => {
         else released = true
       },
     })
-    return { kase, folder, job, done, owned: () => owned, released: () => released }
+    return {
+      kase,
+      folder,
+      job,
+      done,
+      owned: () => owned,
+      released: () => released,
+      read: () => read,
+    }
   }
 
   /** What Studio reads back of `field` for each recorded bus over `window`. */
@@ -361,7 +371,7 @@ describe("GridKit's programs on solver files", () => {
   })
 
   it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
-    const { job, done, owned, released } = await run(
+    const { job, done, owned, released, read } = await run(
       'cancel',
       'IEEE39',
       { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
@@ -370,8 +380,9 @@ describe("GridKit's programs on solver files", () => {
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)
-    expect(job.results!.frames).toBeGreaterThan(0)
-    expect(job.results!.domain[1]).toBeLessThan(1000)
+    expect(job.results).toBe(read()!.info.id)
+    expect(read()!.info.frames).toBeGreaterThan(0)
+    expect(read()!.info.domain[1]).toBeLessThan(1000)
     // The process is gone, not left to finish its thousand seconds, and so is its container.
     expect(() => process.kill(owned()!.pid, 0)).toThrow()
     const container = owned()!.container

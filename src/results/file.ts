@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, open } from 'node:fs/promises'
 import { basename, dirname, extname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
-import { setTimeout } from 'node:timers/promises'
 
 import {
   appendData,
@@ -21,7 +20,7 @@ import {
 
 import type { Case } from '../gridkit/index.js'
 import type { Results, Revision, SamplesInput } from '../shared/messages.js'
-import { parseMessage } from './arrow.js'
+import type { Frames, ResultCache } from './cache.js'
 import {
   chunkFrames,
   columnName,
@@ -31,10 +30,7 @@ import {
   samplesOf,
   selectionsOf,
 } from './decode.js'
-import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
-
-/** One batch per field, all over the same frames. */
-type Frames = readonly SampleBatch[]
+import { follow, type Piece } from './follow.js'
 
 /** Bytes `start` to `end` of a results file, holding frames `first` up to `first + count`. */
 interface Segment {
@@ -159,44 +155,11 @@ export function described(
   }
 }
 
-/** Decoded chunks by key; past `limit` bytes, the least recently used are dropped. */
-export class ResultCache {
-  readonly #entries = new Map<string, { frames: Frames; bytes: number }>()
-  bytes = 0
-  constructor(public limit = 256 << 20) {}
-  get(key: string) {
-    const found = this.#entries.get(key)
-    if (found) {
-      this.#entries.delete(key)
-      this.#entries.set(key, found)
-    }
-    return found?.frames
-  }
-  /** Keeps `frames` themselves, whose arrays nothing writes again, unless they alone exceed the
-   *  limit; returns them either way. */
-  put(key: string, frames: Frames) {
-    const bytes = blockByteLength(frames)
-    if (bytes > this.limit) return frames
-    const old = this.#entries.get(key)
-    if (old) this.bytes -= old.bytes
-    this.#entries.delete(key)
-    this.#entries.set(key, { frames, bytes })
-    this.bytes += bytes
-    while (this.bytes > this.limit) {
-      const [key, entry] = this.#entries.entries().next().value!
-      this.#entries.delete(key)
-      this.bytes -= entry.bytes
-    }
-    return frames
-  }
-  drop(prefix: string) {
-    for (const [key, entry] of this.#entries)
-      if (key.startsWith(prefix)) {
-        this.#entries.delete(key)
-        this.bytes -= entry.bytes
-      }
-  }
-}
+/** Why results let go of cannot be read: the views ask nothing more of them, and say nothing. */
+export const unavailable = () =>
+  Object.assign(new Error('These results are no longer read. Open them again.'), {
+    code: 'results-unavailable',
+  })
 
 /** A GridKit results file read for a case, in chunks of frames that every process cuts alike: the
  *  header's width sets how many frames each holds. The header says what the file holds, whether a
@@ -210,10 +173,12 @@ export class ResultsFile {
   #tail: Frames[] = []
   #joined?: { count: number; frames: Frames }
   /** The header's bytes: the CSV header line, or the Arrow schema message. */
-  #header = new Uint8Array()
+  #header: Uint8Array = new Uint8Array()
   /** How every segment of this file reads, from its header. */
   readonly #layout: Layout = {}
-  #at = 0
+  /** Who reads the file now, each done once its promise settles. */
+  readonly #leases = new Map<AbortController, Promise<void>>()
+  #retired = false
   constructor(
     readonly info: Results,
     readonly kase: Case,
@@ -230,13 +195,45 @@ export class ResultsFile {
     return this.#layout.read?.fields ?? []
   }
 
+  /** Whether anyone reads the file now. */
+  get busy(): boolean {
+    return this.#leases.size > 0
+  }
+
+  /** Reads the file with `read` until it settles. Retiring the file stops it, and waits for it. */
+  async use<R>(signal: AbortSignal, read: (signal: AbortSignal) => Promise<R>): Promise<R> {
+    signal.throwIfAborted()
+    if (this.#retired) throw unavailable()
+    const lease = new AbortController()
+    let done!: () => void
+    this.#leases.set(lease, new Promise<void>((resolve) => (done = resolve)))
+    try {
+      return await read(AbortSignal.any([signal, lease.signal]))
+    } finally {
+      this.#leases.delete(lease)
+      done()
+    }
+  }
+
+  /** Stops whoever reads the file, waits for them, and lets go of its chunks. The file stays. */
+  async retire(): Promise<void> {
+    this.#retired = true
+    const leases = [...this.#leases]
+    for (const [lease] of leases) lease.abort(unavailable())
+    await Promise.all(leases.map(([, done]) => done))
+    this.release()
+  }
+
   /** Follows the results file as the run writes it, reading each segment as it comes, and tells
    *  `progress` after each. Returns once `ended` and the file has nothing more. */
   async ingest(signal: AbortSignal, ended: () => boolean, progress: () => Promise<void> | void) {
-    await this.#follow(signal, ended, async (start, end, bytes) => {
-      await this.#append(start, end, bytes, signal)
-      await progress()
-    })
+    for await (const piece of follow(this.info.path, this.info.format, signal, ended)) {
+      if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
+      else {
+        await this.#append(piece, signal)
+        await progress()
+      }
+    }
   }
 
   /** The first frame time after `at`, or the last before it when `direction` is -1: the first or
@@ -378,6 +375,21 @@ export class ResultsFile {
     this.cache.drop(this.info.id + ':')
   }
 
+  /** Keeps the file's header, which a CSV file's segments are read with. Read alone, it gives the
+   *  layout every segment is read with. */
+  async #learn(header: Uint8Array, signal: AbortSignal) {
+    this.#header = header
+    if (this.info.format !== 'csv') return
+    await readResults(
+      Readable.from([header]),
+      this.kase,
+      { signal, publish: () => {} },
+      'csv',
+      this.#layout,
+    )
+    this.#learned()
+  }
+
   /** Tells the views, through `info`, what the file holds and how it is cut, once its header says. */
   #learned() {
     if (this.info.outputs.length || !this.fields.length) return
@@ -439,132 +451,6 @@ export class ResultsFile {
     return this.cache.put(key, joined(groups))
   }
 
-  /** Follows the results file until `ended` and it has nothing more, handing `segment` each run of
-   *  it: the bytes between `start` and `end`. A CSV segment ends at the first row end past
-   *  SEGMENT_BYTES. While the run writes, one also ends at the last whole row read each time the
-   *  views would hear of it, so a live run's frames come at its pace. */
-  async #follow(
-    signal: AbortSignal,
-    ended: () => boolean,
-    segment: (start: number, end: number, bytes: Uint8Array) => Promise<void>,
-  ) {
-    let file
-    while (!file) {
-      signal.throwIfAborted()
-      try {
-        file = await open(this.info.path, 'r')
-      } catch (error) {
-        if (ended()) throw error
-        await setTimeout(40, undefined, { signal })
-      }
-    }
-    try {
-      let pending = Buffer.alloc(0)
-      let start = this.#at
-      /** Where the search for the end of the CSV header, or of a segment, resumes in `pending`. */
-      let scan = 0
-      let quoted = false
-      /** When the last segment was cut. The first is cut as soon as it can be. */
-      let cutAt = -Infinity
-      const cut = async (length: number) => {
-        await segment(start, start + length, pending.subarray(0, length))
-        start += length
-        pending = pending.subarray(length)
-        scan = 0
-        cutAt = performance.now()
-      }
-      // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
-      // gathered from many small reads.
-      const piece = Buffer.alloc(4 << 20)
-      while (true) {
-        signal.throwIfAborted()
-        // Asked before reading: a writer done by then has written everything this read can see.
-        const over = ended()
-        const { bytesRead } = await file.read(piece, 0, piece.length, this.#at)
-        if (bytesRead) {
-          this.#at += bytesRead
-          pending = Buffer.concat([pending, piece.subarray(0, bytesRead)])
-        }
-        const finished = over && bytesRead === 0
-        if (this.info.format === 'arrow') {
-          while (pending.length >= 8) {
-            const continuation = pending.readUInt32LE(0) === 0xffffffff
-            const prefix = continuation ? 8 : 4
-            const metadataLength = pending.readUInt32LE(continuation ? 4 : 0)
-            if (!metadataLength) {
-              start += prefix
-              pending = pending.subarray(prefix)
-              break
-            }
-            if (pending.length < prefix + metadataLength) break
-            const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
-            const length = prefix + metadataLength + message.bodyLength
-            if (!Number.isSafeInteger(message.bodyLength) || message.bodyLength < 0)
-              throw new Error('An Arrow message has an invalid body length.')
-            if (pending.length < length) break
-            if (message.header.kind === 'batch') {
-              await cut(length)
-              continue
-            }
-            if (message.header.kind === 'schema') {
-              if (this.#header.length) throw new Error('Repeated Arrow schema.')
-              this.#header = pending.subarray(0, length).slice()
-            }
-            start += length
-            pending = pending.subarray(length)
-          }
-        } else {
-          // Only the header quotes; past it, a row ends at its newline.
-          while (!this.#header.length && scan < pending.length) {
-            const byte = pending[scan++]!
-            if (byte === 34) quoted = !quoted
-            if (byte !== 10 || quoted) continue
-            this.#header = pending.subarray(0, scan).slice()
-            // Read alone, the header gives the layout every segment is read with.
-            await readResults(
-              Readable.from([this.#header]),
-              this.kase,
-              { signal, publish: () => {} },
-              'csv',
-              this.#layout,
-            )
-            this.#learned()
-            start += scan
-            pending = pending.subarray(scan)
-            scan = 0
-          }
-          if (this.#header.length) {
-            while (pending.length >= SEGMENT_BYTES) {
-              const newline = pending.indexOf(10, Math.max(scan, SEGMENT_BYTES - 1))
-              if (newline < 0) {
-                scan = pending.length
-                break
-              }
-              await cut(newline + 1)
-            }
-            // Once the writer is done, everything it wrote is a segment. Before, the whole rows read
-            // so far are, whenever the views would next hear of them.
-            const length = finished
-              ? pending.length
-              : !over && performance.now() - cutAt >= PROGRESS_MS
-                ? pending.lastIndexOf(10) + 1
-                : 0
-            if (length) await cut(length)
-          }
-        }
-        if (finished) {
-          if (this.info.format === 'arrow' && pending.length)
-            throw new Error('Results ended inside an Arrow message.')
-          if (!this.#header.length) throw new Error('Results contain no header.')
-          break
-        }
-        if (!bytesRead) await setTimeout(40, undefined, { signal })
-      }
-    } finally {
-      await file.close()
-    }
-  }
-
   /** Decodes `bytes`, whose first frame is `first`, handing `publish` each group of frames: one
    *  batch per field, never crossing into the next chunk. A CSV segment is rows alone, read with the
    *  layout its header gave; an Arrow batch is read after the schema. */
@@ -601,7 +487,7 @@ export class ResultsFile {
   }
 
   /** Reads the segment between `start` and `end`, `bytes`: each group of its frames in turn. */
-  async #append(start: number, end: number, bytes: Uint8Array, signal: AbortSignal) {
+  async #append({ start, end, bytes }: Extract<Piece, { kind: 'segment' }>, signal: AbortSignal) {
     const first = this.info.frames
     await this.#decode(bytes, first, signal, (group) => this.#add(group))
     const count = this.info.frames - first

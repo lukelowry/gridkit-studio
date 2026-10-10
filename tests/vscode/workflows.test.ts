@@ -29,9 +29,7 @@ suite('Workflows', function () {
   const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
   /** The bus's recorded voltage at time `t` of `results`. */
   async function voltage(results: string, t: number): Promise<number> {
-    const blocks = await bench.studio.client.call('query', {
-      uri: bench.key,
-      version: (await bench.current()).version,
+    const blocks = await bench.studio.client.results.call('query', {
       results,
       query: {
         kind: 'rows',
@@ -127,8 +125,8 @@ suite('Workflows', function () {
     )
     const run = bench.session.run!
     assert.equal(run.state, 'complete', run.message)
-    const steady = await voltage(run.results!.id, 0.95)
-    const faulted = await voltage(run.results!.id, 1.05)
+    const steady = await voltage(run.results!, 0.95)
+    const faulted = await voltage(run.results!, 1.05)
     assert.ok(faulted < steady - 0.1, `the faulted bus's voltage drops: ${steady} → ${faulted}`)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

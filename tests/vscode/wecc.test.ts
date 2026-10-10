@@ -80,7 +80,6 @@ suite('WECC240 run', function () {
   /** Each bus's recorded angle at `t`, as the views read it. */
   async function anglesAt(t: number): Promise<Map<string, number>> {
     const angles = new Map<string, number>()
-    const version = bench.studio.state(uri.toString()).summary!.version
     for (let offset = 0; offset < buses.length; offset += 100) {
       const query = {
         kind: 'rows' as const,
@@ -91,9 +90,7 @@ suite('WECC240 run', function () {
         limit: 100,
         at: t,
       }
-      const blocks = (await bench.studio.client.call('query', {
-        uri: uri.toString(),
-        version,
+      const blocks = (await bench.studio.client.results.call('query', {
         results: session().results!.id,
         query,
       })) as RowsBlock[]

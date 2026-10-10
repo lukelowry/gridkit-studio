@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Case } from '../gridkit/case.js'
 import { catalog, catalogOf } from '../gridkit/definition.js'
 import { diagnose, diagnoseAsync } from '../gridkit/edits.js'
-import { CaseCache, summarize } from './cases.js'
+import { CaseCache, summarize } from './parsed.js'
 
 const text = '{"buses":[{"class":"Bus","number":1,"name":"one","params":{"kv":230}}]}'
 const signal = () => new AbortController().signal

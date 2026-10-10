@@ -130,7 +130,7 @@ export function registerCommands(studio: Sessions) {
   }
   const queryRows = async (context: Context, query: RowsQuery, signal?: AbortSignal) =>
     rowsOf(
-      (await studio.client.call(
+      (await studio.client.cases.call(
         'query',
         { uri: context.session.uri, version: context.summary.version, query },
         signal,
@@ -378,7 +378,7 @@ export function registerCommands(studio: Sessions) {
     if (!choice || choice.n === study.shown) return
     show(
       session,
-      await studio.client.call('open', {
+      await studio.client.results.call('open', {
         ...(await studio.revisionOf(session.uri)),
         path: contingencyFile(study, choice.n),
         contingency: { ...study, shown: choice.n },
@@ -390,7 +390,7 @@ export function registerCommands(studio: Sessions) {
     // The views let go of the results before they go, and of those a running run's end reports.
     studio.show(session, undefined)
     changed(session)
-    await studio.client.call('clear', { uri: session.uri })
+    await studio.client.results.call('clear', { uri: session.uri })
     studio.show(session, undefined)
     changed(session)
   })
@@ -455,7 +455,7 @@ export function registerCommands(studio: Sessions) {
     if (!selected?.[0]) return
     show(
       context.session,
-      await studio.client.call('open', {
+      await studio.client.results.call('open', {
         ...(await studio.revisionOf(context.session.uri)),
         path: localPath(selected[0]),
         cacheBytes: cacheBytesOf(selected[0]),
@@ -467,13 +467,14 @@ export function registerCommands(studio: Sessions) {
     const { results } = context.session
     if (!results) throw new Error('There are no results to export.')
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
-    if (path) await studio.client.call('export', { results: results.id, path: localPath(path) })
+    if (path)
+      await studio.client.results.call('export', { results: results.id, path: localPath(path) })
   })
   register('showOutput', () => studio.output.show())
   command('performance', async (context) => {
     studio.output.appendLine(
       JSON.stringify({
-        ...(await studio.client.call('stats', {})),
+        ...(await studio.client.stats()),
         parseMs: context.summary.parseMs,
       }),
     )

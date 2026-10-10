@@ -23,8 +23,8 @@ const builds = [
   {
     entryPoints: {
       extension: 'src/extension/index.ts',
-      worker: 'src/worker.ts',
-      results: 'src/results-worker.ts',
+      cases: 'src/workers/cases.ts',
+      results: 'src/workers/results.ts',
     },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },

@@ -10,7 +10,7 @@
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
-  import { current, Rows, type Snapshot, staticNeeds } from '../rows.js'
+  import { ofShown, Rows, type Snapshot, staticNeeds } from '../rows.js'
   import { plotNeeds, Samples } from '../samples.js'
   import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
@@ -22,19 +22,10 @@
   let view = $state.raw<ViewState>({})
   /** The case the results were read against, and the samples of them the plots draw. */
   let rows = $state.raw<Snapshot | undefined>()
-  const cases = new Rows({
-    request: (input, signal) => bridge.request('rows', input, signal),
-    presentation: (revision, signal) => bridge.request('presentation', revision, signal),
-    changed: () => (rows = cases.snapshot),
-    report: (reason) => bridge.report(reason),
-  })
+  const cases = new Rows(bridge, () => (rows = cases.snapshot))
   /** Bumped as samples arrive. */
   let held = $state(0)
-  const samples = new Samples({
-    request: (input, signal) => bridge.request('samples', input, signal),
-    changed: () => held++,
-    report: (reason) => bridge.report(reason),
-  })
+  const samples = new Samples(bridge, () => held++)
   let source = $state.raw<Data | undefined>()
   let sampled = $state.raw<readonly FieldSelection[]>([])
   /** The clock as of its last change. */
@@ -87,7 +78,7 @@
     void held
     const span = shown
     samples.want(view.results, plotNeeds(view), span, { at: (span[0] + span[1]) / 2, travel: 0 })
-    source = rows && current(rows, view) ? samples.data(rows.data) : undefined
+    source = rows && ofShown(rows, view) ? samples.data(rows.data) : undefined
     sampled = samples.sampled()
   })
   /** Whether the samples held cover `window` of `from`'s `field`. */

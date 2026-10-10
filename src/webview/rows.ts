@@ -14,8 +14,9 @@ import {
 
 import type { Bindings } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
-import type { Requests, Revision, Summary, ViewState } from '../shared/messages.js'
+import type { Revision, Summary, ViewState } from '../shared/messages.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
+import type { Asker } from './asker.js'
 
 /** The static fields a view draws: their names, places, routes and references, and those its
  *  mappings read; of the types the Network draws when `network`, else of every type. */
@@ -63,20 +64,6 @@ export interface Snapshot {
   readonly presentation?: Record<string, Positions>
 }
 
-export interface RowsOptions {
-  readonly request: (
-    input: Requests['rows']['input'],
-    signal: AbortSignal,
-  ) => Promise<readonly RowBatch[]>
-  readonly presentation: (
-    input: Requests['presentation']['input'],
-    signal: AbortSignal,
-  ) => Promise<Record<string, Positions>>
-  /** Hears each change in the rows held. */
-  readonly changed: () => void
-  readonly report: (reason: unknown) => void
-}
-
 const nameOf = (type: string, field: string) => type + '.' + field
 const revisionOf = ({ uri, version, attachmentId }: Summary): Revision => ({
   uri,
@@ -106,21 +93,36 @@ function joined(held: readonly RowBatch[], batches: readonly RowBatch[]): RowBat
   ]
 }
 
-/** The rows of `of` that `fields` select, asked for once. */
-export async function rowsOnce(
-  options: Pick<RowsOptions, 'request' | 'presentation'>,
+/** Asks `asker` for the rows of `of` that `fields` select, unless there are none to ask for, and,
+ *  with `presentation`, where the diagram's blocks are arranged. */
+function ask(
+  asker: Asker,
   { summary, results }: Of,
+  fields: readonly FieldSelection[] | undefined,
+  presentation: boolean,
+  signal: AbortSignal,
+) {
+  const revision = revisionOf(summary)
+  return Promise.all([
+    fields &&
+      asker.request('rows', results ? { results, fields } : { ...revision, fields }, signal),
+    presentation
+      ? asker.request('presentation', results ? { results } : revision, signal)
+      : undefined,
+  ])
+}
+
+/** The rows of `of` that `fields` select, asked of `asker` once. */
+export async function rowsOnce(
+  asker: Asker,
+  of: Of,
   fields: readonly FieldSelection[],
   presentation: boolean,
   signal: AbortSignal,
 ): Promise<Snapshot> {
+  const { summary } = of
   const revision = revisionOf(summary)
-  const [batches, positions] = await Promise.all([
-    options.request({ ...revision, fields, ...(results && { results }) }, signal),
-    presentation
-      ? options.presentation({ ...revision, ...(results && { results }) }, signal)
-      : undefined,
-  ])
+  const [batches = [], positions] = await ask(asker, of, fields, presentation, signal)
   return {
     data: createData(schemaOf(summary.schema), joined([], batches)),
     revision,
@@ -142,7 +144,11 @@ export class Rows {
   /** Asks that failed, not asked again until something changes. */
   readonly #spent = new Set<string>()
 
-  constructor(private readonly options: RowsOptions) {}
+  /** Asks through `asker`, and tells `changed` of each change in the rows held. */
+  constructor(
+    private readonly asker: Asker,
+    private readonly changed: () => void,
+  ) {}
 
   /** The rows held, which may be of a revision before the latest asked for until its rows come. */
   get snapshot(): Snapshot | undefined {
@@ -173,10 +179,10 @@ export class Rows {
       }))
       .filter(({ select }) => select.length > 0)
     const placed = !presentation || this.#positions !== undefined
-    const ask = key + '\n' + JSON.stringify(lacking) + placed
-    if ((!lacking.length && placed && this.#snapshot && this.#current()) || this.#spent.has(ask))
+    const spent = key + '\n' + JSON.stringify(lacking) + placed
+    if ((!lacking.length && placed && this.#snapshot && this.#current()) || this.#spent.has(spent))
       return
-    void this.#ask(key, of, lacking, !placed, ask)
+    void this.#ask(key, of, lacking, !placed, spent)
   }
 
   /** Ask again for what failed, as when the user reloads a view. */
@@ -194,46 +200,39 @@ export class Rows {
 
   async #ask(
     key: string,
-    { summary, results }: Of,
+    of: Of,
     lacking: readonly FieldSelection[],
     placing: boolean,
-    ask: string,
+    spent: string,
   ) {
     const controller = (this.#flight = new AbortController())
-    const revision = revisionOf(summary)
+    const revision = revisionOf(of.summary)
     try {
-      const [batches, positions] = await Promise.all([
-        lacking.length || !this.#batches.length
-          ? this.options.request(
-              { ...revision, fields: lacking, ...(results && { results }) },
-              controller.signal,
-            )
-          : [],
-        placing
-          ? this.options.presentation(
-              { ...revision, ...(results && { results }) },
-              controller.signal,
-            )
-          : this.#positions,
-      ])
+      const [batches = [], positions = this.#positions] = await ask(
+        this.asker,
+        of,
+        lacking.length || !this.#batches.length ? lacking : undefined,
+        placing,
+        controller.signal,
+      )
       if (controller.signal.aborted || key !== this.#key) return
       this.#batches = joined(this.#batches, batches)
       for (const { from, select } of lacking)
         for (const name of select) this.#held.add(nameOf(from, name))
       this.#positions = positions
       this.#snapshot = {
-        data: createData(schemaOf(summary.schema), this.#batches),
+        data: createData(schemaOf(of.summary.schema), this.#batches),
         revision,
         fields: new Set(this.#held),
         ...(positions && { presentation: positions }),
       }
-      this.options.changed()
+      this.changed()
     } catch (error) {
       if (controller.signal.aborted) return
-      this.#spent.add(ask)
+      this.#spent.add(spent)
       // A revision read again since it was asked for is no failure: the newer one is asked for.
       if (!cancelled(error) && (error as { code?: string })?.code !== 'stale')
-        this.options.report(error)
+        this.asker.report(error)
     } finally {
       if (this.#flight === controller) this.#flight = undefined
       // What the view came to want meanwhile.
@@ -244,7 +243,7 @@ export class Rows {
 }
 
 /** Whether `snapshot` holds the rows of the revision `state` shows. */
-export function current(snapshot: Snapshot | undefined, state: ViewState): boolean {
+export function ofShown(snapshot: Snapshot | undefined, state: ViewState): boolean {
   const summary = state.summary
   const revision = snapshot?.revision
   return (
@@ -260,7 +259,7 @@ export function current(snapshot: Snapshot | undefined, state: ViewState): boole
  *  mappings read. A sampled field comes from the results, which the view checks against the time
  *  it draws. State may come before its rows, and the last frame stays until both agree. */
 export function drawable(snapshot: Snapshot | undefined, state: ViewState): boolean {
-  if (!current(snapshot, state) || state.stale) return false
+  if (!ofShown(snapshot, state) || state.stale) return false
   const summary = state.summary!
   return Object.values(state.bindings ?? {}).every(({ type, field }) => {
     const definition = summary.schema.types[type]?.fields[field]

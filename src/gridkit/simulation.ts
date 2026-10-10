@@ -7,7 +7,7 @@ import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { described, type ResultCache, ResultsFile } from '../results/index.js'
-import type { Run, RuntimeProcess, SimulationRequest, Study } from '../shared/simulation.js'
+import type { Run, RunRequest, RuntimeProcess, Study } from '../shared/simulation.js'
 import { contingencyFile } from '../shared/study.js'
 import type { Case } from './case.js'
 import { launch } from './runtime.js'
@@ -37,10 +37,10 @@ function contingencyBuses(kase: Case): number[] {
   })
 }
 
-/** Runs `request` on `kase`, and reads what it writes into `run.results`. */
+/** Runs `request` on `kase`, and reads what it writes, which `run.results` names. */
 export async function simulate(
   kase: Case,
-  request: SimulationRequest,
+  request: RunRequest,
   run: Run,
   cache: ResultCache,
   context: RunContext,
@@ -80,7 +80,7 @@ export async function simulate(
   /** The file at `path`, read as the run's results. */
   const reading = (path: string, more: Parameters<typeof described>[3]) => {
     const file = new ResultsFile(described(kase, request, path, { format, ...more }), kase, cache)
-    run.results = file.info
+    run.results = file.info.id
     context.reading(file)
     return file
   }

@@ -9,6 +9,7 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Results, SamplesInput } from '../shared/messages.js'
+import type { Asker } from './asker.js'
 import { Samples } from './samples.js'
 
 const index = { source: 'case', type: 'Bus', version: '1' }
@@ -114,7 +115,11 @@ function worker(file: { frames: number }) {
 function cache(request: ReturnType<typeof worker>['request'], budget?: number) {
   const changed = vi.fn()
   const report = vi.fn()
-  const samples = new Samples({ request, changed, report, ...(budget && { budget }) })
+  const asker = {
+    request: (_: 'samples', input: SamplesInput) => request(input),
+    report,
+  } as unknown as Asker
+  const samples = new Samples(asker, changed, budget)
   return { samples, changed, report }
 }
 

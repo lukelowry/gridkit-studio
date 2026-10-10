@@ -16,9 +16,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
 import type { SamplesInput } from '../shared/messages.js'
+import { ResultCache } from './cache.js'
 import { chunkFrames, type Layout, readResults } from './decode.js'
+import { described, ResultsFile } from './file.js'
 import { PROGRESS_MS } from './limits.js'
-import { described, ResultCache, ResultsFile } from './results.js'
 
 const HEADER = 'time,Bus_A_Vm\n'
 const signal = new AbortController().signal

@@ -1,4 +1,4 @@
-/** The messages between the extension, its data worker, and its webviews. */
+/** The messages between the extension, its two workers, and its webviews. */
 
 import type { Positions } from '@latkit/gpu'
 import type {
@@ -14,20 +14,20 @@ import type {
   Value,
 } from '@latkit/model'
 
-import type { Results, Run, RuntimeProcess, SimulationRequest, Study } from './simulation.js'
+import type { Cancel, Reply, Request } from './rpc.js'
+import type { Results, Run, RunRequest, RuntimeProcess, Study } from './simulation.js'
 import type { Sink } from './study.js'
 export type {
   GridKit,
   Program,
   Results,
   Run,
+  RunRequest,
   RuntimeProcess,
-  SimulationRequest,
   Study,
 } from './simulation.js'
 
 import type { Bindings } from './bindings.js'
-import type { Failure } from './errors.js'
 import type { SettingsValues } from './preferences.js'
 import type { ClockState, LoopMode } from './transport.js'
 
@@ -113,87 +113,86 @@ export interface SamplesInput {
   bytes: number
 }
 
-/** What the extension asks of the data worker. */
-export interface Requests {
-  /** The case a results file is read against, as it was then. */
-  describeResults: { input: { results: string }; output: Summary }
-  shutdown: { input: Record<string, never>; output: null }
-  /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
-  anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
+/** How much memory a worker holds. */
+export interface Memory {
+  heapUsed: number
+  arrayBuffers: number
+}
+
+/** The results a request reads, by their id. */
+export interface OfResults {
+  results: string
+}
+
+/** What the case worker answers: each open case's source, parsed as the user edits it, and what
+ *  the editor and the views read of it. */
+export interface CaseApi {
   parse: {
     input: Revision &
       ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
     output: Summary
   }
   validate: { input: Revision; output: Issue[] }
+  /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
+  anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
   complete: { input: { text: string; offset: number }; output: SourceContext['completions'] }
   context: { input: Revision & { offset: number }; output: SourceContext }
   symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
   locate: { input: Revision & Element; output: SourceRange }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */
-  presentation: { input: Revision & { results?: string }; output: Record<string, Positions> }
-  /** Rows of the case, or of the case `results` were read against when the query has an `at`. */
-  query: {
-    input: Revision & { query: Query; results?: string }
-    output: QueryBlock[]
-  }
-  /** The case's static `fields`, of the case `results` were read against when they are named. */
-  rows: {
-    input: Revision & { fields: readonly FieldSelection[]; results?: string }
-    output: RowBatch[]
-  }
-  samples: { input: SamplesInput; output: SampleBatch[] }
-  /** The next sample time from `at` in `direction`; the first or last time when none. */
-  step: { input: { results: string; at: number; direction: -1 | 1 }; output: number }
+  presentation: { input: Revision; output: Record<string, Positions> }
+  /** Rows of the case. */
+  query: { input: Revision & { query: Query }; output: QueryBlock[] }
+  /** The case's static `fields`. */
+  rows: { input: Revision & { fields: readonly FieldSelection[] }; output: RowBatch[] }
+  /** Drops the case. */
+  release: { input: { uri: string; attachmentId?: string }; output: null }
+  stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
+}
+
+/** What the results worker answers: GridKit's runs, and the results files Studio reads, each with
+ *  the case it was read against. */
+export interface ResultsApi {
   /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
    *  and cancelling it stops the run. */
-  run: { input: SimulationRequest; output: Run }
+  run: { input: RunRequest; output: Run }
   /** A GridKit results file read for the case at its revision, whose source is `text`. It answers
    *  once the first frames are read, and the rest are read on. */
   open: {
     input: Revision & { text: string; path: string; cacheBytes: number; contingency?: Study }
     output: Results
   }
+  /** The case the results were read against, as it was then. */
+  describe: { input: OfResults; output: Summary }
+  /** Rows of the case the results were read against, at a time of theirs when the query has an
+   *  `at`. */
+  query: { input: OfResults & { query: Query }; output: QueryBlock[] }
+  /** The static `fields` of the case the results were read against. */
+  rows: { input: OfResults & { fields: readonly FieldSelection[] }; output: RowBatch[] }
+  /** Where the diagram's blocks are arranged in the case the results were read against. */
+  presentation: { input: OfResults; output: Record<string, Positions> }
+  samples: { input: SamplesInput; output: SampleBatch[] }
+  /** The next sample time from `at` in `direction`; the first or last time when none. */
+  step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
+  export: { input: OfResults & { path: string }; output: null }
   /** Lets go of the case's results, stopping a run under way. Their files stay. */
   clear: { input: { uri: string }; output: null }
-  /** Drops the case and its results. */
-  release: { input: { uri: string; attachmentId?: string }; output: null }
-  export: { input: { results: string; path: string }; output: null }
+  /** Stops every run under way, each interrupted. */
+  shutdown: { input: Record<string, never>; output: null }
   stats: {
     input: Record<string, never>
-    output: {
-      cacheBytes: number
-      sessions: number
-      results: number
-      memory: { heapUsed: number; arrayBuffers: number }
-    }
+    output: { memory: Memory; files: number; cacheBytes: number }
   }
 }
 
-export type Method = keyof Requests
-
-export type Request = {
-  [K in Method]: { kind: 'request'; id: number; method: K; input: Requests[K]['input'] }
-}[Method]
-
-export type ToWorker = Request | { kind: 'cancel'; id: number }
-
-export type FromWorker =
+/** What a worker tells the extension besides its replies. */
+export type WorkerEvent =
+  /** The GridKit process a case's run started, or none once it ends. */
   | { kind: 'process'; uri: string; process?: RuntimeProcess }
-  | { kind: 'result'; id: number; value: unknown }
-  | {
-      kind: 'error'
-      id: number
-      problem: Failure
-      offset?: number
-      length?: number
-      /** Whether the error is a defect in Studio; `detail` is its stack. */
-      defect?: boolean
-      detail?: string
-    }
+  /** A run started, began to write its results, or ended. */
   | { kind: 'run'; run: Run }
-  /** How far an opened results file has been read. */
+  /** How far a results file has been read: a run's as it writes it, or one opened. */
   | { kind: 'results'; uri: string; results: Results }
   /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
    *  where they differ. Without, a line of Studio's own. */
@@ -204,6 +203,9 @@ export type FromWorker =
       level?: 'error' | 'warn' | 'info' | 'debug'
       raw?: string
     }
+
+export type ToWorker = Request | Cancel
+export type FromWorker = Reply | WorkerEvent
 
 export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'export'
 
@@ -257,18 +259,7 @@ export type ToView =
   | { kind: 'state'; state: ViewState }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
-  /** A request's answer, or why it failed; `defect` marks a defect in Studio, `detail` its stack,
-   *  and `cancelled` a request let go of, where nothing failed. */
-  | {
-      kind: 'reply'
-      id: number
-      value?: unknown
-      error?: string
-      code?: string
-      defect?: boolean
-      cancelled?: boolean
-      detail?: string
-    }
+  | Reply
   | { kind: 'action'; command: string; value?: unknown }
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
@@ -279,14 +270,18 @@ export type TransportAction =
   | { action: 'playPause' | 'goLive' }
 
 /** What a view asks of the extension. */
-export interface ViewRequests {
+export interface ViewApi {
   /** Rows of the case, or of the shown results when the query has an `at`. */
   query: { input: RowsQuery; output: RowsBlock[] }
   /** The static fields a view draws, of a case's revision or of the case results were read
    *  against. */
-  rows: { input: Requests['rows']['input']; output: RowBatch[] }
-  /** Where the diagram's blocks are arranged in the case at a revision. */
-  presentation: { input: Revision & { results?: string }; output: Record<string, Positions> }
+  rows: {
+    input: CaseApi['rows']['input'] | ResultsApi['rows']['input']
+    output: RowBatch[]
+  }
+  /** Where the diagram's blocks are arranged, in a case's revision or in the case results were
+   *  read against. */
+  presentation: { input: Revision | OfResults; output: Record<string, Positions> }
   samples: { input: SamplesInput; output: SampleBatch[] }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
@@ -303,8 +298,8 @@ export interface ViewRequests {
 
 export type FromView =
   | { kind: 'ready' }
-  | { kind: 'cancel'; id: number }
-  | { kind: 'request'; id: number; method: keyof ViewRequests; input: unknown }
+  | Request
+  | Cancel
   | { kind: 'command'; command: string; value?: unknown }
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */

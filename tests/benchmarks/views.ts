@@ -330,7 +330,10 @@ export async function run() {
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
       /** What the run started here wrote, as read so far. */
-      const wrote = () => ran()?.results
+      const wrote = () => {
+        const id = ran()?.results
+        return id && session.results?.id === id ? session.results : undefined
+      }
       started = performance.now()
       const since = () => performance.now() - started
       bench.run('Run Dynamic Simulation', solver)
@@ -450,9 +453,7 @@ export async function run() {
       const value = Number(
         rowsOf(
           (
-            await bench.studio.client.call('query', {
-              uri: key,
-              version: summary().version,
+            await bench.studio.client.results.call('query', {
               results: session.results!.id,
               query: {
                 kind: 'rows',

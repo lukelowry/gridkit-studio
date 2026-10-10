@@ -6,7 +6,7 @@
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { rowsOnce, staticNeeds } from '../rows.js'
-  import { networkNeeds, plotNeeds, Samples, type SamplesOptions } from '../samples.js'
+  import { networkNeeds, plotNeeds, Samples } from '../samples.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -29,18 +29,16 @@
   /** The results the time range came from, and whether the user has edited it since. */
   let seeded: string | undefined
   let touched = false
-  const asking: SamplesOptions = {
-    request: (input, signal) => bridge.request('samples', input, signal),
-    changed: () => {},
-    report: (reason) => bridge.report(reason),
-  }
   /** The samples the Monitor's part plots, all of the time range; and those the Network's part
    *  maps, a moment at a time, read a few chunks ahead of the frame drawn. */
-  const plotting = new Samples(asking)
-  const mapping = new Samples(asking)
+  const plotting = new Samples(bridge, () => {})
+  const mapping = new Samples(bridge, () => {})
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
   let cancelled = false
+  /** The moments the Network's part of the last export was given the samples of, for tests. */
+  let moments: number[] = []
+  ;(window as { gridkitExport?: () => unknown }).gridkitExport = () => ({ moments })
   const owner = new CanvasGpu()
   const id = $props.id()
 
@@ -76,18 +74,20 @@
 
   /** Export to a file the user picks, written as frames are encoded. */
   async function start(): Promise<void> {
-    if (busy || !ready || !view.summary) return
     const chosen = settings
     const state = view
+    const { summary, results } = state
+    if (busy || !ready || !summary) return
     const control = (stop = new AbortController())
     const { signal } = control
     status = 'running'
     cancelled = false
     progress = null
+    moments = []
     bridge.send({ kind: 'busy', busy: true })
     let file: number | null = null
     try {
-      const name = view.summary.name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
+      const name = summary.name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
       file = await bridge.request(
         'videoOpen',
         { name: `${name}.${chosen.format}`, format: chosen.format },
@@ -98,16 +98,12 @@
         return
       }
       const cameras = await bridge.request('cameras', {}, signal)
-      const { summary, results } = state
       // The case the results were read against, which the summary then describes.
-      const of = { summary: summary!, ...(results?.frames && { results: results.id }) }
+      const of = { summary, ...(results?.frames && { results: results.id }) }
       const held = await rowsOnce(
-        {
-          request: (input, s) => bridge.request('rows', input, s),
-          presentation: (input, s) => bridge.request('presentation', input, s),
-        },
+        bridge,
         of,
-        staticNeeds(summary!, state.bindings, false),
+        staticNeeds(summary, state.bindings, false),
         chosen.views.includes('diagram'),
         signal,
       )
@@ -141,6 +137,7 @@
           mapped: async (at, s) => {
             mapping.want(results, mapped, [at, at], { at, travel: 1 })
             await mapping.until([at, at], s)
+            moments.push(at)
             return mapping.data(rows)
           },
           presentation: held.presentation ?? {},

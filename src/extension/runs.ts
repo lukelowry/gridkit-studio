@@ -8,7 +8,7 @@ import { dirname, isAbsolute, resolve } from 'node:path'
 import * as vscode from 'vscode'
 
 import { formatNumber } from '../shared/format.js'
-import type { GridKit, Program, Run } from '../shared/messages.js'
+import type { GridKit, Program, Results } from '../shared/messages.js'
 import { outputOf, readSolver } from '../shared/study.js'
 import { cacheBytesOf, notice, type Sessions } from './sessions.js'
 import { showView } from './views.js'
@@ -33,12 +33,12 @@ const nameOf = (uri: vscode.Uri) => uri.path.split('/').at(-1)!
 const near = (solver: vscode.Uri, path: string) =>
   isAbsolute(path) ? vscode.Uri.file(path) : vscode.Uri.joinPath(solver, '..', path)
 
-/** How far a run has come, in percent and in words. A study runs its contingencies at once, so
- *  only a simulation counts. */
-function progressOf(program: Program, { state, results }: Run) {
+/** How far a run has come, by the `results` it has written so far, in percent and in words. A
+ *  study runs its contingencies at once, so only a simulation counts. */
+function progressOf(program: Program, results?: Results) {
   if (program === 'ContingencyAnalysis') return { percent: 0, message: 'Faulting each bus' }
   const { span, domain, frames } = results ?? {}
-  if (state !== 'running' || !frames || !span || !domain || !(span[1] > span[0]))
+  if (!frames || !span || !domain || !(span[1] > span[0]))
     return { percent: 0, message: 'Starting' }
   return {
     percent: (100 * (domain[1] - span[0])) / (span[1] - span[0]),
@@ -95,18 +95,26 @@ export function registerRuns(studio: Sessions) {
         },
         async (progress, token) => {
           let shown = 0
+          const report = (results?: Results) => {
+            const { percent, message } = progressOf(program, results)
+            progress.report({ increment: percent - shown, message })
+            shown = percent
+          }
+          /** The results the run writes, once it begins to. */
+          let writes: string | undefined
           const listening = [
             token.onCancellationRequested(() => stop.abort()),
             studio.client.event.event((event) => {
-              if (event.kind !== 'run' || event.run.uri !== uri) return
-              const { percent, message } = progressOf(program, event.run)
-              progress.report({ increment: percent - shown, message })
-              shown = percent
+              if (event.kind === 'run' && event.run.uri === uri) {
+                writes = event.run.results
+                if (!writes) report()
+              } else if (event.kind === 'results' && event.results.id === writes)
+                report(event.results)
             }),
           ]
           try {
             // The call is the run. It settles when the run ends, and aborting it stops the run.
-            await studio.client.call(
+            await studio.client.results.call(
               'run',
               {
                 uri,

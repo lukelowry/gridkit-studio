@@ -2,7 +2,8 @@ import type { Positions } from '@latkit/gpu'
 import { type Data, type NumericColumn, read, type RowBatch, textColumn } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { Requests, Summary } from '../shared/messages.js'
+import type { CaseApi, Summary } from '../shared/messages.js'
+import type { Asker } from './asker.js'
 import { Rows } from './rows.js'
 
 const index = { source: 'case', type: 'Bus', version: '1' }
@@ -20,8 +21,8 @@ const both = { from: 'Bus', select: ['kV', 'area'] }
 /** A case worker that answers with two buses' fields, keeping what it was asked. At version `v`,
  *  a bus's field holds `v` and `v + 0.5`. With `gate`, it waits for it before answering. */
 function worker(gate?: () => Promise<void>) {
-  const asked: Requests['rows']['input'][] = []
-  const request = vi.fn(async (input: Requests['rows']['input']) => {
+  const asked: CaseApi['rows']['input'][] = []
+  const request = vi.fn(async (input: CaseApi['rows']['input']) => {
     asked.push(input)
     await gate?.()
     return input.fields.map(({ select }): RowBatch => ({
@@ -50,7 +51,12 @@ function rowsOf(request: ReturnType<typeof worker>['request']) {
   const changed = vi.fn()
   const report = vi.fn()
   const presentation = vi.fn(async () => placed)
-  const rows = new Rows({ request, presentation, changed, report })
+  const asker = {
+    request: (method: string, input: CaseApi['rows']['input']) =>
+      method === 'rows' ? request(input) : presentation(),
+    report,
+  } as unknown as Asker
+  const rows = new Rows(asker, changed)
   return { rows, changed, report, presentation }
 }
 

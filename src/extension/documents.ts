@@ -68,10 +68,12 @@ export class Documents {
         this.entries.delete(uri)
         this.changed.fire(uri)
         this.diagnostics.delete(document.uri)
-        void this.client.call('release', { uri, attachmentId: entry.attachmentId }).catch(() => {})
+        void this.client.cases
+          .call('release', { uri, attachmentId: entry.attachmentId })
+          .catch(() => {})
       }),
-      // A new worker reads the open cases again, unless the reading may be what stops it.
-      this.client.failure.event((error) => {
+      // A new case worker reads the open cases again, unless the reading may be what stops it.
+      this.client.cases.failure.event((error) => {
         const now = Date.now()
         this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
         const retry = this.#crashes.length < CRASHES
@@ -121,7 +123,7 @@ export class Documents {
         : { uri, version, attachmentId: entry.attachmentId, text: document.getText() }
     entry.changes = []
     entry.workerVersion = version
-    const pending = this.client
+    const pending = this.client.cases
       .call('parse', input, controller.signal)
       .catch((error) => {
         // The worker's mirror is not at the delta's base: resend the whole text.
@@ -130,7 +132,7 @@ export class Documents {
           !controller.signal.aborted &&
           document.version === version
         )
-          return this.client.call(
+          return this.client.cases.call(
             'parse',
             { uri, version, attachmentId: current.attachmentId, text: document.getText() },
             controller.signal,
@@ -191,7 +193,7 @@ export class Documents {
     if (summary.validation === 'complete') return summary
     if (entry.validation) return entry.validation
     const signal = entry.controller!.signal
-    const pending = this.client
+    const pending = this.client.cases
       .call('validate', { uri, version: summary.version, attachmentId: entry.attachmentId }, signal)
       .then((issues) => {
         signal.throwIfAborted()
@@ -255,7 +257,7 @@ export class Documents {
       .catch(() => {})
       .then(async () => {
         check()
-        const edits = await this.client.call('transact', {
+        const edits = await this.client.cases.call('transact', {
           uri,
           version: expected,
           attachmentId: entry.attachmentId,
@@ -291,7 +293,7 @@ export class Documents {
       this.entries.get(uri)?.document ??
       (await vscode.workspace.openTextDocument(vscode.Uri.parse(uri)))
     const source = element
-      ? await this.client.call('locate', {
+      ? await this.client.cases.call('locate', {
           uri,
           version: (await this.ensure(document)).version,
           ...element,

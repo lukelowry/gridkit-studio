@@ -1,27 +1,27 @@
 import { randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 
+import type { RowsBlock, RowsQuery } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { cancelled, defect, detail, message } from '../shared/format.js'
 import type {
   FromView,
-  Requests,
-  SamplesInput,
+  Results,
   Summary,
   ToView,
+  ViewApi,
   ViewKind,
-  ViewRequests,
   ViewState,
 } from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
+import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
 import { typeName } from '../shared/schema.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
-import { VideoFile } from './video.js'
+import { VideoFiles } from './video.js'
 
 /** The views a clock moves. */
-const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor'])
+const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor'])
 /** The commands a webview may run. */
 const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
@@ -56,6 +56,18 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   return parts.join(' · ')
 }
 
+/** What of the results a view draws: which, how far they are read, what they hold, and the times
+ *  and values they span. */
+const drawn = (results?: Results) =>
+  results && [
+    results.id,
+    results.frames,
+    results.outputs,
+    results.domain,
+    results.span,
+    results.domains,
+  ]
+
 /** What each view reads of the state, besides the summary and settings, which are compared on
  *  their own; a view is sent state only when this changes. While a run writes, the frames read so
  *  far send a view that draws them state again, which is how it hears there are more to ask for. */
@@ -88,15 +100,7 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     selection,
     anchors,
     bindings,
-    results && [
-      results.id,
-      results.fingerprint,
-      results.frames,
-      results.outputs,
-      results.domain,
-      results.span,
-      results.domains,
-    ],
+    drawn(results),
   ],
   // Results the plots show have a fixed span while a run writes them, else the times they hold.
   monitor: ({ uri, stale, selection, bindings, plots, window, results }) => [
@@ -106,15 +110,8 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     bindings,
     plots,
     window,
-    results && [
-      results.id,
-      results.growing,
-      results.frames,
-      results.outputs,
-      results.span,
-      results.domain,
-      results.domains,
-    ],
+    drawn(results),
+    results?.growing,
   ],
   // An export's times follow the results' until the user chooses their own.
   export: ({ uri, stale, error, bindings, plots, results }) => [
@@ -123,14 +120,7 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     error,
     bindings,
     plots,
-    results && [
-      results.id,
-      results.frames,
-      results.outputs,
-      results.domain,
-      results.span,
-      results.domains,
-    ],
+    drawn(results),
   ],
 }
 
@@ -152,7 +142,8 @@ function html(
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
 class View {
-  #requests = new Map<number, AbortController>()
+  readonly #answering: Answerer
+  readonly #videos = new VideoFiles()
   #summary?: Summary
   /** The case the shown results were read against, as it was then. */
   #described?: { results: string; summary: Summary }
@@ -165,8 +156,6 @@ class View {
   #running?: Promise<void>
   /** The sequence number of the latest transport change this view made. */
   #seq = 0
-  #files = new Map<number, VideoFile>()
-  #file = 0
   /** Whether the view is mid-task and must not be replaced. */
   busy = false
   #settle: () => void = () => {}
@@ -190,6 +179,7 @@ class View {
       kind,
     )
     const report = (error: unknown) => studio.error(error)
+    this.#answering = answerer(this.#handlers(), (reply) => void this.send(reply))
     this.disposables.push(
       panel.webview.onDidReceiveMessage((message: FromView) => {
         void this.receive(message).catch(report)
@@ -240,16 +230,15 @@ class View {
   }
   /** Let go of the view's requests under way. */
   cancel() {
-    for (const controller of this.#requests.values()) controller.abort()
-    this.#requests.clear()
+    this.#answering.cancel()
   }
   async receive(message: FromView) {
     if (!message || typeof message !== 'object' || this.#disposed) return
     const session = this.studio.all.get(this.uri)
     switch (message.kind) {
+      case 'request':
       case 'cancel':
-        this.#requests.get(message.id)?.abort()
-        return
+        return this.#answering.receive(message)
       case 'ready':
         this.#ready = true
         this.#settle()
@@ -317,110 +306,62 @@ class View {
           })
         }
         return
-      case 'request':
-        return this.answer(message.id, message.method, message.input)
     }
   }
-  /** Reply to the view's request `id` unless it was cancelled. */
-  async answer(id: number, method: keyof ViewRequests, input: unknown) {
-    const request = new AbortController()
-    this.#requests.set(id, request)
-    try {
-      const work = this.handle(method, input, request.signal)
-      // The Case panel's rows load under VS Code's own progress bar on the view.
-      if (this.kind === 'case' && method === 'query')
-        void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.case' } }, () =>
-          work.catch(() => {}),
-        )
-      const value = await work
-      if (!request.signal.aborted) await this.send({ kind: 'reply', id, value })
-    } catch (error) {
-      if (!request.signal.aborted)
-        await this.send({
-          kind: 'reply',
-          id,
-          error: message(error),
-          detail: detail(error),
-          ...(typeof (error as { code?: unknown })?.code === 'string' && {
-            code: (error as { code: string }).code,
-          }),
-          ...(defect(error) && { defect: true }),
-          ...(cancelled(error) && { cancelled: true }),
-        })
-    } finally {
-      this.#requests.delete(id)
-    }
-  }
-  async handle(method: keyof ViewRequests, input: unknown, signal: AbortSignal): Promise<unknown> {
+  /** What the view may ask: of the case it shows, the results it draws, and the videos it exports.
+   *  It asks for what it lacks of the case and the results: the case's revision names what it asks
+   *  of, and is refused once stale. */
+  #handlers(): Handlers<ViewApi> {
     const { studio, uri } = this
-    // A view asks for what it lacks of the case and the results it shows: the case's revision
-    // names what it asks of, and is refused once stale.
-    if (method === 'samples') return studio.client.call('samples', input as SamplesInput, signal)
-    if (method === 'rows')
-      return studio.client.call('rows', input as Requests['rows']['input'], signal)
-    if (method === 'presentation')
-      return studio.client.call('presentation', input as Requests['presentation']['input'], signal)
-    if (method === 'cameras') return studio.all.get(uri)?.cameras ?? {}
-    if (method === 'videoWrite') {
-      const { file, position, bytes } = input as ViewRequests['videoWrite']['input']
-      const chunk = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes
-      if (!(chunk instanceof Uint8Array)) throw new Error('Invalid video write.')
-      const open = this.#files.get(file)
-      if (!open) throw new Error('The video file is closed.')
-      return open.write(position, chunk)
+    const { client } = studio
+    /** The case as it reads now. A request made while the case is read again, as it is after each
+     *  edit, waits for that reading. A case that no longer reads keeps the view on its last
+     *  revision, which says so, and the request is let go: Problems says why. */
+    const read = async () => {
+      const entry = studio.documents.entries.get(uri)
+      const summary =
+        entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
+      if (!summary) throw new DOMException('The case does not read.', 'AbortError')
+      return summary
     }
-    if (method === 'videoClose') {
-      const { file, abort } = input as ViewRequests['videoClose']['input']
-      const open = this.#files.get(file)
-      this.#files.delete(file)
-      if (open) {
-        try {
-          await (abort ? open.abort() : open.close())
-        } catch (error) {
-          await open.abort()
-          throw error
-        }
-      }
-      return open && !abort ? open.uri.fsPath : null
-    }
-    if (method === 'videoOpen') {
-      const { name, format } = input as ViewRequests['videoOpen']['input']
-      const file = await VideoFile.choose(
-        vscode.Uri.parse(uri),
-        String(name),
-        format === 'webm' ? 'webm' : 'mp4',
-      )
-      if (!file) return null
-      if (signal.aborted || this.#disposed) {
-        await file.abort()
-        signal.throwIfAborted()
-        return null
-      }
-      this.#files.set(++this.#file, file)
-      return this.#file
-    }
-    // A request made while the case is read again, as it is after each edit, waits for that
-    // reading. A case that no longer reads keeps the view on its last revision, which says so, and
-    // the request is let go: Problems says why.
-    const entry = studio.documents.entries.get(uri)
-    const summary = entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
-    if (!summary) throw new DOMException('The case does not read.', 'AbortError')
-    if (method === 'query') {
-      const query = input as ViewRequests['query']['input']
+    /** Rows of the case, or, `at` a time, of the shown results. */
+    const query = async (query: RowsQuery, signal: AbortSignal) => {
       if (query?.kind !== 'rows') throw new Error('Invalid row query')
-      // A query `at` a time reads the shown results.
       const results = query.at === undefined ? undefined : studio.all.get(uri)?.results?.id
-      return studio.client.call(
-        'query',
-        { uri, version: summary.version, query, ...(results && { results }) },
-        signal,
-      )
+      const blocks = results
+        ? await client.results.call('query', { results, query }, signal)
+        : await client.cases.call('query', { uri, version: (await read()).version, query }, signal)
+      return blocks.filter((block): block is RowsBlock => block.kind === 'rows')
     }
-    if (method === 'transact') {
-      const edit = input as ViewRequests['transact']['input']
-      return studio.documents.transact(uri, edit.version, [...edit.mutations], edit.label)
+    return {
+      samples: (input, signal) => client.results.call('samples', input, signal),
+      rows: (input, signal) =>
+        'results' in input
+          ? client.results.call('rows', input, signal)
+          : client.cases.call('rows', input, signal),
+      presentation: (input, signal) =>
+        'results' in input
+          ? client.results.call('presentation', input, signal)
+          : client.cases.call('presentation', input, signal),
+      query: (input, signal) => {
+        const rows = query(input, signal)
+        // The Case panel's rows load under VS Code's own progress bar on the view.
+        if (this.kind === 'case')
+          void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.case' } }, () =>
+            rows.catch(() => {}),
+          )
+        return rows
+      },
+      transact: async ({ version, mutations, label }) => {
+        await read()
+        return studio.documents.transact(uri, version, [...mutations], label)
+      },
+      cameras: async () => studio.all.get(uri)?.cameras ?? {},
+      videoOpen: ({ name, format }, signal) =>
+        this.#videos.open(vscode.Uri.parse(uri), name, format, signal),
+      videoWrite: ({ file, position, bytes }) => this.#videos.write(file, position, bytes),
+      videoClose: ({ file, abort }) => this.#videos.close(file, abort),
     }
-    throw new Error('Unknown view request: ' + method)
   }
   /** Bring the view up to date; resolves once it is. */
   update(): Promise<void> {
@@ -445,7 +386,7 @@ class View {
       if (this.#described?.results !== results)
         this.#described = {
           results,
-          summary: await this.studio.client.call('describeResults', { results }),
+          summary: await this.studio.client.results.call('describe', { results }),
         }
       state.summary = this.#described.summary
     }
@@ -478,8 +419,7 @@ class View {
     this.#settle()
     this.#disposed = true
     this.cancel()
-    for (const file of this.#files.values()) void file.abort().catch(() => {})
-    this.#files.clear()
+    this.#videos.dispose()
     for (const disposable of this.disposables) disposable.dispose()
   }
 }

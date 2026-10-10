@@ -222,22 +222,23 @@ export async function run() {
       )
     }
     await withoutVa()
-    const originalCall = bench.studio.client.call
+    const results = bench.studio.client.results
+    const originalCall = results.call
     let failing = true
-    bench.studio.client.call = (async (...args: Parameters<typeof originalCall>) => {
+    results.call = (async (...args: Parameters<typeof originalCall>) => {
       const [method, input] = args
       if (method === 'samples' && failing && (input as SamplesInput).field.select[0] === 'Va') {
         failing = false
         throw Object.assign(new Error('Injected read failure'), { code: 'io' })
       }
-      return originalCall.apply(bench.studio.client, args)
+      return originalCall.apply(results, args)
     }) as typeof originalCall
     try {
       bench.session.plots = allPlots
       bench.studio.changed.fire(bench.key)
       await until(() => bench.studio.errors.length > 0, 'the failed ask said')
     } finally {
-      bench.studio.client.call = originalCall
+      results.call = originalCall
     }
     const said = bench.studio.errors.splice(0)
     assert.ok(

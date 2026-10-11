@@ -153,7 +153,7 @@ async function containerCli(cli: string): Promise<string> {
   throw new Error(
     cli
       ? `${cli} was not found. Check GridKit Studio: Container CLI.`
-      : 'GridKit is not installed here, and GridKit Image runs in Docker or Podman. Install one, set GridKit Studio: GridKit Path to an install, or open this folder in a dev container with GridKit.',
+      : 'GridKit is not installed here, and GridKit Image needs Docker or Podman. Install one, or set GridKit Studio: GridKit Path to a GridKit install.',
   )
 }
 
@@ -183,7 +183,7 @@ export async function runtimeOf(
     return { kind: 'container', cli: found, podman: await isPodman(found), image }
   }
   throw new Error(
-    'GridKit is not installed here. Set GridKit Studio: GridKit Image to run it in Docker or Podman, set GridKit Path to its install folder, or open this folder in a dev container with GridKit.',
+    'GridKit is not installed here. Set GridKit Studio: GridKit Path to its install folder, or GridKit Image to run it in Docker or Podman.',
   )
 }
 

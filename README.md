@@ -16,28 +16,31 @@ Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstud
 
 ## GridKit
 
-Studio looks for GridKit in this order:
+Studio runs GridKit from an install or from a container image.
 
-1. The install folder set in `gridkitStudio.gridkitPath`
-2. `PATH`, including dev containers, SSH, and WSL
-3. The Docker or Podman image set in `gridkitStudio.gridkitImage`
+**Install.** Set the folder GridKit is installed in. Leave it empty if GridKit is on your `PATH`.
 
-To use the default image, pull it first:
+```json
+"gridkitStudio.gridkitPath": "/opt/gridkit"
+```
+
+**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
 
 ```sh
 docker pull ghcr.io/lukelowry/gridkit:latest
 ```
 
-To work inside a container instead, with GridKit on `PATH`, save this as `.devcontainer/devcontainer.json` in your project and run **Dev Containers: Reopen in Container**:
-
 ```json
-{
-  "image": "ghcr.io/lukelowry/gridkit:latest",
-  "customizations": { "vscode": { "extensions": ["lukelowery.gridkit-studio"] } }
-}
+"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit:latest"
 ```
 
-To run GridKit, right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes. The case's `mon` lists say what gets recorded, and **Monitored Signals** edits them. **Show Results** on a solver file shows what its last run wrote, and **Run Again** in the Monitor runs that solver file again. **Open Results…** in the Monitor shows any other output you have.
+## How to use
+
+Right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
+
+- **Monitored Signals** chooses what the case records.
+- **Show Results** on a solver file shows what its last run wrote, and **Run Again** in the Monitor runs it again.
+- **Open Results…** in the Monitor shows any other output.
 
 ## Features
 

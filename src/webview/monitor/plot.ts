@@ -17,6 +17,7 @@ import type { Bindings } from '../../shared/bindings.js'
 import { intersectRows, recordedSelection } from '../../shared/coverage.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import type { Results } from '../../shared/simulation.js'
+import { UNLIMITED } from '../gpu.js'
 import { color, type Palette, viewStyle } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
@@ -39,8 +40,10 @@ export function plotRows(
   }
 }
 
-/** Caps each plot's history textures; the complete results are held outside the plot. */
-export const PLOT_LIMITS: Monitor.Limits = { historyBytes: 128 * 1024 ** 2 }
+/** No limit refuses a plot: every row of any case, and history the size of any canvas or export.
+ *  With history unbounded, a plot keeps each of up to four colorings of its traces, so recoloring
+ *  never draws its lines again. */
+export const PLOT_LIMITS: Monitor.Limits = { rows: UNLIMITED, historyBytes: UNLIMITED }
 
 /** The single trace key, so another field replaces the trace in place. */
 const TRACE = 'plotted'

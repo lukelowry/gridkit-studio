@@ -49,11 +49,25 @@ export function textOffset(kase: Case, byte: number): number {
   return map.chars[low]! + decoder.decode(kase.file.subarray(map.bytes[low]!, byte)).length
 }
 
-/** `text` with `edits` applied; each edit's offset is into `text` as given. */
+/** `text` with `edits` applied; each edit's offset is into `text` as given. One pass joins what lies
+ *  between the edits with their texts, so a batch of any size copies the text once. Insertions at
+ *  one offset land last first, as when each is applied in turn. */
 export function apply(text: string, edits: readonly SourceEdit[]): string {
-  for (const edit of [...edits].sort((a, b) => b.offset - a.offset))
-    text = text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length)
-  return text
+  if (edits.length === 1) {
+    const [edit] = edits as [SourceEdit]
+    return text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length)
+  }
+  const order = edits
+    .map((edit, i) => ({ edit, i }))
+    .sort((a, b) => a.edit.offset - b.edit.offset || b.i - a.i)
+  const parts: string[] = []
+  let at = 0
+  for (const { edit } of order) {
+    parts.push(text.slice(at, edit.offset), edit.text)
+    at = Math.max(at, edit.offset + edit.length)
+  }
+  parts.push(text.slice(at))
+  return parts.join('')
 }
 
 /** `text` with `value` set at `path` by jsonc-parser, which leaves the rest unformatted. */
@@ -237,7 +251,7 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     })
   }
   for (const table of kase.tables.values()) {
-    for (let row = 0; row < table.records.length && issues.length < 100; row++) {
+    for (let row = 0; row < table.records.length; row++) {
       yield
       let record: ReturnType<typeof recordOf> | undefined
       let tree: ReturnType<typeof parseTree>
@@ -278,7 +292,6 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
                 : 'Invalid ' + plan.name + ' value.',
           })
         }
-        if (issues.length >= 100) break
       }
     }
   }

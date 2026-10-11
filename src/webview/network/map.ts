@@ -1,9 +1,10 @@
 /** What lies on the ground under a network on Earth: Natural Earth's coasts and borders, shipped
  *  with Studio so the default map draws offline, or OpenStreetMap as vector tiles. Each source loads
- *  once a page, and every geography on it borrows what loaded. */
+ *  once a page, and every geography on it borrows what loaded. The Network imports this module
+ *  only for a case on Earth, once it is on screen. */
 
-import { type Geography, geojson, type Tiles, tiles } from '@latkit/geography'
-import type { RGBA } from '@latkit/gpu'
+import { createGeography, type Geography, geojson, type Tiles, tiles } from '@latkit/geography'
+import type { Gpu, RGBA } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
 
 import type { SettingsReader } from '../../shared/preferences.js'
@@ -74,6 +75,18 @@ export async function loadMap(s: SettingsReader): Promise<Loaded | null> {
   }
 }
 
+/** The map a network draws beneath it, which tells `report` only of its failures: it takes no
+ *  input, so the network answers every gesture. */
+export function mountEarth(
+  gpu: Gpu,
+  config: Geography.Config,
+  report: (reason: unknown) => void,
+): Geography {
+  const earth = createGeography(gpu, config)
+  earth.on('error', report)
+  return earth
+}
+
 /** A credit's text; TileJSON writes it as HTML, which the page never inserts as such. */
 function credit(html: string | undefined): string | undefined {
   if (!html) return undefined
@@ -89,8 +102,14 @@ export function mapConfig(
   palette: Palette,
   font: string | null,
   loaded: Loaded | null,
+  flat: boolean,
 ): Geography.Config {
-  const ground = color(s.get('network.map.groundColor'), palette.surface2)
+  // Laid flat, the ground is all the canvas shows behind the network, so it is the network's own
+  // background, as before the map joins; tilted or round, the Earth stands apart from beyond it.
+  const ground = color(
+    s.get('network.map.groundColor'),
+    flat ? color(s.get('network.background'), palette.background) : palette.surface2,
+  )
   const line = color(s.get('network.map.lineColor'), faded(palette.text2, LINE_ALPHA))
   const widthPx = s.get('network.map.lineWidthPx')
   const family = s.get('network.font') || font

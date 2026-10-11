@@ -125,16 +125,23 @@ interface OfResults {
 
 /** What the case worker answers: each open case's source, parsed as the user edits it, and what
  *  the editor and the views read of it. */
+/** What brings the case worker's copy of a document to a revision: its whole text, or the changes
+ *  since the version the worker holds. */
+export type SourceDelta =
+  { text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] }
+
 export interface CaseApi {
   parse: {
-    input: Revision &
-      ({ text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] })
+    input: Revision & SourceDelta
     output: Summary
   }
   validate: { input: Revision; output: Issue[] }
   /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
   anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
-  complete: { input: { text: string; offset: number }; output: SourceContext['completions'] }
+  complete: {
+    input: Revision & SourceDelta & { offset: number }
+    output: SourceContext['completions']
+  }
   context: { input: Revision & { offset: number }; output: SourceContext }
   symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
   locate: { input: Revision & Element; output: SourceRange }

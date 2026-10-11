@@ -187,20 +187,27 @@ export async function runtimeOf(
   )
 }
 
-/** Refuses an image that is not on this machine: the user pulls images, never Studio. */
-async function requireImage(cli: string, podman: boolean, image: string): Promise<void> {
+/** Refuses an image that is not on this machine: the user pulls images, never Studio. However long the
+ *  engine takes to answer, as Docker Desktop starting cold does, the run waits, until `signal` stops it. */
+async function requireImage(
+  cli: string,
+  podman: boolean,
+  image: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const failed = await new Promise<string | null>((resolve) => {
     try {
       execFile(
         cli,
         ['image', 'inspect', '--format', '{{.Id}}', image],
-        { windowsHide: true, timeout: 30_000 },
+        { windowsHide: true, ...(signal && { signal }) },
         (error, _, stderr) => resolve(error ? stderr.trim() || error.message : null),
       )
     } catch (error) {
       resolve(message(error))
     }
   })
+  signal?.throwIfAborted()
   if (failed === null) return
   const engine = podman ? 'podman' : 'docker'
   throw new Error(
@@ -214,10 +221,20 @@ async function requireImage(cli: string, podman: boolean, image: string): Promis
 export async function available(
   gridkit: GridKit,
   program: Program = 'DynamicSimulation',
+  signal?: AbortSignal,
 ): Promise<Runtime> {
   const runtime = await runtimeOf(gridkit, program)
-  if (runtime.kind === 'container') await requireImage(runtime.cli, runtime.podman, runtime.image)
+  if (runtime.kind === 'container')
+    await requireImage(runtime.cli, runtime.podman, runtime.image, signal)
   return runtime
+}
+
+/** How many threads GridKit's math libraries take: one each, unless the environment says. */
+function threads(env: NodeJS.ProcessEnv) {
+  return {
+    OMP_NUM_THREADS: env.OMP_NUM_THREADS ?? '1',
+    OPENBLAS_NUM_THREADS: env.OPENBLAS_NUM_THREADS ?? '1',
+  }
 }
 
 /** The container CLI's arguments that run `program` in `image` on the solver file `place` names:
@@ -233,6 +250,7 @@ export function containerArgs(
     readonly podman: boolean
     readonly uid?: number
     readonly gid?: number
+    readonly env?: NodeJS.ProcessEnv
   },
 ): string[] {
   const linux = host.platform === 'linux'
@@ -260,10 +278,10 @@ export function containerArgs(
         ? ['--userns', 'keep-id']
         : ['--user', `${host.uid ?? 0}:${host.gid ?? 0}`]
       : []),
-    '--env',
-    'OMP_NUM_THREADS=1',
-    '--env',
-    'OPENBLAS_NUM_THREADS=1',
+    ...Object.entries(threads(host.env ?? {})).flatMap(([name, value]) => [
+      '--env',
+      `${name}=${value}`,
+    ]),
     image,
     program,
     basename(place.solver),
@@ -289,7 +307,7 @@ export async function launch(
   log: (text: string) => void,
   lifecycle: (process?: RuntimeProcess) => void = () => {},
 ) {
-  const runtime = await available(gridkit, program)
+  const runtime = await available(gridkit, program, signal)
   signal.throwIfAborted()
   if (runtime.kind === 'container')
     for (const path of [place.solver, ...place.touches]) {
@@ -320,6 +338,7 @@ export async function launch(
               podman: runtime.podman,
               uid: process.getuid?.(),
               gid: process.getgid?.(),
+              env: process.env,
             },
           ),
         ]
@@ -330,11 +349,7 @@ export async function launch(
     windowsHide: true,
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      OMP_NUM_THREADS: '1',
-      OPENBLAS_NUM_THREADS: process.env.OPENBLAS_NUM_THREADS ?? '1',
-    },
+    env: { ...process.env, ...threads(process.env) },
   })
   const owned: RuntimeProcess = {
     pid: child.pid ?? 0,

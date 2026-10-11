@@ -24,22 +24,17 @@ const sources = new CaseCache()
 const running = new Map<string, { controller: AbortController; done: Promise<Run> }>()
 const shelf = new Shelf()
 const cache = new ResultCache()
-const cacheLimit = (value: number) => {
-  if (!Number.isFinite(value) || value < 16 << 20 || value > 2048 * (1 << 20))
-    throw new Error('Result cache must be between 16 and 2048 MiB.')
-  return value
-}
 const nameOf = (uri: string) => uri.split('/').at(-1) ?? 'Case'
 /** The case `source` names: one read before, by its fingerprint, else its text, which the extension
  *  sends again when asked. */
 async function caseOf({ uri, fingerprint, text }: CaseSource, signal: AbortSignal) {
-  const known = sources.find(fingerprint, nameOf(uri))
+  const known = sources.find(uri, fingerprint)
   if (known) return known
   if (text === undefined)
     throw Object.assign(new Error('The results worker has yet to read this case.'), {
       code: 'needs-source',
     })
-  return sources.parse(text, catalog, nameOf(uri), signal)
+  return sources.parse(uri, text, catalog, nameOf(uri), signal)
 }
 
 /** What tells the extension how far `file` has been read: at most every PROGRESS_MS, unless `now`. */
@@ -67,7 +62,7 @@ function withResults<R>(
 async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): Promise<Run> {
   if (running.has(input.uri)) throw failure('conflict', `${nameOf(input.uri)} is already running.`)
   const kase = await caseOf(input, signal)
-  cache.limit = cacheLimit(input.cacheBytes)
+  cache.limit = input.cacheBytes
   const run: Run = {
     id: randomUUID(),
     uri: input.uri,
@@ -153,11 +148,19 @@ async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): 
  *  results lets go of them. */
 async function openResults(input: ResultsApi['open']['input'], signal: AbortSignal) {
   const kase = await caseOf(input, signal)
-  cache.limit = cacheLimit(input.cacheBytes)
+  cache.limit = input.cacheBytes
+  const started = (await stat(input.path)).mtimeMs
+  // A file read whole and unchanged since, as when a study shows a contingency again, is read.
+  const kept = shelf.reopen(input.uri, input.path, kase.version, started)
+  if (kept) {
+    kept.info.revision = { uri: input.uri, version: input.version }
+    if (input.contingency) kept.info.contingency = input.contingency
+    return kept.info
+  }
   const file = new ResultsFile(
     described(kase, input, input.path, {
       growing: true,
-      started: (await stat(input.path)).mtimeMs,
+      started,
       ...(input.contingency && { contingency: input.contingency }),
       ...(input.solver && { solver: input.solver }),
     }),
@@ -237,6 +240,7 @@ serve<ResultsApi>(
       active?.controller.abort(new Error('Simulation cancelled.'))
       await active?.done
       await shelf.clear(uri)
+      sources.forget(uri)
       return null
     },
     async shutdown() {

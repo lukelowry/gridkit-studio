@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 
 import type { Value } from '../shared/messages.js'
-import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
+import type { Element, Mutation, SourceDelta, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
 
 /** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
@@ -98,31 +98,61 @@ export class Documents {
     if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
     return entry?.pending ?? this.parse(document)
   }
-  parse(document: vscode.TextDocument): Promise<Summary> {
+  /** `document`'s entry, made on first use. */
+  #entry(document: vscode.TextDocument): Entry {
     const uri = document.uri.toString()
     let entry = this.entries.get(uri)
     if (!entry) {
       entry = { document, attachmentId: crypto.randomUUID(), stale: true, changes: [] }
       this.entries.set(uri, entry)
     }
+    return entry
+  }
+  /** What brings the case worker's copy of `document` to its version: the changes since the
+   *  version the worker holds, or, before it holds one, the whole text. */
+  #delta(entry: Entry, document: vscode.TextDocument): SourceDelta {
+    const delta: SourceDelta =
+      entry.workerVersion !== undefined
+        ? { baseVersion: entry.workerVersion, changes: entry.changes }
+        : { text: document.getText() }
+    entry.changes = []
+    entry.workerVersion = document.version
+    return delta
+  }
+  /** The fields that complete at `offset` of `document`. Only what changed since the case worker's
+   *  copy crosses, and the worker reads no further than the cursor. */
+  complete(document: vscode.TextDocument, offset: number, signal: AbortSignal) {
+    const entry = this.#entry(document)
+    const uri = document.uri.toString()
+    const version = document.version
+    const call = (source: SourceDelta) =>
+      this.client.cases.call(
+        'complete',
+        { uri, version, attachmentId: entry.attachmentId, offset, ...source },
+        signal,
+      )
+    return call(this.#delta(entry, document)).catch((error: Error) => {
+      // The worker's copy is not at the delta's base: send the whole text.
+      if (error.message === 'Source mirror is stale.' && !signal.aborted)
+        return call({ text: document.getText() })
+      throw error
+    })
+  }
+  parse(document: vscode.TextDocument): Promise<Summary> {
+    const uri = document.uri.toString()
+    const entry = this.#entry(document)
     entry.controller?.abort()
     entry.validation = undefined
     clearTimeout(entry.timer)
     const controller = (entry.controller = new AbortController())
     const version = document.version
     const current = entry
-    const input =
-      entry.workerVersion !== undefined && entry.changes.length
-        ? {
-            uri,
-            version,
-            attachmentId: entry.attachmentId,
-            baseVersion: entry.workerVersion,
-            changes: entry.changes,
-          }
-        : { uri, version, attachmentId: entry.attachmentId, text: document.getText() }
-    entry.changes = []
-    entry.workerVersion = version
+    const input = {
+      uri,
+      version,
+      attachmentId: entry.attachmentId,
+      ...this.#delta(entry, document),
+    }
     const pending = this.client.cases
       .call('parse', input, controller.signal)
       .catch((error) => {

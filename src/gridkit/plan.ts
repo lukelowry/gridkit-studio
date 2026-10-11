@@ -168,11 +168,14 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
       occupied.set(target, id + '.' + port.name)
     }
   }
-  for (const table of kase.tables.values())
-    for (let row = 0; row < table.records.length; row++) {
-      const id = kase.id(table, row)
-      if (!removed.has(id)) check(id)
-    }
+  // Only a removal or a rewired net can break a row the batch leaves alone, so without either only
+  // the rows it adds are checked.
+  if (removed.size || touchedNets.size)
+    for (const table of kase.tables.values())
+      for (let row = 0; row < table.records.length; row++) {
+        const id = kase.id(table, row)
+        if (!removed.has(id)) check(id)
+      }
   for (const id of added.keys()) check(id)
   const edits: SourceEdit[] = []
   for (const id of new Set([...fields.keys(), ...positions.keys()])) {

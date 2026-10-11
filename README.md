@@ -24,14 +24,14 @@ Studio runs GridKit from an install or from a container image.
 "gridkitStudio.gridkitPath": "/opt/gridkit"
 ```
 
-**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
+**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image. The default names one GridKit build by its digest, so it stays the same when a tag moves.
 
 ```sh
-docker pull ghcr.io/lukelowry/gridkit:latest
+docker pull ghcr.io/lukelowry/gridkit@sha256:6a8f96ea84eebb8bb17fd6260cb90d425b6f3ca7e0c486dee3e163d0e67903f3
 ```
 
 ```json
-"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit:latest"
+"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit@sha256:6a8f96ea84eebb8bb17fd6260cb90d425b6f3ca7e0c486dee3e163d0e67903f3"
 ```
 
 ## How to use

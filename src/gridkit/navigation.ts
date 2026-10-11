@@ -1,4 +1,4 @@
-import { findNodeAtLocation, getLocation, parseTree } from 'jsonc-parser'
+import { findNodeAtLocation, getLocation, parseTree, visit } from 'jsonc-parser'
 
 import type { SourceContext } from '../shared/messages.js'
 import type { Case } from './case.js'
@@ -68,16 +68,15 @@ export function completionsAt(
   const path = location.path
   const array = typeof path[0] === 'string' ? path[0] : ''
   const row = typeof path[1] === 'number' ? path[1] : undefined
-  const tree = parseTree(text)
   const type =
     array === 'buses'
       ? catalog.bus
       : array === 'signals'
         ? SIGNAL
-        : row !== undefined && tree
-          ? findNodeAtLocation(tree, [array, row, 'class'])?.value
+        : row !== undefined
+          ? classOf(text, array, row)
           : CASE
-  const shape = catalog.shapes.get(type)
+  const shape = type === undefined ? undefined : catalog.shapes.get(type)
   if (!shape) return []
   const group = path.slice(row === undefined ? 0 : 2, -1)
   const fields = [...shape.plan.values()]
@@ -86,6 +85,46 @@ export function completionsAt(
     .filter(([path]) => JSON.stringify(path.slice(0, -1)) === JSON.stringify(group))
     .map(([path, plan]) => completion(path.at(-1)!, plan))
   return [...new Map(fields.map((field) => [field.name, field])).values()]
+}
+
+/** The `class` of record `row` of `array`, read up to it alone. Depth and records are counted as the
+ *  scan goes, so nothing is built, and it stops at the record. */
+function classOf(text: string, array: string, row: number): string | undefined {
+  const done = {}
+  let value: unknown
+  /** How deep the scan is: 1 among the case's own keys, 3 among a record's. */
+  let depth = 0
+  let key = ''
+  let within = false
+  let records = -1
+  try {
+    visit(text, {
+      onObjectBegin: () => {
+        if (within && depth === 2 && ++records > row) throw done
+        depth++
+      },
+      onObjectEnd: () => void depth--,
+      onArrayBegin: () => {
+        if (depth === 1 && key === array) within = true
+        depth++
+      },
+      onArrayEnd: () => {
+        if (--depth === 1) within = false
+      },
+      onObjectProperty: (name) => {
+        if (depth === 1 || depth === 3) key = name
+      },
+      onLiteralValue: (literal) => {
+        if (within && depth === 3 && records === row && key === 'class') {
+          value = literal
+          throw done
+        }
+      },
+    })
+  } catch (error) {
+    if (error !== done) throw error
+  }
+  return typeof value === 'string' ? value : undefined
 }
 
 /** The completion `name` offers for `plan`: its type and unit, and its description. */

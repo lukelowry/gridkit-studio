@@ -64,13 +64,13 @@
     "vscode:prepublish": "pnpm build"
   },
   "dependencies": {
-    "@latkit/diagram": "link:../latkit/packages/diagram",
-    "@latkit/geography": "link:../latkit/packages/geography",
-    "@latkit/gpu": "link:../latkit/packages/gpu",
-    "@latkit/model": "link:../latkit/packages/model",
-    "@latkit/monitor": "link:../latkit/packages/monitor",
-    "@latkit/network": "link:../latkit/packages/network",
-    "@latkit/video": "link:../latkit/packages/video",
+    "@latkit/diagram": "0.12.0",
+    "@latkit/geography": "0.1.0",
+    "@latkit/gpu": "0.19.0",
+    "@latkit/model": "4.2.0",
+    "@latkit/monitor": "0.18.0",
+    "@latkit/network": "0.22.0",
+    "@latkit/video": "0.7.0",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
@@ -1422,10 +1422,10 @@
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",
-            "default": "ghcr.io/lukelowry/gridkit:latest",
+            "default": "ghcr.io/lukelowry/gridkit@sha256:6a8f96ea84eebb8bb17fd6260cb90d425b6f3ca7e0c486dee3e163d0e67903f3",
             "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit:latest`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
+            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. The default names one GridKit build by its digest, so it stays the same when a tag moves. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit@sha256:6a8f96ea84eebb8bb17fd6260cb90d425b6f3ca7e0c486dee3e163d0e67903f3`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
           },
           "gridkitStudio.containerCli": {
             "type": "string",
@@ -1437,9 +1437,8 @@
           "gridkitStudio.resultCacheMiB": {
             "type": "number",
             "default": 256,
-            "minimum": 32,
-            "maximum": 2048,
-            "description": "Maximum result-window cache per extension window in MiB."
+            "minimum": 0,
+            "description": "Decoded results kept in memory per window, in MiB. Past it, the least recently read are let go, and read again from the file when needed."
           }
         }
       },

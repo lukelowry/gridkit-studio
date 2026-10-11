@@ -30,6 +30,10 @@
     traceSelection,
   } from './plot.js'
 
+  /** How long a plot goes without a frame before the GPU is asked whether it still finishes work,
+   *  and how long it then has to answer. */
+  const STALL_MS = 10_000
+
   let {
     plot,
     view,
@@ -241,27 +245,41 @@
       gpu: device.stats(),
       ...made.stats(),
     })
-    // Detect a wedged renderer from presented frames, not from the independent host clock.
-    // Hidden lanes and idle plots need no frames. Give initialization/refinement time to work.
+    // A renderer wedges when the GPU queue never finishes what it was given. A plot that is only slow
+    // to prepare, as a large one is, has a queue that still drains, and draws however long that
+    // takes; hidden lanes and idle plots need no frames at all.
+    let probing = false
+    let unmounted = false
     const health = setInterval(() => {
       if (resting || recovery.blocked) {
         lastFrame = performance.now()
         return
       }
       if (
-        (presentedAt === undefined || made.config.at !== presentedAt) &&
-        performance.now() - lastFrame > 10_000
-      ) {
+        probing ||
+        (presentedAt !== undefined && made.config.at === presentedAt) ||
+        performance.now() - lastFrame <= STALL_MS
+      )
+        return
+      probing = true
+      const drained = device.device.queue.onSubmittedWorkDone().then(
+        () => true,
+        () => true,
+      )
+      const late = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), STALL_MS))
+      void Promise.race([drained, late]).then((alive) => {
+        probing = false
         lastFrame = performance.now()
         // A stuck submission occupies the shared GPU's in-flight slots. Replacing only this
         // renderer would leave its replacement waiting on the same never-settling queue.
-        if (!device.signal.aborted) {
-          bridge.report(new Error('Monitor stopped presenting frames. Restarting graphics.'))
+        if (!alive && !unmounted && !device.signal.aborted) {
+          bridge.report(new Error('The GPU stopped finishing its work. Restarting graphics.'))
           device.destroy()
         }
-      }
+      })
     }, 1000)
     return () => {
+      unmounted = true
       camera = made.camera
       clearInterval(health)
       delete inspected.gridkitPlot

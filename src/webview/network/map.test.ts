@@ -11,14 +11,14 @@ const lines = ['provinces', 'countries', 'coastline'].map((name) => ({ name }) a
 
 describe('the map under a network on Earth', () => {
   it('keeps the ground with nothing on it while no map has loaded', () => {
-    const config = mapConfig(reader(), palette, null, null)
+    const config = mapConfig(reader(), palette, null, null, false)
     expect(config).toMatchObject({ input: 'none', surfaceColor: palette.surface2 })
     expect(config).not.toHaveProperty('lines')
     expect(config).not.toHaveProperty('source')
   })
   it('draws provinces finer and dashed, beneath country borders and coasts', () => {
     const s = reader({ 'network.map.lineWidthPx': 2 })
-    const config = mapConfig(s, palette, null, { kind: 'borders', lines })
+    const config = mapConfig(s, palette, null, { kind: 'borders', lines }, false)
     expect(Object.keys(config.lines!)).toEqual(['Province', 'Country', 'Coast'])
     expect(config.lines!.Province).toMatchObject({ source: lines[0], dash: true })
     expect(config.lines!.Province!.widthPx).toBeLessThan(2)
@@ -26,16 +26,29 @@ describe('the map under a network on Earth', () => {
   })
   it('draws OpenStreetMap from its tiles, each layer by name', () => {
     const tiles = {} as Tiles
-    const config = mapConfig(reader(), palette, null, {
-      kind: 'openstreetmap',
-      tiles,
-      attribution: 'credit',
-    })
+    const config = mapConfig(
+      reader(),
+      palette,
+      null,
+      { kind: 'openstreetmap', tiles, attribution: 'credit' },
+      true,
+    )
     expect(config.source).toBe(tiles)
     expect(Object.keys(config.areas!)).toContain('water')
     expect(config.lines!.boundary).toMatchObject({ dash: true })
     // Roads are named by a record that draws nothing else.
     expect(config.lines!.transportation_name).toEqual({ visible: false, labels: 'name' })
+  })
+  it('lays a flat map on the network background, and sets the Earth apart tilted or round', () => {
+    const tones: Record<string, number[]> = {
+      background: [0, 0, 0, 1],
+      surface2: [0.5, 0.5, 0.5, 1],
+    }
+    const toned = new Proxy(tones, {
+      get: (all, key: string) => all[key] ?? [0.2, 0.2, 0.2, 1],
+    }) as unknown as Palette
+    expect(mapConfig(reader(), toned, null, null, true).surfaceColor).toEqual([0, 0, 0, 1])
+    expect(mapConfig(reader(), toned, null, null, false).surfaceColor).toEqual([0.5, 0.5, 0.5, 1])
   })
   it('tells maps apart by source, and tiles by where they come from', () => {
     const tiles = (url: string) =>

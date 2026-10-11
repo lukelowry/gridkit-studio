@@ -11,7 +11,14 @@
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
-  import { DEFAULTS, exportable, exportVideo, type VideoSettings, viewsOf } from './video.js'
+  import {
+    DEFAULTS,
+    exportable,
+    exportVideo,
+    prefetchMap,
+    type VideoSettings,
+    viewsOf,
+  } from './video.js'
 
   const ENDS = [0, 1] as const
 
@@ -170,6 +177,7 @@
         if (message.kind !== 'state') return
         view = merged(view, message.state)
         appearance(view.settings)
+        prefetchMap(view)
         const { results } = view
         // The time range follows the results until the user edits it.
         if (

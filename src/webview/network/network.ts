@@ -1,7 +1,5 @@
-/** Mount the network renderer and the map beneath it, find elements in it, and switch its
- *  projection. */
+/** Mount the network renderer, find elements in it, and switch its projection. */
 
-import { createGeography, type Geography } from '@latkit/geography'
 import type { Gpu, ProjectedCamera } from '@latkit/gpu'
 import { type Data, itemId } from '@latkit/model'
 import { createNetwork, type Network } from '@latkit/network'
@@ -10,7 +8,6 @@ import type { Element, ViewState } from '../../shared/messages.js'
 import { located } from '../../shared/positions.js'
 import { defaults, type SettingsValues } from '../../shared/preferences.js'
 import { elementType, networkOf } from '../../shared/schema.js'
-import { bridge } from '../bridge.js'
 import { itemOf, nativeMenu } from '../menu.js'
 
 /** A projection the view offers. */
@@ -30,6 +27,10 @@ export function projectionOf(
   if (preferred === 'flat') return geographic ? 'mercator' : 'flat'
   return preferred === 'globe' && !geographic ? 'flat' : preferred
 }
+
+/** Whether `projection` lays the drawing flat, so the ground fills all the canvas. */
+export const isFlat = (projection: ProjectedCamera.Projection): boolean =>
+  projection === 'flat' || projection === 'mercator'
 
 /** The projection the view offers that the camera's `projection` is. */
 export const offeredAs = (projection: ProjectedCamera.Projection): Projection =>
@@ -60,14 +61,6 @@ export function mountNetwork(
     ),
   )
   return network
-}
-
-/** The map a network draws beneath it, which reports only its failures: it takes no input, so the
- *  network answers every gesture. */
-export function mountEarth(gpu: Gpu, config: Geography.Config): Geography {
-  const earth = createGeography(gpu, config)
-  earth.on('error', (reason) => bridge.report(reason))
-  return earth
 }
 
 /** The network item `element` is; undefined when the network does not draw its type. */

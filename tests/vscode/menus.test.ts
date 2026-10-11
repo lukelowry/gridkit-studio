@@ -436,11 +436,12 @@ suite('Monitor menus', () => {
   })
 
   test('opens results from the title bar, and plots one of their signals', async () => {
-    const before = bench.session.results!.id
+    const path = vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath
     await bench.title('monitor', 'Open Results')
-    await bench.dialog(vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath)
+    await bench.dialog(path)
     await bench.pick('Bus.Vm')
-    await until(() => bench.session.results?.id !== before, 'the opened results on show')
+    // A file read before and unchanged since shows as the results already read.
+    await until(() => bench.session.results?.path === path, 'the opened results on show')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm'),
       'its voltage plotted',

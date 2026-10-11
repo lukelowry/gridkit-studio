@@ -34,11 +34,7 @@ export function registerNavigation(studio: Sessions) {
       {
         async provideCompletionItems(document, position, token) {
           const completions = await cancellable(token, (signal) =>
-            studio.client.cases.call(
-              'complete',
-              { text: document.getText(), offset: document.offsetAt(position) },
-              signal,
-            ),
+            studio.documents.complete(document, document.offsetAt(position), signal),
           )
           return completions.map((field) => {
             const item = new vscode.CompletionItem(field.name, vscode.CompletionItemKind.Field)

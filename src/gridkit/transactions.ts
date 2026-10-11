@@ -8,13 +8,10 @@ import type { Case } from './case.js'
 import { apply, recordOf } from './edits.js'
 import { planTransaction } from './plan.js'
 
-const decoder = new TextDecoder()
-const MAX_MUTATIONS = 10000
-
 /** The source edits that make `mutations`, by row ID; only the records they touch are read. */
 export function transaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
-  if (!Array.isArray(mutations) || !mutations.length || mutations.length > MAX_MUTATIONS)
-    throw failure('resource-limit', 'A transaction must contain 1–10,000 changes.')
+  if (!Array.isArray(mutations) || !mutations.length)
+    throw failure('invalid-input', 'A transaction needs a change.')
   return planTransaction(kase, mutations)
 }
 const presentations = new WeakMap<Case, Record<string, Layout.Positions>>()
@@ -24,7 +21,9 @@ export function presentation(kase: Case): Record<string, Layout.Positions> {
   const cached = presentations.get(kase)
   if (cached) return cached
   const result: Record<string, Layout.Positions> = {}
-  if (!decoder.decode(kase.file).includes('"diagram"')) {
+  // A case that places no block says nothing of a diagram; its bytes are searched where they lie.
+  const file = Buffer.from(kase.file.buffer, kase.file.byteOffset, kase.file.byteLength)
+  if (!file.includes('"diagram"')) {
     presentations.set(kase, result)
     return result
   }

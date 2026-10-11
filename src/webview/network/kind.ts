@@ -3,7 +3,7 @@
  *  network on Earth; and its projections, rotation and labels. */
 
 import type { Geography } from '@latkit/geography'
-import type { ProjectedCamera } from '@latkit/gpu'
+import type { Gpu, ProjectedCamera } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
 import type { Network } from '@latkit/network'
 
@@ -29,29 +29,32 @@ export function network(host: Host): Kind {
   const availability = element.querySelector<HTMLElement>('.canvas-host__status')!
   let module: typeof import('./network.js') | undefined
   let styles: typeof import('./style.js') | undefined
+  const loaded = Promise.all([import('./network.js'), import('./style.js')]).then(
+    ([network, style]) => {
+      module = network
+      styles = style
+    },
+  )
+  /** The map's code, which only a case on Earth loads, once it is on screen. */
   let maps: typeof import('./map.js') | undefined
-  const loaded = Promise.all([
-    import('./network.js'),
-    import('./style.js'),
-    import('./map.js'),
-  ]).then(([network, style, map]) => {
-    module = network
-    styles = style
-    maps = map
-  })
+  let mapping: Promise<unknown> | undefined
   /** The rows with the samples held, which it draws; and those it last drew. */
   let data: Data | undefined
   let painted: Data | undefined
   /** The time it last readied for, which it then draws. */
   let at = 0
   let geographic = false
-  /** The map beneath the network, made with it; what it draws, once loaded; and which map that is,
-   *  or is loading. */
+  /** The GPU the network draws on, and the map beneath a network on Earth: made once the case is on
+   *  screen; what it draws, once loaded; which map that is, or is loading; and whether its ground
+   *  was last made for a flat camera. */
+  let device: Gpu | undefined
   let earth: Geography | undefined
   let map: Loaded | null = null
   let mapped: string | undefined
-  /** Labels, like the map, wait for the first frame so text layout never delays it. */
-  let labelled = false
+  let flatGround: boolean | undefined
+  /** Labels and the map wait for the first frame, so neither text layout nor the map's pipelines
+   *  ever delay it. */
+  let onScreen = false
   /** Topology is unchanged by sampled frames. Do not rescan coordinates on every update. */
   let located: Data | undefined
   let preferredProjection: ProjectedCamera.Projection | undefined
@@ -65,10 +68,23 @@ export function network(host: Host): Kind {
   })
   const clock = createClock(show)
   const config = (rows: Data) =>
-    styles!.networkConfig(rows, data ?? rows, host.state(), geographic ? earth! : null, labelled)
-  const ground = () => {
+    styles!.networkConfig(
+      rows,
+      data ?? rows,
+      host.state(),
+      geographic ? (earth ?? null) : null,
+      onScreen,
+    )
+  const ground = (view: Network) => {
     const { palette, font } = theme()
-    return maps!.mapConfig(reader(host.state().settings), palette, font, map)
+    flatGround = module!.isFlat(view.camera.projection)
+    return maps!.mapConfig(reader(host.state().settings), palette, font, map, flatGround)
+  }
+  /** The ground's look follows the camera: one turned from flat to tilted or round, or back, paints
+   *  it again. */
+  const regrounded = () => {
+    const view = host.view() as Network | undefined
+    if (earth && view && module!.isFlat(view.camera.projection) !== flatGround) host.paint()
   }
   const chosen = (): Projection => host.state().settings?.['network.camera.projection'] ?? 'flat'
   const preferred = () => module!.projectionOf(chosen(), geographic)
@@ -123,14 +139,30 @@ export function network(host: Host): Kind {
     // Pages reach the view as time does, this frame; a restyle waits for the next.
     else host.paintNow()
   }
-  /** Loads the map after the first frame, so it never delays the case, and again once the settings
-   *  choose another. A map that fails is reported, and tried again on a retry or another choice. */
+  /** Loads the map after the first frame, so neither its code nor its data delays the case, and
+   *  again once the settings choose another. A map that fails is reported, and tried again on a
+   *  retry or another choice. */
   function decorate() {
+    if (!geographic || host.closed()) return
+    if (!maps) {
+      // Painting once the code is in lays the ground, and loads the map chosen.
+      mapping ??= import('./map.js').then(
+        (map) => {
+          maps = map
+          if (!host.closed()) host.paint()
+        },
+        (reason: unknown) => {
+          mapping = undefined
+          bridge.report(reason)
+        },
+      )
+      return
+    }
     const s = reader(host.state().settings)
-    const key = maps!.mapKey(s)
-    if (!geographic || key === mapped || host.closed()) return
+    const key = maps.mapKey(s)
+    if (key === mapped) return
     mapped = key
-    void maps!.loadMap(s).then(
+    void maps.loadMap(s).then(
       (value) => {
         if (mapped !== key || host.closed()) return
         map = value
@@ -217,9 +249,9 @@ export function network(host: Host): Kind {
       return true
     },
     mount(gpu, rows) {
-      labelled = false
+      onScreen = false
+      device = gpu
       preferredProjection = preferred()
-      earth = module!.mountEarth(gpu, ground())
       return module!.mountNetwork(
         gpu,
         canvas,
@@ -234,8 +266,12 @@ export function network(host: Host): Kind {
       )
     },
     paint(view, rows) {
-      earth!.set(ground(), { replace: true })
-      ;(view as Network).set({ ...config(rows.data), at }, { replace: true })
+      const network = view as Network
+      // Until the case is on screen the network draws alone, its own grid standing for the map's.
+      if (earth) earth.set(ground(network), { replace: true })
+      else if (onScreen && geographic && maps)
+        earth = maps.mountEarth(device!, ground(network), (reason) => bridge.report(reason))
+      network.set({ ...config(rows.data), at }, { replace: true })
       painted = data
       credit()
     },
@@ -251,16 +287,20 @@ export function network(host: Host): Kind {
     presented() {
       if (!element.querySelector('.toolbar')) sync = toolbar()
       sync()
-      // The case is on screen: add its labels, and the map paint asks for.
-      labelled = true
+      // The case is on screen: add its labels, and the map beneath it.
+      onScreen = true
       host.paint()
     },
     unmount() {
       earth?.destroy()
       earth = undefined
+      device = undefined
     },
     item: (view, element) => module!.networkItem(view as Network, element),
-    sync: () => sync(),
+    sync: () => {
+      sync()
+      regrounded()
+    },
     act(view, command, value) {
       if (command === 'projection') module!.setProjection(view as Network, value as Projection)
       else if (command === 'orbit') orbit(view as Network)

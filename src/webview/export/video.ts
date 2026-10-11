@@ -4,7 +4,13 @@
 
 import { createDiagram } from '@latkit/diagram'
 import { createGeography } from '@latkit/geography'
-import { createComposition, type Gpu, type Layout, type View } from '@latkit/gpu'
+import {
+  createComposition,
+  type Gpu,
+  type Layout,
+  type ProjectedCamera,
+  type View,
+} from '@latkit/gpu'
 import type { Data, Domain } from '@latkit/model'
 import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
@@ -15,10 +21,9 @@ import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
-import { MAX_OUTPUT_PIXELS } from '../gpu.js'
 import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions, plotRows } from '../monitor/plot.js'
 import { loadMap, mapConfig } from '../network/map.js'
-import { isGeographic, projectionOf } from '../network/network.js'
+import { isFlat, isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { theme } from '../theme.js'
 
@@ -87,6 +92,13 @@ function plotsOf({ results, plots = [] }: ViewState): Plot[] {
 
 /** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
  *  time range within the results, an even size up to 4K and a positive speed. */
+/** Starts reading the map a network on Earth shows, as soon as the page knows the case, so an
+ *  export never waits for it. A map that fails says so in the Network view. */
+export function prefetchMap(state: ViewState): void {
+  if (state.summary && networkOf(state.summary.schema).geographic)
+    void loadMap(reader(state.settings)).catch(() => {})
+}
+
 export function exportable(settings: VideoSettings, state: ViewState): boolean {
   const range = state.results?.domain
   if (!state.summary || !range || !(range[1] > range[0])) return false
@@ -102,7 +114,6 @@ export function exportable(settings: VideoSettings, state: ViewState): boolean {
     [settings.width, settings.height].every(
       (n) => Number.isSafeInteger(n) && n > 0 && n % 2 === 0,
     ) &&
-    settings.width * settings.height <= MAX_OUTPUT_PIXELS &&
     settings.rate > 0
   )
 }
@@ -134,10 +145,20 @@ export async function exportVideo(
     for (const view of settings.views) {
       if (view === 'network') {
         const geographic = isGeographic(rows)
+        const camera = (cameras.network as Partial<ProjectedCamera> | undefined) ?? {
+          projection: projectionOf(preferences.get('network.camera.projection'), geographic),
+          fit: true,
+        }
         // The view has said once why a map failed to load; the video then shows the ground alone.
         const map = geographic ? await loadMap(preferences).catch(() => null) : null
+        const flat = isFlat(camera.projection ?? 'flat')
         const earth = geographic
-          ? keep(createGeography(gpu, { ...mapConfig(preferences, colors, face, map), ...still }))
+          ? keep(
+              createGeography(gpu, {
+                ...mapConfig(preferences, colors, face, map, flat),
+                ...still,
+              }),
+            )
           : null
         const [start] = settings.timeRange
         let drawn = await mapped(start, signal)
@@ -148,15 +169,7 @@ export async function exportVideo(
           ...still,
           canvas: null,
         })
-        const network = keep(
-          createNetwork(gpu, {
-            ...config(drawn, start),
-            camera: (cameras.network as never) ?? {
-              projection: projectionOf(preferences.get('network.camera.projection'), geographic),
-              fit: true,
-            },
-          }),
-        )
+        const network = keep(createNetwork(gpu, { ...config(drawn, start), camera }))
         ready = async (at) => {
           const data = await mapped(at, signal)
           if (data === drawn) return

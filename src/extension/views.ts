@@ -64,7 +64,9 @@ const drawn = (results?: Results) =>
   results && [
     results.id,
     results.frames,
-    results.outputs,
+    // A file's outputs are fixed once its header is read: whether they are is all that changes, so
+    // their row indexes are never written out again.
+    results.outputs.length,
     results.domain,
     results.span,
     results.domains,

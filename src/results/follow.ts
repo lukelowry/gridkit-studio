@@ -66,16 +66,33 @@ export async function* follow(
     // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
     // gathered from many small reads.
     const buffer = Buffer.alloc(4 << 20)
+    /** Reads not yet joined onto `pending`, and how long `pending` must grow before a piece can end
+     *  in it: an Arrow message larger than a read is joined once, when all of it is here, not again
+     *  at every read. */
+    let reads: Buffer[] = []
+    let readBytes = 0
+    let needed = 0
     while (true) {
       signal.throwIfAborted()
       // Asked before reading: a writer done by then has written everything this read can see.
       const over = ended()
       const { bytesRead } = await file.read(buffer, 0, buffer.length, at)
-      if (bytesRead) {
-        at += bytesRead
-        pending = Buffer.concat([pending, buffer.subarray(0, bytesRead)])
-      }
+      at += bytesRead
       const finished = over && bytesRead === 0
+      if (!finished && pending.length + readBytes + bytesRead < needed) {
+        // The read buffer is reused, so a read kept for later is a copy.
+        if (bytesRead) {
+          reads.push(Buffer.from(buffer.subarray(0, bytesRead)))
+          readBytes += bytesRead
+        } else await setTimeout(40, undefined, { signal })
+        continue
+      }
+      if (bytesRead || readBytes) {
+        pending = Buffer.concat([pending, ...reads, buffer.subarray(0, bytesRead)])
+        reads = []
+        readBytes = 0
+      }
+      needed = 0
       if (format === 'arrow') {
         while (pending.length >= 8) {
           const continuation = pending.readUInt32LE(0) === 0xffffffff
@@ -86,12 +103,18 @@ export async function* follow(
             pending = pending.subarray(prefix)
             break
           }
-          if (pending.length < prefix + metadataLength) break
+          if (pending.length < prefix + metadataLength) {
+            needed = prefix + metadataLength
+            break
+          }
           const message = parseMessage(pending.subarray(prefix, prefix + metadataLength))
           const length = prefix + metadataLength + message.bodyLength
           if (!Number.isSafeInteger(message.bodyLength) || message.bodyLength < 0)
             throw new Error('An Arrow message has an invalid body length.')
-          if (pending.length < length) break
+          if (pending.length < length) {
+            needed = length
+            break
+          }
           if (message.header.kind === 'batch') {
             yield cut(length)
             continue

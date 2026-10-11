@@ -133,6 +133,17 @@ describe('single catalog and source ownership', () => {
     const text = '{"buses":[{"class":"Bus","number":1,"params":{"k'
     expect(completionsAt(catalog, text, text.length).map((field) => field.name)).toContain('kv')
   })
+  it('completes by the class of the record the cursor is in, past the records before it', () => {
+    const names = (text: string) => completionsAt(catalog, text, text.length).map((f) => f.name)
+    const alone = names('{"devices":[{"class":"Genrou","params":{"')
+    expect(alone.length).toBeGreaterThan(0)
+    expect(
+      names(
+        '{"devices":[{"class":"Branch","params":{"x":1},"mon":["a"]},{"class":"Genrou","params":{"',
+      ),
+    ).toEqual(alone)
+    expect(names('{"devices":[{"class":"Branch","params":{"')).not.toEqual(alone)
+  })
   it('loads the real TwoArea case', async () => {
     const kase = await Case.parse(await readFile('cases/TwoArea.case.json', 'utf8'), catalog)
     expect(kase.table('Bus').records.length).toBe(10)

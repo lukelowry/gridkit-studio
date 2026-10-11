@@ -1,12 +1,16 @@
 import { createGpu, type Gpu } from '@latkit/gpu'
 
-/** The largest image a view draws or a video holds: 4K. */
-export const MAX_OUTPUT_PIXELS = 3840 * 2160
+/** A view's limit that never refuses work. latkit refuses a frame past any of its views' limits, such
+ *  as rows drawn, geometry held or layout time; Studio sets none, so only the device and the memory
+ *  it has bound what a case draws. */
+export const UNLIMITED = Number.MAX_SAFE_INTEGER
 
-/** An admission limit, not an allocation: a 4K canvas and a 4K export, each with old and new
- *  targets alive at 40 B/pixel (4x color, depth, resolve), plus 256 MiB for geometry and caches. */
+/** What the view's memory pool keeps for reuse once nothing holds it: enough for a 4K canvas's and
+ *  a 4K export's targets, old and new, at 40 B a pixel, beside 256 MiB of geometry and caches. It
+ *  never limits what a frame draws: past it the pool lets go of what no one holds, least recently
+ *  used first. */
 const GPU_BUDGET = {
-  gpuBytes: 4 * MAX_OUTPUT_PIXELS * 40 + 256 * 1024 ** 2,
+  gpuBytes: 4 * 3840 * 2160 * 40 + 256 * 1024 ** 2,
   cpuBytes: 256 * 1024 ** 2,
   stagingBytes: 64 * 1024 ** 2,
 }

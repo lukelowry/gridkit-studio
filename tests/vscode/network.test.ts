@@ -188,4 +188,13 @@ suite('Network', () => {
     )
     await bench.capture('network-globe')
   })
+
+  test("lays Natural Earth's borders beneath a case on Earth, once it is on screen", async () => {
+    await until(
+      async () => (await network.evaluate<number>('gridkitStats().map?.vertices ?? 0')) > 0,
+      'the borders drawn',
+      60_000,
+    )
+    await bench.capture('network-borders')
+  })
 })

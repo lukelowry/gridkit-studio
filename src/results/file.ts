@@ -319,7 +319,12 @@ export class ResultsFile {
     return {
       kind: 'samples',
       index: batch.index,
-      rows: places ? axisOf(places.map((place) => held.rows[place]!)) : held.axis,
+      // The reply's arrays move to the extension, so the rows it names are a copy, never the field's own.
+      rows: places
+        ? axisOf(places.map((place) => held.rows[place]!))
+        : held.axis.kind === 'indices'
+          ? { kind: 'indices', values: held.axis.values.slice() }
+          : held.axis,
       firstFrame: batch.firstFrame,
       coordinates: batch.coordinates.slice(),
       columns: {
@@ -433,24 +438,35 @@ export class ResultsFile {
         this.#joined = { count: frames, frames: joined(this.#tail) }
       return this.#joined.frames
     }
-    const key = this.info.id + ':' + k
-    const cached = this.cache.get(key)
+    const keyOf = (j: number) => this.info.id + ':' + j
+    const cached = this.cache.get(keyOf(k))
     if (cached) return cached
-    const groups: Frames[] = []
+    // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
+    // whole is kept, so a segment longer than a chunk, as an Arrow batch can be, decodes once.
+    const groups = new Map<number, Frames[]>()
     const [first, end] = [k * chunk, (k + 1) * chunk]
+    let from = Infinity
+    let to = -Infinity
     for (const segment of this.#segments) {
       if (segment.first + segment.count <= first || segment.first >= end) continue
+      from = Math.min(from, segment.first)
+      to = Math.max(to, segment.first + segment.count)
       await this.#decode(
         await this.#read(segment.start, segment.end),
         segment.first,
         signal,
         (group) => {
-          const at = group[0]!.firstFrame
-          if (at >= first && at < end) groups.push(group)
+          const j = Math.floor(group[0]!.firstFrame / chunk)
+          const held = groups.get(j)
+          if (held) held.push(group)
+          else groups.set(j, [group])
         },
       )
     }
-    return this.cache.put(key, joined(groups))
+    for (const [j, held] of groups)
+      if (j !== k && j * chunk >= from && (j + 1) * chunk <= Math.min(to, frames))
+        this.cache.put(keyOf(j), joined(held))
+    return this.cache.put(keyOf(k), joined(groups.get(k) ?? []))
   }
 
   /** Decodes `bytes`, whose first frame is `first`, handing `publish` each group of frames: one

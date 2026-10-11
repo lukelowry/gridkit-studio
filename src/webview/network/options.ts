@@ -3,6 +3,7 @@
 import type { Network } from '@latkit/network'
 
 import type { SettingsReader } from '../../shared/preferences.js'
+import { UNLIMITED } from '../gpu.js'
 import { color, faded, type Palette, viewStyle } from '../theme.js'
 
 /** The strength of the hover and selection glows in the theme's focus color. */
@@ -47,5 +48,12 @@ export function networkOptions(s: SettingsReader, palette: Palette, font: string
     hoverColor: color(s.get('network.hoverColor'), faded(palette.focus, HOVER_ALPHA)),
     vertexColor: color(s.get('network.vertexColor'), palette.network),
     edgeColor: color(s.get('network.edgeColor')) ?? 'ends',
+    // Hit-test indexes past `pickingBytes` only fall back to scans, so that one stays latkit's.
+    limits: {
+      vertices: UNLIMITED,
+      segments: UNLIMITED,
+      geometryBytes: UNLIMITED,
+      layoutMs: UNLIMITED,
+    },
   }
 }

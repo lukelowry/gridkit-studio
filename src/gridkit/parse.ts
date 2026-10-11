@@ -29,6 +29,8 @@ const CLOSE_OBJECT = 0x7d
 const OPEN_ARRAY = 0x5b
 const CLOSE_ARRAY = 0x5d
 const UTF8 = new TextEncoder()
+/** Reads a number token, checked as JSON by then, however many digits it has. */
+const ASCII = new TextDecoder()
 
 export const ARRAYS: readonly ArrayName[] = ['buses', 'signals', 'devices']
 
@@ -732,5 +734,5 @@ function parseNumber(bytes: Uint8Array, start: number, end: number): number {
     const value = exponent >= 0 ? mantissa * POW10[exponent]! : mantissa / POW10[-exponent]!
     return negative ? -value : value
   }
-  return Number(String.fromCharCode(...bytes.subarray(start, end)))
+  return Number(ASCII.decode(bytes.subarray(start, end)))
 }

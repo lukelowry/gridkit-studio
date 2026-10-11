@@ -59,12 +59,13 @@ type Saved = Partial<Pick<Session, 'bindings' | 'plots' | 'table'>> & {
   results?: { path: string; solver?: string; contingency?: Study }
 }
 
-/** The `resultCacheMiB` setting for `uri`, in bytes. */
+/** The `resultCacheMiB` setting for `uri`, in bytes. It only paces what stays decoded, so any value
+ *  works: one that is not a number keeps the default, and a negative one keeps nothing. */
 export function cacheBytesOf(uri: vscode.Uri) {
-  return (
-    vscode.workspace.getConfiguration('gridkitStudio', uri).get<number>('resultCacheMiB', 256) *
-    (1 << 20)
+  const mib = Number(
+    vscode.workspace.getConfiguration('gridkitStudio', uri).get<number>('resultCacheMiB', 256),
   )
+  return (Number.isFinite(mib) ? Math.max(0, mib) : 256) * (1 << 20)
 }
 
 /** The display settings for `uri`; an invalid value keeps its default. */

@@ -4,7 +4,9 @@ import { type Block, type Data, type Query, read, selectBatches } from '@latkit/
 
 import type { Case } from '../gridkit/index.js'
 
-const BLOCK_BYTES = 256 << 10
+/** A reply sends all its blocks at once, so a block needs no bound of its own: one row of any size
+ *  reads, and a read takes the fewest blocks, and so the fewest buffers to move. */
+const BLOCK_BYTES = Number.MAX_SAFE_INTEGER
 
 /** `query` of `data`, in blocks of their own, to send. */
 export async function queried(data: Data, query: Query, signal: AbortSignal) {

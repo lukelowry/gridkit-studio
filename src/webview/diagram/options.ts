@@ -2,6 +2,7 @@ import type { Diagram } from '@latkit/diagram'
 import type { Layout } from '@latkit/gpu'
 
 import type { SettingsReader } from '../../shared/preferences.js'
+import { UNLIMITED } from '../gpu.js'
 import { color, type Palette, viewStyle } from '../theme.js'
 
 type DiagramStyle = Omit<
@@ -61,6 +62,15 @@ export function diagramOptions(s: SettingsReader, palette: Palette, font: string
       keyboard: s.get('diagram.input.keyboard'),
       dragThresholdPx: s.get('diagram.input.dragThresholdPx'),
       touchDragThresholdPx: s.get('diagram.input.touchDragThresholdPx'),
+    },
+    limits: {
+      vertices: UNLIMITED,
+      edges: UNLIMITED,
+      ends: UNLIMITED,
+      geometryBytes: UNLIMITED,
+      pickingBytes: UNLIMITED,
+      routePoints: UNLIMITED,
+      layoutMs: UNLIMITED,
     },
   }
 }

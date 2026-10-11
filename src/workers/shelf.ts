@@ -17,6 +17,22 @@ export class Shelf {
     throw unavailable()
   }
 
+  /** The results read whole from `path` for the case `uri` with content `fingerprint`, unchanged
+   *  since `started`, made the ones the case shows; undefined when none are read. */
+  reopen(uri: string, path: string, fingerprint: string, started: number): ResultsFile | undefined {
+    const files = this.#cases.get(uri) ?? []
+    const file = files.find(
+      ({ info }) =>
+        info.path === path &&
+        info.fingerprint === fingerprint &&
+        info.started === started &&
+        !info.growing &&
+        !info.error,
+    )
+    if (file) this.#cases.set(uri, [file, ...files.filter((other) => other !== file)])
+    return file
+  }
+
   /** Keeps `file` as the shown results of the case it was read for. */
   keep(file: ResultsFile): void {
     const { uri } = file.info.revision

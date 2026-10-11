@@ -98,16 +98,23 @@ it('names the time axis in sentence case, and leaves the values to the signal me
   expect(axisLabel({ name: 'time', unit: 's' })).toBe('Time (s)')
   expect(axisLabel(undefined)).toBe('Coordinate')
   expect(plotOptions(reader(), null, null, { ticks: true, time: 'Time (s)' })).toMatchObject({
-    xAxis: { label: 'Time (s)', labels: true },
+    xAxis: { label: 'Time (s)', tickLabels: true },
     yAxis: { label: '' },
   })
 })
 
-it('frames each plot, and labels the time ticks of the last of those stacked over one axis', () => {
+it('outlines each plot, and labels the time ticks of the last of those stacked over one axis', () => {
   const above = plotOptions(reader(), null, null, { ticks: false, time: 'Time (s)' })
-  expect(above).toMatchObject({ frame: true, xAxis: { label: '', labels: false, grid: true } })
+  expect(above).toMatchObject({
+    outline: true,
+    xAxis: { label: '', tickLabels: false, grid: true },
+  })
   const last = plotOptions(reader(), null, null, { ticks: true, caption: 'Bus · Vm' })
-  expect(last).toMatchObject({ frame: true, xAxis: { labels: true }, yAxis: { label: 'Bus · Vm' } })
+  expect(last).toMatchObject({
+    outline: true,
+    xAxis: { tickLabels: true },
+    yAxis: { label: 'Bus · Vm' },
+  })
 })
 
 it('draws every trace in the chosen color and width', () => {

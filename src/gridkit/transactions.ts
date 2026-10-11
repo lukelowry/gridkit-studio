@@ -1,5 +1,5 @@
-import type { Positions } from '@latkit/gpu'
-import { failure, type FieldValues } from '@latkit/model'
+import type { Layout } from '@latkit/gpu'
+import { failure, type FieldInput } from '@latkit/model'
 import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
@@ -17,13 +17,13 @@ export function transaction(kase: Case, mutations: readonly Mutation[]): SourceE
     throw failure('resource-limit', 'A transaction must contain 1–10,000 changes.')
   return planTransaction(kase, mutations)
 }
-const presentations = new WeakMap<Case, Record<string, Positions>>()
+const presentations = new WeakMap<Case, Record<string, Layout.Positions>>()
 
 /** Each diagram block's position, from `extension.diagram.position` in its own record. */
-export function presentation(kase: Case): Record<string, Positions> {
+export function presentation(kase: Case): Record<string, Layout.Positions> {
   const cached = presentations.get(kase)
   if (cached) return cached
-  const result: Record<string, Positions> = {}
+  const result: Record<string, Layout.Positions> = {}
   if (!decoder.decode(kase.file).includes('"diagram"')) {
     presentations.set(kase, result)
     return result
@@ -53,7 +53,7 @@ export function presentation(kase: Case): Record<string, Positions> {
     }
     if (rows.length) {
       const placed = { kind: 'indices', values: Uint32Array.from(rows) } as const
-      const axis = (values: number[]): FieldValues => ({
+      const axis = (values: number[]): FieldInput.Values => ({
         index: table.index,
         rows: placed,
         values: {

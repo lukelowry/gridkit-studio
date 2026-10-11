@@ -2,14 +2,7 @@
   paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import {
-    type Data,
-    type Domain,
-    type FieldSelection,
-    itemId,
-    read,
-    type RowsBlock,
-  } from '@latkit/model'
+  import { type Block, type Data, type Domain, itemId, type Query, read } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
   import { onMount } from 'svelte'
 
@@ -60,7 +53,7 @@
     /** The case with the frames read so far; a new snapshot each time frames arrive. */
     source: Data | undefined
     /** The fields, and their rows, whose samples `source` holds. */
-    sampled: readonly FieldSelection[]
+    sampled: readonly Query.Selection[]
     /** Whether the samples held cover `window` of `from`'s `field`. */
     covers: (from: string, field: string, window: Domain) => boolean
     /** The playhead. */
@@ -341,7 +334,7 @@
     const reading = new AbortController()
     const timer = setTimeout(() => {
       void (async () => {
-        const blocks: RowsBlock[] = []
+        const blocks: Block.Rows[] = []
         for await (const block of read(
           snapshot,
           {

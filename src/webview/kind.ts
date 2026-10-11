@@ -3,7 +3,7 @@
 
 import type { Diagram } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
-import type { FieldSelection } from '@latkit/model'
+import type { Query } from '@latkit/model'
 import type { Network } from '@latkit/network'
 
 import type { Bindings } from '../shared/bindings.js'
@@ -51,7 +51,7 @@ export interface Kind {
   /** Whether it asks where the diagram's blocks are arranged. */
   readonly presentation: boolean
   /** The static fields of the case it draws. */
-  needs(summary: Summary, bindings: Bindings | undefined): FieldSelection[]
+  needs(summary: Summary, bindings: Bindings | undefined): Query.Selection[]
   /** Whether `rows` are of the case it draws now. */
   current(rows: Snapshot | undefined): boolean
   /** Whether it can draw now; it asks for what it lacks. */
@@ -68,6 +68,8 @@ export interface Kind {
   painted(view: Drawn): void
   /** Once the view's first frame is on screen. */
   presented(view: Drawn): void
+  /** Lets go of what it made with the view, once the view is destroyed. */
+  unmount(): void
   /** The item `view` draws for `element`; undefined when it draws none. */
   item(view: Drawn, element: Element): unknown
   /** Brings its own controls up to date with the view. */

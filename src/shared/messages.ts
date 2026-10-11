@@ -1,18 +1,7 @@
 /** The messages between the extension, its two workers, and its webviews. */
 
-import type { Positions } from '@latkit/gpu'
-import type {
-  Domain,
-  FieldSelection,
-  Query,
-  QueryBlock,
-  RowBatch,
-  RowsBlock,
-  RowsQuery,
-  SampleBatch,
-  Schema,
-  Value,
-} from '@latkit/model'
+import type { Layout } from '@latkit/gpu'
+import type { Block, Data, Domain, Query, Schema } from '@latkit/model'
 
 import type { Cancel, Reply, Request } from './rpc.js'
 import type { Results, Run, RunRequest, RuntimeProcess, Study } from './simulation.js'
@@ -30,6 +19,9 @@ export type {
 import type { Bindings } from './bindings.js'
 import type { SettingsValues } from './preferences.js'
 import type { ClockState, LoopMode } from './transport.js'
+
+/** A JSON value of a case record: what a cell shows and an edit writes. */
+export type Value = number | string | boolean | null | readonly Value[]
 
 /** A case document at one version. */
 export interface Revision {
@@ -101,7 +93,7 @@ export type Mutation =
 export interface SamplesInput {
   results: string
   /** One field, of the rows a view draws; without rows, of every row the file holds. */
-  field: FieldSelection
+  field: Query.Selection
   /** The times wanted, with the frames either side that reach them. */
   window: Domain
   /** The frames of each chunk the view holds: chunk `k`'s first `held[k]`. */
@@ -148,11 +140,11 @@ export interface CaseApi {
   locate: { input: Revision & Element; output: SourceRange }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */
-  presentation: { input: Revision; output: Record<string, Positions> }
+  presentation: { input: Revision; output: Record<string, Layout.Positions> }
   /** Rows of the case. */
-  query: { input: Revision & { query: Query }; output: QueryBlock[] }
+  query: { input: Revision & { query: Query }; output: Block[] }
   /** The case's static `fields`. */
-  rows: { input: Revision & { fields: readonly FieldSelection[] }; output: RowBatch[] }
+  rows: { input: Revision & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
   /** Drops the case. */
   release: { input: { uri: string; attachmentId?: string }; output: null }
   stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
@@ -174,12 +166,12 @@ export interface ResultsApi {
   describe: { input: OfResults; output: Summary }
   /** Rows of the case the results were read against, at a time of theirs when the query has an
    *  `at`. */
-  query: { input: OfResults & { query: Query }; output: QueryBlock[] }
+  query: { input: OfResults & { query: Query }; output: Block[] }
   /** The static `fields` of the case the results were read against. */
-  rows: { input: OfResults & { fields: readonly FieldSelection[] }; output: RowBatch[] }
+  rows: { input: OfResults & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
   /** Where the diagram's blocks are arranged in the case the results were read against. */
-  presentation: { input: OfResults; output: Record<string, Positions> }
-  samples: { input: SamplesInput; output: SampleBatch[] }
+  presentation: { input: OfResults; output: Record<string, Layout.Positions> }
+  samples: { input: SamplesInput; output: Data.SampleBatch[] }
   /** The next sample time from `at` in `direction`; the first or last time when none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
@@ -278,17 +270,17 @@ export type TransportAction =
 /** What a view asks of the extension. */
 export interface ViewApi {
   /** Rows of the case, or of the shown results when the query has an `at`. */
-  query: { input: RowsQuery; output: RowsBlock[] }
+  query: { input: Query.Rows; output: Block.Rows[] }
   /** The static fields a view draws, of a case's revision or of the case results were read
    *  against. */
   rows: {
     input: CaseApi['rows']['input'] | ResultsApi['rows']['input']
-    output: RowBatch[]
+    output: Data.RowBatch[]
   }
   /** Where the diagram's blocks are arranged, in a case's revision or in the case results were
    *  read against. */
-  presentation: { input: Revision | OfResults; output: Record<string, Positions> }
-  samples: { input: SamplesInput; output: SampleBatch[] }
+  presentation: { input: Revision | OfResults; output: Record<string, Layout.Positions> }
+  samples: { input: SamplesInput; output: Data.SampleBatch[] }
   transact: {
     input: { version: number; mutations: readonly Mutation[]; label?: string }
     output: void

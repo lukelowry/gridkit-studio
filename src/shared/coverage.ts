@@ -1,17 +1,10 @@
 /** Sets of a table's rows: whether some cover others, their union and their intersection. */
-import {
-  type Data,
-  failure,
-  type FieldSelection,
-  type RowAxis,
-  type RowSelection,
-  selectRows,
-} from '@latkit/model'
+import { type Data, failure, type Index, type Query, selectRows } from '@latkit/model'
 
 /** Half-open physical row intervals. Compact ranges keep whole-case checks constant-size. */
 type Interval = readonly [number, number]
-const rowIntervals = new WeakMap<RowAxis, readonly Interval[]>()
-function intervals(rows: RowAxis): readonly Interval[] {
+const rowIntervals = new WeakMap<Index.Rows, readonly Interval[]>()
+function intervals(rows: Index.Rows): readonly Interval[] {
   let found = rowIntervals.get(rows)
   if (found) return found
   if (rows.kind === 'range') found = rows.count ? [[rows.offset, rows.offset + rows.count]] : []
@@ -28,7 +21,7 @@ function intervals(rows: RowAxis): readonly Interval[] {
   return found
 }
 
-export function coversRows(available: readonly RowAxis[], required: RowAxis): boolean {
+export function coversRows(available: readonly Index.Rows[], required: Index.Rows): boolean {
   const all = available.flatMap((rows) => [...intervals(rows)]).sort((a, b) => a[0] - b[0])
   let i = 0
   for (const [start, end] of intervals(required)) {
@@ -46,8 +39,8 @@ export function coversRows(available: readonly RowAxis[], required: RowAxis): bo
 function resolveRows(
   data: Data,
   from: string,
-  selections: readonly (RowSelection | undefined)[],
-): RowSelection {
+  selections: readonly (Index.Selection | undefined)[],
+): Index.Selection {
   const table = data.tables[from]
   if (!table) throw failure('invalid-input', `Missing row space: ${from}`)
   const axes = selections.map((rows) => selectRows(table, rows))
@@ -65,10 +58,10 @@ function resolveRows(
 
 export function recordedSelection(
   data: Data,
-  outputs: readonly FieldSelection[],
+  outputs: readonly Query.Selection[],
   from: string,
   field: string,
-): RowSelection {
+): Index.Selection {
   return resolveRows(
     data,
     from,
@@ -76,7 +69,7 @@ export function recordedSelection(
   )
 }
 
-export function intersectRows(a: RowAxis, b: RowAxis): RowAxis {
+export function intersectRows(a: Index.Rows, b: Index.Rows): Index.Rows {
   const out: [number, number][] = []
   const left = intervals(a)
   const right = intervals(b)

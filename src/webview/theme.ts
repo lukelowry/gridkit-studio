@@ -1,8 +1,8 @@
 /** The VS Code theme as the renderers read it, through the CSS tokens. */
 
-import { parseColor, type RGBA } from '@latkit/gpu'
+import { type ItemView, parseColor, type RGBA } from '@latkit/gpu'
 
-import type { SettingsValues } from '../shared/preferences.js'
+import type { SettingsReader, SettingsValues } from '../shared/preferences.js'
 
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
@@ -66,6 +66,48 @@ export function color(value: string | null, fallback: RGBA): RGBA
 export function color(value: string | null, fallback?: RGBA): RGBA | undefined
 export function color(value: string | null, fallback?: RGBA): RGBA | undefined {
   return value === null ? fallback : (parseColor(value) ?? fallback)
+}
+
+/** `color` with its alpha scaled by `alpha`. */
+export const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
+
+/** `from` moved `t` of the way toward `to`, keeping its alpha. */
+export const mix = (from: RGBA, to: RGBA, t: number): RGBA => [
+  from[0] + (to[0] - from[0]) * t,
+  from[1] + (to[1] - from[1]) * t,
+  from[2] + (to[2] - from[2]) * t,
+  from[3],
+]
+
+/** The style every latkit view shares, from one view's settings: quality, motion, picking, text
+ *  and colors, with `fallback`'s theme colors where a color setting is null. */
+export function viewStyle(
+  s: SettingsReader,
+  view: 'network' | 'diagram' | 'monitor',
+  font: string | null,
+  fallback: {
+    readonly background?: RGBA
+    readonly textColor?: RGBA
+    readonly selectedColor?: RGBA
+  },
+): ItemView.Style {
+  const motion = s.get('accessibility.motion')
+  const family = s.get(`${view}.font`) || font
+  return {
+    msaa: s.get(`${view}.msaa`),
+    hover: s.get(`${view}.hover`),
+    hoverBudgetMs: s.get(`${view}.hoverBudgetMs`),
+    pickRadiusPx: s.get(`${view}.pickRadiusPx`),
+    animationMs: s.get(`${view}.animationMs`),
+    fitPaddingPx: s.get(`${view}.fitPaddingPx`),
+    selectedWidthPx: s.get(`${view}.selectedWidthPx`),
+    motion: motion === 'system' ? 'auto' : motion,
+    ...(family && { font: { family } }),
+    fontSizePx: s.get(`${view}.fontSizePx`),
+    background: color(s.get(`${view}.background`), fallback.background),
+    textColor: color(s.get(`${view}.textColor`), fallback.textColor),
+    selectedColor: color(s.get(`${view}.selectedColor`), fallback.selectedColor),
+  }
 }
 
 /** Expose the user's motion and contrast settings to the tokens. Another contrast changes the

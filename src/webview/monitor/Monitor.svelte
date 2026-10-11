@@ -2,7 +2,7 @@
   labels. Plots are added from the view's title bar, which also names the results, and played from
   the status bar. -->
 <script lang="ts">
-  import type { Data, Domain, FieldSelection } from '@latkit/model'
+  import type { Data, Domain, Query } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
@@ -28,7 +28,7 @@
   let held = $state(0)
   const samples = new Samples(bridge, () => held++)
   let source = $state.raw<Data | undefined>()
-  let sampled = $state.raw<readonly FieldSelection[]>([])
+  let sampled = $state.raw<readonly Query.Selection[]>([])
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */

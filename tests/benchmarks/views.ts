@@ -227,16 +227,15 @@ export async function run() {
         settings.update('network.vertices.labels', i % 2 === 1, global),
       )
       await settings.update('network.vertices.labels', true, global)
-      // Borders draw only on Earth, after the first frame.
+      // The map draws only on Earth, after the first frame.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {
-        await measure('borders', (i) => settings.update('network.borders', i % 2 === 1, global))
-        const without = await idle<Stats>(network)
-        await settings.update('network.borders', undefined, global)
-        await network.waitForFunction(
-          '(segments) => gridkitStats().segments > segments',
-          without.segments,
-          { timeout: 60_000 },
+        await measure('map', (i) =>
+          settings.update('network.map.source', i % 2 === 1 ? 'borders' : 'none', global),
         )
+        await settings.update('network.map.source', undefined, global)
+        await network.waitForFunction('() => gridkitStats().map.vertices > 0', undefined, {
+          timeout: 60_000,
+        })
       }
       const bus = 'Bus/' + JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       // A selection draws again over the rest, glowing. Clearing it draws as before.
@@ -524,7 +523,7 @@ export async function run() {
     assert.deepEqual(bench.studio.errors, [], 'Studio reported no error')
   } finally {
     await simpleDialog(undefined)
-    for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.borders'])
+    for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.map.source'])
       await settings.update(key, undefined, global)
     await bench.browser.close()
   }

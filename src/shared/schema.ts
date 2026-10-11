@@ -1,6 +1,6 @@
 /** A case's topology, read from its schema alone: what the network and the diagram draw. */
 
-import type { FieldDefinition, Schema } from '@latkit/model'
+import type { Schema } from '@latkit/model'
 
 /** A field of one type that names a row of another. */
 interface Reference {
@@ -42,7 +42,7 @@ export function typeName(schema: Schema, type: string): string {
   return schema.types[type]?.label ?? type
 }
 
-function fieldsOf(schema: Schema, type: string): Readonly<Record<string, FieldDefinition>> {
+function fieldsOf(schema: Schema, type: string): Readonly<Record<string, Schema.Field>> {
   return schema.types[type]?.fields ?? {}
 }
 
@@ -52,17 +52,17 @@ function withUnit(name: string, unit: string | undefined): string {
 }
 
 /** A field's unit, unless its own name already says it, as `kv` says kV. */
-export function unitOf(definition: FieldDefinition | undefined, field: string): string {
+export function unitOf(definition: Schema.Field | undefined, field: string): string {
   const unit = definition?.unit ?? ''
   return unit.toLowerCase() === field.slice(field.indexOf('.') + 1).toLowerCase() ? '' : unit
 }
 
 /** A field's label, or its key, with its unit. */
-export function fieldName(definition: FieldDefinition | undefined, field: string): string {
+export function fieldName(definition: Schema.Field | undefined, field: string): string {
   return withUnit(definition?.label ?? field, unitOf(definition, field))
 }
 
-export function isReference(definition: FieldDefinition | undefined): boolean {
+export function isReference(definition: Schema.Field | undefined): boolean {
   return typeof definition?.type === 'object' && definition.type.kind === 'reference'
 }
 

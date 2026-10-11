@@ -8,17 +8,15 @@ const palette = new Proxy({}, { get: () => [0.8, 0.8, 0.8, 1] }) as Palette
 
 describe('networkOptions', () => {
   it('colors an unmapped edge by its ends', () => {
-    expect(networkOptions(reader(), palette, 'mono', false).edgeColor).toBe('ends')
+    expect(networkOptions(reader(), palette, 'mono').edgeColor).toBe('ends')
   })
   it('keeps an edge color the user chose', () => {
     const s = reader({ 'network.edgeColor': '#ff0000' })
-    expect(networkOptions(s, palette, 'mono', false).edgeColor).toEqual([1, 0, 0, 1])
+    expect(networkOptions(s, palette, 'mono').edgeColor).toEqual([1, 0, 0, 1])
   })
   it('glows in the theme, translucent, unless the user chose a color with its alpha', () => {
-    expect(networkOptions(reader(), palette, 'mono', false).hoverColor).toEqual([
-      0.8, 0.8, 0.8, 0.5,
-    ])
+    expect(networkOptions(reader(), palette, 'mono').hoverColor).toEqual([0.8, 0.8, 0.8, 0.5])
     const s = reader({ 'network.selectedColor': '#ff000080' })
-    expect(networkOptions(s, palette, 'mono', false).selectedColor).toEqual([1, 0, 0, 128 / 255])
+    expect(networkOptions(s, palette, 'mono').selectedColor).toEqual([1, 0, 0, 128 / 255])
   })
 })

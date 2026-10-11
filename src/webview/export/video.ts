@@ -3,7 +3,8 @@
  *  the frame drawn. */
 
 import { createDiagram } from '@latkit/diagram'
-import { createComposition, type Gpu, type Positions, type View } from '@latkit/gpu'
+import { createGeography } from '@latkit/geography'
+import { createComposition, type Gpu, type Layout, type View } from '@latkit/gpu'
 import type { Data, Domain } from '@latkit/model'
 import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
@@ -16,7 +17,7 @@ import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
 import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions, plotRows } from '../monitor/plot.js'
-import { loadBorders } from '../network/borders.js'
+import { loadMap, mapConfig } from '../network/map.js'
 import { isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { theme } from '../theme.js'
@@ -55,7 +56,7 @@ interface VideoInputs {
   readonly plotted: Data
   /** The rows with the samples the Network maps at `at`, once they are held. */
   readonly mapped: (at: number, signal: AbortSignal) => Promise<Data>
-  readonly presentation: Readonly<Record<string, Positions>>
+  readonly presentation: Readonly<Record<string, Layout.Positions>>
   readonly cameras: Cameras
 }
 
@@ -133,15 +134,16 @@ export async function exportVideo(
     for (const view of settings.views) {
       if (view === 'network') {
         const geographic = isGeographic(rows)
-        const borders =
-          geographic && preferences.get('network.borders')
-            ? await loadBorders().catch(() => null)
-            : null
+        // The view has said once why a map failed to load; the video then shows the ground alone.
+        const map = geographic ? await loadMap(preferences).catch(() => null) : null
+        const earth = geographic
+          ? keep(createGeography(gpu, { ...mapConfig(preferences, colors, face, map), ...still }))
+          : null
         const [start] = settings.timeRange
         let drawn = await mapped(start, signal)
         signal.throwIfAborted()
         const config = (data: Data, at: number) => ({
-          ...networkConfig(rows, data, state, geographic, borders),
+          ...networkConfig(rows, data, state, earth),
           at,
           ...still,
           canvas: null,
@@ -240,8 +242,11 @@ export async function exportVideo(
       frameRate: settings.frameRate,
       format: settings.format,
       quality: { medium: 0.5, high: 0.75, 'very-high': 1 }[settings.quality],
-      at: (seconds) => start + seconds * settings.rate,
-      ready: (at) => (at === undefined ? undefined : ready(at)),
+      at: async (seconds) => {
+        const at = start + seconds * settings.rate
+        await ready(at)
+        return at
+      },
       signal,
       onProgress: (progress) => {
         if (!signal.aborted) onProgress(progress)

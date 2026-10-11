@@ -1,17 +1,22 @@
 /** What the Network brings to the canvas: its renderer, loaded while the worker prepares the case;
- *  the samples it maps at the time it shows, asked for as the clock moves; and its projections,
- *  rotation, borders and labels. */
+ *  the samples it maps at the time it shows, asked for as the clock moves; the map beneath a
+ *  network on Earth; and its projections, rotation and labels. */
 
+import type { Geography } from '@latkit/geography'
+import type { ProjectedCamera } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
-import type { Network, Projection } from '@latkit/network'
+import type { Network } from '@latkit/network'
 
+import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
 import { createClock } from '../clock.js'
 import type { Host, Kind } from '../kind.js'
 import { drawable, staticNeeds } from '../rows.js'
 import { networkNeeds, Samples } from '../samples.js'
+import { theme } from '../theme.js'
 import { icon, type IconName } from '../ui/glyphs.js'
-import { loadBorders } from './borders.js'
+import type { Loaded } from './map.js'
+import type { Projection } from './network.js'
 
 const PROJECTIONS: readonly { value: Projection; label: string; icon: IconName }[] = [
   { value: 'flat', label: 'Flat', icon: 'projection-flat' },
@@ -24,25 +29,32 @@ export function network(host: Host): Kind {
   const availability = element.querySelector<HTMLElement>('.canvas-host__status')!
   let module: typeof import('./network.js') | undefined
   let styles: typeof import('./style.js') | undefined
-  const loaded = Promise.all([import('./network.js'), import('./style.js')]).then(
-    ([network, style]) => {
-      module = network
-      styles = style
-    },
-  )
+  let maps: typeof import('./map.js') | undefined
+  const loaded = Promise.all([
+    import('./network.js'),
+    import('./style.js'),
+    import('./map.js'),
+  ]).then(([network, style, map]) => {
+    module = network
+    styles = style
+    maps = map
+  })
   /** The rows with the samples held, which it draws; and those it last drew. */
   let data: Data | undefined
   let painted: Data | undefined
   /** The time it last readied for, which it then draws. */
   let at = 0
   let geographic = false
-  let borders: Data | null = null
-  let borderRequest: Promise<void> | undefined
-  /** Labels, like borders, wait for the first frame so text layout never delays it. */
+  /** The map beneath the network, made with it; what it draws, once loaded; and which map that is,
+   *  or is loading. */
+  let earth: Geography | undefined
+  let map: Loaded | null = null
+  let mapped: string | undefined
+  /** Labels, like the map, wait for the first frame so text layout never delays it. */
   let labelled = false
   /** Topology is unchanged by sampled frames. Do not rescan coordinates on every update. */
   let located: Data | undefined
-  let preferredProjection: Projection | undefined
+  let preferredProjection: ProjectedCamera.Projection | undefined
   let buffering: ReturnType<typeof setTimeout> | undefined
   let sync = () => {}
 
@@ -53,9 +65,13 @@ export function network(host: Host): Kind {
   })
   const clock = createClock(show)
   const config = (rows: Data) =>
-    styles!.networkConfig(rows, data ?? rows, host.state(), geographic, borders, labelled)
-  const preferred = () =>
-    module!.projectionOf(host.state().settings?.['network.camera.projection'] ?? 'flat', geographic)
+    styles!.networkConfig(rows, data ?? rows, host.state(), geographic ? earth! : null, labelled)
+  const ground = () => {
+    const { palette, font } = theme()
+    return maps!.mapConfig(reader(host.state().settings), palette, font, map)
+  }
+  const chosen = (): Projection => host.state().settings?.['network.camera.projection'] ?? 'flat'
+  const preferred = () => module!.projectionOf(chosen(), geographic)
 
   /** Whether it holds what it maps at `t`: rows of this revision, and the samples its mappings
    *  read over that time. */
@@ -107,23 +123,36 @@ export function network(host: Host): Kind {
     // Pages reach the view as time does, this frame; a restyle waits for the next.
     else host.paintNow()
   }
-  /** Loads borders after the first frame, so decoration never delays the case. */
+  /** Loads the map after the first frame, so it never delays the case, and again once the settings
+   *  choose another. A map that fails is reported, and tried again on a retry or another choice. */
   function decorate() {
-    if (
-      !geographic ||
-      host.state().settings?.['network.borders'] === false ||
-      borders ||
-      borderRequest ||
-      host.closed()
-    )
-      return
-    borderRequest = loadBorders()
-      .then((value) => {
-        if (host.closed()) return
-        borders = value
+    const s = reader(host.state().settings)
+    const key = maps!.mapKey(s)
+    if (!geographic || key === mapped || host.closed()) return
+    mapped = key
+    void maps!.loadMap(s).then(
+      (value) => {
+        if (mapped !== key || host.closed()) return
+        map = value
         host.paint()
-      })
-      .catch((reason) => bridge.report(reason))
+      },
+      (reason) => bridge.report(reason),
+    )
+  }
+  /** Credits the map's tiles in the corner, as their license asks, while they draw. */
+  function credit() {
+    const text = geographic && map?.kind === 'openstreetmap' ? map.attribution : undefined
+    let node = element.querySelector<HTMLElement>('.canvas-host__credit')
+    if (!text) {
+      node?.remove()
+      return
+    }
+    if (!node) {
+      node = document.createElement('div')
+      node.className = 'canvas-host__credit'
+      element.append(node)
+    }
+    node.textContent = text
   }
   const orbit = (view: Network | undefined) => {
     if (!view || host.state().settings?.['accessibility.motion'] === 'reduce') return
@@ -163,8 +192,9 @@ export function network(host: Host): Kind {
       if (!view) return
       const { camera, projections: offered } = view
       for (const { value, control } of projections) {
-        control.setAttribute('aria-pressed', String(camera.projection === value))
-        control.disabled = !offered[value] || (value === 'globe' && !geographic)
+        control.setAttribute('aria-pressed', String(module!.offeredAs(camera.projection) === value))
+        control.disabled =
+          !offered[module!.projectionOf(value, geographic)] || (value === 'globe' && !geographic)
       }
       orbiting.setAttribute('aria-pressed', String(camera.orbit === true))
     }
@@ -189,6 +219,7 @@ export function network(host: Host): Kind {
     mount(gpu, rows) {
       labelled = false
       preferredProjection = preferred()
+      earth = module!.mountEarth(gpu, ground())
       return module!.mountNetwork(
         gpu,
         canvas,
@@ -203,8 +234,10 @@ export function network(host: Host): Kind {
       )
     },
     paint(view, rows) {
+      earth!.set(ground(), { replace: true })
       ;(view as Network).set({ ...config(rows.data), at }, { replace: true })
       painted = data
+      credit()
     },
     painted(view) {
       if (host.rendered()) decorate()
@@ -212,15 +245,19 @@ export function network(host: Host): Kind {
       const projection = preferred()
       if (preferredProjection === projection) return
       preferredProjection = projection
-      module!.setProjection(view as Network, projection)
+      module!.setProjection(view as Network, chosen())
       sync()
     },
     presented() {
       if (!element.querySelector('.toolbar')) sync = toolbar()
       sync()
-      // The case is on screen: add its labels, and the borders paint asks for.
+      // The case is on screen: add its labels, and the map paint asks for.
       labelled = true
       host.paint()
+    },
+    unmount() {
+      earth?.destroy()
+      earth = undefined
     },
     item: (view, element) => module!.networkItem(view as Network, element),
     sync: () => sync(),
@@ -229,13 +266,14 @@ export function network(host: Host): Kind {
       else if (command === 'orbit') orbit(view as Network)
     },
     retry() {
-      borderRequest = undefined
+      mapped = undefined
       samples.retry()
     },
     stats: () => ({
       requestedAt: clock.now(),
       samples: samples.stats(),
       availability: element.dataset.availability,
+      map: geographic ? earth?.stats() : undefined,
     }),
     dispose() {
       clearTimeout(buffering)

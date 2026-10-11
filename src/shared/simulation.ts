@@ -1,4 +1,4 @@
-import type { Domain, FieldSelection } from '@latkit/model'
+import type { Domain, Query } from '@latkit/model'
 
 import type { CaseSource, Revision } from './messages.js'
 
@@ -48,7 +48,7 @@ export interface Results {
   path: string
   format: 'arrow' | 'csv'
   /** What the file holds, once its header is read. */
-  outputs: readonly FieldSelection[]
+  outputs: readonly Query.Selection[]
   frames: number
   domain: Domain
   /** Finite value ranges over every frame read, shared by all views and time windows. */

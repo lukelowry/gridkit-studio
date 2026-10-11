@@ -2,15 +2,8 @@
  *  lacks of the revision it shows. A field asked for stays held while the revision stands, so a
  *  mapping taken away changes nothing drawn, and mapping it again asks for nothing. */
 
-import type { Positions } from '@latkit/gpu'
-import {
-  createData,
-  type Data,
-  type FieldSelection,
-  type RowBatch,
-  type Schema,
-  staticFields,
-} from '@latkit/model'
+import type { Layout } from '@latkit/gpu'
+import { createData, type Data, type Query, type Schema, staticFields } from '@latkit/model'
 
 import type { Bindings } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
@@ -24,7 +17,7 @@ export function staticNeeds(
   summary: Summary,
   bindings: Bindings | undefined,
   network: boolean,
-): FieldSelection[] {
+): Query.Selection[] {
   const { schema } = summary
   const bound = Object.values(bindings ?? {})
   const drawn = networkOf(schema)
@@ -61,7 +54,7 @@ export interface Snapshot {
   /** The static fields held, each as `type.field`. */
   readonly fields: ReadonlySet<string>
   /** Where the diagram's blocks are arranged, when it was asked for. */
-  readonly presentation?: Record<string, Positions>
+  readonly presentation?: Record<string, Layout.Positions>
 }
 
 const nameOf = (type: string, field: string) => type + '.' + field
@@ -81,7 +74,10 @@ function schemaOf(schema: Schema): Schema {
 }
 
 /** `batches` with each type's ids held once: rows asked for again bring their ids again. */
-function joined(held: readonly RowBatch[], batches: readonly RowBatch[]): RowBatch[] {
+function joined(
+  held: readonly Data.RowBatch[],
+  batches: readonly Data.RowBatch[],
+): Data.RowBatch[] {
   const named = new Set(held.filter((batch) => batch.ids).map((batch) => batch.index.type))
   return [
     ...held,
@@ -98,7 +94,7 @@ function joined(held: readonly RowBatch[], batches: readonly RowBatch[]): RowBat
 function ask(
   asker: Asker,
   { summary, results }: Of,
-  fields: readonly FieldSelection[] | undefined,
+  fields: readonly Query.Selection[] | undefined,
   presentation: boolean,
   signal: AbortSignal,
 ) {
@@ -116,7 +112,7 @@ function ask(
 export async function rowsOnce(
   asker: Asker,
   of: Of,
-  fields: readonly FieldSelection[],
+  fields: readonly Query.Selection[],
   presentation: boolean,
   signal: AbortSignal,
 ): Promise<Snapshot> {
@@ -136,10 +132,10 @@ export class Rows {
   #snapshot?: Snapshot
   /** What the held batches are of, and the batches. */
   #key = ''
-  #batches: RowBatch[] = []
+  #batches: Data.RowBatch[] = []
   #held = new Set<string>()
-  #positions?: Record<string, Positions>
-  #wanted?: { of: Of; fields: readonly FieldSelection[]; presentation: boolean }
+  #positions?: Record<string, Layout.Positions>
+  #wanted?: { of: Of; fields: readonly Query.Selection[]; presentation: boolean }
   #flight?: AbortController
   /** Asks that failed, not asked again until something changes. */
   readonly #spent = new Set<string>()
@@ -157,7 +153,7 @@ export class Rows {
 
   /** Ask for the rows of `of` that `fields` select and the view lacks, and, with `presentation`,
    *  where the diagram's blocks are arranged. */
-  want(of: Of | undefined, fields: readonly FieldSelection[], presentation = false): void {
+  want(of: Of | undefined, fields: readonly Query.Selection[], presentation = false): void {
     if (!of) return
     this.#wanted = { of, fields, presentation }
     const { summary } = of
@@ -201,7 +197,7 @@ export class Rows {
   async #ask(
     key: string,
     of: Of,
-    lacking: readonly FieldSelection[],
+    lacking: readonly Query.Selection[],
     placing: boolean,
     spent: string,
   ) {

@@ -4,39 +4,31 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  '@latkit/monitor@0.17.0':
-    hash: 2cdf72e3251eb4b21627db23e48250cf54c5531e744e90f16de2ee6779f5de32
-    path: patches/@latkit__monitor@0.17.0.patch
-  '@latkit/network@0.21.0':
-    hash: e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225
-    path: patches/@latkit__network@0.21.0.patch
-  '@latkit/video@0.6.4':
-    hash: a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290
-    path: patches/@latkit__video@0.6.4.patch
-
 importers:
 
   .:
     dependencies:
       '@latkit/diagram':
-        specifier: 0.11.0
-        version: 0.11.0
+        specifier: link:../latkit/packages/diagram
+        version: link:../latkit/packages/diagram
+      '@latkit/geography':
+        specifier: link:../latkit/packages/geography
+        version: link:../latkit/packages/geography
       '@latkit/gpu':
-        specifier: 0.18.0
-        version: 0.18.0
+        specifier: link:../latkit/packages/gpu
+        version: link:../latkit/packages/gpu
       '@latkit/model':
-        specifier: 4.1.0
-        version: 4.1.0
+        specifier: link:../latkit/packages/model
+        version: link:../latkit/packages/model
       '@latkit/monitor':
-        specifier: 0.17.0
-        version: 0.17.0(patch_hash=2cdf72e3251eb4b21627db23e48250cf54c5531e744e90f16de2ee6779f5de32)
+        specifier: link:../latkit/packages/monitor
+        version: link:../latkit/packages/monitor
       '@latkit/network':
-        specifier: 0.21.0
-        version: 0.21.0(patch_hash=e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225)
+        specifier: link:../latkit/packages/network
+        version: link:../latkit/packages/network
       '@latkit/video':
-        specifier: 0.6.4
-        version: 0.6.4(patch_hash=a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290)
+        specifier: link:../latkit/packages/video
+        version: link:../latkit/packages/video
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -395,24 +387,6 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@latkit/diagram@0.11.0':
-    resolution: {integrity: sha512-jo80mSkNQjLWWIJk/gJ4s5MrURrfRlQBkekytVqQg0dGmukaMGOVc92J9u1fxLlu/dOwP20m+I/XXtOsey7twA==}
-
-  '@latkit/gpu@0.18.0':
-    resolution: {integrity: sha512-rb8Z8ZrcLhrPcL2gcmW+MKWbNBIxhpsahF+cxK0BVE4AxTSPmdbg/NQvWempmbKJNmrdNErYDPdE4N06qm1J3g==}
-
-  '@latkit/model@4.1.0':
-    resolution: {integrity: sha512-+W+6b6ZeaIX0mOm8dnK7XS8GckatS/K7b4axRKfBdBbT1LjSVYyleuvLms2J1zY+OsPyt8bjadhOl+2MjdlXoA==}
-
-  '@latkit/monitor@0.17.0':
-    resolution: {integrity: sha512-2C4R+sJxyMeMG4/FEsRwrI0wm/DpBKluY9unEfPySz1xN97311PVcxR+V+qv8XlbonUfps92UGI+B8FnP/SUsA==}
-
-  '@latkit/network@0.21.0':
-    resolution: {integrity: sha512-er7ZKLrmlL5tZzclWo21b+IEsAyMdHwNRhYQWoplKWkUjrRoCLsQtOM2tn6LmMrnXzSu2NDAd5K6bOe0ZvnADg==}
-
-  '@latkit/video@0.6.4':
-    resolution: {integrity: sha512-OLmkjXJDZSSa5f1JQ3U5SQonj8lJ68yyGS8zBmtH9+E9WKeMhO6o6BLUgy8JVr9k+ijnlerq2ueG9AJ9LxN7Dg==}
-
   '@napi-rs/keyring-darwin-arm64@1.3.0':
     resolution: {integrity: sha512-pl76hJvdYUBn6I24bXiOBMA9nbDapo3I5B+f3OorjDU4dUMSypXeKbOVehJe8fhgTiH24flMyTS3aAIy43xegQ==}
     engines: {node: '>= 10'}
@@ -677,12 +651,6 @@ packages:
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
 
-  '@types/dom-mediacapture-transform@0.1.12':
-    resolution: {integrity: sha512-d7/QsLRwF864A5mgIM/YrfiglHoYn7zgCcAoJgW404r+2DwnNr7EBbLnCWpmOMgH8y0te73L1AV6H1bmauaWFw==}
-
-  '@types/dom-webcodecs@0.1.13':
-    resolution: {integrity: sha512-O5hkiFIcjjszPIYyUSyvScyvrBoV3NOEEZx/pMlsu44TKzWNkLVBBxnxJz42in5n3QIolYOcBYFCPZZ0h8SkwQ==}
-
   '@types/esrecurse@4.3.1':
     resolution: {integrity: sha512-xJBAbDifo5hpffDBuHl0Y8ywswbiAp/Wi7Y/GtAgSlZyIABppyurxVueOPE8LUQOxdlgi6Zqce7uoEpqNTeiUw==}
 
@@ -944,10 +912,6 @@ packages:
     resolution: {integrity: sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg==}
     engines: {node: '>=4'}
     hasBin: true
-
-  culori@4.0.2:
-    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -1369,9 +1333,6 @@ packages:
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
-
-  mediabunny@1.61.1:
-    resolution: {integrity: sha512-530o7Q2OkChbfXt8N9WmzcW/wmUN0Vdxgl3RE5zUlzny3aNJUi7huOjdOVVq60aCEjTaMR1Ikby+61+co8gRwA==}
 
   mime@1.6.0:
     resolution: {integrity: sha512-x0Vn8spI+wuJ1O6S7gnbaQg8Pxh4NNHb7KSINmEWKiPE4RKOplvijn+NkmYmmRgP68mc70j2EbeTFRsrswaQeg==}
@@ -2110,39 +2071,6 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@latkit/diagram@0.11.0':
-    dependencies:
-      '@latkit/gpu': 0.18.0
-      '@latkit/model': 4.1.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/gpu@0.18.0':
-    dependencies:
-      '@latkit/model': 4.1.0
-      '@webgpu/types': 0.1.74
-      culori: 4.0.2
-
-  '@latkit/model@4.1.0': {}
-
-  '@latkit/monitor@0.17.0(patch_hash=2cdf72e3251eb4b21627db23e48250cf54c5531e744e90f16de2ee6779f5de32)':
-    dependencies:
-      '@latkit/gpu': 0.18.0
-      '@latkit/model': 4.1.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/network@0.21.0(patch_hash=e0651a7a2adc787058fabb4d90bb7a78fb2a36f72556e5b964d40364157a2225)':
-    dependencies:
-      '@latkit/gpu': 0.18.0
-      '@latkit/model': 4.1.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/video@0.6.4(patch_hash=a50953b0ab0c009f193d57a8d50a75079a33843d35bf9eea254055b76e824290)':
-    dependencies:
-      '@latkit/gpu': 0.18.0
-      '@latkit/model': 4.1.0
-      '@webgpu/types': 0.1.74
-      mediabunny: 1.61.1
-
   '@napi-rs/keyring-darwin-arm64@1.3.0':
     optional: true
 
@@ -2308,12 +2236,6 @@ snapshots:
       assertion-error: 2.0.1
 
   '@types/deep-eql@4.0.2': {}
-
-  '@types/dom-mediacapture-transform@0.1.12':
-    dependencies:
-      '@types/dom-webcodecs': 0.1.13
-
-  '@types/dom-webcodecs@0.1.13': {}
 
   '@types/esrecurse@4.3.1': {}
 
@@ -2589,8 +2511,6 @@ snapshots:
       which: 2.0.2
 
   cssesc@3.0.0: {}
-
-  culori@4.0.2: {}
 
   debug@4.4.3(supports-color@8.1.1):
     dependencies:
@@ -3019,11 +2939,6 @@ snapshots:
   marked@18.1.0: {}
 
   math-intrinsics@1.1.0: {}
-
-  mediabunny@1.61.1:
-    dependencies:
-      '@types/dom-mediacapture-transform': 0.1.12
-      '@types/dom-webcodecs': 0.1.13
 
   mime@1.6.0: {}
 

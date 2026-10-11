@@ -1,6 +1,6 @@
 /** Mount the block diagram and find elements in it. */
 
-import { createDiagram, type Diagram, type DiagramConfig, type DiagramItem } from '@latkit/diagram'
+import { createDiagram, type Diagram } from '@latkit/diagram'
 import type { Gpu } from '@latkit/gpu'
 import { type Data, itemId, rowAt, rowCount } from '@latkit/model'
 
@@ -19,7 +19,7 @@ export function diagrammed(source: Data): boolean {
 }
 
 /** The element a diagram item is: a port is a field of its block; a group is none. */
-function elementOf(item: DiagramItem): Element | null {
+function elementOf(item: Diagram.Item): Element | null {
   if (item.kind === 'group') return null
   return { id: itemId(item), ...(item.kind === 'port' && { field: item.port }) }
 }
@@ -29,14 +29,14 @@ function elementOf(item: DiagramItem): Element | null {
 export function mountDiagram(
   gpu: Gpu,
   canvas: HTMLCanvasElement,
-  config: Omit<DiagramConfig, 'canvas'>,
+  config: Omit<Diagram.Config, 'canvas'>,
   state: () => ViewState,
   select: (element: Element | null) => void,
   open: (element: Element) => void,
   refuse: (reason: unknown) => void,
 ): Diagram {
   const diagram = createDiagram(gpu, { ...config, canvas })
-  const pick = (item: DiagramItem | undefined, then: (element: Element) => void) => {
+  const pick = (item: Diagram.Item | undefined, then: (element: Element) => void) => {
     const element = item ? elementOf(item) : null
     if (element) then(element)
   }
@@ -79,13 +79,13 @@ export function mountDiagram(
 }
 
 /** The first block wired to another, or else the first block. */
-function firstWired(diagram: Diagram): DiagramItem | undefined {
+function firstWired(diagram: Diagram): Diagram.Item | undefined {
   const source = diagram.config.source
-  let first: DiagramItem | undefined
+  let first: Diagram.Item | undefined
   for (const type of diagramOf(source.schema).vertices) {
     const table = source.tables[type]
     if (!table || !rowCount(table.rows)) continue
-    const item: DiagramItem = {
+    const item: Diagram.Item = {
       kind: 'vertex',
       source,
       index: table.index,
@@ -101,7 +101,7 @@ function firstWired(diagram: Diagram): DiagramItem | undefined {
 export function diagramItem(
   diagram: Diagram,
   element: Element | undefined,
-): DiagramItem | undefined {
+): Diagram.Item | undefined {
   if (!element) return undefined
   const { source } = diagram.config
   const placement = placementOf(diagramOf(source.schema), elementType(element.id))

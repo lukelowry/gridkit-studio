@@ -1,7 +1,7 @@
 /** The catalog as a Schema, with each table's plan for the parser. A field is named by its path in
  *  the record, `params.kv` or `init.Vr`; a sampled output by GridKit's name for it, `Vm`. */
 
-import type { DataType, FieldDefinition, Schema, TypeDefinition } from '@latkit/model'
+import type { Schema } from '@latkit/model'
 import { failure } from '@latkit/model'
 
 import models from './catalog.json'
@@ -65,12 +65,12 @@ type FieldSource =
 export interface FieldPlan {
   readonly required?: boolean
   readonly name: string
-  readonly definition: FieldDefinition
+  readonly definition: Schema.Field
   readonly source: FieldSource
 }
 
 interface PortPlan extends FieldPlan {
-  readonly definition: FieldDefinition & {
+  readonly definition: Schema.Field & {
     readonly type: { readonly kind: 'reference'; readonly to: string }
   }
   readonly source: { readonly kind: 'port'; readonly name: string }
@@ -81,7 +81,7 @@ export interface Shape {
   readonly kind: 'bus' | 'signal' | 'device' | 'case'
   /** The array its records are in; null for the Case table. */
   readonly array: ArrayName | null
-  readonly definition: TypeDefinition
+  readonly definition: Schema.Type
   /** Every field by name, the identity and ports included. */
   readonly plan: ReadonlyMap<string, FieldPlan>
   /** The native identity: a device's id, a bus's number, a signal's id. */
@@ -98,8 +98,8 @@ export const CASE = 'Case'
 /** The Case table's one row. */
 export const CASE_ROW = 'case'
 
-const POINT: DataType = { kind: 'vector', items: 'float64', size: 2 }
-const ROUTE: DataType = { kind: 'list', items: POINT }
+const POINT: Schema.FieldType = { kind: 'vector', items: 'float64', size: 2 }
+const ROUTE: Schema.FieldType = { kind: 'list', items: POINT }
 
 export function catalogOf(json: unknown): Catalog {
   const text = JSON.stringify(json)
@@ -118,7 +118,7 @@ export function catalogOf(json: unknown): Catalog {
       throw failure('invalid-input', `The catalog declares ${shape.type} twice.`)
     shapes.set(shape.type, shape)
   }
-  const types: Record<string, TypeDefinition> = Object.create(null)
+  const types: Record<string, Schema.Type> = Object.create(null)
   for (const [type, shape] of shapes) types[type] = shape.definition
   const schema: Schema = {
     axis: { name: 'time', unit: 's' },
@@ -132,7 +132,7 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
   for (const port of spec.ports)
     if (parameters.has(port.name))
       throw failure('invalid-input', `${spec.name}.${port.name} is both a parameter and a port.`)
-  const typeOf = (spec: ParamSpec | ExtensionSpec): DataType =>
+  const typeOf = (spec: ParamSpec | ExtensionSpec): Schema.FieldType =>
     spec.type === 'flag'
       ? 'boolean'
       : spec.type === 'integer'
@@ -142,7 +142,7 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
           : 'float64'
   const field = (
     name: string,
-    type: DataType,
+    type: Schema.FieldType,
     source: FieldSource,
     unit?: string,
     geographic?: boolean,
@@ -284,11 +284,11 @@ export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
 /** A table's shape, its fields sorted once into the plan, fields, ports and output order. */
 function compile(
   table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity'>,
-  definition: Omit<TypeDefinition, 'fields'>,
+  definition: Omit<Schema.Type, 'fields'>,
   entries: readonly FieldPlan[],
 ): Shape {
   const plan = new Map<string, FieldPlan>()
-  const definitions: Record<string, FieldDefinition> = Object.create(null)
+  const definitions: Record<string, Schema.Field> = Object.create(null)
   const fields: FieldPlan[] = []
   const ports: PortPlan[] = []
   const outputOrder = new Map<string, number>()

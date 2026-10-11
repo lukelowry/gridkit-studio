@@ -1,7 +1,7 @@
-import { blockByteLength, type SampleBatch } from '@latkit/model'
+import { blockByteLength, type Data } from '@latkit/model'
 
 /** One batch per field, all over the same frames. */
-export type Frames = readonly SampleBatch[]
+export type Frames = readonly Data.SampleBatch[]
 
 /** Decoded chunks by key; past `limit` bytes, the least recently used are dropped. */
 export class ResultCache {

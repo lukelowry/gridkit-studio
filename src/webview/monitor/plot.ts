@@ -2,22 +2,22 @@
 
 import { colormaps } from '@latkit/gpu'
 import {
-  type Axis,
   type Data,
   type Domain,
-  type FieldSelection,
   itemKey,
+  type Query,
   rowAt,
   rowCount,
+  type Schema,
   selectRows,
 } from '@latkit/model'
-import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
+import type { Monitor } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
 import { intersectRows, recordedSelection } from '../../shared/coverage.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import type { Results } from '../../shared/simulation.js'
-import { color, type Palette } from '../theme.js'
+import { color, type Palette, viewStyle } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
 
@@ -26,7 +26,7 @@ export function plotRows(
   source: Data,
   results: Results | undefined,
   plot: Plotted,
-): FieldSelection['rows'] {
+): Query.Selection['rows'] {
   const recorded = recordedSelection(source, results?.outputs ?? [], plot.type, plot.field)
   if (!plot.id) return recorded
   const table = source.tables[plot.type]!
@@ -40,7 +40,7 @@ export function plotRows(
 }
 
 /** Caps each plot's history textures; the complete results are held outside the plot. */
-export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
+export const PLOT_LIMITS: Monitor.Limits = { historyBytes: 128 * 1024 ** 2 }
 
 /** The single trace key, so another field replaces the trace in place. */
 const TRACE = 'plotted'
@@ -51,8 +51,8 @@ export function traceSelection(
   source: Data,
   selected: string | undefined,
   type: string,
-  rows?: FieldSelection['rows'],
-): MonitorItem[] {
+  rows?: Query.Selection['rows'],
+): Monitor.Item[] {
   if (!selected?.startsWith(type + '/')) return []
   const table = source.tables[type]
   if (!table) return []
@@ -70,10 +70,10 @@ export function traceSelection(
 }
 
 /** A trace row's identity, as the plot selects by it: the reading's frame is not part of it. */
-const traceKey = (item: MonitorItem): string => itemKey(item, item.trace ?? '')
+const traceKey = (item: Monitor.Item): string => itemKey(item, item.trace ?? '')
 
 /** Whether two selections hold the same trace rows, whichever readings found them. */
-export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem[]): boolean {
+export function sameSelection(a: readonly Monitor.Item[], b: readonly Monitor.Item[]): boolean {
   return a.length === b.length && a.every((item, i) => traceKey(item) === traceKey(b[i]!))
 }
 
@@ -83,14 +83,14 @@ export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem
 const MARGIN_PX = [8, 12, 4, 0] as const
 
 /** How many traces `rows` of `type` draw. */
-export function traceCount(source: Data, type: string, rows: FieldSelection['rows']): number {
+export function traceCount(source: Data, type: string, rows: Query.Selection['rows']): number {
   const table = source.tables[type]
   return table ? rowCount(selectRows(table, rows)) : 0
 }
 
 /** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
  *  every row. A plot added to the Monitor waits for the samples it asks for. */
-export function holds(sampled: readonly FieldSelection[], { type, field, id }: Plotted): boolean {
+export function holds(sampled: readonly Query.Selection[], { type, field, id }: Plotted): boolean {
   return sampled.some(
     ({ from, select, rows }) =>
       from === type &&
@@ -111,9 +111,9 @@ export function plotBindings(
   settings: SettingsReader,
   { type, field, id }: Plotted,
   bindings: Bindings = {},
-  rows?: FieldSelection['rows'],
+  rows?: Query.Selection['rows'],
   results?: Results,
-): Pick<MonitorConfig, 'traces'> {
+): Pick<Monitor.Config, 'traces'> {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
   )
@@ -155,20 +155,21 @@ export function plotOptions(
   palette: Palette | null,
   font: string | null,
   { ticks, time, caption }: { ticks: boolean; time?: string; caption?: string },
-): Partial<MonitorConfig> {
+): Partial<Monitor.Config> {
   const xPrecision = s.get('monitor.xAxis.precision')
   const yPrecision = s.get('monitor.yAxis.precision')
-  const family = s.get('monitor.font') || font
-  const motion = s.get('accessibility.motion')
   return {
-    fontSizePx: s.get('monitor.fontSizePx'),
-    ...(family && { font: { family } }),
+    ...viewStyle(s, 'monitor', font, {
+      background: palette?.surface1,
+      textColor: palette?.text2,
+      selectedColor: palette?.primaryText,
+    }),
     paddingPx: [...MARGIN_PX],
-    frame: true,
+    outline: true,
     xAxis: s.get('monitor.xAxis.visible')
       ? {
           label: ticks ? (time ?? '') : '',
-          labels: ticks,
+          tickLabels: ticks,
           grid: s.get('monitor.xAxis.grid'),
           minSpacingPx: s.get('monitor.xAxis.minSpacingPx'),
           format: s.get('monitor.xAxis.format'),
@@ -186,35 +187,26 @@ export function plotOptions(
       : false,
     traceColor: color(s.get('monitor.traceColor') ?? defaults['monitor.traceColor']),
     traceWidthPx: s.get('monitor.traceWidthPx'),
-    hover: s.get('monitor.hover'),
-    hoverBudgetMs: s.get('monitor.hoverBudgetMs'),
-    msaa: s.get('monitor.msaa'),
-    pickRadiusPx: s.get('monitor.pickRadiusPx'),
-    animationMs: s.get('monitor.animationMs'),
-    fitPaddingPx: s.get('monitor.fitPaddingPx'),
-    motion: motion === 'system' ? 'auto' : motion,
-    selectedWidthPx: s.get('monitor.selectedWidthPx'),
     unselectedAlpha: s.get('monitor.unselectedAlpha'),
     input: { mode: s.get('monitor.input.mode'), keyboard: s.get('monitor.input.keyboard') },
-    background: color(s.get('monitor.background'), palette?.surface1),
-    textColor: color(s.get('monitor.textColor'), palette?.text2),
     axisColor: color(s.get('monitor.axisColor'), palette?.border),
     gridColor: color(
       s.get('monitor.gridColor'),
       palette ? [palette.text2[0], palette.text2[1], palette.text2[2], 0.15] : undefined,
     ),
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),
-    selectedColor: color(s.get('monitor.selectedColor'), palette?.primaryText),
+    // The hovered reading's dot, as the playhead and the selection draw.
+    hoverColor: palette?.primaryText,
   }
 }
 
 /** The axis name in sentence case; 'Coordinate' when unnamed. */
-export function axisName(axis: Axis | undefined): string {
+export function axisName(axis: Schema.Axis | undefined): string {
   const name = axis?.name ?? 'Coordinate'
   return name.charAt(0).toUpperCase() + name.slice(1)
 }
 
 /** The axis caption: its name, then its unit in parentheses. */
-export function axisLabel(axis: Axis | undefined): string {
+export function axisLabel(axis: Schema.Axis | undefined): string {
   return axis?.unit ? `${axisName(axis)} (${axis.unit})` : axisName(axis)
 }

@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises'
 
 import {
+  type Block,
   createData,
   read,
-  type RowsBlock,
   selectBatches,
   staticFields,
   validateSchema,
@@ -61,7 +61,7 @@ describe('single catalog and source ownership', () => {
   })
   it('reads stable IDs and sparse native identities through current Latkit queries', async () => {
     const kase = await Case.parse(source, catalog)
-    const blocks: RowsBlock[] = []
+    const blocks: Block.Rows[] = []
     for await (const block of read(
       kase.data,
       {

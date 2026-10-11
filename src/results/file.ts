@@ -9,11 +9,10 @@ import {
   blockByteLength,
   type Data,
   type Domain,
-  type FieldSelection,
+  type Index,
+  type Query,
   rowAt,
-  type RowAxis,
   rowCount,
-  type SampleBatch,
   selectRows,
   sliceSamples,
 } from '@latkit/model'
@@ -57,7 +56,7 @@ function firstWhere(count: number, holds: (index: number) => boolean): number {
 }
 
 /** Frames `from` up to `to` of `frames`, as views of their arrays. */
-function slice(frames: Frames, from: number, to: number): SampleBatch[] {
+function slice(frames: Frames, from: number, to: number): Data.SampleBatch[] {
   return frames.map((batch) => {
     const at = from - batch.firstFrame
     const rows = rowCount(batch.rows)
@@ -76,7 +75,7 @@ function slice(frames: Frames, from: number, to: number): SampleBatch[] {
 }
 
 /** `rows`, ascending, as the briefest axis. */
-const axisOf = (rows: Uint32Array): RowAxis =>
+const axisOf = (rows: Uint32Array): Index.Rows =>
   rows.every((row, i) => row === rows[0]! + i)
     ? { kind: 'range', offset: rows[0] ?? 0, count: rows.length }
     : { kind: 'indices', values: rows }
@@ -264,14 +263,14 @@ export class ResultsFile {
   async samples(
     { field, window, held, near, bytes }: SamplesInput,
     signal: AbortSignal,
-  ): Promise<SampleBatch[]> {
+  ): Promise<Data.SampleBatch[]> {
     const { chunk, frames } = this.info
     if (!chunk) return []
     const [first, end] = this.#span(window)
     const chunks: number[] = []
     for (let k = Math.floor(first / chunk); k * chunk < end; k++) chunks.push(k)
     if (near) chunks.sort((a, b) => this.#distance(a, near) - this.#distance(b, near))
-    const reply: SampleBatch[] = []
+    const reply: Data.SampleBatch[] = []
     let size = 0
     for (const k of chunks) {
       const from = k * chunk + (held[k] ?? 0)
@@ -288,7 +287,10 @@ export class ResultsFile {
 
   /** `frames`' samples of `field`: the rows of it the file holds, or those of them it names, as one
    *  batch of arrays of its own, to send. */
-  #pick(frames: Frames, { from, select: [name], rows }: FieldSelection): SampleBatch | undefined {
+  #pick(
+    frames: Frames,
+    { from, select: [name], rows }: Query.Selection,
+  ): Data.SampleBatch | undefined {
     const batch = frames.find((each) => each.index.type === from && name! in each.columns)
     const held = this.fields.find((field) => field.index.type === from && field.name === name)
     if (!batch || !held) return undefined

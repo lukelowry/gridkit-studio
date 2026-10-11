@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import { type Domain, read, rowAt, rowCount, sampleAt, type SampleWindow } from '@latkit/model'
+import { type Domain, type Query, read, rowAt, rowCount, sampleAt } from '@latkit/model'
 import { applyEdits, modify } from 'jsonc-parser'
 import { beforeAll, describe, expect, it } from 'vitest'
 
@@ -149,7 +149,7 @@ describe("GridKit's programs on solver files", () => {
   }
 
   /** What Studio reads back of `field` for each recorded bus over `window`. */
-  async function readBack(results: ResultsFile, field: string, window: SampleWindow) {
+  async function readBack(results: ResultsFile, field: string, window: Query.Window) {
     const found: { row: number; t: number; value: number | null }[] = []
     const span: Domain =
       window.kind === 'range'

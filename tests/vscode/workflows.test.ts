@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 
-import type { RowsBlock } from '@latkit/model'
+import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 
@@ -40,7 +40,7 @@ suite('Workflows', function () {
         at: t,
       },
     })
-    return rowsOf(blocks as RowsBlock[])[0]!.values.Vm as number
+    return rowsOf(blocks as Block.Rows[])[0]!.values.Vm as number
   }
 
   suiteSetup(async function () {

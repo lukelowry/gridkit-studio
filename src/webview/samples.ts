@@ -2,14 +2,7 @@
  *  change once read, so a view keeps what it was sent, asks only for what it lacks over the times
  *  it shows, and, past its budget, lets go of the chunks farthest from them. */
 
-import {
-  appendData,
-  blockByteLength,
-  type Data,
-  type Domain,
-  type FieldSelection,
-  type SampleBatch,
-} from '@latkit/model'
+import { appendData, blockByteLength, type Data, type Domain, type Query } from '@latkit/model'
 
 import { recordedWhole } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
@@ -26,7 +19,7 @@ const SAMPLE_BYTES = 8
 /** One field of results a view draws, and the rows it selects; without rows, every row the file
  *  holds. `rows` counts them. */
 interface Need {
-  readonly selection: FieldSelection
+  readonly selection: Query.Selection
   readonly rows: number
 }
 
@@ -77,7 +70,7 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
 })
 
 /** What names a selection of fields and rows, so equal selections compare equal. */
-export function selectionKey({ from, select, rows }: FieldSelection): string {
+export function selectionKey({ from, select, rows }: Query.Selection): string {
   return `${from}\n${select.join(',')}\n${rows ? JSON.stringify(rows) : ''}`
 }
 
@@ -105,7 +98,7 @@ const away = ([start, end]: Domain, at: number) =>
 interface Chunk {
   count: number
   domain: Domain
-  readonly pieces: SampleBatch[]
+  readonly pieces: Data.SampleBatch[]
   bytes: number
 }
 
@@ -137,7 +130,7 @@ export class Samples {
   /** Bumped whenever chunks go: data made before then is made again. */
   #generation = 0
   /** The pieces taken in since the generation began, in order. */
-  #arrived: { key: string; batch: SampleBatch }[] = []
+  #arrived: { key: string; batch: Data.SampleBatch }[] = []
   #assembled?: {
     rows: Data
     generation: number
@@ -225,7 +218,7 @@ export class Samples {
       }
     }
     // Made anew from every piece held, in frame order.
-    const pieces: { key: string; batch: SampleBatch }[] = []
+    const pieces: { key: string; batch: Data.SampleBatch }[] = []
     for (const [key, chunks] of this.#held)
       for (const chunk of chunks.values())
         for (const batch of chunk.pieces) pieces.push({ key, batch })
@@ -297,7 +290,7 @@ export class Samples {
   }
 
   /** The needs that hold samples: the fields, and their rows, the view can draw. */
-  sampled(): FieldSelection[] {
+  sampled(): Query.Selection[] {
     return this.#needs
       .map(({ selection }) => selection)
       .filter((selection) => !!this.#held.get(selectionKey(selection))?.size)
@@ -488,7 +481,7 @@ export class Samples {
   }
 
   /** Hold `batches`, the frames `key` lacked; whether any came. */
-  #take(key: string, batches: readonly SampleBatch[]): boolean {
+  #take(key: string, batches: readonly Data.SampleBatch[]): boolean {
     if (!this.#needs.some(({ selection }) => selectionKey(selection) === key)) return false
     const size = this.#results!.chunk
     let chunks = this.#held.get(key)

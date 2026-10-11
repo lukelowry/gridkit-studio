@@ -5,11 +5,13 @@ import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import type { Data } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until, visible } from './harness.js'
+import type { SamplesInput } from '../../src/shared/messages.js'
+import { type TestHost, testHost, until, visible, VM } from './harness.js'
 
 suite('Monitor', () => {
   let bench: TestHost
@@ -110,6 +112,78 @@ suite('Monitor', () => {
     } finally {
       await bench.page.emulateMedia({ reducedMotion: null })
       await writeFile(path, original)
+    }
+  })
+
+  test('draws the samples it holds around those it has not read, then those once they come', async () => {
+    // The worker's replies of samples come without the frames `lacking` names, as if it had not
+    // got to them, and an ask that brings nothing is not made again until the Monitor retries. It
+    // names every frame until the run's chunks are known.
+    const thread = bench.studio.client.results
+    const call = thread.call
+    let lacking: readonly [number, number] = [0, Infinity]
+    /** The first frame of each batch of every bus's voltage the Monitor was sent. */
+    const held: number[] = []
+    thread.call = (async (method: string, input: unknown, signal?: AbortSignal) => {
+      const value = await call.call(thread, method as never, input as never, signal)
+      if (method !== 'samples') return value
+      const kept = (value as Data.SampleBatch[]).filter(
+        ({ firstFrame, coordinates }) =>
+          firstFrame + coordinates.length <= lacking[0] || firstFrame >= lacking[1],
+      )
+      if (!(input as SamplesInput).field.rows) held.push(...kept.map((batch) => batch.firstFrame))
+      return kept
+    }) as typeof call
+    try {
+      monitor = await bench.show('monitor')
+      // Every bus's voltage over three and a half chunks, so the start, the middle and the end of
+      // the run come in replies of their own.
+      const { chunk, frames, domain } = await bench.waveform('Long waveform.csv', 46_000, 46, 3)
+      assert.ok(frames >= 3 * chunk, 'The run must span more than three chunks')
+      bench.session.plots = [{ from: VM.type, field: VM.field }]
+      bench.studio.changed.fire(bench.key)
+      lacking = [chunk, 3 * chunk]
+      const show = (window: [number, number] | undefined) => {
+        bench.session.window = window
+        bench.studio.changed.fire(bench.key)
+      }
+      /** The frames of the readings under the plot at `at`, a voltage of 1. */
+      const readings = (at: number) =>
+        monitor.evaluate<number[] | null>(`(async () => {
+          const canvas = document.querySelector('canvas')
+          const point = canvas?.gridkitPoint?.(${at}, 1)
+          if (!point || !canvas.gridkitRead) return null
+          return (await canvas.gridkitRead([point[0], point[1]])).map(({ frame }) => frame)
+        })()`)
+      const step = (domain[1] - domain[0]) / 100
+      show([domain[1] - step, domain[1]])
+      await until(() => held.some((frame) => frame >= 3 * chunk), 'the Monitor holds the end')
+      show([domain[0], domain[0] + step])
+      await until(() => held.some((frame) => frame < chunk), 'the Monitor holds the start')
+      // The whole run, its start and end held and its middle not: the plot draws each run it holds
+      // and nothing between them.
+      show(undefined)
+      const middle = (domain[0] + domain[1]) / 2
+      await until(async () => {
+        const [start, end] = await Promise.all([readings(step), readings(domain[1] - step)])
+        return start?.length && end?.length
+      }, 'the Monitor draws the start and end of the run')
+      const lacked = await readings(middle)
+      assert.ok(lacked, 'The plot reads its middle')
+      assert.ok(
+        lacked.every((frame) => frame < chunk || frame >= 3 * chunk),
+        'The plot draws nothing where it holds nothing',
+      )
+      // The middle comes once asked for again.
+      lacking = [0, 0]
+      await vscode.commands.executeCommand('gridkitStudio.retryMonitor', bench.uri)
+      await until(
+        async () => (await readings(middle))?.some((frame) => frame >= chunk && frame < 3 * chunk),
+        'the Monitor draws the middle of the run once it comes',
+      )
+    } finally {
+      thread.call = call
+      await bench.reset()
     }
   })
 })

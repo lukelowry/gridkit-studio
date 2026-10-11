@@ -1,5 +1,5 @@
-import type { Positions } from '@latkit/gpu'
-import { type Data, type NumericColumn, read, type RowBatch, textColumn } from '@latkit/model'
+import type { Layout } from '@latkit/gpu'
+import { type Column, type Data, read, textColumn } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { CaseApi, Summary } from '../shared/messages.js'
@@ -8,7 +8,7 @@ import { Rows } from './rows.js'
 
 const index = { source: 'case', type: 'Bus', version: '1' }
 /** Where the diagram places its blocks, as the worker answers. */
-const placed: Record<string, Positions> = {}
+const placed: Record<string, Layout.Positions> = {}
 const schema = {
   types: { Bus: { fields: { kV: { type: 'float64' }, area: { type: 'float64' } } } },
 } as const
@@ -25,7 +25,7 @@ function worker(gate?: () => Promise<void>) {
   const request = vi.fn(async (input: CaseApi['rows']['input']) => {
     asked.push(input)
     await gate?.()
-    return input.fields.map(({ select }): RowBatch => ({
+    return input.fields.map(({ select }): Data.RowBatch => ({
       kind: 'rows',
       index,
       rows: { kind: 'range', offset: 0, count: 2 },
@@ -64,7 +64,7 @@ function rowsOf(request: ReturnType<typeof worker>['request']) {
 async function values(data: Data, field: string) {
   const found: number[] = []
   for await (const block of read(data, { kind: 'rows', from: 'Bus', select: [field] })) {
-    const column = block.columns[field] as NumericColumn
+    const column = block.columns[field] as Column.Numeric
     for (let i = 0; i < column.length; i++) found.push(column.values[column.offset + i]!)
   }
   return found

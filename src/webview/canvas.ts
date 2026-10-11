@@ -91,6 +91,7 @@ function boot() {
   }
   const drop = () => {
     view?.destroy()
+    kind.unmount()
     view = undefined
     delete canvas.dataset.rendered
   }
@@ -341,8 +342,7 @@ function boot() {
     unwatch()
     kind.dispose()
     recovery.dispose()
-    view?.destroy()
-    view = undefined
+    drop()
     owner.dispose()
   })
   bridge.send({ kind: 'ready' })

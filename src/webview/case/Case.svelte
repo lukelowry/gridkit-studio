@@ -2,13 +2,13 @@
   chosen from the view's title bar, which also says what shows; a column's menu maps it onto the
   network. -->
 <script lang="ts">
-  import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
+  import type { Query, Schema } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
   import { display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import type { TableState, ViewState } from '../../shared/messages.js'
+  import type { TableState, Value, ViewState } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
   import { appearance } from '../theme.js'
@@ -38,7 +38,7 @@
   let revealing: string | undefined
   /** The last element selected here, which is in sight already. */
   let own: string | undefined
-  const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
+  const definitions = $derived<Readonly<Record<string, Schema.Field>>>(
     view.summary?.schema.types[type]?.fields ?? {},
   )
   /** The field each row is known by, shown as the row's own header. */
@@ -139,13 +139,13 @@
     try {
       // The filter matches a row's name, else its identity.
       const named = allFields.includes('name') ? 'name' : identity
-      const where: NonNullable<RowsQuery['where']>[number][] = [
+      const where: NonNullable<Query.Rows['where']>[number][] = [
         ...(filter && named
           ? [{ field: named, operator: 'contains', value: filter } as const]
           : []),
         ...(equal ? [{ field: equal.field, operator: 'equal', value: equal.value } as const] : []),
       ]
-      const query: RowsQuery = {
+      const query: Query.Rows = {
         kind: 'rows',
         from: type,
         select: fields,

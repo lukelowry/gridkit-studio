@@ -1,11 +1,11 @@
-import { type RowsBlock, textColumn } from '@latkit/model'
+import { type Block, textColumn } from '@latkit/model'
 import { expect, it } from 'vitest'
 
 import { referenceNames, rowsOf } from './cells.js'
 
 it('resolves scalar and list references, honoring offsets and null validity', async () => {
   const index = { source: 'case', version: 'one', type: 'Bus' }
-  const blocks: RowsBlock[] = [
+  const blocks: Block.Rows[] = [
     {
       kind: 'rows',
       index: { ...index, type: 'Device' },

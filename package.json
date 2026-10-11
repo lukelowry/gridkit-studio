@@ -64,12 +64,13 @@
     "vscode:prepublish": "pnpm build"
   },
   "dependencies": {
-    "@latkit/diagram": "0.11.0",
-    "@latkit/gpu": "0.18.0",
-    "@latkit/model": "4.1.0",
-    "@latkit/monitor": "0.17.0",
-    "@latkit/network": "0.21.0",
-    "@latkit/video": "0.6.4",
+    "@latkit/diagram": "link:../latkit/packages/diagram",
+    "@latkit/geography": "link:../latkit/packages/geography",
+    "@latkit/gpu": "link:../latkit/packages/gpu",
+    "@latkit/model": "link:../latkit/packages/model",
+    "@latkit/monitor": "link:../latkit/packages/monitor",
+    "@latkit/network": "link:../latkit/packages/network",
+    "@latkit/video": "link:../latkit/packages/video",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
@@ -99,12 +100,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ],
-    "patchedDependencies": {
-      "@latkit/network@0.21.0": "patches/@latkit__network@0.21.0.patch",
-      "@latkit/video@0.6.4": "patches/@latkit__video@0.6.4.patch",
-      "@latkit/monitor@0.17.0": "patches/@latkit__monitor@0.17.0.patch"
-    }
+    ]
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -1498,13 +1494,7 @@
           "gridkitStudio.network.lines": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Edges. Off leaves the world’s borders drawn.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.borders": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Layers — Borders. Draw coasts and country borders under a network on Earth.",
+            "markdownDescription": "Layers — Edges. Off leaves the map drawn.",
             "type": "boolean"
           },
           "gridkitStudio.network.poles": {
@@ -1516,19 +1506,101 @@
           "gridkitStudio.network.grid": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Grid. Draw a coordinate grid under the network, latitude and longitude on the globe.",
+            "markdownDescription": "Layers — Grid. Lines of longitude and latitude under a network on Earth, and of x and y under one laid out.",
             "type": "boolean"
           },
-          "gridkitStudio.network.earthAxis": {
+          "gridkitStudio.network.map.source": {
+            "default": "borders",
+            "scope": "resource",
+            "markdownDescription": "Map — Map. What lies under a network on Earth. Coasts and borders ship with Studio and draw offline. OpenStreetMap loads vector tiles from the tiles URL.",
+            "type": "string",
+            "enum": [
+              "borders",
+              "openstreetmap",
+              "none"
+            ],
+            "enumDescriptions": [
+              "Coasts and borders",
+              "OpenStreetMap",
+              "None"
+            ]
+          },
+          "gridkitStudio.network.map.tilesUrl": {
+            "default": "https://tiles.openfreemap.org/planet",
+            "scope": "resource",
+            "markdownDescription": "Map — Tiles URL. OpenStreetMap vector tiles in the OpenMapTiles schema: a PMTiles archive, TileJSON, or a {z}/{x}/{y} template.",
+            "type": "string"
+          },
+          "gridkitStudio.network.map.earthAxis": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Earth axis. Draw the axis the globe turns on.",
+            "markdownDescription": "Map — Earth axis. Draw the axis the globe turns on.",
             "type": "boolean"
+          },
+          "gridkitStudio.network.map.daylight": {
+            "default": false,
+            "scope": "resource",
+            "markdownDescription": "Map — Daylight. Light the Earth and the network by where the sun is now.",
+            "type": "boolean"
+          },
+          "gridkitStudio.network.map.nightFloor": {
+            "default": 0.3,
+            "scope": "resource",
+            "markdownDescription": "Map — Night floor. Brightness on the night side.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "gridkitStudio.network.map.terminatorWidth": {
+            "default": 0.12,
+            "scope": "resource",
+            "markdownDescription": "Map — Terminator width. Softness of the edge between day and night.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.5
+          },
+          "gridkitStudio.network.map.lineWidthPx": {
+            "default": 1,
+            "scope": "resource",
+            "markdownDescription": "Map — Border width. Stroke width of coasts and borders.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "gridkitStudio.network.map.groundColor": {
+            "default": null,
+            "scope": "resource",
+            "markdownDescription": "Map — Ground. The Earth under the network. Null follows the current VS Code theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
+          },
+          "gridkitStudio.network.map.lineColor": {
+            "default": null,
+            "scope": "resource",
+            "markdownDescription": "Map — Border color. Coasts and borders. Null follows the current VS Code theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
           },
           "gridkitStudio.network.vertexRadiusPx": {
             "default": 3,
             "scope": "resource",
             "markdownDescription": "Size — Vertex radius. Marker radius before a bound size scales it.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 16
+          },
+          "gridkitStudio.network.vertexMinRadiusPx": {
+            "default": 1,
+            "scope": "resource",
+            "markdownDescription": "Size — Smallest vertex radius. Zoomed out, markers shrink toward this as edges shorten on screen, so neighbors stay apart. The vertex radius or more keeps one size.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
@@ -1542,7 +1614,7 @@
             "maximum": 8
           },
           "gridkitStudio.network.zScale": {
-            "default": 3,
+            "default": 0.4,
             "scope": "resource",
             "markdownDescription": "Size — Height. Multiplies how high a bound height raises vertices.",
             "type": "number",
@@ -1564,14 +1636,6 @@
             "type": "number",
             "minimum": 0,
             "maximum": 24
-          },
-          "gridkitStudio.network.pathWidthPx": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Size — Border width. Stroke width of coasts and country borders.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4
           },
           "gridkitStudio.network.shadows": {
             "default": false,
@@ -1639,36 +1703,6 @@
             ],
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
-          },
-          "gridkitStudio.network.daylight": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Daylight. Light a network on Earth by where the sun is now.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.nightFloor": {
-            "default": 0.55,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Night floor. Brightness of the network on the night side.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "gridkitStudio.network.surfaceNightFloor": {
-            "default": 0.15,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Ground night floor. Brightness of the ground on the night side.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "gridkitStudio.network.terminatorWidth": {
-            "default": 0.12,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Terminator width. Softness of the edge between day and night.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 0.5
           },
           "gridkitStudio.network.selectedEnds": {
             "default": true,
@@ -1841,17 +1875,6 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.surfaceColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Ground. The globe, and the ground under a tilted view. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
           "gridkitStudio.network.gridColor": {
             "default": null,
             "scope": "resource",
@@ -1863,21 +1886,10 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.pathColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Border color. Coasts and country borders. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
           "gridkitStudio.network.camera.projection": {
             "default": "flat",
             "scope": "resource",
-            "markdownDescription": "Camera — Projection. How a network first shows. Globe needs geography.",
+            "markdownDescription": "Camera — Projection. How a network first shows. A network on Earth lies flat as a Web Mercator map. Globe needs one on Earth.",
             "type": "string",
             "enum": [
               "flat",

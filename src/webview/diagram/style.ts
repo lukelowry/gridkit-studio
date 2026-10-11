@@ -1,5 +1,5 @@
-import type { DiagramConfig } from '@latkit/diagram'
-import type { Positions } from '@latkit/gpu'
+import type { Diagram } from '@latkit/diagram'
+import type { Layout } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
 
 import type { ViewState } from '../../shared/messages.js'
@@ -14,8 +14,8 @@ import { diagramOptions } from './options.js'
 export function diagramConfig(
   source: Data,
   state: ViewState,
-  places: Readonly<Record<string, Positions>>,
-): Omit<DiagramConfig, 'canvas' | 'camera'> {
+  places: Readonly<Record<string, Layout.Positions>>,
+): Omit<Diagram.Config, 'canvas' | 'camera'> {
   const s = reader(state.settings)
   const drawn = diagramOf(source.schema)
   const editing = state.diagramEditing === true

@@ -2,7 +2,7 @@
  *  A member the catalog does not know, or a device class, is
  *  found and kept for its own column or table; invalid values become null. */
 
-import type { DataType, Problem } from '@latkit/model'
+import type { Failure, Schema } from '@latkit/model'
 import { failure } from '@latkit/model'
 
 import {
@@ -236,7 +236,7 @@ export interface Parsed {
   readonly codes: Uint16Array<ArrayBuffer>
   /** Each record's `mon` value, as its start and end in the file; 0, 0 where it has none. */
   readonly mons: Uint32Array<ArrayBuffer>
-  readonly problems: readonly Problem[]
+  readonly problems: readonly Failure.Problem[]
 }
 
 export const NONE = 0xffff
@@ -295,7 +295,7 @@ const OWN = new Keys(['diagram'])
 
 /** One table's identities and value spans, cut into chunks of at most CHUNK_ROWS rows. */
 class Rows {
-  readonly types: readonly DataType[]
+  readonly types: readonly Schema.FieldType[]
   readonly params: Keys
   readonly init: Keys
   readonly extension: Keys
@@ -371,7 +371,7 @@ class Rows {
     const spans = this.#spans.slice(0, this.#count * this.#width)
     const { bytes } = this
     const width = this.#width
-    const column = (type: DataType, slot: number, port = false): IndexedChunk => {
+    const column = (type: Schema.FieldType, slot: number, port = false): IndexedChunk => {
       const decode = deferred(() => {
         const target = builder(type)
         const supplied = new Uint8Array(Math.ceil(spans.length / width / 8))
@@ -428,7 +428,7 @@ export class Parser {
   #first = 0
   #tables: (Rows | null)[] = []
   #found: Found[] = []
-  #problems: Problem[] = []
+  #problems: Failure.Problem[] = []
 
   constructor(catalog: Catalog) {
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
@@ -608,7 +608,7 @@ export class Parser {
 function into(
   bytes: Uint8Array,
   target: Builder,
-  type: DataType,
+  type: Schema.FieldType,
   value: number,
   end: number,
 ): boolean {

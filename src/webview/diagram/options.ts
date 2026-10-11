@@ -1,15 +1,15 @@
-import type { DiagramConfig, DiagramInput } from '@latkit/diagram'
-import type { LayoutOptions } from '@latkit/gpu'
+import type { Diagram } from '@latkit/diagram'
+import type { Layout } from '@latkit/gpu'
 
 import type { SettingsReader } from '../../shared/preferences.js'
-import { color, type Palette } from '../theme.js'
+import { color, type Palette, viewStyle } from '../theme.js'
 
 type DiagramStyle = Omit<
-  DiagramConfig,
+  Diagram.Config,
   'source' | 'vertices' | 'edges' | 'groups' | 'canvas' | 'layout' | 'input'
-> & { readonly layout: LayoutOptions; readonly input: DiagramInput }
+> & { readonly layout: Layout; readonly input: Diagram.Input }
 
-export function layoutOf(s: SettingsReader): LayoutOptions {
+export function layoutOf(s: SettingsReader): Layout {
   return {
     algorithm: s.get('diagram.layout.algorithm'),
     direction: s.get('diagram.layout.direction'),
@@ -21,24 +21,21 @@ export function layoutOf(s: SettingsReader): LayoutOptions {
 
 /** Diagram settings as renderer options, shared by the live view and video export. */
 export function diagramOptions(s: SettingsReader, palette: Palette, font: string): DiagramStyle {
-  const motion = s.get('accessibility.motion')
-  const family = s.get('diagram.font') || font
   const [r, g, b] = palette.text2
   return {
-    motion: motion === 'system' ? 'auto' : motion,
-    ...(family && { font: { family } }),
-    fontSizePx: s.get('diagram.fontSizePx'),
-    background: color(s.get('diagram.background'), palette.background),
+    ...viewStyle(s, 'diagram', font, {
+      background: palette.background,
+      textColor: palette.text1,
+      selectedColor: palette.focus,
+    }),
     vertexColor: color(s.get('diagram.vertexColor'), palette.surface2),
     outlineColor: color(s.get('diagram.outlineColor'), palette.text2),
-    textColor: color(s.get('diagram.textColor'), palette.text1),
     edgeColor: color(s.get('diagram.edgeColor'), palette.text1),
     gridColor: color(s.get('diagram.gridColor'), [r, g, b, 0.15]),
     ...(s.get('diagram.groupColor') !== null && {
       groupColor: color(s.get('diagram.groupColor'))!,
     }),
     hoverColor: color(s.get('diagram.hoverColor'), palette.focus),
-    selectedColor: color(s.get('diagram.selectedColor'), palette.focus),
     grid: s.get('diagram.grid'),
     gridPitch: s.get('diagram.gridPitch'),
     gridMinSpacingPx: s.get('diagram.gridMinSpacingPx'),
@@ -55,15 +52,8 @@ export function diagramOptions(s: SettingsReader, palette: Palette, font: string
     routeClearance: s.get('diagram.routeClearance'),
     labels: s.get('diagram.labels.visible'),
     hoverWidthPx: s.get('diagram.hoverWidthPx'),
-    selectedWidthPx: s.get('diagram.selectedWidthPx'),
-    animationMs: s.get('diagram.animationMs'),
-    fitPaddingPx: s.get('diagram.fitPaddingPx'),
     revealPaddingPx: s.get('diagram.revealPaddingPx'),
-    pickRadiusPx: s.get('diagram.pickRadiusPx'),
-    msaa: s.get('diagram.msaa'),
     detail: s.get('diagram.detail'),
-    hover: s.get('diagram.hover'),
-    hoverBudgetMs: s.get('diagram.hoverBudgetMs'),
     layout: layoutOf(s),
     input: {
       mode: s.get('diagram.input.mode'),

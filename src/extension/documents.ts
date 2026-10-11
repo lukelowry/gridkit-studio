@@ -1,6 +1,6 @@
-import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
+import type { Value } from '../shared/messages.js'
 import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
 

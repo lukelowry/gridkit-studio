@@ -1,6 +1,6 @@
 /** The network's display channels, and which numeric field drives each. */
 
-import type { FieldSelection } from '@latkit/model'
+import type { Query } from '@latkit/model'
 
 import { coversRows } from './coverage.js'
 
@@ -39,7 +39,7 @@ const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
 /** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel
  *  requires: the network draws every row. */
 export function recordedWhole(
-  outputs: readonly FieldSelection[],
+  outputs: readonly Query.Selection[],
   count: number,
   field: FieldRef,
 ): boolean {

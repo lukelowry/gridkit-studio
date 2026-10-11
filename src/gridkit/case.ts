@@ -5,23 +5,11 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 
-import type {
-  ColumnPages,
-  Data,
-  DataType,
-  Index,
-  NumericColumn,
-  ReferenceColumn,
-  RowBatch,
-  Schema,
-  TextColumn,
-  TypeDefinition,
-  Value,
-  Version,
-} from '@latkit/model'
+import type { Data, Index, Schema } from '@latkit/model'
 import { createData, failure } from '@latkit/model'
 import { printParseErrorCode, visit } from 'jsonc-parser'
 
+import type { Value } from '../shared/messages.js'
 import {
   builder,
   type Chunk,
@@ -153,7 +141,7 @@ export class Case {
   }
   constructor(
     readonly name: string,
-    readonly version: Version,
+    readonly version: Index['version'],
     readonly catalog: Catalog,
     /** The catalog's types, with the classes and fields this case has that it does not know. */
     readonly schema: Schema,
@@ -195,7 +183,7 @@ export class Case {
     const i = ids.offset + row - table.starts[chunk]!
     return ids.kind === 'text'
       ? utf8(ids.bytes, ids.offsets[i]!, ids.offsets[i + 1]!)
-      : (ids as NumericColumn).values[i]!
+      : (ids as Chunk.Numeric).values[i]!
   }
 
   /** The row with this native identity, or -1. */
@@ -228,7 +216,7 @@ export class Case {
       for (const port of table.shape.ports) {
         if (port.definition.type.to !== SIGNAL || port.definition.direction !== 'out') continue
         for (const chunk of table.fields.get(port.name)!.chunks) {
-          const reference = chunk as ReferenceColumn
+          const reference = chunk as Chunk.Reference
           for (let at = 0; at < reference.length; at++) {
             if (!isValid(reference, at)) continue
             const row = reference.values[reference.offset + at]!
@@ -293,7 +281,7 @@ function joined(
   file: Uint8Array,
   layout: Layout,
   catalog: Catalog,
-  version: Version,
+  version: Index['version'],
   fallback: string,
 ): Case {
   const chunks = shapes.map((shape) => ({
@@ -324,7 +312,7 @@ function joined(
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
     const starts = startsOf(ids)
-    const column = (type: DataType, list: readonly Chunk[]): Column => ({
+    const column = (type: Schema.FieldType, list: readonly Chunk[]): Column => ({
       type,
       chunks: list,
       starts,
@@ -367,7 +355,7 @@ function joined(
   const fields = foundColumns(file, found, records, shapes, tables)
   const header = caseTable(file, layout, catalog.shapes.get(CASE)!, version)
   tables.set(CASE, header)
-  const types: Record<string, TypeDefinition> = Object.create(null)
+  const types: Record<string, Schema.Type> = Object.create(null)
   for (const [type, table] of tables) types[type] = table.shape.definition
   const arrays: Partial<Record<ArrayName, RecordArray>> = {}
   for (const array of ARRAYS) {
@@ -434,7 +422,7 @@ function foundColumns(
         }),
       )
       const scalar = kinds.size === 1 && !kinds.has('object')
-      const type: DataType = !scalar
+      const type: Schema.FieldType = !scalar
         ? 'text'
         : kinds.has('number')
           ? 'float64'
@@ -485,7 +473,12 @@ function foundColumns(
 }
 
 /** The Case table's one row: the header's and system parameters' members. */
-function caseTable(file: Uint8Array, layout: Layout, shape: Shape, version: Version): Table {
+function caseTable(
+  file: Uint8Array,
+  layout: Layout,
+  shape: Shape,
+  version: Index['version'],
+): Table {
   const values = new Map<string, Value>()
   const members = new Members()
   for (const member of layout.members) {
@@ -510,7 +503,7 @@ function caseTable(file: Uint8Array, layout: Layout, shape: Shape, version: Vers
     }
   }
   const starts = Uint32Array.of(0, 1)
-  const column = (type: DataType, value: Value): Column => ({
+  const column = (type: Schema.FieldType, value: Value): Column => ({
     type,
     chunks: [chunkOf(type, [value])],
     starts,
@@ -550,8 +543,8 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
 function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
   const ids = native.length === 0 ? undefined : numberIds(target.ids)
   const decode = deferred(() =>
-    native.map((source): ReferenceColumn => {
-      const port = source.read() as NumericColumn
+    native.map((source): Chunk.Reference => {
+      const port = source.read() as Chunk.Numeric
       const values = new Uint32Array(port.length)
       let validity: Uint8Array | undefined
       for (let at = 0; at < port.length; at++) {
@@ -589,7 +582,7 @@ function references(native: readonly IndexedChunk[], starts: Uint32Array, target
 /** Every table's static fields as one Data, sharing the parsed chunks; an empty table keeps its
  *  columns. Row IDs are built on first read, so a view of fields alone never pays for them. */
 function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
-  const batches: RowBatch[] = []
+  const batches: Data.RowBatch[] = []
   for (const table of tables.values())
     batches.push({
       kind: 'rows',
@@ -603,8 +596,8 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
     tables: Object.fromEntries(
       Object.entries(base.tables).map(([type, empty]) => {
         const table = tables.get(type)!
-        const fields: Record<string, ColumnPages> = { ...empty.fields }
-        const pages = (name: string, column: Column): ColumnPages =>
+        const fields: Record<string, Data.Pages> = { ...empty.fields }
+        const pages = (name: string, column: Column): Data.Pages =>
           createData(
             schema,
             column.chunks.length === 0
@@ -616,7 +609,7 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
                     columns: { [name]: builder(column.type, column.index).finish() },
                   },
                 ]
-              : column.chunks.map((chunk, i): RowBatch => ({
+              : column.chunks.map((chunk, i): Data.RowBatch => ({
                   kind: 'rows',
                   index: table.index,
                   rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
@@ -636,7 +629,7 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
           const prefix = UTF8.encode(`${type}/`)
           return createData(
             schema,
-            table.ids.chunks.map((chunk, i): RowBatch => ({
+            table.ids.chunks.map((chunk, i): Data.RowBatch => ({
               kind: 'rows',
               index: table.index,
               rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
@@ -661,7 +654,7 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
 }
 
 /** `Type/native` IDs written straight into UTF-8, with no string per row. No identity is null. */
-function idColumn(prefix: Uint8Array, native: Chunk): TextColumn {
+function idColumn(prefix: Uint8Array, native: Chunk): Chunk.Text {
   const count = native.length
   const offsets = new Int32Array(count + 1)
   let bytes: Uint8Array
@@ -679,7 +672,7 @@ function idColumn(prefix: Uint8Array, native: Chunk): TextColumn {
       offsets[i + 1] = at += prefix.length + end - start
     }
   } else {
-    const { values, offset } = native as NumericColumn
+    const { values, offset } = native as Chunk.Numeric
     // A uint32 has at most ten digits.
     bytes = new Uint8Array(count * (prefix.length + 10))
     for (let i = 0; i < count; i++) {
@@ -728,7 +721,7 @@ class TextIds {
     const slots = new Uint32Array(size)
     const mask = size - 1
     column.chunks.forEach((value, index) => {
-      const chunk = value as TextColumn
+      const chunk = value as Chunk.Text
       const first = column.starts[index]!
       for (let at = 0; at < chunk.length; at++) {
         if (!isValid(chunk, at)) continue
@@ -766,7 +759,7 @@ class TextIds {
 
   #equals(row: number, bytes: Uint8Array, start: number, end: number): boolean {
     const index = chunkAt(this.#column.starts, row)
-    const chunk = this.#column.chunks[index] as TextColumn
+    const chunk = this.#column.chunks[index] as Chunk.Text
     const at = chunk.offset + row - this.#column.starts[index]!
     const from = chunk.offsets[at]!
     if (chunk.offsets[at + 1]! - from !== end - start) return false
@@ -791,7 +784,7 @@ class NumberIds {
     let min = 0xffffffff
     let max = 0
     column.chunks.forEach((value, index) => {
-      const chunk = value as NumericColumn
+      const chunk = value as Chunk.Numeric
       for (let at = 0; at < chunk.length; at++) {
         if (!isValid(chunk, at)) continue
         const key = chunk.values[chunk.offset + at]!

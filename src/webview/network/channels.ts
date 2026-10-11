@@ -1,6 +1,6 @@
 /** The network channels the bindings give each type. */
 
-import type { Channel, ColorChannel, Colormap, ScaleDomain } from '@latkit/gpu'
+import type { Channel, Colormap, Scale } from '@latkit/gpu'
 import type { Data, FieldInput } from '@latkit/model'
 
 import { type Bindings, CHANNELS, channelsFor, type FieldRef } from '../../shared/bindings.js'
@@ -8,7 +8,7 @@ import { type Bindings, CHANNELS, channelsFor, type FieldRef } from '../../share
 /** A sampled field's run and shared normalization range, independent of the displayed frame. */
 export interface Sampled {
   readonly source: Data
-  readonly domain: ScaleDomain
+  readonly domain: Scale.Domain
 }
 
 /** The renderer channels `bindings` give `type`'s vertices or edges. `sampledOf` gives a field's
@@ -19,8 +19,8 @@ export function channelsOf(
   placement: 'vertex' | 'edge',
   colormap: Colormap,
   sampledOf: (field: FieldRef) => Sampled | null | undefined,
-): Record<string, Channel | ColorChannel> {
-  const channels: Record<string, Channel | ColorChannel> = {}
+): Record<string, Channel | Channel.Color> {
+  const channels: Record<string, Channel | Channel.Color> = {}
   for (const channel of channelsFor(placement)) {
     const binding = bindings[channel]
     if (binding === undefined || binding.type !== type) continue

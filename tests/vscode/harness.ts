@@ -868,10 +868,15 @@ export class TestHost {
   }
 
   /** Results of `frames` frames over `seconds`, every bus's voltage a little out of step with the
-   *  last, written beside the case as `name` and shown once they are read. */
-  async waveform(name: string, frames: number, seconds: number): Promise<Results> {
+   *  last, written beside the case as `name` and shown once they are read; with `digits`, values
+   *  are written to that many decimals, which keeps a long run's file small. */
+  async waveform(name: string, frames: number, seconds: number, digits?: number): Promise<Results> {
     const csv = vscode.Uri.joinPath(this.uri, '..', name)
     const { buses } = this.source
+    const voltage = (i: number, k: number) => {
+      const value = 1 + 0.1 * Math.sin(i / 10 + k)
+      return digits === undefined ? value : value.toFixed(digits)
+    }
     await vscode.workspace.fs.writeFile(
       csv,
       new TextEncoder().encode(
@@ -879,9 +884,7 @@ export class TestHost {
           '\n' +
           Array.from(
             { length: frames },
-            (_, i) =>
-              [(i * seconds) / frames, ...buses.map((_, k) => 1 + 0.1 * Math.sin(i / 10 + k))] +
-              '\n',
+            (_, i) => [(i * seconds) / frames, ...buses.map((_, k) => voltage(i, k))] + '\n',
           ).join(''),
       ),
     )

@@ -4,14 +4,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout } from 'node:timers/promises'
 
-import {
-  blockBuffers,
-  read,
-  rowCount,
-  type SampleBatch,
-  selectBatches,
-  staticFields,
-} from '@latkit/model'
+import { blockBuffers, type Data, read, rowCount, selectBatches, staticFields } from '@latkit/model'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
@@ -76,9 +69,9 @@ function asked(
 }
 
 /** Each batch's frames, as `[first frame, count]`, and the values of the first row. */
-const framesOf = (batches: readonly SampleBatch[]) =>
+const framesOf = (batches: readonly Data.SampleBatch[]) =>
   batches.map((batch) => [batch.firstFrame, batch.coordinates.length])
-function valuesOf(batches: readonly SampleBatch[]) {
+function valuesOf(batches: readonly Data.SampleBatch[]) {
   const values: number[] = []
   for (const batch of batches) {
     const column = batch.columns.Vm!

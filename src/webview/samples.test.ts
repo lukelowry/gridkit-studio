@@ -1,9 +1,12 @@
 import {
   blockByteLength,
   createData,
+  createReader,
+  type Data,
   type Domain,
+  type Query,
   read,
-  type SampleBatch,
+  sampleRuns,
   textColumn,
 } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
@@ -74,7 +77,7 @@ function worker(file: { frames: number }) {
         (x, y) =>
           Math.abs(time(x * CHUNK) - near.at) - Math.abs(time(y * CHUNK) - near.at) || x - y,
       )
-    const reply: SampleBatch[] = []
+    const reply: Data.SampleBatch[] = []
     let size = 0
     for (const k of chunks) {
       const from = k * CHUNK + (input.held[k] ?? 0)
@@ -86,7 +89,7 @@ function worker(file: { frames: number }) {
         { length: 2 * count },
         (_, i) => from + (i >> 1) + (i % 2) / 10,
       )
-      const batch: SampleBatch = {
+      const batch: Data.SampleBatch = {
         kind: 'samples',
         index,
         rows: { kind: 'range', offset: 0, count: 2 },
@@ -138,6 +141,29 @@ async function voltages(samples: Samples, window: Domain) {
       values.push(column.values[column.offset + t * column.frameStride]!)
   }
   return values
+}
+
+/** The frames of `window` that `data` holds of Bus 1's voltage, read as the Monitor reads a
+ *  trace. */
+async function frames(data: Data, window: Query.Window) {
+  const reader = createReader()
+  const scope = reader.open()
+  const values: number[] = []
+  try {
+    for await (const block of scope.fields({
+      source: data,
+      from: 'Bus',
+      rows: { kind: 'ids', ids: ['Bus/1'] },
+      fields: { y: 'Vm' },
+      window,
+    }))
+      for (let t = 0; t < block.samples!.coordinates.length; t++)
+        values.push(block.samples!.coordinates[t]! / STEP)
+  } finally {
+    scope.close()
+    reader.destroy()
+  }
+  return values.map(Math.round)
 }
 
 describe('the samples a view holds', () => {
@@ -200,6 +226,37 @@ describe('the samples a view holds', () => {
     await vi.waitFor(() => expect(samples.covers('Bus', 'Vm', [0.37, 0.37])).toBe(true))
     expect(samples.stats().bytes).toBeLessThanOrEqual(budget)
     expect(samples.covers('Bus', 'Vm', [0.16, 0.16])).toBe(false)
+  })
+
+  it('holds runs of frames with holes between, which a view reads one run at a time', async () => {
+    const file = { frames: 40 }
+    const { request } = worker(file)
+    const { samples } = cache(request)
+    const shown = results(file.frames)
+    // The end, then the start, as a Monitor shows them before it shows the whole run: nothing
+    // between them is asked for yet.
+    samples.want(shown, [need], [0.38, 0.38])
+    await vi.waitFor(() => expect(samples.covers('Bus', 'Vm', [0.38, 0.38])).toBe(true))
+    samples.want(shown, [need], [0.01, 0.01])
+    await vi.waitFor(() => expect(samples.covers('Bus', 'Vm', [0.01, 0.01])).toBe(true))
+    const data = samples.data(rows)
+    const whole = { kind: 'frames', offset: 0, count: file.frames } as const
+    const runs = sampleRuns(data.tables.Bus!.fields.Vm!, {
+      kind: 'range',
+      between: shown.domain,
+    })
+    // The hole parts the frames held over the run into the run at the start and the one at the end.
+    expect(runs).toEqual([
+      [0, CHUNK],
+      [file.frames - CHUNK, file.frames],
+    ])
+    // The renderers' reader refuses frames across the hole, as the Monitor met it…
+    await expect(frames(data, whole)).rejects.toThrow(/gap/)
+    // …and reads every frame held when asked a run at a time.
+    const held: number[] = []
+    for (const [first, end] of runs)
+      held.push(...(await frames(data, { kind: 'frames', offset: first, count: end - first })))
+    expect(held).toEqual([0, 1, 2, 3, 36, 37, 38, 39])
   })
 
   it('loads around the playhead evenly for the fields it draws together', async () => {
@@ -265,7 +322,7 @@ describe('the samples a view holds', () => {
       /could not be read/,
     )
     // A wait let go of before the frames come.
-    const slow = cache(vi.fn(() => new Promise<SampleBatch[]>(() => {})))
+    const slow = cache(vi.fn(() => new Promise<Data.SampleBatch[]>(() => {})))
     slow.samples.want(results(8), [need], [0, 0.07])
     const controller = new AbortController()
     const waiting = slow.samples.until([0, 0.07], controller.signal)

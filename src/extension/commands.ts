@@ -1,4 +1,4 @@
-import type { RowsBlock, RowsQuery, Value } from '@latkit/model'
+import type { Block, Query } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import {
@@ -12,6 +12,7 @@ import {
 import { display, leaf, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
+import type { Value } from '../shared/messages.js'
 import type { Element, Plot, Results, Summary } from '../shared/messages.js'
 import { definitions } from '../shared/preferences.js'
 import {
@@ -128,13 +129,13 @@ export function registerCommands(studio: Sessions) {
     if (element) studio.select(session.uri, element)
     await vscode.commands.executeCommand('gridkitStudio.' + view + '.focus')
   }
-  const queryRows = async (context: Context, query: RowsQuery, signal?: AbortSignal) =>
+  const queryRows = async (context: Context, query: Query.Rows, signal?: AbortSignal) =>
     rowsOf(
       (await studio.client.cases.call(
         'query',
         { uri: context.session.uri, version: context.summary.version, query },
         signal,
-      )) as RowsBlock[],
+      )) as Block.Rows[],
     )
   /** The stored value of `field` on the `type` element `id`. */
   const valueOf = async (context: Context, type: string, field: string, id: string) => {

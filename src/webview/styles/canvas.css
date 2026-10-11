@@ -28,6 +28,16 @@
   pointer-events: none;
 }
 
+/* Whom the Network's map credits, as its tiles' license asks, in its bottom right. */
+.canvas-host__credit {
+  position: absolute;
+  inset-inline-end: var(--spacing-sm);
+  inset-block-end: var(--spacing-2xs);
+  color: var(--color-text-2);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
 /* The Network's projections and rotation, over its top right. */
 .toolbar {
   position: absolute;

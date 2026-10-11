@@ -1,5 +1,6 @@
-import { failure, type Value } from '@latkit/model'
+import { failure } from '@latkit/model'
 
+import type { Value } from '../shared/messages.js'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf, elementType } from '../shared/schema.js'
 import type { Case } from './case.js'

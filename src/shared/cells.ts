@@ -2,11 +2,11 @@
 
 import {
   bitAt,
+  type Block,
   type Column,
   type Index,
   numberAt,
-  type RowsBlock,
-  type RowsQuery,
+  type Query,
   textAt,
 } from '@latkit/model'
 
@@ -51,7 +51,7 @@ function cell(column: Column, row: number, references?: ReadonlyMap<string, stri
 }
 
 export function rowsOf(
-  blocks: readonly RowsBlock[],
+  blocks: readonly Block.Rows[],
   references?: ReadonlyMap<string, string>,
 ): Row[] {
   return blocks.flatMap((block) => {
@@ -94,8 +94,8 @@ export function display(value: unknown, { native: short = false } = {}): string 
 /** The ids of the rows the reference columns of `blocks` point at, for `rowsOf`; physical row
  *  numbers are never shown. */
 export async function referenceNames(
-  blocks: readonly RowsBlock[],
-  query: (query: RowsQuery) => Promise<RowsBlock[]>,
+  blocks: readonly Block.Rows[],
+  query: (query: Query.Rows) => Promise<Block.Rows[]>,
 ): Promise<Map<string, string>> {
   const groups = new Map<string, { index: Index; rows: Set<number> }>()
   const visit = (column: Column, row: number) => {

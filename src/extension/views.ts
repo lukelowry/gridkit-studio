@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { basename } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import type { RowsBlock, RowsQuery } from '@latkit/model'
+import type { Block, Query } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import type {
@@ -138,8 +138,9 @@ function html(
   const nonce = randomBytes(18).toString('base64')
   const asset = (path: string) =>
     webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path))
+  // The map's worker starts from a blob, and its tiles come from wherever the tiles URL names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource};">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource} https:;">
 <link rel="stylesheet" href="${asset('dist/webview/' + entry + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
@@ -327,13 +328,13 @@ class View {
       return summary
     }
     /** Rows of the case, or, `at` a time, of the shown results. */
-    const query = async (query: RowsQuery, signal: AbortSignal) => {
+    const query = async (query: Query.Rows, signal: AbortSignal) => {
       if (query?.kind !== 'rows') throw new Error('Invalid row query')
       const results = query.at === undefined ? undefined : studio.all.get(uri)?.results?.id
       const blocks = results
         ? await client.results.call('query', { results, query }, signal)
         : await client.cases.call('query', { uri, version: (await read()).version, query }, signal)
-      return blocks.filter((block): block is RowsBlock => block.kind === 'rows')
+      return blocks.filter((block): block is Block.Rows => block.kind === 'rows')
     }
     return {
       samples: (input, signal) => client.results.call('samples', input, signal),

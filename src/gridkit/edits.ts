@@ -1,9 +1,10 @@
 import { setImmediate } from 'node:timers/promises'
 
-import { failure, type Value } from '@latkit/model'
+import { failure } from '@latkit/model'
 import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-parser'
 
 import { message } from '../shared/format.js'
+import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { FieldPlan } from './definition.js'

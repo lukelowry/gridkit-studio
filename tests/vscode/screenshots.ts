@@ -128,7 +128,6 @@ export async function run() {
     'diagram.hover': 'off',
     'network.colormap': 'batlow',
     'network.vertexRadiusPx': 2,
-    'network.zScale': 0.4,
   }
   for (const [key, value] of Object.entries(SHOWN)) await set(key, value)
   try {

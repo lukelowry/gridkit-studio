@@ -20,11 +20,13 @@ import {
   VM,
 } from './harness.js'
 
-/** Markers large enough that their center pixels are solid, with nothing drawn over them. */
+/** Markers large enough that their center pixels are solid, at one size whatever the zoom, with
+ *  nothing drawn over them. */
 const SOLID: Record<string, unknown> = {
   'network.vertexRadiusPx': 8,
+  'network.vertexMinRadiusPx': 8,
   'network.vertices.labels': false,
-  'network.borders': false,
+  'network.map.source': 'none',
   'network.hover': 'off',
   'network.selectedColor': '#00000000',
 }

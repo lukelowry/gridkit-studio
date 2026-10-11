@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { SampleBatch } from '@latkit/model'
+import type { Data } from '@latkit/model'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { Results, ResultsApi, SamplesInput } from '../shared/messages.js'
@@ -46,7 +46,7 @@ async function waveform(path: string, frames: number, value = (i: number) => Str
  *  lacks until nothing more comes, as a view does. */
 async function everything(rig: Rig, results: Results, field: SamplesInput['field']) {
   const held: Record<number, number> = {}
-  const sent: SampleBatch[] = []
+  const sent: Data.SampleBatch[] = []
   for (;;) {
     const batches = await rig.call('samples', {
       results: results.id,

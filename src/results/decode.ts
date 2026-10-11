@@ -3,13 +3,7 @@
 import { addAbortSignal, type Readable } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
 
-import {
-  failure,
-  type FieldSelection,
-  type Index,
-  type RowAxis,
-  type SampleBatch,
-} from '@latkit/model'
+import { type Data, failure, type Index, type Query } from '@latkit/model'
 
 import type { Case, Table } from '../gridkit/index.js'
 import { type ArrowField, messages } from './arrow.js'
@@ -25,7 +19,7 @@ export interface Field {
   readonly index: Index
   /** Ascending and distinct. */
   readonly rows: Uint32Array
-  readonly axis: RowAxis
+  readonly axis: Index.Rows
 }
 
 /** Decoded frames, in arrays of their own that nothing writes again. */
@@ -72,7 +66,7 @@ export function chunkFrames(fields: readonly Field[]): number {
 }
 
 /** One sample batch per output field, all over the same frames. */
-export function samplesOf(fields: readonly Field[], frames: Frames): SampleBatch[] {
+export function samplesOf(fields: readonly Field[], frames: Frames): Data.SampleBatch[] {
   return fields.map((field, f) => {
     const values = frames.values[f]!
     return {
@@ -404,7 +398,7 @@ function outputOf(index: Index, name: string, rows: Uint32Array): Field {
 
 /** What `fields` hold, as a selection of the rows of the case they were read against: a range when
  *  the rows run unbroken, as a whole type's do, else their indices. */
-export function selectionsOf(fields: readonly Field[]): FieldSelection[] {
+export function selectionsOf(fields: readonly Field[]): Query.Selection[] {
   return fields.map(({ index, name, axis }) => ({
     from: index.type,
     select: [name],

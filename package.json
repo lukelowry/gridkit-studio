@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -1422,7 +1422,7 @@
             "default": "",
             "scope": "machine-overridable",
             "order": 0,
-            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds GridKit's programs on `PATH`, as a dev container or remote host with GridKit has it."
+            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds GridKit on `PATH`."
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",

@@ -146,10 +146,32 @@ export async function again(
   throw new Error('Timed out: ' + (typeof label === 'string' ? label : await label()))
 }
 
-/** Wait for `selector` to show in `frame`. */
+/** Wait for `selector` to show in `frame`. One that never shows says what the page held. */
 export async function visible(frame: Frame, selector: string): Promise<void> {
-  await frame.locator(selector).first().waitFor({ state: 'visible', timeout: TIMEOUT })
+  try {
+    await frame.locator(selector).first().waitFor({ state: 'visible', timeout: TIMEOUT })
+  } catch (error) {
+    throw new Error(`${selector} never showed. The page held ${await held(frame)}`, {
+      cause: error,
+    })
+  }
 }
+
+/** A page's text, and each canvas's size, whether it drew, and whether its plot was paused. */
+const held = (frame: Frame) =>
+  frame
+    .evaluate<string>(
+      `JSON.stringify({
+        text: document.body.innerText.slice(0, 200),
+        hidden: document.hidden,
+        canvases: Array.from(document.querySelectorAll('canvas'), (canvas) => ({
+          rendered: canvas.dataset.rendered === 'true',
+          size: [canvas.clientWidth, canvas.clientHeight],
+          paused: canvas.gridkitPlot?.().paused,
+        })),
+      })`,
+    )
+    .catch((error: unknown) => `nothing readable (${String(error)})`)
 
 /** A canvas view's counters, as `gridkitStats()` reports them. */
 export const stats = <T extends { frames: number } = { frames: number }>(frame: Frame) =>

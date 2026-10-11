@@ -593,12 +593,14 @@ export class Sessions {
       session.plots = plotsFor(results, session.plots)
       this.persist(session)
     }
-    // The span starts with the first frames.
+    // The span starts with the first frames, and a live head is already where they reach: a run
+    // that finishes fast sends no frames after these.
     if (shown?.id !== results.id || (shown.frames === 0 && results.frames > 0)) {
       const at = transport.currentT()
       session.window = undefined
       transport.setSpan(results.domain, { live })
       if (study) transport.seek(at)
+      else if (live && transport.noteHead(results.domain[1])) this.clock.fire(session.uri)
       return
     }
     transport.extend(results.domain[1])

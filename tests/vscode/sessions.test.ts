@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 
 import { setup, suite, test } from 'mocha'
 import * as vscode from 'vscode'
@@ -106,5 +107,45 @@ suite('Sessions', () => {
       'a file that is gone is forgotten',
     )
     assert.equal(forgetting.results, undefined)
+  })
+
+  test('reads a simulation again from where its solver file writes now', async () => {
+    const session = studio.current()
+    const { buses } = JSON.parse(document.getText()) as { buses: { name: string }[] }
+    const samples = new TextEncoder().encode(`time,Bus_${buses[0]!.name}_Vm\n0,1\n0.5,0.9\n1,1\n`)
+    const name = randomUUID()
+    const solver = vscode.Uri.joinPath(folder(), `${name}.solver.json`)
+    const solverText = JSON.stringify({
+      system_model_file: basename(document.uri.path),
+      output_file: `output/${name}.csv`,
+      dt_monitor: 0.5,
+      tmax: 1,
+      events: [],
+    })
+    await vscode.workspace.fs.writeFile(solver, new TextEncoder().encode(solverText))
+    // What a run of the solver file wrote, read from where the solver file wrote it then.
+    const before = vscode.Uri.joinPath(folder(), `${name}.csv`)
+    await vscode.workspace.fs.writeFile(before, samples)
+    const info = await studio.withCase(session.uri, (source) =>
+      studio.client.results.call('open', {
+        ...source,
+        path: before.fsPath,
+        solver: solver.fsPath,
+        cacheBytes: 16 << 20,
+      }),
+    )
+    studio.show(session, info)
+    await studio.persist(session)
+    // The solver file writes elsewhere now, and that file is the one read again.
+    await vscode.workspace.fs.delete(before)
+    const now = vscode.Uri.joinPath(folder(), 'output', `${name}.csv`)
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder(), 'output'))
+    await vscode.workspace.fs.writeFile(now, samples)
+    studio.all.get(session.uri)?.transport.dispose()
+    studio.all.delete(session.uri)
+    const restored = await studio.open(document)
+    await until(() => restored.results?.path === now.fsPath, 'the file the solver file writes')
+    assert.equal(restored.results!.solver, solver.fsPath)
+    await vscode.workspace.fs.delete(solver)
   })
 })

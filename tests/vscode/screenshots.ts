@@ -1,7 +1,6 @@
-/** The README's pictures, from real GridKit runs, written to docs/media. ACTIVSg25k and ACTIVSg70k
- *  are not among GridKit's release cases: GRIDKIT_CASES names a folder that holds them. */
+/** The README's pictures, from real GridKit runs of the cases in cases/, written to docs/media. */
 
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
@@ -10,14 +9,13 @@ import * as vscode from 'vscode'
 import type { Channel, FieldRef } from '../../src/shared/bindings.js'
 import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM } from './harness.js'
 
-const MEDIA = join(process.env.GRIDKIT_TEST_ROOT!, 'docs/media')
+const ROOT = process.env.GRIDKIT_TEST_ROOT!
+const MEDIA = join(ROOT, 'docs/media')
 const WINDOW = { width: 1280, height: 800 }
 const KV = { type: 'Bus', field: 'params.kv' } as const
 /** How ACTIVSg25k closes in on its fault: mouse wheel notches toward a point this many pixels
  *  above the faulted bus, which so settles low in the frame. */
 const FRAMING = { notches: 4, above: 180 }
-/** The most a VS Code extension may read as a document. */
-const DOCUMENT_BYTES = 50 << 20
 
 /** Run the case at `uri` with the solver file `solver` beside it, from that file's menu, and wait
  *  for the run to finish. */
@@ -82,39 +80,10 @@ async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> 
   })
 }
 
-/** The case `name` under GRIDKIT_CASES. One past what an extension may read as a document is
- *  copied without its whitespace, every string and number as written. */
-async function outside(name: string): Promise<string> {
-  const root = process.env.GRIDKIT_CASES
-  if (!root) throw new Error('Set GRIDKIT_CASES to a folder with ACTIVSg25k and ACTIVSg70k.')
-  const found = (await readdir(root, { recursive: true })).find((path) =>
-    path.endsWith(name + '.case.json'),
-  )
-  if (!found) throw new Error(`${name}.case.json is not under ${root}.`)
-  const text = await readFile(join(root, found), 'utf8')
-  if (Buffer.byteLength(text) < DOCUMENT_BYTES) return join(root, found)
-  let compact = ''
-  let inString = false
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!
-    if (inString) {
-      compact += c
-      if (c === '\\') compact += text[++i]
-      else if (c === '"') inString = false
-    } else if (c === '"') {
-      compact += c
-      inString = true
-    } else if (c !== ' ' && c !== '\n' && c !== '\r' && c !== '\t') compact += c
-  }
-  const folder = join(process.env.GRIDKIT_TEST_OUTPUT!, 'media')
-  await mkdir(folder, { recursive: true })
-  await writeFile(join(folder, name + '.case.json'), compact)
-  return join(folder, name + '.case.json')
-}
-
-/** A bus to fault: of the highest voltage, the one with the most branches. */
+/** A bus of the case at `path`, from the repository root, to fault: of the highest voltage, the one
+ *  with the most branches. */
 async function hub(path: string): Promise<string> {
-  const source = JSON.parse(await readFile(path, 'utf8')) as {
+  const source = JSON.parse(await readFile(join(ROOT, path), 'utf8')) as {
     buses: { number: number; params: { kv: number } }[]
     devices: { class: string; ports: Record<string, number> }[]
   }
@@ -170,7 +139,7 @@ export async function run() {
     // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, low over the
     // map, its height.
     await set('network.vertices.labels', false)
-    const large = await show(bench, await outside('ACTIVSg70k'), KV, [
+    const large = await show(bench, 'cases/ACTIVSg70k.case.json', KV, [
       'vertexColor',
       'vertexHeight',
     ])
@@ -187,13 +156,16 @@ export async function run() {
     await bench.reset()
     await set('network.colormap', 'spectral')
     await set('network.zScale', 1.5)
-    const path = await outside('ACTIVSg25k')
+    const path = 'cases/ACTIVSg25k.case.json'
     const fault = await hub(path)
     const wide = await show(bench, path, VM, ['vertexColor', 'vertexHeight'])
     await bench.record('Bus', ['Vm'], wide.uri)
     await simulate(bench, wide.uri, {
       tmax: 1,
       dt_monitor: 0.01,
+      // A fault this near to bolted takes GridKit's solver more steps between samples than it
+      // allows by default.
+      max_steps: 5000,
       events: await faultAt(bench, wide.uri, fault, [0.1, 0.2], 0.001),
     })
     await vscode.commands.executeCommand('workbench.action.closePanel')
@@ -221,10 +193,24 @@ export async function run() {
     const diagram = await bench.open('diagram')
     await vscode.commands.executeCommand('workbench.action.closePanel')
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
-    await idle(diagram)
-    bench.studio.select(bench.key, { id: 'Genrou/30_1_genrou' })
-    await vscode.commands.executeCommand('gridkitStudio.neighborhood', bench.uri)
-    await idle(diagram)
+    // The generator's own menu frames it, as the user does: the command alone frames the Network.
+    const generator = 'Genrou/30_1_genrou'
+    await bench.menu(diagram.locator('canvas'), 'Zoom to Neighborhood', {
+      on: generator,
+      at: async () => {
+        await idle(diagram)
+        const [x, y] = await until(
+          () =>
+            diagram.evaluate<[number, number] | null>(
+              `gridkitLocate(${JSON.stringify(generator)}, null)`,
+            ),
+          'the generator drawn',
+        )
+        return { x, y }
+      },
+    })
+    // Nothing selected, and no focus ring from the right-click.
+    await diagram.locator('canvas').blur()
     bench.studio.select(bench.key, undefined)
     await shoot(bench, 'diagram', diagram)
 

@@ -1,5 +1,5 @@
 /** Runs against real GridKit from a solver file's menu: what the case records, live samples,
- *  playback, a study, a cancelled run, and a native failure. */
+ *  playback, results shown again and run again, a study, a cancelled run, and a native failure. */
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -181,6 +181,33 @@ suite('Run', function () {
     await until(() => bench.session.transport.state.status === 'playing', 'replay starts')
     await bench.playback('Pause').click()
     await until(() => bench.session.transport.state.status === 'paused', 'pause from the bar')
+  })
+
+  test('shows what its solver file wrote last, and runs that solver file again', async () => {
+    const written = bench.session.results!
+    assert.equal(written.solver, bench.solver.fsPath)
+    await bench.title('monitor', 'Clear Results')
+    await until(() => !bench.session.results, 'the results go')
+    // The solver file's menu reads the file its runs write, as written.
+    bench.explorer(bench.solver, 'Show Results')
+    await until(
+      () => bench.session.results?.frames === written.frames,
+      'the solver file’s results show again',
+    )
+    assert.equal(bench.session.results!.path, written.path)
+    assert.equal(bench.session.results!.solver, bench.solver.fsPath)
+    monitor = await bench.view('monitor')
+    await visible(monitor, 'canvas[data-rendered=true]')
+    // The Monitor's title bar runs the solver file of the results it shows.
+    const previous = bench.session.run?.id
+    await bench.title('monitor', 'Run Again')
+    await until(
+      () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
+      'the solver file runs again',
+    )
+    assert.equal(bench.session.run!.command, 'DynamicSimulation IEEE39.solver.json')
+    assert.equal(bench.session.results!.solver, bench.solver.fsPath)
+    assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Vm' }])
   })
 
   test('keeps existing plots until the next run, which plots what it recorded', async () => {

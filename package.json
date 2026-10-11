@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -727,7 +727,7 @@
         },
         {
           "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /.solver.json$/i",
+          "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@2"
         },
         {
@@ -759,7 +759,7 @@
         },
         {
           "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /.solver.json$/i",
+          "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@2"
         },
         {
@@ -791,7 +791,7 @@
         },
         {
           "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /.solver.json$/i",
+          "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@2"
         }
       ],

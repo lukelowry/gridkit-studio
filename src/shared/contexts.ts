@@ -12,7 +12,7 @@ import {
 } from './schema.js'
 
 /** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
-export type Scope = 'element' | 'value' | 'column' | 'plot'
+type Scope = 'element' | 'value' | 'column' | 'plot'
 
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {

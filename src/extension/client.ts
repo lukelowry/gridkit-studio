@@ -1,13 +1,17 @@
-import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import type { DataBatch } from '@latkit/model'
-import { type CancellationToken, EventEmitter, type ExtensionContext, workspace } from 'vscode'
+import type { CancellationToken } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
-import { scratchFolder, sweep } from '../results/scratch.js'
-import type { FromWorker, Method, Requests, RuntimeProcess } from '../shared/messages.js'
+import type {
+  CaseApi,
+  FromWorker,
+  ResultsApi,
+  RuntimeProcess,
+  WorkerEvent,
+} from '../shared/messages.js'
+import { type Api, Caller } from '../shared/rpc.js'
 
 /** Run `run` with a signal that aborts when `token` is cancelled. */
 export async function cancellable<T>(
@@ -24,161 +28,171 @@ export async function cancellable<T>(
   }
 }
 
-export class Client {
-  #worker?: Worker
-  /** The folder the worker keeps its runs in, deleted with it. */
-  #scratch?: string
-  #next = 0
-  #disposed = false
-  /** The GridKit process the worker runs for each case, terminated here if the worker dies. */
-  #owned = new Map<string, RuntimeProcess>()
-  /** Pending teardown of a failed worker; calls wait for it before starting another. */
-  #cleanup?: Promise<void>
-  #pending = new Map<
-    number,
-    {
-      resolve(value: unknown): void
-      reject(error: Error): void
-      consume?(batches: readonly DataBatch[]): Promise<void>
-      cleanup(): void
-    }
-  >()
-  readonly event = new EventEmitter<Extract<FromWorker, { kind: 'run' | 'log' }>>()
-  readonly failure = new EventEmitter<Error>()
-  constructor(private readonly context: ExtensionContext) {}
-  #get() {
-    if (this.#worker) return this.#worker
-    const root = join(this.context.globalStorageUri.fsPath, 'runs')
-    const scratch = (this.#scratch = scratchFolder(root))
-    // Runs left behind by windows that closed without cleaning up, or by an earlier worker here.
-    void sweep(root, scratch)
-    const worker = (this.#worker = new Worker(
-      join(this.context.extensionPath, 'dist', 'worker.cjs'),
-      {
-        workerData: {
-          scratch,
-          storage: join(
-            (this.context.storageUri ?? this.context.globalStorageUri).fsPath,
-            'results',
-          ),
-          storageBytes:
-            workspace.getConfiguration('gridkitStudio').get<number>('resultStorageMiB', 4096) *
-            (1 << 20),
-        },
-      },
-    ))
-    const failed = (error: Error) => {
-      if (this.#worker !== worker) return
-      this.#worker = undefined
-      // Set before anyone hears of the failure, so a call it prompts waits for the teardown.
-      const owned = [...this.#owned.values()]
-      this.#owned.clear()
-      this.#cleanup = Promise.all(owned.map(terminateRuntime))
-        .then(async () => {
-          await worker.terminate()
-          await rm(scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
+/** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
+ *  One listener's failure leaves the others theirs. */
+class Emitter<T> {
+  readonly #listeners = new Set<(value: T) => void>()
+  readonly event = (listener: (value: T) => void) => {
+    this.#listeners.add(listener)
+    return { dispose: () => void this.#listeners.delete(listener) }
+  }
+  fire(value: T): void {
+    for (const listener of [...this.#listeners])
+      try {
+        listener(value)
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error
         })
-        .finally(() => {
-          this.#cleanup = undefined
-        })
-      for (const entry of this.#pending.values()) {
-        entry.cleanup()
-        entry.reject(error)
       }
-      this.#pending.clear()
+  }
+  dispose(): void {
+    this.#listeners.clear()
+  }
+}
+
+/** What a worker's owner hears of it: its events. `release` ends what it started, before another
+ *  worker takes its place. */
+interface Owner {
+  hear(event: WorkerEvent): void
+  release(): Promise<void>
+}
+
+/** A worker of the extension's, started when first asked and again after it stops. */
+class Thread<A extends Api<A>> {
+  /** Hears why the worker stopped, each time it does. */
+  readonly failure = new Emitter<Error>()
+  #worker?: Worker
+  #caller?: Caller<A>
+  /** The teardown of one that stopped: calls wait for it before another starts. */
+  #teardown?: Promise<void>
+  #closed = false
+
+  constructor(
+    private readonly name: string,
+    private readonly script: string,
+    private readonly owner: Owner,
+  ) {}
+
+  /** Whether the worker runs now. */
+  get running(): boolean {
+    return this.#worker !== undefined
+  }
+
+  /** Calls `method` of the worker, starting it if it is not running. */
+  async call<K extends keyof A & string>(
+    method: K,
+    input: A[K]['input'],
+    signal?: AbortSignal,
+  ): Promise<A[K]['output']> {
+    signal?.throwIfAborted()
+    if (this.#teardown) await this.#teardown
+    if (this.#closed) throw new Error('Studio is closed.')
+    return this.#start().call(method, input, signal)
+  }
+
+  #start(): Caller<A> {
+    if (this.#caller) return this.#caller
+    const worker = new Worker(this.script)
+    const caller = new Caller<A>((message) => worker.postMessage(message))
+    this.#worker = worker
+    this.#caller = caller
+    const stopped = (error: Error) => {
+      if (this.#worker !== worker) return
+      this.#worker = this.#caller = undefined
+      // Set before anyone hears, so a call the failure prompts waits for the teardown.
+      this.#teardown = this.owner
+        .release()
+        .then(() => worker.terminate())
+        .then(
+          () => {},
+          () => {},
+        )
+        .finally(() => (this.#teardown = undefined))
+      caller.fail(error)
       this.failure.fire(error)
     }
     worker.on('error', (error) =>
-      failed(
-        Object.assign(new Error(`The data worker stopped: ${error.message}`), {
+      stopped(
+        Object.assign(new Error(`The ${this.name} worker stopped: ${error.message}`), {
           detail: error.stack,
         }),
       ),
     )
-    worker.on('exit', (code) => failed(new Error(`The data worker stopped (exit code ${code}).`)))
+    worker.on('exit', (code) =>
+      stopped(new Error(`The ${this.name} worker stopped (exit code ${code}).`)),
+    )
     worker.on('message', (message: FromWorker) => {
-      if (message.kind === 'process') {
-        if (message.process) this.#owned.set(message.uri, message.process)
-        else this.#owned.delete(message.uri)
-        return
-      }
-      if (message.kind === 'run' || message.kind === 'log') return this.event.fire(message)
-      const pending = this.#pending.get(message.id)
-      if (!pending) return
-      if (message.kind === 'batch') {
-        void (pending.consume?.(message.batches) ?? Promise.resolve()).then(
-          () => worker.postMessage({ kind: 'ack', id: message.id }),
-          (error) => {
-            worker.postMessage({ kind: 'cancel', id: message.id })
-            pending.reject(error)
-            pending.cleanup()
-            this.#pending.delete(message.id)
-          },
-        )
-      } else {
-        pending.cleanup()
-        this.#pending.delete(message.id)
-        if (message.kind === 'error')
-          pending.reject(
-            Object.assign(new Error(message.problem.message), {
-              ...message.problem,
-              offset: message.offset,
-              length: message.length,
-              ...(message.defect && { defect: true, detail: message.detail }),
-            }),
-          )
-        else pending.resolve(message.value)
-      }
+      if (message.kind === 'reply') caller.settle(message)
+      else this.owner.hear(message)
     })
-    return worker
+    return caller
   }
-  call<K extends Method>(
-    method: K,
-    input: Requests[K]['input'],
-    signal?: AbortSignal,
-    consume?: (batches: readonly DataBatch[]) => Promise<void>,
-  ): Promise<Requests[K]['output']> {
-    if (this.#disposed) return Promise.reject(new Error('Studio is closed.'))
-    if (signal?.aborted) return Promise.reject(signal.reason)
-    if (this.#cleanup) return this.#cleanup.then(() => this.call(method, input, signal, consume))
-    const worker = this.#get()
-    const id = ++this.#next
-    return new Promise((resolve, reject) => {
-      const abort = () => {
-        worker.postMessage({ kind: 'cancel', id })
-        this.#pending.delete(id)
-        cleanup()
-        reject(signal?.reason ?? new Error('Cancelled'))
-      }
-      const cleanup = () => signal?.removeEventListener('abort', abort)
-      this.#pending.set(id, {
-        resolve: (value) => resolve(value as Requests[K]['output']),
-        reject,
-        consume,
-        cleanup,
-      })
-      signal?.addEventListener('abort', abort, { once: true })
-      worker.postMessage({ kind: 'request', id, method, input })
-    })
-  }
-  async dispose() {
-    if (this.#worker) await this.call('shutdown', {}).catch(() => {})
-    this.#disposed = true
+
+  /** Stops the worker, failing what was asked of it. */
+  async dispose(): Promise<void> {
+    this.#closed = true
     const worker = this.#worker
     this.#worker = undefined
-    for (const pending of this.#pending.values()) {
-      pending.cleanup()
-      pending.reject(new Error('Studio disposed.'))
-    }
-    this.#pending.clear()
-    await Promise.all([...this.#owned.values()].map(terminateRuntime))
-    this.#owned.clear()
-    await this.#cleanup
+    this.#caller?.fail(new Error('Studio disposed.'))
+    this.#caller = undefined
+    await this.#teardown
     await worker?.terminate()
-    // A window's runs end with it.
-    if (worker && this.#scratch)
-      await rm(this.#scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
-    this.event.dispose()
     this.failure.dispose()
+  }
+}
+
+/** The extension's two workers: the case worker, which reads open cases as they are edited, and the
+ *  results worker, which runs GridKit and reads results files. Their bundles are in `folder`. */
+export class Client {
+  readonly event = new Emitter<Exclude<WorkerEvent, { kind: 'process' }>>()
+  /** The GridKit process the results worker runs for each case, terminated here if it dies. */
+  readonly #owned = new Map<string, RuntimeProcess>()
+  readonly cases: Thread<CaseApi>
+  readonly results: Thread<ResultsApi>
+
+  constructor(folder: string) {
+    const owner = (release: () => Promise<void>): Owner => ({
+      hear: (event) => {
+        if (event.kind !== 'process') return this.event.fire(event)
+        if (event.process) this.#owned.set(event.uri, event.process)
+        else this.#owned.delete(event.uri)
+      },
+      release,
+    })
+    this.cases = new Thread(
+      'case',
+      join(folder, 'cases.cjs'),
+      owner(async () => {}),
+    )
+    this.results = new Thread(
+      'results',
+      join(folder, 'results.cjs'),
+      owner(() => this.#terminate()),
+    )
+  }
+
+  /** What the workers running hold. */
+  async stats() {
+    const [cases, results] = await Promise.all([
+      this.cases.running ? this.cases.call('stats', {}) : undefined,
+      this.results.running ? this.results.call('stats', {}) : undefined,
+    ])
+    return { ...(cases && { cases }), ...(results && { results }) }
+  }
+
+  /** Ends every GridKit process the results worker started. */
+  async #terminate() {
+    const owned = [...this.#owned.values()]
+    this.#owned.clear()
+    await Promise.all(owned.map(terminateRuntime))
+  }
+
+  async dispose() {
+    // A run under way ends as interrupted; nothing is started to be told to.
+    if (this.results.running) await this.results.call('shutdown', {}).catch(() => {})
+    await Promise.all([this.cases.dispose(), this.results.dispose()])
+    await this.#terminate()
+    this.event.dispose()
   }
 }

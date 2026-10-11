@@ -9,13 +9,15 @@ import { type TestHost, testHost, theme, until, VIEWPORT, visible } from './harn
 
 suite('Appearance', () => {
   let bench: TestHost
-  let simulation: Frame
+  /** Video Export, the side bar's own webview. */
+  let exporter: Frame
   const highContrast = async () =>
-    !!(await simulation.locator('body').getAttribute('class'))?.includes('vscode-high-contrast')
+    !!(await exporter.locator('body').getAttribute('class'))?.includes('vscode-high-contrast')
 
   suiteSetup(async () => {
     bench = await testHost()
-    simulation = await bench.show('simulation')
+    await bench.results()
+    exporter = await bench.show('export')
   })
 
   test('follows the theme into high contrast, and back', async () => {
@@ -29,10 +31,10 @@ suite('Appearance', () => {
   test('holds its views in a compact window', async () => {
     await bench.page.setViewportSize({ width: 1000, height: 720 })
     try {
-      await visible(simulation, '[data-testid="study-program"]')
+      await visible(exporter, '[data-testid="video-export"]')
       // The form fits the narrow side bar: nothing scrolls sideways.
       assert.equal(
-        await simulation.evaluate('document.documentElement.scrollWidth <= innerWidth'),
+        await exporter.evaluate('document.documentElement.scrollWidth <= innerWidth'),
         true,
       )
       await bench.capture('compact-vscode')

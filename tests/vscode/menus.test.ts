@@ -376,10 +376,10 @@ suite('Monitor menus', () => {
     await bench.answer('0.2, 0.4')
     await until(async () => (await plotted()).x.join() === '0.2,0.4', 'the window narrowed')
     await bench.title('monitor', 'Fit Recorded Time')
-    const run = bench.session.run!
+    const results = bench.session.results!
     await until(
-      async () => (await plotted()).x.join() === (run.span ?? run.domain).join(),
-      'the whole run shown',
+      async () => (await plotted()).x.join() === (results.span ?? results.domain).join(),
+      'every recorded time shown',
     )
     assert.equal(bench.session.window, undefined)
   })
@@ -435,12 +435,12 @@ suite('Monitor menus', () => {
     assert.ok(lines.length > 1, 'a header and samples')
   })
 
-  test('imports results from the title bar, and plots one of their signals', async () => {
-    const before = bench.session.run!.id
-    await bench.title('monitor', 'Import Results')
+  test('opens results from the title bar, and plots one of their signals', async () => {
+    const before = bench.session.results!.id
+    await bench.title('monitor', 'Open Results')
     await bench.dialog(vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath)
     await bench.pick('Bus.Vm')
-    await until(() => bench.session.run?.id !== before, 'the imported run on show')
+    await until(() => bench.session.results?.id !== before, 'the opened results on show')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm'),
       'its voltage plotted',
@@ -450,7 +450,7 @@ suite('Monitor menus', () => {
 
   test('clears the results from the title bar, and playback leaves the status bar', async () => {
     await bench.title('monitor', 'Clear Results')
-    await until(() => !bench.session.run, 'no results')
+    await until(() => !bench.session.results, 'no results')
     await visible(monitor, '.c-empty')
     await until(async () => (await bench.playback('Play').count()) === 0, 'playback gone')
   })
@@ -465,19 +465,14 @@ suite('Studio commands', () => {
   })
   suiteTeardown(() => simpleDialog(undefined))
 
-  test("says where GridKit runs and shows its output from the Simulation view's menu", async () => {
-    await bench.show('simulation')
-    await bench.title('simulation', 'Where GridKit Runs')
-    await bench.settings(/gridkitStudio\.gridkitPath/)
-    await bench.title('simulation', 'Show Simulation Output')
-    await until(async () => (await bench.panelShown()) === 'Output', 'the output on show')
-  })
-
-  test('validates the case and diagnoses performance from the Command Palette', async () => {
+  test('validates the case, diagnoses performance and shows the log from the Command Palette', async () => {
     await bench.palette('Validate Case')
     await until(async () => /^Problems/.test(await bench.panelShown()), 'Problems on show')
     await bench.palette('Show Performance Diagnostics')
     await until(async () => (await bench.panelShown()) === 'Output', 'the diagnostics on show')
+    await vscode.commands.executeCommand('workbench.action.closePanel')
+    await bench.palette('Show Simulation Output')
+    await until(async () => (await bench.panelShown()) === 'Output', 'the log on show')
   })
 
   test('opens a case from the Command Palette, and either view of it from the Explorer', async () => {

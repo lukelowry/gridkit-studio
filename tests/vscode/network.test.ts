@@ -4,10 +4,13 @@ import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
+import { PNG } from 'pngjs'
+import * as vscode from 'vscode'
 
 import {
   fills,
   frames,
+  idle,
   pause,
   stats,
   type TestHost,
@@ -16,6 +19,18 @@ import {
   visible,
   VM,
 } from './harness.js'
+
+/** Markers large enough that their center pixels are solid, with nothing drawn over them. */
+const SOLID: Record<string, unknown> = {
+  'network.vertexRadiusPx': 8,
+  'network.vertices.labels': false,
+  'network.borders': false,
+  'network.hover': 'off',
+  'network.selectedColor': '#00000000',
+}
+type RGB = readonly [number, number, number]
+/** Whether two colors differ by more than antialiasing does. */
+const apart = (a: RGB, b: RGB) => a.some((channel, i) => Math.abs(channel - b[i]!) > 24)
 
 suite('Network', () => {
   let bench: TestHost
@@ -89,6 +104,65 @@ suite('Network', () => {
     assert.equal(transport.state.status, 'playing')
     assert.equal(await frames(network), hidden)
     transport.pause()
+  })
+
+  test('colors a laid-out case by each mapping it is given, and by none once it is taken away', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const global = vscode.ConfigurationTarget.Global
+    for (const [key, value] of Object.entries(SOLID)) await settings.update(key, value, global)
+    try {
+      // The case alone, nothing mapped and its clock at rest, as the others left it otherwise.
+      await bench.reset()
+      network = await bench.open('network')
+      const ids = bench.source.buses.slice(0, 8).map((bus) => 'Bus/' + bus.number)
+      /** The color each bus's marker is drawn in at its center. */
+      const colors = async (): Promise<RGB[]> => {
+        await idle(network)
+        const png = PNG.sync.read(await network.locator('canvas').screenshot())
+        const points = await network.evaluate(
+          (ids) =>
+            ids.map((id) =>
+              (
+                globalThis as unknown as { gridkitLocate(id: string): [number, number] | null }
+              ).gridkitLocate(id),
+            ),
+          ids,
+        )
+        return points.map((point) => {
+          assert.ok(point, 'every bus is drawn')
+          const at = (Math.round(point[1]) * png.width + Math.round(point[0])) * 4
+          return [png.data[at]!, png.data[at + 1]!, png.data[at + 2]!] as const
+        })
+      }
+      const redraw = async (change: () => unknown) => {
+        const drawn = await frames(network)
+        await change()
+        await until(async () => (await frames(network)) > drawn, 'drawn again')
+        return colors()
+      }
+      const plain = await colors()
+      const given = { type: 'Bus', field: 'init.Vr' }
+      const mapped = await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      assert.ok(
+        mapped.some((color, i) => apart(color, plain[i]!)),
+        'a field mapped colors the buses',
+      )
+      const unmapped = await redraw(() => bench.studio.bind(bench.key, given, []))
+      assert.ok(
+        unmapped.every((color, i) => !apart(color, plain[i]!)),
+        'a mapping taken away colors them as before',
+      )
+      // The same once the case is edited, and so laid out again, while the field is mapped.
+      await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      await bench.record('Bus', ['Vm'])
+      const after = await redraw(() => bench.studio.bind(bench.key, given, []))
+      assert.ok(
+        after.every((color, i) => !apart(color, plain[i]!)),
+        'a mapping taken away after a relayout colors them as before',
+      )
+    } finally {
+      for (const key of Object.keys(SOLID)) await settings.update(key, undefined, global)
+    }
   })
 
   test('lays out a case without coordinates, and offers the globe once its buses have them', async () => {

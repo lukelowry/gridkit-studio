@@ -16,8 +16,6 @@ import { Case } from './case.js'
 import { catalog } from './definition.js'
 import { diagnose, editField, sourceRange } from './edits.js'
 import { completionsAt } from './navigation.js'
-import { parametersOf, selections } from './parameters.js'
-import { caseFile, monitorsOf } from './staging.js'
 
 const source = `{
  "header": {"case_name": "東京 ⚡"},
@@ -42,9 +40,8 @@ const apply = (text: string, edits: ReturnType<typeof editField>) =>
       text,
     )
 describe('single catalog and source ownership', () => {
-  it('derives valid schema, fields, references and simulation options', () => {
+  it('derives valid schema, fields and references', () => {
     expect(validateSchema(catalog.schema)).toEqual([])
-    expect(parametersOf(catalog).tmax.type).toBe('number')
     expect(catalog.schema.types.BusFault.fields['ports.control_signal']).toMatchObject({
       direction: 'in',
       type: { kind: 'reference', to: 'Signal' },
@@ -117,30 +114,6 @@ describe('single catalog and source ownership', () => {
     await expect(Case.parse(source.replace('"number":7', '"number":42'), catalog)).rejects.toThrow()
     await expect(Case.parse(source.replace('"kv":115.0', '"kv":115.0,'), catalog)).rejects.toThrow()
     await expect(Case.parse(source, catalog, 'Case', AbortSignal.abort())).rejects.toThrow()
-  })
-  it('keeps Server monitor output ordering and all unrelated source bytes', async () => {
-    const kase = await Case.parse(source, catalog)
-    const fields = selections(kase, [
-      { from: 'Bus', select: ['Va', 'Vm'], rows: { kind: 'ids', ids: ['Bus/7'] } },
-    ])
-    const text = Buffer.concat(caseFile(kase, monitorsOf(kase, fields), null)).toString()
-    expect(JSON.parse(text).buses[1].mon).toEqual(['Vm', 'Va'])
-    expect(text).toContain('"kv":230.000')
-    expect(text).toContain('"keep":1.000')
-    expect(JSON.parse(text).monitors).toEqual([{ file_name: 'results.csv', format: 'csv' }])
-  })
-  it('replaces inherited monitor destinations and preserves real parameter tokens', async () => {
-    const kase = await Case.parse(
-      source.replace(
-        '"signals":',
-        '"monitors":[{"file_name":"/outside/results.csv","format":"csv"}], "signals":',
-      ),
-      catalog,
-    )
-    const text = Buffer.concat(caseFile(kase, new Map(), null)).toString()
-    expect(JSON.parse(text).monitors).toEqual([{ file_name: 'results.csv', format: 'csv' }])
-    expect(text).not.toContain('/outside/')
-    expect(text).toContain('230.000')
   })
   it('handles native infinite buses and reports invalid known values from the catalog', async () => {
     const kase = await Case.parse(await readFile('cases/TwoBusBasic.case.json', 'utf8'), catalog)

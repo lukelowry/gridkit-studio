@@ -8,7 +8,7 @@ Copyright (c) 2026 Luke Lowery. MIT License.
 
 ## GridKit Server
 
-The catalog compiler, parser, staging and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
+The catalog compiler, parser and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
 
 ## jsonc-parser
 
@@ -44,9 +44,9 @@ The wrench and lightning bolt in the Studio icons are adapted from Google's Mate
 
 ## GridKit case data
 
-The files in `cases/` are [GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics) with their BusFault devices removed by `scripts/cases.mjs`. Studio adds the faults a run asks for. GridKit provides the dynamics models, and the networks come from:
+Most cases in `cases/` are [GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics), copied as they are by `scripts/cases.mjs`. ACTIVSg25k and ACTIVSg70k come from the [lukelowry/cases](https://github.com/lukelowry/cases) repository, and ACTIVSg70k is saved without whitespace so that VS Code can open it. GridKit provides the dynamics models, and the networks come from:
 
-- ACTIVSg2000, ACTIVSg10k and IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
+- ACTIVSg2000, ACTIVSg10k, ACTIVSg25k, ACTIVSg70k and IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
 - WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)
 - TwoArea: Kundur's two-area system
 - TwoBusBasic: GridKit's own example

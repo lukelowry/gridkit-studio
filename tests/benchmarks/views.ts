@@ -6,7 +6,7 @@
  *  again. */
 
 import assert from 'node:assert/strict'
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
@@ -47,8 +47,8 @@ const STILL = {
   'network.vertices.labels': true,
   'network.grid': true,
 }
-/** A second of simulation, its frames a hundredth of a second apart. */
-const RUN = { tmax: 1, dt_monitor: 0.01 }
+/** A second of simulation, its frames a hundredth of a second apart, as a solver file says it. */
+const RUN = { tmax: 1, dt_monitor: 0.01, events: [] }
 /** How long playback is timed. */
 const PLAYBACK_MS = 3000
 /** Where seeks land, as parts of the run. */
@@ -238,13 +238,9 @@ export async function run() {
           { timeout: 60_000 },
         )
       }
-      const [{ id: bus }] = await bench.studio.client.call('elements', {
-        uri: key,
-        version: summary().version,
-        type: 'Bus',
-      })
+      const bus = 'Bus/' + JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       // A selection draws again over the rest, glowing. Clearing it draws as before.
-      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus! }))
+      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus }))
       bench.studio.select(key)
 
       // ── Diagram ──
@@ -273,8 +269,16 @@ export async function run() {
           done: (_, frames) => painted(diagram, frames),
         })
       }
-      // The Diagram's editor is the active one: closing it leaves the Network's.
-      await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+      // The Diagram's tab closes by name, whichever editor has focus, and leaves the Network's.
+      await vscode.window.tabGroups.close(
+        vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs)
+          .filter(
+            (tab) =>
+              tab.input instanceof vscode.TabInputCustom &&
+              tab.input.viewType === 'gridkitStudio.diagram',
+          ),
+      )
 
       // ── Case panel ──
       const counts = summary().counts
@@ -310,8 +314,8 @@ export async function run() {
       if (!gridkit) continue
 
       // ── A second of simulation, followed live ──
-      bench.studio.record(key, [{ from: 'Bus', select: ['Vm'] }])
-      session.values = RUN
+      await bench.record('Bus', ['Vm'], uri)
+      const solver = await bench.writeSolver(RUN, uri)
       session.plots = [{ from: 'Bus', field: 'Vm' }]
       bench.studio.bind(key, VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
@@ -320,17 +324,23 @@ export async function run() {
       await listen(network)
       await listen(monitor)
       const previous = session.run?.id
-      /** The stream the Network painted last: the run's samples come on a later one. */
-      const unsampled = (await network.evaluate<{ stream?: number }>('gridkitStats()')).stream ?? 0
+      /** What the Network painted last had come: the run's samples come after. */
+      const unsampled =
+        (await network.evaluate<{ received?: number }>('gridkitStats()')).received ?? 0
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
+      /** What the run started here wrote, as read so far. */
+      const wrote = () => {
+        const id = ran()?.results
+        return id && session.results?.id === id ? session.results : undefined
+      }
       started = performance.now()
       const since = () => performance.now() - started
-      await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+      bench.run('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
-        settle(() => (ran()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
+        settle(() => (wrote()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
         network
-          .waitForFunction('(stream) => gridkitStats()?.stream > stream', unsampled, {
+          .waitForFunction('(received) => gridkitStats()?.received > received', unsampled, {
             polling: 'raf',
             timeout: 300_000,
           })
@@ -358,7 +368,7 @@ export async function run() {
 
       // ── Playback ──
       const { transport } = session
-      const span = session.run!.domain
+      const span = session.results!.domain
       await steady(monitor)
       transport.setLoop('wrap')
       /** The time between frames each view presents while playing: one display frame at best. */
@@ -383,7 +393,7 @@ export async function run() {
       await playback('frame')
       // A selected bus draws again over the rest in the Network, and fades the other traces in
       // the Monitor.
-      bench.studio.select(key, { id: bus! })
+      bench.studio.select(key, { id: bus })
       await steady(monitor)
       await playback('frame, selected')
       bench.studio.select(key)
@@ -410,7 +420,7 @@ export async function run() {
       })
 
       // ── Plots ──
-      const first = bus!
+      const first = bus
       const lanesBefore = (await plots(monitor)).length
       await time(`monitor ${size} > add plot`, 1, {
         act: () => {
@@ -426,7 +436,7 @@ export async function run() {
       })
       // A new range colors the drawn lines again, and draws none of them.
       const recolored = await steady(monitor)
-      const range = session.run!.domains!.Bus!.Vm!
+      const range = session.results!.domains!.Bus!.Vm!
       await time(`monitor ${size} > recolor`, RUNS, {
         ready: () => plots(monitor),
         act: (i) =>
@@ -443,10 +453,8 @@ export async function run() {
       const value = Number(
         rowsOf(
           (
-            await bench.studio.client.call('query', {
-              uri: key,
-              version: summary().version,
-              run: session.run!.id,
+            await bench.studio.client.results.call('query', {
+              results: session.results!.id,
               query: {
                 kind: 'rows',
                 from: 'Bus',

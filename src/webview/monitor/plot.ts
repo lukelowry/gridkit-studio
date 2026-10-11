@@ -8,6 +8,7 @@ import {
   type FieldSelection,
   itemKey,
   rowAt,
+  rowCount,
   selectRows,
 } from '@latkit/model'
 import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
@@ -15,7 +16,7 @@ import type { MonitorConfig, MonitorItem, MonitorLimits } from '@latkit/monitor'
 import type { Bindings } from '../../shared/bindings.js'
 import { intersectRows, recordedSelection } from '../../shared/coverage.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
-import type { SimulationInfo } from '../../shared/simulation.js'
+import type { Results } from '../../shared/simulation.js'
 import { color, type Palette } from '../theme.js'
 /** A recorded field a plot draws: every row of its type, or the one `id` names. */
 type Plotted = { type: string; field: string; id?: string }
@@ -23,10 +24,10 @@ type Plotted = { type: string; field: string; id?: string }
 /** The same physical rows drive drawing, selection, keyboard readings and export. */
 export function plotRows(
   source: Data,
-  run: SimulationInfo | undefined,
+  results: Results | undefined,
   plot: Plotted,
 ): FieldSelection['rows'] {
-  const recorded = recordedSelection(source, run?.outputs ?? [], plot.type, plot.field)
+  const recorded = recordedSelection(source, results?.outputs ?? [], plot.type, plot.field)
   if (!plot.id) return recorded
   const table = source.tables[plot.type]!
   return {
@@ -38,7 +39,7 @@ export function plotRows(
   }
 }
 
-/** Caps each plot's history textures; the complete run is held outside the plot. */
+/** Caps each plot's history textures; the complete results are held outside the plot. */
 export const PLOT_LIMITS: MonitorLimits = { historyBytes: 128 * 1024 ** 2 }
 
 /** The single trace key, so another field replaces the trace in place. */
@@ -76,12 +77,19 @@ export function sameSelection(a: readonly MonitorItem[], b: readonly MonitorItem
   return a.length === b.length && a.every((item, i) => traceKey(item) === traceKey(b[i]!))
 }
 
-/** Padding past the axes [top, right, bottom, left]: `--spacing-sm`, then `--spacing-md` for the
- *  last time label's overhang; the axis labels pad the bottom and left. */
-const MARGIN_PX = [8, 12, 0, 0] as const
+/** Padding past the plot's frame [top, right, bottom, left]: `--spacing-sm`, `--spacing-md` for the
+ *  last time label's overhang, and `--spacing-2xs` so the frame's bottom line is never clipped; the
+ *  value labels pad the left. */
+const MARGIN_PX = [8, 12, 4, 0] as const
+
+/** How many traces `rows` of `type` draw. */
+export function traceCount(source: Data, type: string, rows: FieldSelection['rows']): number {
+  const table = source.tables[type]
+  return table ? rowCount(selectRows(table, rows)) : 0
+}
 
 /** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
- *  every row. A plot added to the Monitor waits for the stream that holds them. */
+ *  every row. A plot added to the Monitor waits for the samples it asks for. */
 export function holds(sampled: readonly FieldSelection[], { type, field, id }: Plotted): boolean {
   return sampled.some(
     ({ from, select, rows }) =>
@@ -104,13 +112,13 @@ export function plotBindings(
   { type, field, id }: Plotted,
   bindings: Bindings = {},
   rows?: FieldSelection['rows'],
-  run?: SimulationInfo,
+  results?: Results,
 ): Pick<MonitorConfig, 'traces'> {
   const mapped = [bindings.vertexColor, bindings.edgeColor].find(
     (binding) => binding?.type === type && binding.field === field,
   )
-  // The run's whole range, measured as it was read: the plot never reads it.
-  const domain = mapped?.domain ?? run?.domains?.[type]?.[field]
+  // The whole range of the results, measured as they were read: the plot never reads it.
+  const domain = mapped?.domain ?? results?.domains?.[type]?.[field]
   return {
     traces: {
       [TRACE]: {
@@ -131,24 +139,22 @@ export function plotBindings(
   }
 }
 
-/** A simulation's configured interval stays fixed, including before its first sample and
- * after cancellation. Imported recordings use their recorded interval. */
-export function monitorWindow(
-  run?: Pick<SimulationInfo, 'span' | 'domain'>,
-  chosen?: Domain,
-): Domain {
+/** A simulation's interval, to its solver file's end time, stays fixed, including before its first
+ * sample and after cancellation. Opened results use their recorded interval. */
+export function monitorWindow(results?: Pick<Results, 'span' | 'domain'>, chosen?: Domain): Domain {
   if (chosen) return chosen
-  const range = run?.span ?? run?.domain
+  const range = results?.span ?? results?.domain
   return range && range[1] > range[0] ? range : [range?.[0] ?? 0, (range?.[0] ?? 0) + 1]
 }
 
-/** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. */
+/** Renderer options from the settings and theme; a null `palette` or `font` keeps the default. A plot
+ *  is framed. Its time ticks are labelled only with `ticks`, as on the last of plots stacked over one
+ *  time axis; `time` captions that axis and `caption` the values, where nothing else names them. */
 export function plotOptions(
   s: SettingsReader,
   palette: Palette | null,
   font: string | null,
-  axis: string,
-  valueLabel: string,
+  { ticks, time, caption }: { ticks: boolean; time?: string; caption?: string },
 ): Partial<MonitorConfig> {
   const xPrecision = s.get('monitor.xAxis.precision')
   const yPrecision = s.get('monitor.yAxis.precision')
@@ -158,9 +164,11 @@ export function plotOptions(
     fontSizePx: s.get('monitor.fontSizePx'),
     ...(family && { font: { family } }),
     paddingPx: [...MARGIN_PX],
+    frame: true,
     xAxis: s.get('monitor.xAxis.visible')
       ? {
-          label: axis,
+          label: ticks ? (time ?? '') : '',
+          labels: ticks,
           grid: s.get('monitor.xAxis.grid'),
           minSpacingPx: s.get('monitor.xAxis.minSpacingPx'),
           format: s.get('monitor.xAxis.format'),
@@ -169,7 +177,7 @@ export function plotOptions(
       : false,
     yAxis: s.get('monitor.yAxis.visible')
       ? {
-          label: s.get('monitor.yAxis.label') ? valueLabel : '',
+          label: caption ?? '',
           grid: s.get('monitor.yAxis.grid'),
           minSpacingPx: s.get('monitor.yAxis.minSpacingPx'),
           format: s.get('monitor.yAxis.format'),

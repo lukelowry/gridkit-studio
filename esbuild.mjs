@@ -1,4 +1,4 @@
-﻿/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
+﻿/** Bundle the extension and its two workers for Node, and the webviews for the browser, into dist/.
  *  `--watch` rebuilds on change, unminified. */
 
 import { copyFile, mkdir, rm } from 'node:fs/promises'
@@ -23,7 +23,8 @@ const builds = [
   {
     entryPoints: {
       extension: 'src/extension/index.ts',
-      worker: 'src/worker.ts',
+      cases: 'src/workers/cases.ts',
+      results: 'src/workers/results.ts',
     },
     outdir: 'dist',
     outExtension: { '.js': '.cjs' },
@@ -37,7 +38,6 @@ const builds = [
     entryPoints: {
       canvas: 'src/webview/canvas.ts',
       case: 'src/webview/case.ts',
-      simulation: 'src/webview/simulation.ts',
       monitor: 'src/webview/monitor.ts',
       export: 'src/webview/export.ts',
     },

@@ -4,8 +4,15 @@ import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { ArrayName } from './definition.js'
-import { apply, editable, fieldValue, nativePath, textOffset, withValue } from './edits.js'
-import { realText } from './staging.js'
+import {
+  apply,
+  editable,
+  fieldValue,
+  nativePath,
+  realText,
+  textOffset,
+  withValue,
+} from './edits.js'
 
 /** Resolve the entire proposed identity set before fields, so a branch may name new buses. */
 export function createRecords(

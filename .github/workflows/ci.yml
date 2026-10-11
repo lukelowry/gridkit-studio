@@ -4,17 +4,11 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish release
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 jobs:
   # Format, lint, settings, types, unit tests and the VSIX, on every OS.
   check:
@@ -80,46 +74,35 @@ jobs:
             output/simulation
             output/packaged-*/playwright
             output/packaged-*/tests
+  # The one check main's branch protection requires: every job above passed. Its name stays the
+  # same when the jobs or their matrices change.
+  required:
+    if: always()
+    needs: [check, gridkit]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+  # A tag whose version matches package.json publishes that VSIX as a GitHub pre-release.
   release:
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish)
+    if: github.ref_type == 'tag'
     needs: [check, gridkit]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    concurrency:
-      group: publish-release
-      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: gridkit-studio
           path: dist
-      - name: Publish GitHub Release
-        shell: bash
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          asset="$(ls dist/gridkit-studio-*.vsix)"
-          tag="v$(unzip -p "$asset" extension/package.json | jq -er .version)"
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$tag" ]]; then
-            echo "::error::$GITHUB_REF_NAME does not match package.json, which is $tag."
+          version="v$(unzip -p dist/gridkit-studio-*.vsix extension/package.json | jq -r .version)"
+          if [[ "$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match package.json, which is $version."
             exit 1
           fi
-          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
-            echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha 2>/dev/null)"; then
-            if [[ "$commit" != "$GITHUB_SHA" ]]; then
-              echo "::error::$tag points to another commit. Use a new version."
-              exit 1
-            fi
-          else
-            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
-          fi
-          if ! gh release view "$tag" > /dev/null 2>&1; then
-            gh release create "$tag" --draft --prerelease --verify-tag --title "GridKit Studio $tag" --notes ""
-          fi
-          gh release upload "$tag" "$asset" --clobber
-          gh release edit "$tag" --draft=false
+          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix \
+            --prerelease --title "GridKit Studio $GITHUB_REF_NAME" --notes ""

@@ -1,5 +1,9 @@
+/** A view's side of its channel to the extension: what it sends, the requests it makes, and the
+ *  messages it hears. */
+
 import { cancelled, defect, detail, message } from '../shared/format.js'
-import type { FromView, ToView, ViewRequests, ViewState } from '../shared/messages.js'
+import type { FromView, ToView, ViewApi, ViewState } from '../shared/messages.js'
+import { Caller } from '../shared/rpc.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
   getState(): unknown
@@ -7,18 +11,8 @@ declare function acquireVsCodeApi(): {
 }
 const api = acquireVsCodeApi()
 const listeners = new Set<(message: ToView) => void>()
-const pending = new Map<
-  number,
-  { resolve(value: unknown): void; reject(error: Error): void; release(): void }
->()
-let next = 0
-/** Removes request `id` from `pending`, clearing its timeout and abort listener. */
-function take(id: number) {
-  const entry = pending.get(id)
-  pending.delete(id)
-  entry?.release()
-  return entry
-}
+const extension = new Caller<ViewApi>((message) => api.postMessage(message))
+
 export const bridge = {
   send(message: FromView) {
     api.postMessage(message)
@@ -49,28 +43,13 @@ export const bridge = {
       ...(defect(reason) && { defect: true }),
     })
   },
-  /** Calls `method` in the extension, as long as it takes unless `signal` cancels it. */
-  request<K extends keyof ViewRequests>(
+  /** Calls `method` in the extension, as long as it takes unless `signal` lets go of it. */
+  request<K extends keyof ViewApi>(
     method: K,
-    input: ViewRequests[K]['input'],
+    input: ViewApi[K]['input'],
     signal?: AbortSignal,
-  ): Promise<ViewRequests[K]['output']> {
-    if (signal?.aborted) return Promise.reject(new DOMException('Cancelled', 'AbortError'))
-    const id = ++next
-    return new Promise((resolve, reject) => {
-      const cancel = () => {
-        if (!take(id)) return
-        api.postMessage({ kind: 'cancel', id })
-        reject(new DOMException('Cancelled', 'AbortError'))
-      }
-      pending.set(id, {
-        resolve: (value) => resolve(value as ViewRequests[K]['output']),
-        reject,
-        release: () => signal?.removeEventListener('abort', cancel),
-      })
-      signal?.addEventListener('abort', cancel, { once: true })
-      api.postMessage({ kind: 'request', id, method, input })
-    })
+  ): Promise<ViewApi[K]['output']> {
+    return extension.call(method, input, signal)
   },
 }
 /** Applies a state message. Each carries the whole state except `summary` and `settings`, which
@@ -81,19 +60,7 @@ export function merged(state: ViewState, incoming: ViewState): ViewState {
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
-  if (message.kind === 'reply') {
-    const entry = take(message.id)
-    if (message.cancelled) entry?.reject(new DOMException(message.error, 'AbortError'))
-    else if (message.error)
-      entry?.reject(
-        Object.assign(new Error(message.error), {
-          detail: message.detail,
-          ...(message.defect && { defect: true }),
-        }),
-      )
-    else entry?.resolve(message.value)
-    return
-  }
+  if (message.kind === 'reply') return extension.settle(message)
   // One listener's failure leaves the others their message.
   for (const listener of listeners)
     try {

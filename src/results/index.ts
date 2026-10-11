@@ -1,5 +1,6 @@
-/** DynamicSimulation results: native CSV and Arrow decoded into sample pages. */
+/** GridKit results files: native CSV and Arrow, decoded in chunks of frames. */
 
-export { BATCH_BYTES, PROGRESS_MS } from './limits.js'
-export { ResultCache, Results } from './results.js'
-export { importedFields } from './selection.js'
+export { ResultCache } from './cache.js'
+export { type Field } from './decode.js'
+export { described, ResultsFile, unavailable } from './file.js'
+export { PROGRESS_MS } from './limits.js'

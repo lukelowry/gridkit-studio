@@ -79,10 +79,9 @@ try {
   )
   const workspace = path.join(run, 'workspace')
   await mkdir(workspace)
-  await copyFile(
-    path.join(root, 'cases/IEEE39.case.json'),
-    path.join(workspace, 'IEEE39.case.json'),
-  )
+  // The case, and the solver file that runs it, as GridKit runs a pair.
+  for (const file of ['IEEE39.case.json', 'IEEE39.solver.json'])
+    await copyFile(path.join(root, 'cases', file), path.join(workspace, file))
 
   const executable =
     process.env.VSCODE_EXECUTABLE_PATH ??

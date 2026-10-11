@@ -12,7 +12,7 @@ View, edit, and simulate [GridKit](https://github.com/ORNL/GridKit) power-system
 
 ## Install
 
-Download the VSIX from [Releases](https://github.com/lukelowry/gridkit-studio/releases) and install it with **Extensions: Install from VSIX…**, then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
+Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
 
 ## GridKit
 
@@ -27,6 +27,17 @@ To use the default image, pull it first:
 ```sh
 docker pull ghcr.io/lukelowry/gridkit:latest
 ```
+
+To work inside a container instead, with GridKit on `PATH`, save this as `.devcontainer/devcontainer.json` in your project and run **Dev Containers: Reopen in Container**:
+
+```json
+{
+  "image": "ghcr.io/lukelowry/gridkit:latest",
+  "customizations": { "vscode": { "extensions": ["lukelowery.gridkit-studio"] } }
+}
+```
+
+To run GridKit, right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes. The case's `mon` lists say what gets recorded, and **Monitored Signals** edits them. **Show Results** on a solver file shows what its last run wrote, and **Run Again** in the Monitor runs that solver file again. **Open Results…** in the Monitor shows any other output you have.
 
 ## Features
 
@@ -43,7 +54,7 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _An IEEE39 generator with its exciter and stabilizer in the diagram_
 
-- Dynamic simulation and contingency analysis
+- Dynamic simulation and contingency analysis from a solver file's menu
 - Monitor for plotting and playing back signals
 
 ![IEEE39 during a fault with voltage magnitude on the network and in the Monitor](docs/media/monitor.png)

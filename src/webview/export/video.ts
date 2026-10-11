@@ -1,4 +1,6 @@
-/** Render selected views from a fixed run snapshot into a video file. */
+/** Render selected views of results into a video file: the Monitor's part from every sample over
+ *  the time range, the Network's from samples that come a moment at a time, a few chunks ahead of
+ *  the frame drawn. */
 
 import { createDiagram } from '@latkit/diagram'
 import { createComposition, type Gpu, type Positions, type View } from '@latkit/gpu'
@@ -7,11 +9,9 @@ import { createMonitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
-import { recordedWhole } from '../../shared/bindings.js'
-import { coversInterval } from '../../shared/coverage.js'
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
-import { diagramOf, fieldName, networkOf } from '../../shared/schema.js'
+import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { MAX_OUTPUT_PIXELS } from '../gpu.js'
@@ -46,12 +46,15 @@ export const DEFAULTS: VideoSettings = {
   quality: 'high',
 }
 
-/** What the export draws: the view state, the case and its run's samples, where the case saves
+/** What the export draws: the view state, the case's rows, those rows with every sample the
+ *  Monitor's part plots, the samples the Network's part maps at each moment, where the case saves
  *  its diagram blocks, and each view's camera. */
 interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
-  readonly samples: Data
+  readonly plotted: Data
+  /** The rows with the samples the Network maps at `at`, once they are held. */
+  readonly mapped: (at: number, signal: AbortSignal) => Promise<Data>
   readonly presentation: Readonly<Record<string, Positions>>
   readonly cameras: Cameras
 }
@@ -72,17 +75,19 @@ export function viewsOf(state: ViewState): { value: VideoView; label: string }[]
   ]
 }
 
-/** The plots of `state` its run recorded, which the Monitor's part of a video draws. */
-export function plotsOf({ run, plots = [] }: ViewState): Plot[] {
+/** The plots of `state` its results hold, which the Monitor's part of a video draws. */
+function plotsOf({ results, plots = [] }: ViewState): Plot[] {
   return plots.filter((plot) =>
-    run?.outputs.some((output) => output.from === plot.from && output.select.includes(plot.field)),
+    results?.outputs.some(
+      (output) => output.from === plot.from && output.select.includes(plot.field),
+    ),
   )
 }
 
-/** Whether the export can start: a case with a recorded run, a view, a signal for the Monitor's
- *  part, a time range within the run, an even size up to 4K and a positive speed. */
+/** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
+ *  time range within the results, an even size up to 4K and a positive speed. */
 export function exportable(settings: VideoSettings, state: ViewState): boolean {
-  const range = state.run?.domain
+  const range = state.results?.domain
   if (!state.summary || !range || !(range[1] > range[0])) return false
   if (settings.views.length === 0) return false
   if (settings.views.includes('monitor') && plotsOf(state).length === 0) return false
@@ -102,11 +107,12 @@ export function exportable(settings: VideoSettings, state: ViewState): boolean {
 }
 
 /** Encodes the views to `output` on renderers of their own, so VS Code stays usable; colors span
- *  the whole run. The caller closes or aborts `output`. */
+ *  the whole run. Before each frame draws, the Network is given the samples of its moment. The
+ *  caller closes or aborts `output`. */
 export async function exportVideo(
   gpu: Gpu,
   settings: VideoSettings,
-  { state, rows, samples, presentation, cameras }: VideoInputs,
+  { state, rows, plotted, mapped, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
   signal: AbortSignal,
   onProgress: (progress: VideoProgress) => void,
@@ -121,39 +127,40 @@ export async function exportVideo(
     made.push(view)
     return view
   }
+  /** Gives the Network the samples of the moment `at`, once they are held. */
+  let ready = async (_at: number) => {}
   try {
     for (const view of settings.views) {
       if (view === 'network') {
-        for (const { type, field } of Object.values(state.bindings ?? {})) {
-          if (
-            !state.run ||
-            !rows.schema.types[type]?.fields[field]?.sampled ||
-            !recordedWhole(state.run.outputs, state.summary?.counts[type] ?? 0, { type, field })
-          )
-            continue
-          if (!coversInterval(samples, type, field, settings.timeRange))
-            throw new Error(
-              `Export samples do not cover ${type}.${field} over the requested interval.`,
-            )
-        }
         const geographic = isGeographic(rows)
         const borders =
           geographic && preferences.get('network.borders')
             ? await loadBorders().catch(() => null)
             : null
+        const [start] = settings.timeRange
+        let drawn = await mapped(start, signal)
         signal.throwIfAborted()
+        const config = (data: Data, at: number) => ({
+          ...networkConfig(rows, data, state, geographic, borders),
+          at,
+          ...still,
+          canvas: null,
+        })
         const network = keep(
           createNetwork(gpu, {
-            ...networkConfig(rows, samples, state, geographic, borders),
-            at: settings.timeRange[0],
-            ...still,
-            canvas: null,
+            ...config(drawn, start),
             camera: (cameras.network as never) ?? {
               projection: projectionOf(preferences.get('network.camera.projection'), geographic),
               fit: true,
             },
           }),
         )
+        ready = async (at) => {
+          const data = await mapped(at, signal)
+          if (data === drawn) return
+          drawn = data
+          network.set({ ...config(data, at), camera: network.camera }, { replace: true })
+        }
         cells.push([network])
       } else if (view === 'diagram') {
         if (!diagrammed(rows)) throw new Error('This case has no diagram to export.')
@@ -170,26 +177,35 @@ export async function exportVideo(
         const plots = plotsOf(state)
         if (plots.length === 0) throw new Error('No recorded signal to export.')
         cells.push(
-          plots.map((plot) => {
+          plots.map((plot, i) => {
             const definition = rows.schema.types[plot.from]?.fields[plot.field]
+            // Nothing beside a video names its plots, so each names itself as the Monitor's
+            // header does; the last, over the time axis they share, labels and captions its ticks.
+            const name =
+              typeName(rows.schema, plot.from) +
+              (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
+              ` · ${fieldName(definition, plot.field)}`
+            const last = i === plots.length - 1
             return keep(
               createMonitor(gpu, {
-                ...plotOptions(
-                  preferences,
-                  colors,
-                  face,
-                  axisLabel(rows.schema.axis),
-                  fieldName(definition, plot.field),
-                ),
+                ...plotOptions(preferences, colors, face, {
+                  ticks: last,
+                  caption: name,
+                  ...(last && { time: axisLabel(rows.schema.axis) }),
+                }),
                 ...still,
                 canvas: null,
-                source: samples,
+                source: plotted,
                 ...plotBindings(
                   preferences,
                   { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
                   state.bindings,
-                  plotRows(samples, state.run, { type: plot.from, field: plot.field, id: plot.id }),
-                  state.run,
+                  plotRows(plotted, state.results, {
+                    type: plot.from,
+                    field: plot.field,
+                    id: plot.id,
+                  }),
+                  state.results,
                 ),
                 camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,
@@ -225,6 +241,7 @@ export async function exportVideo(
       format: settings.format,
       quality: { medium: 0.5, high: 0.75, 'very-high': 1 }[settings.quality],
       at: (seconds) => start + seconds * settings.rate,
+      ready: (at) => (at === undefined ? undefined : ready(at)),
       signal,
       onProgress: (progress) => {
         if (!signal.aborted) onProgress(progress)

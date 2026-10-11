@@ -94,3 +94,55 @@ export class VideoFile {
       })
   }
 }
+
+/** The videos one view's exports write, each by the handle the view was given for it. */
+export class VideoFiles {
+  readonly #open = new Map<number, VideoFile>()
+  #next = 0
+
+  /** Asks the user where to save `name`, next to `beside`: a handle to write it through, or null
+   *  when they cancel. */
+  async open(
+    beside: vscode.Uri,
+    name: string,
+    format: 'mp4' | 'webm',
+    signal: AbortSignal,
+  ): Promise<number | null> {
+    const file = await VideoFile.choose(beside, String(name), format === 'webm' ? 'webm' : 'mp4')
+    if (!file) return null
+    if (signal.aborted) {
+      await file.abort()
+      signal.throwIfAborted()
+    }
+    this.#open.set(++this.#next, file)
+    return this.#next
+  }
+
+  async write(handle: number, position: number, bytes: Uint8Array | ArrayBuffer): Promise<void> {
+    const chunk = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes
+    if (!(chunk instanceof Uint8Array)) throw new Error('Invalid video write.')
+    const file = this.#open.get(handle)
+    if (!file) throw new Error('The video file is closed.')
+    return file.write(position, chunk)
+  }
+
+  /** Finishes the video, or with `abort` discards it: the finished video's path. */
+  async close(handle: number, abort = false): Promise<string | null> {
+    const file = this.#open.get(handle)
+    this.#open.delete(handle)
+    if (!file) return null
+    try {
+      await (abort ? file.abort() : file.close())
+    } catch (error) {
+      await file.abort()
+      throw error
+    }
+    return abort ? null : file.uri.fsPath
+  }
+
+  /** Discards every video still open. */
+  dispose(): void {
+    for (const file of this.#open.values()) void file.abort().catch(() => {})
+    this.#open.clear()
+  }
+}

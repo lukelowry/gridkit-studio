@@ -16,7 +16,7 @@ export function registerNavigation(studio: Sessions) {
     const summary = await parsed(document)
     if (!summary) return undefined
     const context = await cancellable(token, (signal) =>
-      studio.client.call(
+      studio.client.cases.call(
         'context',
         {
           uri: document.uri.toString(),
@@ -34,7 +34,7 @@ export function registerNavigation(studio: Sessions) {
       {
         async provideCompletionItems(document, position, token) {
           const completions = await cancellable(token, (signal) =>
-            studio.client.call(
+            studio.client.cases.call(
               'complete',
               { text: document.getText(), offset: document.offsetAt(position) },
               signal,
@@ -74,7 +74,7 @@ export function registerNavigation(studio: Sessions) {
         const id = context?.reference
         if (!id) return
         const range = await cancellable(token, (signal) =>
-          studio.client.call(
+          studio.client.cases.call(
             'locate',
             { uri: document.uri.toString(), version: context.summary.version, id },
             signal,
@@ -94,7 +94,7 @@ export function registerNavigation(studio: Sessions) {
         const summary = await parsed(document)
         if (!summary) return undefined
         const symbols = await cancellable(token, (signal) =>
-          studio.client.call(
+          studio.client.cases.call(
             'symbols',
             { uri: document.uri.toString(), version: summary.version },
             signal,

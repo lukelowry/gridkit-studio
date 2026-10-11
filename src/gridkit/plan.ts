@@ -6,10 +6,22 @@ import type { Case } from './case.js'
 import { createRecords } from './create.js'
 import type { ArrayName } from './definition.js'
 import { apply, editField, minimal, recordOf, textOffset, withValue } from './edits.js'
+import { recordEdits } from './recording.js'
 
 type Addition = Extract<Mutation, { kind: 'add' }>
 /** Validate the final graph, then emit disjoint edits against the original source once. */
 export function planTransaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
+  // What a case records is a batch of its own: one edit per element whose `mon` list changes.
+  const records = mutations.filter((mutation) => mutation.kind === 'record')
+  if (records.length) {
+    if (records.length < mutations.length)
+      throw failure('invalid-input', 'Change what a case records in a batch of its own.')
+    if (new Set(records.map(({ type }) => type)).size < records.length)
+      throw failure('invalid-input', 'Change what each type records once in a batch.')
+    return records
+      .flatMap(({ type, add, remove }) => recordEdits(kase, type, add, remove))
+      .sort((a, b) => a.offset - b.offset)
+  }
   const added = new Map<string, Addition>()
   const removed = new Set<string>()
   const fields = new Map<string, Map<string, Value>>()

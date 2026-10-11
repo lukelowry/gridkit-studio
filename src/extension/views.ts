@@ -1,54 +1,44 @@
 import { randomBytes } from 'node:crypto'
+import { basename } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
-import { type DataBatch, type FieldSelection, staticFields } from '@latkit/model'
+import type { RowsBlock, RowsQuery } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { BATCH_BYTES } from '../results/limits.js'
-import { retryable } from '../shared/errors.js'
-import { cancelled, defect, detail, message } from '../shared/format.js'
-import {
-  type Begin,
-  type FromView,
-  type Requests,
-  type Revision,
-  type SimulationInfo,
-  type Summary,
-  type ToView,
-  type VideoView,
-  type ViewKind,
-  type ViewRequests,
-  type ViewState,
+import type {
+  FromView,
+  Results,
+  Summary,
+  ToView,
+  ViewApi,
+  ViewKind,
+  ViewState,
 } from '../shared/messages.js'
-import { type PageEntry, type PageRange, type Want, wantKey } from '../shared/pages.js'
 import type { SettingsValues } from '../shared/preferences.js'
-import { isReference, nameFieldOf, networkOf, positionOf, typeName } from '../shared/schema.js'
-import type { Session, Sessions } from './sessions.js'
-import { packed, StreamDelivery } from './stream.js'
-import { VideoFile } from './video.js'
+import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
+import { typeName } from '../shared/schema.js'
+import { packed } from './packed.js'
+import type { Sessions } from './sessions.js'
+import { VideoFiles } from './video.js'
 
-/** Results decode to float64. */
-const SAMPLE_BYTES = 8
-/** The views that draw the case, and so are streamed its rows and samples. */
-const DRAWN: ReadonlySet<ViewKind> = new Set(['network', 'diagram', 'monitor', 'export'])
+/** The views a clock moves. */
+const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor'])
 /** The commands a webview may run. */
 const COMMANDS: ReadonlySet<string> = new Set([
   'elementSource',
   'plot',
   'addPlot',
   'removePlot',
-  'startSimulation',
-  'stopSimulation',
   'chooseSignals',
-  'showContingency',
 ])
 /** How many rows the Case panel's filters leave, by case. */
 const shownRows = new Map<string, number>()
 
 /** What a panel's title says after its name: the case, and what the panel shows of it. The Case
- *  panel's type and filtered count, and the Monitor's run, live here rather than in the panels. */
+ *  panel's type and filtered count, and the Monitor's results, live here rather than in the
+ *  panels. */
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
-  const { summary, table, run, launching } = studio.state(uri)
+  const { summary, table, results } = studio.state(uri)
   const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
   if (kind === 'case' && summary && table?.type) {
     parts.push(typeName(summary.schema, table.type))
@@ -57,26 +47,32 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
     if ((table.filter || table.equal) && count !== undefined && shown !== undefined)
       parts.push(`${shown.toLocaleString()} of ${count.toLocaleString()}`)
   }
-  // How far a run has come, or what it left; never how it ended, which only a notification says.
-  if (kind === 'simulation' && launching) parts.push('starting')
-  else if ((kind === 'simulation' || kind === 'monitor') && run) {
-    const study = run.contingency
-    if (run.state === 'running' && kind === 'simulation')
-      parts.push(
-        study
-          ? `${study.done.toLocaleString()} of ${study.buses.length.toLocaleString()} contingencies`
-          : run.span && run.span[1] > run.span[0]
-            ? `${Math.round((100 * (run.domain[1] - run.span[0])) / (run.span[1] - run.span[0]))}%`
-            : 'starting',
-      )
-    else if (run.frames) parts.push(`${run.frames.toLocaleString()} samples`)
+  // What a run left, never how it ended, which only a notification says. How far one has come is
+  // its notification's to say.
+  if (kind === 'monitor' && results) {
+    if (results.solver) parts.push(basename(results.solver))
+    const study = results.contingency
+    if (study) parts.push(`bus ${study.buses[study.shown]}`)
+    if (results.frames) parts.push(`${results.frames.toLocaleString()} samples`)
   }
   return parts.join(' · ')
 }
 
+/** What of the results a view draws: which, how far they are read, what they hold, and the times
+ *  and values they span. */
+const drawn = (results?: Results) =>
+  results && [
+    results.id,
+    results.frames,
+    results.outputs,
+    results.domain,
+    results.span,
+    results.domains,
+  ]
+
 /** What each view reads of the state, besides the summary and settings, which are compared on
- *  their own; a view is sent state only when this changes. While a run streams, only what a view
- *  draws from the run sends it state again. */
+ *  their own; a view is sent state only when this changes. While a run writes, the frames read so
+ *  far send a view that draws them state again, which is how it hears there are more to ask for. */
 const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
   case: ({ version, stale, error, writable, selection, bindings, table }) => [
     version,
@@ -86,15 +82,6 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     selection,
     bindings,
     table,
-  ],
-  simulation: ({ uri, stale, error, values, outputs, run, launching }) => [
-    uri,
-    stale,
-    error,
-    values,
-    outputs,
-    run && [run.id, run.state, run.frames, run.domain, run.span, run.message, run.contingency],
-    launching,
   ],
   diagram: ({ uri, stale, error, writable, selection, anchors, bindings, diagramEditing }) => [
     uri,
@@ -106,8 +93,8 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     bindings,
     diagramEditing,
   ],
-  // The times a run holds mark which ones the network can draw, and its ranges color it.
-  network: ({ uri, stale, error, writable, selection, anchors, bindings, run }) => [
+  // The times the results hold mark which ones the network can draw, and their ranges color it.
+  network: ({ uri, stale, error, writable, selection, anchors, bindings, results }) => [
     uri,
     stale,
     error,
@@ -115,54 +102,32 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     selection,
     anchors,
     bindings,
-    run && [
-      run.id,
-      run.fingerprint,
-      run.frames > 0,
-      run.outputs,
-      run.domain,
-      run.span,
-      run.domains,
-    ],
+    drawn(results),
   ],
-  // A run the plots show has a fixed span, else the times it recorded.
-  monitor: ({ uri, stale, selection, bindings, plots, window, run }) => [
+  // Results the plots show have a fixed span while a run writes them, else the times they hold.
+  monitor: ({ uri, stale, selection, bindings, plots, window, results }) => [
     uri,
     stale,
     selection,
     bindings,
     plots,
     window,
-    run && [run.id, run.state, run.frames > 0, run.outputs, run.span ?? run.domain, run.domains],
+    drawn(results),
+    results?.growing,
   ],
-  // An export's times follow the run's until the user chooses their own.
-  export: ({ uri, stale, error, bindings, plots, run }) => [
+  // An export's times follow the results' until the user chooses their own.
+  export: ({ uri, stale, error, bindings, plots, results }) => [
     uri,
     stale,
     error,
     bindings,
     plots,
-    run && [run.id, run.frames > 0, run.outputs, run.domain, run.span, run.domains],
+    drawn(results),
   ],
 }
 
 /** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
 type Hidden = 'destroyed' | 'idle' | 'working'
-
-/** A stream a view is sent: the case's rows, or pages of a run's samples. Either may be sent again
- *  safely, as rows replace those the view holds and a page it holds already is held once. */
-interface Transfer {
-  /** What names it, so one that failed is not sent again until something changes. */
-  keys: readonly string[]
-  /** The run it belongs to: a stream for another is let go. */
-  run?: string
-  revision: Revision
-  begin: (signal: AbortSignal) => Promise<BeginBody> | BeginBody
-  request: Requests['batches']['input']
-}
-/** `T` without `K`, each member of a union on its own. */
-type Without<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
-type BeginBody = Without<Begin, 'kind' | 'stream'>
 
 function html(
   webview: vscode.Webview,
@@ -179,41 +144,20 @@ function html(
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
 class View {
-  #requests = new Map<number, AbortController>()
+  readonly #answering: Answerer
+  readonly #videos = new VideoFiles()
   #summary?: Summary
-  #resultSummary?: { simulationId: string; value: Summary }
+  /** The case the shown results were read against, as it was then. */
+  #described?: { results: string; summary: Summary }
   #settings?: SettingsValues
   #shown = ''
   #ready = false
   #disposed = false
-  #stream = 0
-  #controller?: AbortController
-  readonly #delivery = new StreamDelivery((message) => this.send(message))
-  /** What names the rows the view holds. */
-  #base?: string
-  /** The run whose pages the view was told of, how it was cut into them, and those it had
-   *  published. */
-  #listed?: { run: string; paging: string; frames: number; pages: readonly PageEntry[] }
-  /** The pages the view last asked for. */
-  #asked?: Omit<Extract<FromView, { kind: 'want' }>, 'kind'>
-  /** The stream that brought each field of each page, so a want sent before it arrived is not
-   *  answered twice. */
-  readonly #delivered = new Map<string, number>()
-  /** The pages on their way, and whether the view needs them to show what it shows now. */
-  #flight?: { run: string; pages: PageRange; required: boolean }
-  /** Invalid data waits for a changed demand; transient failures retry after a quiet interval. */
-  readonly #failed = new Set<string>()
-  #retry?: { keys: ReadonlySet<string>; timer: ReturnType<typeof setTimeout> }
-  #failure = ''
   /** Whether another update is due, and the update in progress. */
   #again = false
   #running?: Promise<void>
   /** The sequence number of the latest transport change this view made. */
   #seq = 0
-  /** The data a video export asked for. */
-  #video?: ViewRequests['videoData']['input']
-  #files = new Map<number, VideoFile>()
-  #file = 0
   /** Whether the view is mid-task and must not be replaced. */
   busy = false
   #settle: () => void = () => {}
@@ -237,6 +181,7 @@ class View {
       kind,
     )
     const report = (error: unknown) => studio.error(error)
+    this.#answering = answerer(this.#handlers(), (reply) => void this.send(reply))
     this.disposables.push(
       panel.webview.onDidReceiveMessage((message: FromView) => {
         void this.receive(message).catch(report)
@@ -250,12 +195,6 @@ class View {
       studio.action.event((action) => {
         if (action.uri !== uri || (action.view && action.view !== kind)) return
         void this.send({ kind: 'action', command: action.command, value: action.value })
-        // A reload asks again for what last failed to stream.
-        if (action.command === 'retryMonitor' || action.command === 'reloadView') {
-          this.#failed.clear()
-          this.clearRetry()
-          void this.update().catch(report)
-        }
       }),
       ('onDidChangeViewState' in panel ? panel.onDidChangeViewState : panel.onDidChangeVisibility)(
         () => {
@@ -268,7 +207,7 @@ class View {
           } else if (hidden === 'destroyed') {
             // The webview is destroyed; its replacement sends 'ready' again.
             this.#ready = false
-            this.cancel(true)
+            this.cancel()
           }
         },
       ),
@@ -283,7 +222,7 @@ class View {
   tick() {
     const session = this.studio.all.get(this.uri)
     if (!session || !this.#ready || !this.panel.visible) return
-    if (this.kind === 'export' || !DRAWN.has(this.kind)) return
+    if (!CLOCKED.has(this.kind)) return
     void this.send({
       kind: 'clock',
       clock: session.transport.snapshot(),
@@ -291,35 +230,24 @@ class View {
       seq: this.#seq,
     })
   }
-  cancel(requests = false) {
-    if (requests) {
-      for (const controller of this.#requests.values()) controller.abort()
-      this.#requests.clear()
-    }
-    this.#controller?.abort()
-    this.clearRetry()
+  /** Let go of the view's requests under way. */
+  cancel() {
+    this.#answering.cancel()
   }
   async receive(message: FromView) {
     if (!message || typeof message !== 'object' || this.#disposed) return
     const session = this.studio.all.get(this.uri)
     switch (message.kind) {
+      case 'request':
       case 'cancel':
-        this.#requests.get(message.id)?.abort()
-        return
+        return this.#answering.receive(message)
       case 'ready':
-        this.cancel()
         this.#ready = true
         this.#settle()
         this.#shown = ''
-        this.#base = this.#summary = this.#settings = this.#listed = this.#asked = undefined
-        this.#delivered.clear()
-        this.#failed.clear()
+        this.#summary = this.#settings = undefined
         this.tick()
         await this.update()
-        return
-      case 'ack':
-      case 'commit':
-        this.#delivery.receive(message)
         return
       case 'select':
         if (message.element === null || typeof message.element?.id === 'string')
@@ -330,26 +258,6 @@ class View {
         if (this.kind !== 'monitor' || !session || bounds?.length !== 2) return
         if (!bounds.every(Number.isFinite) || !(bounds[0] < bounds[1])) return
         session.window = [bounds[0], bounds[1]]
-        await this.update()
-        return
-      }
-      case 'want': {
-        const { run, paging, wants, required, settled } = message
-        if (typeof run !== 'string' || typeof paging !== 'string' || !Array.isArray(wants)) return
-        if (!Number.isSafeInteger(required) || !Number.isSafeInteger(settled)) return
-        this.#asked = { run, paging, wants, required, settled }
-        // Pages on their way finish while the view still wants them; pages sent ahead give way to
-        // those it needs to show now.
-        const flight = this.#flight
-        if (flight) {
-          const carried = ({ page }: Want) => page >= flight.pages[0] && page < flight.pages[1]
-          if (
-            run !== flight.run ||
-            !wants.some(carried) ||
-            (!flight.required && !wants.slice(0, required).every(carried))
-          )
-            this.#controller?.abort()
-        }
         await this.update()
         return
       }
@@ -370,12 +278,6 @@ class View {
           await this.studio.step(session, message.value === -1 ? -1 : 1)
         return
       }
-      case 'values':
-        if (session && message.uri === this.uri && message.values) {
-          session.values = message.values
-          this.studio.persist(session)
-        }
-        return
       case 'tableState':
         if (!session) return
         session.table = message.table
@@ -387,7 +289,6 @@ class View {
         return
       case 'busy':
         this.busy = message.busy === true
-        if (!this.busy) this.#video = undefined
         return
       case 'error':
         this.studio.report(
@@ -407,109 +308,62 @@ class View {
           })
         }
         return
-      case 'request':
-        return this.answer(message.id, message.method, message.input)
     }
   }
-  /** Reply to the view's request `id` unless it was cancelled. */
-  async answer(id: number, method: keyof ViewRequests, input: unknown) {
-    const request = new AbortController()
-    this.#requests.set(id, request)
-    try {
-      const work = this.handle(method, input, request.signal)
-      // The Case panel's rows load under VS Code's own progress bar on the view.
-      if (this.kind === 'case' && method === 'query')
-        void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.case' } }, () =>
-          work.catch(() => {}),
-        )
-      const value = await work
-      if (!request.signal.aborted) await this.send({ kind: 'reply', id, value })
-    } catch (error) {
-      if (!request.signal.aborted)
-        await this.send({
-          kind: 'reply',
-          id,
-          error: message(error),
-          detail: detail(error),
-          ...(defect(error) && { defect: true }),
-          ...(cancelled(error) && { cancelled: true }),
-        })
-    } finally {
-      this.#requests.delete(id)
-    }
-  }
-  async handle(method: keyof ViewRequests, input: unknown, signal: AbortSignal): Promise<unknown> {
+  /** What the view may ask: of the case it shows, the results it draws, and the videos it exports.
+   *  It asks for what it lacks of the case and the results: the case's revision names what it asks
+   *  of, and is refused once stale. */
+  #handlers(): Handlers<ViewApi> {
     const { studio, uri } = this
-    if (method === 'videoWrite') {
-      const { file, position, bytes } = input as ViewRequests['videoWrite']['input']
-      const chunk = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes
-      if (!(chunk instanceof Uint8Array)) throw new Error('Invalid video write.')
-      const open = this.#files.get(file)
-      if (!open) throw new Error('The video file is closed.')
-      return open.write(position, chunk)
+    const { client } = studio
+    /** The case as it reads now. A request made while the case is read again, as it is after each
+     *  edit, waits for that reading. A case that no longer reads keeps the view on its last
+     *  revision, which says so, and the request is let go: Problems says why. */
+    const read = async () => {
+      const entry = studio.documents.entries.get(uri)
+      const summary =
+        entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
+      if (!summary) throw new DOMException('The case does not read.', 'AbortError')
+      return summary
     }
-    if (method === 'videoClose') {
-      const { file, abort } = input as ViewRequests['videoClose']['input']
-      const open = this.#files.get(file)
-      this.#files.delete(file)
-      if (open) {
-        try {
-          await (abort ? open.abort() : open.close())
-        } catch (error) {
-          await open.abort()
-          throw error
-        }
-      }
-      return open && !abort ? open.uri.fsPath : null
-    }
-    if (method === 'videoOpen') {
-      const { name, format } = input as ViewRequests['videoOpen']['input']
-      const file = await VideoFile.choose(
-        vscode.Uri.parse(uri),
-        String(name),
-        format === 'webm' ? 'webm' : 'mp4',
-      )
-      if (!file) return null
-      if (signal.aborted || this.#disposed) {
-        await file.abort()
-        signal.throwIfAborted()
-        return null
-      }
-      this.#files.set(++this.#file, file)
-      return this.#file
-    }
-    if (method === 'videoData') {
-      this.#video = input as ViewRequests['videoData']['input']
-      await this.update()
-      if (this.#failure) throw new Error(this.#failure)
-      return studio.all.get(uri)?.cameras ?? {}
-    }
-    // A request made while the case is read again, as it is after each edit, waits for that
-    // reading. A case that no longer reads keeps the view on its last revision, which says so, and
-    // the request is let go: Problems says why.
-    const entry = studio.documents.entries.get(uri)
-    const summary = entry && (await studio.documents.ensure(entry.document).catch(() => undefined))
-    if (!summary) throw new DOMException('The case does not read.', 'AbortError')
-    if (method === 'elements') {
-      const { type } = input as ViewRequests['elements']['input']
-      return studio.client.call('elements', { uri, version: summary.version, type }, signal)
-    }
-    if (method === 'query') {
-      const query = input as ViewRequests['query']['input']
+    /** Rows of the case, or, `at` a time, of the shown results. */
+    const query = async (query: RowsQuery, signal: AbortSignal) => {
       if (query?.kind !== 'rows') throw new Error('Invalid row query')
-      // A query `at` a time reads the shown run.
-      const run = query.at === undefined ? undefined : studio.all.get(uri)?.run?.id
-      return studio.client.call(
-        'query',
-        { uri, version: summary.version, query, ...(run && { run }) },
-        signal,
-      )
+      const results = query.at === undefined ? undefined : studio.all.get(uri)?.results?.id
+      const blocks = results
+        ? await client.results.call('query', { results, query }, signal)
+        : await client.cases.call('query', { uri, version: (await read()).version, query }, signal)
+      return blocks.filter((block): block is RowsBlock => block.kind === 'rows')
     }
-    if (method === 'transact') {
-      const edit = input as ViewRequests['transact']['input']
-      return studio.documents.transact(uri, edit.version, [...edit.mutations], edit.label)
+    return {
+      samples: (input, signal) => client.results.call('samples', input, signal),
+      rows: (input, signal) =>
+        'results' in input
+          ? client.results.call('rows', input, signal)
+          : client.cases.call('rows', input, signal),
+      presentation: (input, signal) =>
+        'results' in input
+          ? client.results.call('presentation', input, signal)
+          : client.cases.call('presentation', input, signal),
+      query: (input, signal) => {
+        const rows = query(input, signal)
+        // The Case panel's rows load under VS Code's own progress bar on the view.
+        if (this.kind === 'case')
+          void vscode.window.withProgress({ location: { viewId: 'gridkitStudio.case' } }, () =>
+            rows.catch(() => {}),
+          )
+        return rows
+      },
+      transact: async ({ version, mutations, label }) => {
+        await read()
+        return studio.documents.transact(uri, version, [...mutations], label)
+      },
+      cameras: async () => studio.all.get(uri)?.cameras ?? {},
+      videoOpen: ({ name, format }, signal) =>
+        this.#videos.open(vscode.Uri.parse(uri), name, format, signal),
+      videoWrite: ({ file, position, bytes }) => this.#videos.write(file, position, bytes),
+      videoClose: ({ file, abort }) => this.#videos.close(file, abort),
     }
-    throw new Error('Unknown view request: ' + method)
   }
   /** Bring the view up to date; resolves once it is. */
   update(): Promise<void> {
@@ -529,17 +383,15 @@ class View {
     // A hidden view catches up when it shows; one kept working works on while hidden.
     if (!this.#ready || (!this.panel.visible && !(this.hidden === 'working' && this.busy))) return
     const state = this.studio.state(this.uri)
-    if ((this.kind === 'monitor' || this.kind === 'export') && state.run?.frames) {
-      if (this.#resultSummary?.simulationId !== state.run.id)
-        this.#resultSummary = {
-          simulationId: state.run.id,
-          value: await this.studio.client.call('describeSimulation', {
-            simulationId: state.run.id,
-          }),
+    if ((this.kind === 'monitor' || this.kind === 'export') && state.results?.frames) {
+      const results = state.results.id
+      if (this.#described?.results !== results)
+        this.#described = {
+          results,
+          summary: await this.studio.client.results.call('describe', { results }),
         }
-      state.summary = this.#resultSummary.value
+      state.summary = this.#described.summary
     }
-    const session = this.studio.all.get(this.uri)
     const signature = JSON.stringify(SHOWN[this.kind](state))
     if (
       signature !== this.#shown ||
@@ -554,326 +406,7 @@ class View {
       this.#summary = state.summary
       this.#settings = state.settings
       await this.send({ kind: 'state', state: sent })
-      if (this.#disposed) return
     }
-    if (!DRAWN.has(this.kind) || !state.summary || !session) return
-    if (state.stale && this.kind !== 'monitor' && this.kind !== 'export') return
-    const { summary } = state
-    const run = this.#sampled(summary, state.run)
-    // The rows first: pages extend them.
-    const rows = this.#rows(summary, run, session)
-    if (!rows) return
-    if (rows.key !== this.#base) {
-      if (this.#stuck(rows.key)) return
-      this.clearRetry()
-      const sent = await this.#send(this.#rowsTransfer(summary, rows, run))
-      if (sent === undefined) return
-      this.#base = rows.key
-    }
-    if (!run || this.#stuck('pages:' + run.id)) return
-    await this.#list(run)
-    // One stream of pages a pass, so the view's state reaches it between them.
-    const next = this.#next(summary, run)
-    if (!next) return
-    this.#flight = { run: run.id, pages: next.pages, required: next.required }
-    try {
-      const stream = await this.#send(this.#pagesTransfer(summary, run, this.#listed!.paging, next))
-      if (stream !== undefined)
-        for (let page = next.pages[0]; page < next.pages[1]; page++)
-          for (const field of next.fields) this.#delivered.set(wantKey(page, field), stream)
-    } finally {
-      this.#flight = undefined
-    }
-    this.#again = true
-  }
-  /** Whether `key` failed, or waits to be retried. */
-  #stuck(key: string): boolean {
-    return this.#failed.has(key) || !!this.#retry?.keys.has(key)
-  }
-  private clearRetry() {
-    clearTimeout(this.#retry?.timer)
-    this.#retry = undefined
-  }
-  /** The run whose samples the view draws: the Monitor's run on show, or the Network's while it is
-   *  of this revision, as an export's are. A run is readable once it reports frames. */
-  #sampled(summary: Summary, run: SimulationInfo | undefined): SimulationInfo | undefined {
-    if (!run?.frames) return undefined
-    if (this.#draws('monitor')) return run
-    return this.#draws('network') && run.fingerprint === summary.fingerprint ? run : undefined
-  }
-  /** The case's rows the view draws: the types it shows, with the fields their names, places,
-   *  routes, references and static mappings read. A run's samples come in pages beside them. */
-  #rows(
-    summary: Summary,
-    run: SimulationInfo | undefined,
-    session: Session,
-  ): { key: string; statics: FieldSelection[] } | undefined {
-    const { kind } = this
-    if (kind === 'export' && !this.#video) return undefined
-    const { schema } = summary
-    const bindings = Object.values(session.bindings)
-    const network = networkOf(schema)
-    const drawn =
-      kind === 'network'
-        ? new Set([...network.vertices, ...network.edges.map((edge) => edge.type)])
-        : undefined
-    const statics = staticFields(schema)
-      .filter((field) => !drawn || drawn.has(field.from))
-      .map((field) => ({
-        ...field,
-        select: field.select.filter(
-          (name) =>
-            bindings.some((binding) => binding.type === field.from && binding.field === name) ||
-            name === nameFieldOf(schema, field.from) ||
-            [positionOf(schema, field.from)?.x, positionOf(schema, field.from)?.y].includes(name) ||
-            network.edges.some((edge) => edge.type === field.from && edge.bends === name) ||
-            isReference(schema.types[field.from]!.fields[name]),
-        ),
-      }))
-      .filter((field) => field.select.length > 0)
-    const key =
-      JSON.stringify([
-        summary.uri,
-        summary.attachmentId,
-        summary.version,
-        kind === 'monitor' && run ? run.fingerprint : summary.fingerprint,
-      ]) +
-      ':' +
-      JSON.stringify(statics)
-    return { key, statics }
-  }
-  /** The rows as a stream. The Monitor's, and an export's, are the case its run ran on. */
-  #rowsTransfer(
-    summary: Summary,
-    rows: { key: string; statics: FieldSelection[] },
-    run: SimulationInfo | undefined,
-  ): Transfer {
-    const revision = { uri: this.uri, version: summary.version, attachmentId: summary.attachmentId }
-    const of = this.kind === 'monitor' || this.kind === 'export' ? run : undefined
-    return {
-      keys: [rows.key],
-      run: of?.id,
-      revision,
-      begin: async (signal) => ({
-        base: true,
-        schema: summary.schema,
-        fields: rows.statics,
-        revision,
-        counts: summary.counts,
-        ...(this.#draws('diagram') && {
-          presentation: await this.studio.client.call('presentation', revision, signal),
-        }),
-      }),
-      request: {
-        ...revision,
-        fields: rows.statics,
-        includeStatic: true,
-        ...(of && { run: of.id, pages: [0, 0] as const }),
-      },
-    }
-  }
-  /** Tell the view of the pages `run` published since it was last told. A run it was not told of,
-   *  or one cut into pages anew, starts over. */
-  async #list(run: SimulationInfo): Promise<void> {
-    let listed = this.#listed?.run === run.id ? this.#listed : undefined
-    if (listed?.frames === run.frames) return
-    let answer: Requests['pages']['output']
-    try {
-      answer = await this.studio.client.call('pages', {
-        run: run.id,
-        from: listed?.pages.length ?? 0,
-      })
-      if (listed && answer.paging !== listed.paging) {
-        listed = undefined
-        answer = await this.studio.client.call('pages', { run: run.id, from: 0 })
-      }
-    } catch (error) {
-      if (this.#disposed || this.studio.all.get(this.uri)?.run?.id !== run.id) return
-      this.#failed.add('pages:' + run.id)
-      this.studio.report(error)
-      return
-    }
-    if (this.#disposed) return
-    const { paging, pages } = answer
-    const from = listed?.pages.length ?? 0
-    if (!listed) {
-      this.#delivered.clear()
-      this.#failed.clear()
-      this.#asked = undefined
-    }
-    this.#listed = {
-      run: run.id,
-      paging,
-      frames: run.frames,
-      pages: [...(listed?.pages ?? []), ...pages],
-    }
-    if (pages.length || !listed)
-      await this.send({ kind: 'pages', run: run.id, paging, from, pages })
-  }
-  /** Whether `run` was cut into pages anew since `paging`; then the view starts over. */
-  async #repaged(run: string, paging: string): Promise<boolean> {
-    const now = await this.studio.client
-      .call('pages', { run, from: Infinity })
-      .catch(() => undefined)
-    if (!now || now.paging === paging) return false
-    this.#listed = undefined
-    return true
-  }
-  /** The next pages to send: the first the view wants that no stream since its last settled one
-   *  brought. Pages it needs to show now go together, up to BATCH_BYTES; pages sent ahead go one
-   *  at a time, so a page the view comes to need waits behind one at most. */
-  #next(
-    summary: Summary,
-    run: SimulationInfo,
-  ): { pages: PageRange; fields: FieldSelection[]; required: boolean } | undefined {
-    const asked = this.#asked
-    const listed = this.#listed
-    if (!asked || !listed || asked.run !== run.id || listed.run !== run.id) return undefined
-    if (asked.paging !== listed.paging) return undefined
-    const lacking = ({ page, fields }: Want) =>
-      Number.isSafeInteger(page) && page >= 0 && page < listed.pages.length
-        ? fields.filter((field) => {
-            const key = wantKey(page, field)
-            return !this.#stuck(key) && (this.#delivered.get(key) ?? 0) <= asked.settled
-          })
-        : []
-    const bytes = (page: number, fields: readonly FieldSelection[]) =>
-      fields.reduce(
-        (sum, { from, rows }) =>
-          sum +
-          (rows?.kind === 'ids' ? rows.ids.length : (summary.counts[from] ?? 0)) *
-            listed.pages[page]!.count *
-            SAMPLE_BYTES,
-        0,
-      )
-    for (let i = 0; i < asked.wants.length; i++) {
-      const fields = lacking(asked.wants[i]!)
-      if (!fields.length) continue
-      const first = asked.wants[i]!.page
-      if (i >= asked.required) return { pages: [first, first + 1], fields, required: false }
-      const needed = new Map(asked.wants.slice(0, asked.required).map((want) => [want.page, want]))
-      const same = JSON.stringify(fields)
-      let end = first + 1
-      let size = bytes(first, fields)
-      for (let next = needed.get(end); next; next = needed.get(end)) {
-        size += bytes(end, fields)
-        if (size > BATCH_BYTES || JSON.stringify(lacking(next)) !== same) break
-        end++
-      }
-      return { pages: [first, end], fields, required: true }
-    }
-    return undefined
-  }
-  /** Pages `pages` of `run`'s samples, cut as `paging` names, of `fields`, as a stream. */
-  #pagesTransfer(
-    summary: Summary,
-    run: SimulationInfo,
-    paging: string,
-    { pages, fields }: { pages: PageRange; fields: FieldSelection[] },
-  ): Transfer {
-    const revision = { uri: this.uri, version: summary.version, attachmentId: summary.attachmentId }
-    const keys: string[] = []
-    for (let page = pages[0]; page < pages[1]; page++)
-      for (const field of fields) keys.push(wantKey(page, field))
-    return {
-      keys,
-      run: run.id,
-      revision,
-      begin: () => ({
-        base: false,
-        simulationId: run.id,
-        pages,
-        paging,
-        fields,
-        revision,
-        counts: summary.counts,
-      }),
-      request: { ...revision, fields, run: run.id, pages, paging, includeStatic: false },
-    }
-  }
-  /** Whether this view draws `view`, as itself or in a video export. */
-  #draws(view: VideoView): boolean {
-    return this.kind === view || (this.kind === 'export' && !!this.#video?.views.includes(view))
-  }
-  /** Send `transfer`, and resolve with its stream once the view commits it; undefined when it did
-   *  not. What may pass is sent again: a stream changes nothing until it commits, and one that
-   *  committed with its receipt lost is held once. */
-  async #send(transfer: Transfer): Promise<number | undefined> {
-    const { studio, uri } = this
-    const controller = (this.#controller = new AbortController())
-    this.#failure = ''
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const stream = ++this.#stream
-      try {
-        await this.send({ kind: 'begin', stream, ...(await transfer.begin(controller.signal)) })
-        let sequence = 0
-        // Backpressure: the next batch waits for the view to ack this one.
-        const consume = async (batches: readonly DataBatch[]) => {
-          await this.#delivery.post(
-            { kind: 'batch', stream, sequence: ++sequence, batches },
-            controller.signal,
-          )
-        }
-        const { coverage } = await studio.client.call(
-          'batches',
-          transfer.request,
-          controller.signal,
-          consume,
-        )
-        controller.signal.throwIfAborted()
-        await this.#delivery.post({ kind: 'end', stream, coverage }, controller.signal)
-        controller.signal.throwIfAborted()
-        this.#failure = ''
-        if (this.#controller === controller) this.#controller = undefined
-        return stream
-      } catch (error) {
-        if (controller.signal.aborted || this.#disposed) return undefined
-        // A run cleared or replaced while it streamed is no failure: the view asks for what shows now.
-        if (transfer.run && studio.all.get(uri)?.run?.id !== transfer.run) return undefined
-        if (!transfer.run && studio.state(uri).summary?.version !== transfer.revision.version)
-          return undefined
-        // The worker holds a newer reading of the case than the one asked for, as while an edit
-        // leaves it unreadable: the view catches up once that reading reaches it.
-        if ((error as { code?: string })?.code === 'stale') return undefined
-        if ((error as { code?: string })?.code === 'superseded') {
-          this.#again = true
-          return undefined
-        }
-        // Pages asked for as a reading of the run no longer cuts it: the view starts over.
-        const { run, paging } = transfer.request
-        if (
-          run &&
-          paging !== undefined &&
-          (error as { code?: string })?.code === 'conflict' &&
-          (await this.#repaged(run, paging))
-        ) {
-          this.#again = true
-          return undefined
-        }
-        if (retryable(error) && attempt < 2) {
-          try {
-            await delay(250 * 4 ** attempt, undefined, { signal: controller.signal })
-          } catch {
-            return undefined
-          }
-          continue
-        }
-        if (retryable(error)) {
-          this.clearRetry()
-          this.#retry = {
-            keys: new Set(transfer.keys),
-            timer: setTimeout(() => {
-              this.#retry = undefined
-              void this.update().catch((reason) => studio.error(reason))
-            }, 10_000),
-          }
-        } else for (const key of transfer.keys) this.#failed.add(key)
-        this.#failure = message(error)
-        studio.report(error)
-        return undefined
-      }
-    }
-    return undefined
   }
   /** Whether its page is still loading where VS Code keeps one, on screen or kept while hidden:
    *  replacing it now breaks VS Code's loader. */
@@ -887,9 +420,8 @@ class View {
   dispose() {
     this.#settle()
     this.#disposed = true
-    this.cancel(true)
-    for (const file of this.#files.values()) void file.abort().catch(() => {})
-    this.#files.clear()
+    this.cancel()
+    this.#videos.dispose()
     for (const disposable of this.disposables) disposable.dispose()
   }
 }
@@ -900,7 +432,7 @@ const resolved = new Map<ViewKind, vscode.WebviewView>()
 
 /** Show view `kind` without taking focus from where the user is. One never shown yet can only be
  *  shown by focusing it. */
-export async function showView(kind: 'case' | 'monitor' | 'simulation' | 'export') {
+export async function showView(kind: 'case' | 'monitor' | 'export') {
   const view = resolved.get(kind)
   if (view) view.show(true)
   else await vscode.commands.executeCommand('gridkitStudio.' + kind + '.focus')
@@ -926,7 +458,7 @@ export function registerViews(studio: Sessions) {
         },
       ),
     )
-  for (const kind of ['case', 'monitor', 'simulation', 'export'] as const) {
+  for (const kind of ['case', 'monitor', 'export'] as const) {
     // An export keeps working while its panel is collapsed. The Case panel takes the Monitor's
     // place in the bottom panel, so the Monitor is kept idle rather than destroyed.
     const hidden = kind === 'export' ? 'working' : kind === 'monitor' ? 'idle' : 'destroyed'
@@ -963,7 +495,7 @@ export function registerViews(studio: Sessions) {
               if (
                 uri &&
                 (studio.documents.entries.has(uri) ||
-                  ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.run))
+                  ((kind === 'monitor' || kind === 'export') && studio.all.get(uri)?.results))
               ) {
                 content = new View(studio, panel, uri, kind, hidden)
                 panel.description = describe(studio, kind, uri)

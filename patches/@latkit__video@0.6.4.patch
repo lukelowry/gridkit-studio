@@ -1,0 +1,36 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 1820d0e79a2dfd83dee0721bf1f3939529aeb181..26a9a2b6a41e2db189a6c27e5e8746981cbb3b90 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -23,6 +23,9 @@ interface VideoOptions extends RequestOptions {
+     readonly pixelRatio?: number;
+     /** Maps output seconds to a model coordinate. Omit to keep the view's; effects still receive output time. */
+     readonly at?: (seconds: number) => number;
++    /** Awaited before each frame draws, with its coordinate: the caller makes ready what the frame
++     *  reads, such as data loaded a part at a time. */
++    readonly ready?: (at: number | undefined, signal: AbortSignal) => Promise<void> | void;
+     /** `mp4` by default. */
+     readonly format?: 'mp4' | 'webm';
+     /** From 0 to 1, as for images; 0.75 by default. */
+diff --git a/dist/index.js b/dist/index.js
+index 64eff83999ae0e2855bcd50cc8cf538780791cee..50cb5404f5ce5490b78c33c8726af935af9e11ca 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -34,6 +34,8 @@ function settings(options, maxDimension) {
+     throw failure("invalid-input", "Video output must be an unlocked WritableStream");
+   if (options.at !== void 0 && typeof options.at !== "function")
+     throw failure("invalid-input", "Video at must be a coordinate function");
++  if (options.ready !== void 0 && typeof options.ready !== "function")
++    throw failure("invalid-input", "Video ready must be a function");
+   let frames = Math.ceil(durationUs * frameRate / 1e6);
+   if (Math.round((frames - 1) * 1e6 / frameRate) >= durationUs) frames--;
+   return {
+@@ -186,6 +188,8 @@ async function exportVideo(view, options) {
+       const at = options.at ? options.at(frame.seconds) : view.config.at ?? void 0;
+       if (at !== void 0 && !Number.isFinite(at))
+         throw failure3("invalid-input", "Video coordinate must be finite");
++      if (options.ready) await work.wait(Promise.resolve(options.ready(at, signal)));
++      signal.throwIfAborted();
+       await gpu.render({
+         completion: "complete",
+         signal,

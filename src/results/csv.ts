@@ -100,35 +100,6 @@ export async function* csvMessages(
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
 }
 
-/** The time of each row in `bytes`, rows whose header was read before: each row's first number,
- *  read as `csvMessages` reads it, and nothing after it. */
-export function csvTimes(bytes: Uint8Array): Float64Array {
-  let text: string
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-  } catch {
-    throw failure('io', 'The CSV results are not valid UTF-8.')
-  }
-  const times: number[] = []
-  // Keep the next comma: a row with none must not search the rest of the page again.
-  let comma = -1
-  for (let start = 0; start < text.length;) {
-    let newline = text.indexOf('\n', start)
-    if (newline < 0) newline = text.length
-    if (comma < start) {
-      comma = text.indexOf(',', start)
-      if (comma < 0) comma = text.length
-    }
-    const token = text.slice(start, Math.min(comma, newline))
-    start = newline + 1
-    if (comma >= newline && token.trim() === '') continue
-    const time = numberOf(token, times.length + 1, 1)
-    if (!Number.isFinite(time)) throw failure('io', 'A CSV frame must have a finite time.')
-    times.push(time)
-  }
-  return Float64Array.from(times)
-}
-
 /** `source` as text, with a newline after it to end a last record that has none. Each part is
  *  decoded whole, several times faster than streaming, once the bytes of a character it ends
  *  partway through are carried to the next. */

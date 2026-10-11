@@ -79,9 +79,21 @@ export async function run() {
     const { uri, network } = await bench.openCase('cases/ACTIVSg10k.case.json')
     const key = uri.toString()
     const session = bench.studio.all.get(key)!
-    bench.studio.record(key, [{ from: 'Bus', select: ['Vm', 'Va'] }])
-    session.values = { tmax: 10, dt_monitor: 0.01 }
-    await vscode.commands.executeCommand('gridkitStudio.startSimulation', uri)
+    await bench.record('Bus', ['Vm', 'Va'], uri)
+    bench.run(
+      'Run Dynamic Simulation',
+      await bench.writeSolver(
+        {
+          tmax: 10,
+          dt_monitor: 0.01,
+          events: [
+            { time: 1, type: 'fault_on', element_id: 0 },
+            { time: 1.15, type: 'fault_off', element_id: 0 },
+          ],
+        },
+        uri,
+      ),
+    )
     await until(
       () => session.run?.state === 'complete' || session.run?.state === 'failed',
       'GridKit completes',
@@ -107,11 +119,11 @@ export async function run() {
     const firstShown = performance.now()
     await shows(0)
     report.first = performance.now() - firstShown
-    report.frames = session.run!.frames
-    report.domain = session.run!.domain
+    report.frames = session.results!.frames
+    report.domain = session.results!.domain
 
     /** Seconds of the run, as it recorded them. */
-    const [start, end] = session.run!.domain
+    const [start, end] = session.results!.domain
     const at = (part: number) => start + part * (end - start)
 
     // Seeks far from anything shown.

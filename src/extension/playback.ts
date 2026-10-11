@@ -1,6 +1,6 @@
 /** Playback in the status bar, right of the problem counts behind a bar: step back, play or pause,
  *  step forward, the time, the speed, and the end. They follow the active case's clock while its
- *  run has samples. */
+ *  results have samples. */
 
 import * as vscode from 'vscode'
 
@@ -46,9 +46,9 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
   const show = () => {
     const uri = studio.active
     const session = uri ? studio.all.get(uri) : undefined
-    const run = session?.run
+    const results = session?.results
     const state = session?.transport.state
-    if (!session || !run?.frames || !state || state.status === 'idle') {
+    if (!session || !results?.frames || !state || state.status === 'idle') {
       for (const each of items) each.hide()
       clearInterval(timer)
       timer = undefined
@@ -58,8 +58,8 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const t = transport.currentT()
     const playing = state.status === 'playing'
     const finished = !transport.live && !playing && state.loop === 'none' && t >= state.span[1]
-    // The run's configured times, which its samples fill as they arrive.
-    const [from, to] = run.span ?? run.domain
+    // The times a run will cover, which its samples fill as they arrive.
+    const [from, to] = results.span ?? results.domain
     const unit = studio.documents.entries.get(uri!)?.summary?.schema.axis?.unit ?? 's'
     say(back, '$(chevron-left)', 'Previous sample')
     say(

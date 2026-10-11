@@ -6,7 +6,7 @@ import { stat } from 'node:fs/promises'
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import { simpleDialog, type TestHost, testHost, visible } from './harness.js'
+import { simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 suite('Export', () => {
   let bench: TestHost
@@ -34,5 +34,44 @@ suite('Export', () => {
     assert.ok(size > 1000, 'The exported video has frames')
     bench.report.videoBytes = size
     await bench.capture('export-vscode')
+  }).timeout(180_000)
+
+  test('maps each moment it draws from the samples of that moment, chunk after chunk', async () => {
+    // Results long enough for several chunks, with the Network mapping their voltage.
+    const shown = await bench.results()
+    const results = await bench.waveform('Long waveform.csv', 30_000, 3)
+    const { chunk, frames, domain } = results
+    assert.ok(frames > 2 * chunk, `the results span three chunks: ${frames} of ${chunk}`)
+    const boundary = (k: number) => domain[0] + ((domain[1] - domain[0]) * k * chunk) / frames
+    bench.studio.bind(bench.key, VM, ['vertexColor'])
+    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 chunks.webm')
+    try {
+      const exporter = await bench.show('export')
+      await visible(exporter, '[data-testid="video-export"]')
+      // The Network's part alone, over a time that crosses from the first chunk into the third.
+      const plots = exporter.getByRole('switch', { name: 'Monitor' })
+      if ((await plots.getAttribute('aria-checked')) === 'true') await plots.click()
+      const start = boundary(1) - 0.05
+      const end = boundary(2) + 0.05
+      await exporter.getByLabel('Start (s)').fill(String(start))
+      await exporter.getByLabel('End (s)').fill(String(end))
+      await exporter.locator('[data-testid="video-start"]').click()
+      await bench.dialog(video.fsPath)
+      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
+      assert.ok((await stat(video.fsPath)).size > 1000, 'The exported video has frames')
+      const { moments } = await exporter.evaluate<{ moments: number[] }>('gridkitExport()')
+      // Each moment's samples were held when it drew, in order, from either side of both bounds.
+      assert.ok(moments.length > 2, moments.join())
+      assert.ok(
+        moments.every((t, i) => i === 0 || t >= moments[i - 1]!),
+        moments.join(),
+      )
+      assert.ok(moments[0]! < boundary(1) && moments.at(-1)! > boundary(2), moments.join())
+    } finally {
+      bench.studio.bind(bench.key, VM, [])
+      bench.studio.show(bench.session, shown)
+      bench.studio.changed.fire(bench.key)
+      await until(() => bench.session.results?.id === shown.id, 'the first results shown again')
+    }
   }).timeout(180_000)
 })

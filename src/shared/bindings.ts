@@ -33,7 +33,7 @@ export type Bindings = Readonly<Partial<Record<Channel, Binding>>>
 /** The field data types that can drive a channel. */
 export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int32', 'uint32'])
 
-export const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
+const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.type === b.type && a.field === b.field
 
 /** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel

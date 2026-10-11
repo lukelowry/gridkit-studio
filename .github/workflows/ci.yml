@@ -74,6 +74,15 @@ jobs:
             output/simulation
             output/packaged-*/playwright
             output/packaged-*/tests
+  # The one check main's branch protection requires: every job above passed. Its name stays the
+  # same when the jobs or their matrices change.
+  required:
+    if: always()
+    needs: [check, gridkit]
+    runs-on: ubuntu-latest
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
   # A tag whose version matches package.json publishes that VSIX as a GitHub pre-release.
   release:
     if: github.ref_type == 'tag'

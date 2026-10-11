@@ -4,28 +4,14 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
-  # The benchmarks, nightly.
-  schedule:
-    - cron: '0 7 * * *'
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish release
-        type: boolean
-        default: false
-      bench:
-        description: Run the benchmarks
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 jobs:
   # Format, lint, settings, types, unit tests and the VSIX, on every OS.
   check:
-    if: github.event_name != 'schedule'
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -88,78 +74,26 @@ jobs:
             output/simulation
             output/packaged-*/playwright
             output/packaged-*/tests
-  # Every benchmark, against real GridKit. None fails on time, only when a view stops answering;
-  # the timings are kept for a person to set beside another run's with bench:compare.
-  bench:
-    if: github.event_name == 'schedule' || inputs.bench
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      GRIDKIT_TEST_REQUIRED: '1'
-      GRIDKIT_TEST_SOFTWARE_GPU: '1'
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: pnpm/action-setup@v6
-      - run: pnpm install --frozen-lockfile
-      - run: docker pull ghcr.io/lukelowry/gridkit:latest
-      - run: dbus-run-session -- xvfb-run -a pnpm bench
-      - run: dbus-run-session -- xvfb-run -a pnpm test:windowed
-      - run: dbus-run-session -- xvfb-run -a pnpm test:scrub
-      - run: dbus-run-session -- xvfb-run -a pnpm test:playback
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: bench
-          path: |
-            output/bench
-            output/tests
-            output/playwright
+  # A tag whose version matches package.json publishes that VSIX as a GitHub pre-release.
   release:
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish)
+    if: github.ref_type == 'tag'
     needs: [check, gridkit]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    concurrency:
-      group: publish-release
-      cancel-in-progress: false
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: gridkit-studio
           path: dist
-      - name: Publish GitHub Release
-        shell: bash
-        env:
+      - env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          asset="$(ls dist/gridkit-studio-*.vsix)"
-          tag="v$(unzip -p "$asset" extension/package.json | jq -er .version)"
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$tag" ]]; then
-            echo "::error::$GITHUB_REF_NAME does not match package.json, which is $tag."
+          version="v$(unzip -p dist/gridkit-studio-*.vsix extension/package.json | jq -r .version)"
+          if [[ "$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match package.json, which is $version."
             exit 1
           fi
-          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" == false ]]; then
-            echo "$tag is already published. Bump package.json to publish another version." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if commit="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha 2>/dev/null)"; then
-            if [[ "$commit" != "$GITHUB_SHA" ]]; then
-              echo "::error::$tag points to another commit. Use a new version."
-              exit 1
-            fi
-          else
-            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$tag" -f "sha=$GITHUB_SHA" > /dev/null
-          fi
-          if ! gh release view "$tag" > /dev/null 2>&1; then
-            gh release create "$tag" --draft --prerelease --verify-tag --title "GridKit Studio $tag" --notes ""
-          fi
-          gh release upload "$tag" "$asset" --clobber
-          gh release edit "$tag" --draft=false
+          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix \
+            --prerelease --title "GridKit Studio $GITHUB_REF_NAME" --notes ""

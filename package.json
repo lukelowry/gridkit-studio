@@ -60,7 +60,7 @@
     "bench": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/views.ts",
     "bench:compare": "node tests/benchmarks/compare.mjs output/bench/base.json output/bench/head.json",
     "screenshots": "pnpm build && node tests/vscode/launch.mjs tests/vscode/screenshots.ts",
-    "package": "pnpm exec vsce package --pre-release --no-dependencies --out dist/",
+    "package": "pnpm exec vsce package --no-dependencies --out dist/",
     "vscode:prepublish": "pnpm build"
   },
   "dependencies": {

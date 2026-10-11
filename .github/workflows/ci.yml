@@ -28,7 +28,11 @@ jobs:
       - uses: pnpm/action-setup@v6
       - run: pnpm install --frozen-lockfile
       - run: pnpm quality
-      - run: pnpm package
+      # An odd minor version (0.5.x) is a pre-release, as VS Code recommends: the Marketplace keeps
+      # each version number to one channel.
+      - shell: bash
+        run: |
+          pnpm package $(node -p "require('./package.json').version.split('.')[1] % 2 ? '--pre-release' : ''")
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
         with:
@@ -61,8 +65,9 @@ jobs:
         with:
           name: gridkit-studio
           path: dist
-      # Studio never pulls; the runner does, as a user would.
-      - run: docker pull ghcr.io/lukelowry/gridkit:latest
+      # The image Studio runs GridKit from by default. Studio never pulls; the runner does, as a
+      # user would.
+      - run: docker pull "$(jq -r '.contributes.configuration[].properties["gridkitStudio.gridkitImage"].default // empty' package.json)"
       - run: pnpm test:simulation
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
       - run: dbus-run-session -- xvfb-run -a pnpm test:trust
@@ -83,7 +88,8 @@ jobs:
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
-  # A tag whose version matches package.json publishes that VSIX as a GitHub pre-release.
+  # A tag whose version matches package.json publishes that VSIX: a pre-release VSIX as a GitHub
+  # pre-release, any other as the latest release.
   release:
     if: github.ref_type == 'tag'
     needs: [check, gridkit]
@@ -104,5 +110,6 @@ jobs:
             echo "::error::$GITHUB_REF_NAME does not match package.json, which is $version."
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix \
-            --prerelease --title "GridKit Studio $GITHUB_REF_NAME" --notes ""
+          pre=$(unzip -p dist/gridkit-studio-*.vsix extension.vsixmanifest | grep -q 'PreRelease" Value="true"' && echo --prerelease || true)
+          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix $pre \
+            --title "GridKit Studio $GITHUB_REF_NAME" --notes ""

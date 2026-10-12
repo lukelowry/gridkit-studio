@@ -7,11 +7,12 @@
 import * as vscode from 'vscode'
 
 import { PROGRAM } from '../gridkit/index.js'
+import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
 import { commandId } from '../shared/ids.js'
 import type { Results } from '../shared/messages.js'
 import { cancellable } from './client.js'
-import { notice, SHOW_PROBLEMS } from './report.js'
+import { notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
 import type { Sessions } from './sessions.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
@@ -44,12 +45,15 @@ export function registerRuns(studio: Sessions) {
     const document = await vscode.workspace.openTextDocument(model)
     return { solver, input, study, model, document }
   }
-  /** The case `document` holds, as it reads, or a notice that it has problems to fix `before`. */
+  /** The case `document` holds, as it reads; a notice that it has problems to fix `before`, which
+   *  Problems lists; or why else it could not be read. */
   const readable = async (document: vscode.TextDocument, before: string) => {
-    const summary = await studio.documents.parsed(document)
-    if (!summary)
+    try {
+      return await studio.documents.read(document)
+    } catch (error) {
+      if (!saidInProblems(error)) throw error
       throw notice(`${nameOf(document.uri)} has problems to fix before ${before}.`, SHOW_PROBLEMS)
-    return summary
+    }
   }
 
   const run = async (target: unknown) => {
@@ -69,7 +73,7 @@ export function registerRuns(studio: Sessions) {
       })
     const output = writtenBy(solver, study, summary)
     // A run removes the file it writes before it starts, so that file must not be one it reads.
-    if ([solver, model].some((file) => file.toString() === output.toString()))
+    if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
     const session = await studio.open(document)
     await showView('monitor')
@@ -101,7 +105,8 @@ export function registerRuns(studio: Sessions) {
                   vscode.workspace.getWorkspaceFolder(solver)?.uri ??
                   vscode.Uri.joinPath(solver, '..')
                 ).fsPath,
-                gridkit: gridkitOf(model),
+                // As the settings of the folder it mounts say.
+                gridkit: gridkitOf(solver),
               },
               signal,
             ),

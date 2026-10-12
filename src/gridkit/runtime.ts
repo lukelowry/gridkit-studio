@@ -4,7 +4,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { access, stat } from 'node:fs/promises'
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import {
   basename,
@@ -22,13 +22,13 @@ import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/errors.js'
 import type { GridKit, RuntimeProcess } from '../shared/messages.js'
-import { readSolverLine, type SolverLine } from './solver.js'
+import { clipped, readSolverLine, type SolverLine } from './solver.js'
 
 /** The GridKit program Studio runs on a solver file. */
 export const PROGRAM = 'DynamicSimulation'
 /** Where a container sees the workspace folder. */
 const MOUNT = '/workspace'
-/** How long a container CLI may take to list or describe what it holds, and to remove a container. */
+/** How long a CLI may take to list or describe what it holds, and to remove a container. */
 const ASK_MS = 10_000
 const REMOVE_MS = 30_000
 /** How many of a run's last lines say why a container that never ran stopped. */
@@ -93,6 +93,75 @@ function sweepContainers(cli: string): Promise<void> {
       )),
     )
   return sweep
+}
+
+/** Whether GridKit installed here outlives the window that started it, should that window die
+ *  mid-run: on Linux and macOS it runs in a process group of its own; on Windows it ends with its
+ *  window. */
+const outlives = process.platform !== 'win32'
+
+/** What process `pid` is, as when it started and its command line; undefined once it has exited. */
+async function identityOf(pid: number): Promise<string | undefined> {
+  if (process.platform === 'linux')
+    try {
+      const [status, command] = await Promise.all([
+        readFile(`/proc/${pid}/stat`, 'utf8'),
+        readFile(`/proc/${pid}/cmdline`, 'utf8'),
+      ])
+      // Its start, in clock ticks since boot, is the 22nd field; the 2nd, its name in parentheses,
+      // may hold spaces and parentheses itself.
+      const start = status.slice(status.lastIndexOf(')') + 2).split(' ')[19]
+      return start && `${start} ${command}`
+    } catch {
+      return undefined
+    }
+  return new Promise((resolve) =>
+    execFile(
+      'ps',
+      ['-o', 'lstart=,command=', '-p', String(pid)],
+      { windowsHide: true, timeout: ASK_MS },
+      (error, stdout) => resolve((!error && stdout.trim()) || undefined),
+    ),
+  )
+}
+
+/** A run of GridKit installed here, written down while it runs: the window that started it, and
+ *  what its process is. */
+interface Written {
+  readonly host: number
+  readonly pid: number
+  readonly identity: string
+}
+
+/** Writes down in `folder` the process `pid` this window started, and returns what crosses it out. */
+export async function writeDown(folder: string, pid: number): Promise<() => Promise<void>> {
+  const identity = await identityOf(pid)
+  if (!identity) return async () => {}
+  await mkdir(folder, { recursive: true })
+  const path = join(folder, `${process.pid}-${pid}.json`)
+  await writeFile(path, JSON.stringify({ host: process.pid, pid, identity } satisfies Written))
+  return () => rm(path, { force: true })
+}
+
+/** Ends the runs of GridKit installed here that windows since exited wrote down in `folder`, and
+ *  crosses them out. A run is ended only while its process is still the one written down, so a
+ *  process id the system has since given another is never touched. */
+export async function sweepOrphans(folder: string): Promise<void> {
+  const names = await readdir(folder).catch(() => [])
+  await Promise.all(
+    names.map(async (name) => {
+      const path = join(folder, name)
+      try {
+        const { host, pid, identity } = JSON.parse(await readFile(path, 'utf8')) as Written
+        // A window still open ends its own runs.
+        if (alive(host)) return
+        if ((await identityOf(pid)) === identity) process.kill(-pid, 'SIGKILL')
+      } catch {
+        // Unreadable, or ended as it was swept: either way, done with.
+      }
+      await rm(path, { force: true })
+    }),
+  )
 }
 
 /** How a run starts GridKit: installed here, or in a container of `image`. */
@@ -304,23 +373,34 @@ export function containerArgs(
   ]
 }
 
-/** Stops `child` and every process it started. */
-function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> {
-  if (!child.pid || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
-  return terminateRuntime(owned).catch(() => {
-    child.kill('SIGKILL')
-  })
+/** Whether `child` has exited. */
+const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null
+
+/** Stops `child` and every process it started; should that leave it running, ends it alone. */
+async function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> {
+  if (!child.pid || exited(child)) return
+  await terminateRuntime(owned).catch(() => {})
+  if (!exited(child)) child.kill('SIGKILL')
+}
+
+/** What a launch hears of its run. */
+export interface Launch {
+  /** Aborting it stops the run. */
+  readonly signal: AbortSignal
+  /** Hears each line the run prints. */
+  readonly log: (text: string) => void
+  /** Hears of the process while it lives, and once it ends. */
+  readonly lifecycle?: (process?: RuntimeProcess) => void
+  /** The folder this machine's windows write their runs down in, when a run may outlive them. */
+  readonly runs?: string
 }
 
 /** Runs GridKit with `runtime`, which `placed` settled, on the solver file `place` names, in its
- *  folder. `log` hears each line it prints, and `lifecycle` the process while it lives. Aborting
- *  `signal` stops it. */
+ *  folder. */
 export function launch(
   runtime: Runtime,
   place: Place,
-  signal: AbortSignal,
-  log: (text: string) => void,
-  lifecycle: (process?: RuntimeProcess) => void = () => {},
+  { signal, log, lifecycle = () => {}, runs }: Launch,
 ) {
   signal.throwIfAborted()
   const folder = dirname(place.solver)
@@ -362,7 +442,13 @@ export function launch(
     ...(container && { container }),
   }
   if (child.pid) lifecycle(owned)
-  let ended = false
+  // GridKit installed here may outlive this window; a container is swept by its label.
+  const written =
+    child.pid && runs && outlives && runtime.kind === 'installed'
+      ? writeDown(runs, child.pid).catch(() => async () => {})
+      : undefined
+  /** How the run's writing stands: on, done with its last row whole, or stopped partway. */
+  let writer: 'writing' | 'done' | 'stopped' = 'writing'
   /** The last lines printed, which say why a container that never ran stopped. */
   const tail: string[] = []
   /** What stopped the run: the first error GridKit printed. */
@@ -377,7 +463,7 @@ export function launch(
   for (const pipe of [child.stdout, child.stderr])
     createInterface({ input: pipe, crlfDelay: Infinity }).on('line', (line) => {
       const text = stripVTControlCharacters(line)
-      tail.push(text)
+      tail.push(clipped(text))
       if (tail.length > TAIL_LINES) tail.shift()
       if (/\[ERROR\]/i.test(text)) nativeError ??= readSolverLine(text)
       log(text)
@@ -385,7 +471,7 @@ export function launch(
   const done = new Promise<void>((resolve, reject) => {
     child.once('error', reject)
     child.once('close', (code) => {
-      ended = true
+      writer = code === 0 && !signal.aborted ? 'done' : 'stopped'
       // A container that never ran says why last: no engine, no image, no access.
       const said = container ? tail.findLast((line) => line.trim()) : undefined
       if (signal.aborted) reject(signal.reason)
@@ -395,16 +481,19 @@ export function launch(
       else resolve()
     })
   }).finally(async () => {
-    ended = true
+    if (writer === 'writing') writer = 'stopped'
     signal.removeEventListener('abort', onAbort)
     await cleanup
-    // A run stopped while the engine still made its container leaves one the first removal missed;
-    // with the CLI gone, nothing makes it any more.
-    if (cleanup && container) await removeContainer(container)
+    // The CLI gone, its container may not be: one stopped while the engine still made it, or whose
+    // CLI ended first, is left running. Removed by name, it is gone for good.
+    if (container) await removeContainer(container)
+    await (
+      await written
+    )?.()
     lifecycle()
   })
   void done.catch(() => {})
-  return { done, stop, ended: () => ended }
+  return { done, stop, writer: () => writer }
 }
 
 /** Removes the container `cli` runs by `name`, whether it runs or not; one already gone is fine. */

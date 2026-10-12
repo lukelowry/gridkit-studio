@@ -16,13 +16,15 @@ type CsvMessage =
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
  *  `known` is the header's names, when another read of the same results parsed it: `source` is
- *  then rows alone. With `parse`, only the columns it marks are read as numbers, the time always:
- *  the others are counted, so each row still matches its header, and left NaN. A last row cut
- *  short, as a writer that was stopped leaves it, is left out. */
+ *  then rows alone, the first of them frame `first` of the file, as a problem numbers it. With
+ *  `parse`, only the columns it marks are read as numbers, the time always: the others are
+ *  counted, so each row still matches its header, and left NaN. A last row cut short, as a writer
+ *  that was stopped leaves it, is left out. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
   known?: readonly string[],
   parse?: Uint8Array,
+  first = 0,
 ): AsyncGenerator<CsvMessage> {
   let header = ''
   let quoted = false
@@ -32,7 +34,8 @@ export async function* csvMessages(
   let capacity = 0
   let column = 0
   let rows = 0
-  let received = 0
+  /** The frames before this batch's, counted from the file's first. */
+  let received = first
   let pending = ''
   const schema = (names: readonly string[]): CsvMessage => {
     headed = true
@@ -183,6 +186,10 @@ function headerOf(text: string): string[] {
   return names
 }
 
+/** A value that is not a number, and an infinite one, however a C library prints them. */
+const NAN = /^[+-]?(?:nan(?:\(\w*\))?|1\.#(?:s|q)?nan|1\.#ind)$/i
+const INFINITY = /^[+-]?(?:inf(?:inity)?|1\.#inf)$/i
+
 function numberOf(text: string, frame: number, column: number): number {
   let token = text
   // A bare number has nothing to trim or unquote; only a token that starts or ends otherwise does.
@@ -196,8 +203,9 @@ function numberOf(text: string, frame: number, column: number): number {
   if (!(token.charCodeAt(0) === 48 && (prefix === 120 || prefix === 111 || prefix === 98))) {
     const value = Number(token)
     if (!Number.isNaN(value)) return value
-    if (/^[+-]?nan$/i.test(token)) return NaN
-    if (/^[+-]?inf(?:inity)?$/i.test(token)) return token[0] === '-' ? -Infinity : Infinity
+    // As C libraries print them, MSVC's among them: `-nan(ind)`, `1.#QNAN`, `-1.#INF`.
+    if (NAN.test(token)) return NaN
+    if (INFINITY.test(token)) return token[0] === '-' ? -Infinity : Infinity
   }
   throw failure('io', `CSV frame ${frame}, column ${column} is not a number.`)
 }

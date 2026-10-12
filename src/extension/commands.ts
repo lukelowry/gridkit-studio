@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import type { Block, Query, Schema } from '@latkit/model'
 import * as vscode from 'vscode'
 
@@ -442,9 +444,15 @@ export function registerCommands(studio: Sessions) {
   })
   onSession('exportCsv', async ({ results }) => {
     if (!results) throw new Error('There are no results to export.')
-    const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
-    if (path)
-      await studio.client.results.call('export', { results: results.id, path: localPath(path) })
+    // Held while the user chooses where: results shown meanwhile take nothing from the export.
+    const held = randomUUID()
+    await studio.client.results.call('share', { results: results.id, as: held })
+    try {
+      const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
+      if (path) await studio.client.results.call('export', { results: held, path: localPath(path) })
+    } finally {
+      studio.closeResults(held)
+    }
   })
   register('showOutput', () => studio.reporter.output.show())
   command('performance', async (context) => {

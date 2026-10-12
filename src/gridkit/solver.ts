@@ -7,6 +7,15 @@ export interface SolverLine {
   text: string
 }
 
+/** How much of one line Studio keeps: a debug dump of a whole case's values says no more past it. */
+export const LINE_CHARS = 4096
+
+/** `line`, past LINE_CHARS cut short, saying by how much. */
+export const clipped = (line: string) =>
+  line.length <= LINE_CHARS
+    ? line
+    : `${line.slice(0, LINE_CHARS)}… (${(line.length - LINE_CHARS).toLocaleString()} more characters)`
+
 /** A level, then any bracketed parts, then what the line says. */
 const PRINTED = /^\[(ERROR|WARNING|INFO|DEBUG)\](?:\[[^\]]*\])*\s*(.*)$/
 const LEVELS = { ERROR: 'error', WARNING: 'warn', INFO: 'info', DEBUG: 'debug' } as const
@@ -26,11 +35,12 @@ export function solverLine(
   raw: string,
   said: boolean,
 ): { level: SolverLine['level']; message: string; raw?: string } | undefined {
-  const { level, text } = readSolverLine(raw)
+  const line = clipped(raw)
+  const { level, text } = readSolverLine(line)
   if (!text) return undefined
   return {
     level: level === 'error' && said ? 'debug' : level,
     message: text,
-    ...(text !== raw.trim() && { raw }),
+    ...(text !== line.trim() && { raw: line }),
   }
 }

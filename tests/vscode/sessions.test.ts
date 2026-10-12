@@ -151,9 +151,9 @@ suite('Sessions', () => {
     await vscode.workspace.fs.delete(solver)
   })
 
-  test('lets go of every case nothing holds, here and in the results worker', async () => {
+  test('lets go of every case nothing holds, here and in the results worker, where they rest', async () => {
     const stats = async () => (await studio.client.stats()).results
-    const held = (await stats()) ?? { files: 0, cases: 0 }
+    const held = (await stats()) ?? { files: 0, resting: 0, cases: 0 }
     // Cases followed one after another, each showing results, each closed as the next is followed.
     const visited: Session[] = []
     for (let n = 0; n < 3; n++) {
@@ -168,7 +168,15 @@ suite('Sessions', () => {
     for (const session of visited.slice(0, -1))
       assert.equal(studio.get(session.uri), undefined, 'A case nothing holds closes')
     await until(async () => (await stats())!.files === held.files + 1, 'one results file held')
-    assert.equal((await stats())!.cases, held.cases + 1, 'The worker reads one case for them')
+    // What the cases before showed may rest in the worker, with its case, under the budget, to open
+    // again without reading anything: a case is read for the results held, and each that rests.
+    const now = (await stats())!
+    assert.ok(now.resting - held.resting <= 2, 'Only results let go of rest')
+    assert.equal(
+      now.cases,
+      held.cases + 1 + (now.resting - held.resting),
+      'The worker reads a case for the results held, and for each that rests',
+    )
     // The last lets go once another case is followed.
     await studio.open(document)
     assert.equal(studio.get(last!.uri), undefined)

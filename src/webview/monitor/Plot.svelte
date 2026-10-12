@@ -50,6 +50,7 @@
     gpu,
     paused,
     generation,
+    retries,
     ticks,
     streaming,
     onframe,
@@ -75,6 +76,8 @@
     gpu: () => Promise<Gpu>
     paused: boolean
     generation: number
+    /** How many times the user asked the plots to try again: each starts over what it failed. */
+    retries: number
     /** Whether its time ticks are labelled: the last of the plots, which share one time axis. */
     ticks: boolean
     /** Whether `source` brings the window a slice at a time, letting go of the slices drawn. */
@@ -147,6 +150,11 @@
         at: t,
       }),
   )
+  // Asked to try again, a plot says a failure again should it recur.
+  $effect.pre(() => {
+    void retries
+    untrack(() => recovery.reset())
+  })
   let windowUpdate = 0
   let previousFit: boolean | undefined
   /** The plot's whole config, besides its canvas, time, and camera. */
@@ -390,7 +398,10 @@
           at,
           rows: selection,
         }
-        if (!held) return bridge.request('query', query, reading.signal)
+        if (!held) {
+          const results = view.results?.id
+          return results ? bridge.request('query', { results, query }, reading.signal) : []
+        }
         const blocks: Block.Rows[] = []
         for await (const block of read(snapshot, query, { signal: reading.signal }))
           if (block.kind === 'rows') blocks.push(block)

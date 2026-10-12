@@ -81,7 +81,7 @@ describe('document transactions', () => {
     ])
     const next = applyChanges(text, [edits])
     const after = await parse(next)
-    const layout = presentation(after).ConstantSignalSource!
+    const layout = (await presentation(after, AbortSignal.any([]))).ConstantSignalSource!
     expect(layout.x.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(120) })
     expect(layout.y.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(48) })
     expect(JSON.parse(next).devices[0].extension.diagram.position).toEqual([120, 48])

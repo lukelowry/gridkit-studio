@@ -165,7 +165,8 @@ class Thread<A extends Api<A>> {
  *  bundles are in `folder`. */
 export class Client {
   readonly event = new Emitter<Exclude<WorkerEvent, { kind: 'process' }>>()
-  /** The GridKit process the results worker runs for each case, terminated here if it dies. */
+  /** The GridKit process of each run the results worker has under way, by the run's id, ended here
+   *  should the worker stop before it ends them. */
   readonly #owned = new Map<string, RuntimeProcess>()
   readonly cases: Thread<CaseApi>
   readonly results: Thread<ResultsApi>
@@ -174,8 +175,8 @@ export class Client {
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
         if (event.kind !== 'process') return this.event.fire(event)
-        if (event.process) this.#owned.set(event.uri, event.process)
-        else this.#owned.delete(event.uri)
+        if (event.process) this.#owned.set(event.run, event.process)
+        else this.#owned.delete(event.run)
       },
       release,
     })

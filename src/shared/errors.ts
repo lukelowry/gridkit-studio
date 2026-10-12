@@ -18,8 +18,6 @@ export type Code =
   | 'stale-source'
   /** The results asked of were closed: nothing failed, and nothing more is asked of them. */
   | 'results-closed'
-  /** The results file was written again after it was read. */
-  | 'results-changed'
   /** A failure with no code of its own. */
   | 'operation-failed'
   | Failure.Code

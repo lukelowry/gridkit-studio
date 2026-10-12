@@ -299,14 +299,13 @@ function boot() {
       selection()
       // Only what the view draws from restyles it: a selection, say, it shows on its own.
       if (DRAWN.some((key) => state[key] !== before[key])) paint()
+    } else if (message.kind === 'shown') {
+      shown = message.shown
+      view?.set({ paused: !shown || document.hidden })
+      if (shown) paint()
     } else if (message.kind === 'action') {
-      if (message.command === 'shown') {
-        shown = message.value === true
-        view?.set({ paused: !shown || document.hidden })
-        if (shown) paint()
-        return
-      }
       if (message.command === 'reloadView') {
+        recovery.reset()
         drop()
         kind.retry()
         rows.retry()
@@ -360,6 +359,6 @@ function boot() {
     drop()
     owner.dispose()
   })
-  bridge.send({ kind: 'ready' })
+  bridge.ready()
 }
 boot()

@@ -20,7 +20,7 @@ export interface Field {
 }
 
 /** Decoded frames, in arrays of their own that nothing writes again. */
-interface Frames {
+export interface Decoded {
   readonly firstFrame: number
   readonly count: number
   readonly coordinates: Float64Array
@@ -37,7 +37,7 @@ interface Reading {
   readonly only?: readonly number[]
   /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
    *  from one chunk into the next. */
-  readonly publish: (frames: Frames) => void | Promise<void>
+  readonly publish: (frames: Decoded) => void | Promise<void>
 }
 
 /** Where each output's rows are among the columns. */
@@ -67,7 +67,7 @@ export function chunkFrames(fields: readonly Field[]): number {
  *  `fields`, else of every one. */
 export function samplesOf(
   fields: readonly Field[],
-  frames: Frames,
+  frames: Decoded,
   only?: readonly number[],
 ): Data.SampleBatch[] {
   return (only ?? fields.map((_, f) => f)).map((f, i) => {
@@ -119,7 +119,7 @@ export async function readResults(
       reading.only && layout.header && layout.read
         ? columnsOf(layout.read.plan, reading.only, layout.header.length)
         : undefined
-    for await (const message of csvMessages(chunks, layout.header, parse)) {
+    for await (const message of csvMessages(chunks, layout.header, parse, first)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
         if (plan) throw failure('io', 'The results repeat their header.')
@@ -220,6 +220,12 @@ function stemOf(kase: Case, table: Table, row: number): string {
     table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
   return `${table.shape.type}_${identity}_`
 }
+
+/** How a results file whose header `names` reads for `kase`, as a store of it read through says. */
+export const layoutFrom = (names: readonly string[], kase: Case): Layout => ({
+  header: names,
+  read: layoutOf(names, kase),
+})
 
 /** What a results file holds, from its header alone: each output of the case it has a column for,
  *  matched by complete name, case-insensitively, in catalog and row order, and the column each of

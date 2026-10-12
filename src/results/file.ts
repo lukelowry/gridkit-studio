@@ -1,46 +1,43 @@
-import { copyFile, mkdir, open, stat } from 'node:fs/promises'
-import { basename, dirname, resolve } from 'node:path'
+import { copyFile, mkdir, stat } from 'node:fs/promises'
+import { basename, dirname } from 'node:path'
 import { Readable } from 'node:stream'
 
 import {
   appendData,
-  bitAt,
   blockByteLength,
   type Data,
   type Domain,
+  type Index,
   type Query,
   rowAt,
   rowCount,
   selectRows,
-  sliceSamples,
 } from '@latkit/model'
 
 import type { Case } from '../gridkit/index.js'
 import { message, problem } from '../shared/errors.js'
-import type { Results, Revision, SamplesInput } from '../shared/messages.js'
+import type { ResultsLayout, ResultsProgress, Revision, SamplesInput } from '../shared/messages.js'
 import type { Frames, ResultCache } from './cache.js'
 import {
   axisOf,
   chunkFrames,
+  type Decoded,
   type Field,
   type Layout,
+  layoutFrom,
   readResults,
   samplesOf,
   selectionsOf,
 } from './decode.js'
-import { follow, type Piece } from './follow.js'
-
-/** Bytes `start` to `end` of a results file, holding frames `first` up to `first + count`. */
-interface Segment {
-  start: number
-  end: number
-  first: number
-  count: number
-}
+import { follow, type Writer } from './follow.js'
+import { fileKey, type Store } from './store.js'
 
 /** While a playhead plays, time behind it counts this many times over: views load ahead of it. */
 const BEHIND = 4
-/** Times are kept in an array that doubles as frames come, from this many. */
+/** Times are kept in pages of about this many frames, each a whole number of chunks: a chunk's
+ *  times are part of one page, which every batch of the chunk shares. */
+const PAGE_FRAMES = 1 << 16
+/** How many frames' times a file's first page holds before it grows. */
 const FIRST_TIMES = 1024
 
 /** The first of `count` indices where `holds`, which holds at every index after one it holds at;
@@ -56,25 +53,6 @@ function firstWhere(count: number, holds: (index: number) => boolean): number {
   return low
 }
 
-/** Frames `from` up to `to` of `frames`, as views of their arrays. */
-function slice(frames: Frames, from: number, to: number): Data.SampleBatch[] {
-  return frames.map((batch) => {
-    const at = from - batch.firstFrame
-    const rows = rowCount(batch.rows)
-    return {
-      ...batch,
-      firstFrame: from,
-      coordinates: batch.coordinates.subarray(at, at + to - from),
-      columns: Object.fromEntries(
-        Object.entries(batch.columns).map(([name, column]) => [
-          name,
-          sliceSamples(column, 0, rows, at, to - from),
-        ]),
-      ),
-    }
-  })
-}
-
 /** The first of `rows`, ascending, at or past `row`. */
 function seek(rows: Uint32Array, row: number): number {
   let low = 0
@@ -87,51 +65,131 @@ function seek(rows: Uint32Array, row: number): number {
   return low
 }
 
-/** `groups`, each the frames after the last, as one batch per field. */
-function joined(groups: readonly Frames[]): Frames {
-  if (groups.length < 2) return groups[0] ?? []
-  const count = groups.reduce((sum, group) => sum + group[0]!.coordinates.length, 0)
-  const coordinates = new Float64Array(count)
-  let at = 0
-  for (const group of groups) {
-    coordinates.set(group[0]!.coordinates, at)
-    at += group[0]!.coordinates.length
+/** Every frame's time, in pages of a whole number of chunks. The last page grows as frames come,
+ *  to its whole size: times a view took of it before stay as they were, as times never change. */
+class Times {
+  readonly #pages: Float64Array[] = []
+  readonly #page: number
+  #count = 0
+
+  constructor(chunk: number) {
+    this.#page = chunk * Math.max(1, Math.ceil(PAGE_FRAMES / chunk))
   }
-  return groups[0]!.map((head, f) => {
-    const rows = rowCount(head.rows)
-    const [name] = Object.keys(head.columns)
-    const values = new Float64Array(count * rows)
-    let into = 0
-    for (const group of groups) {
-      const column = group[f]!.columns[name!]!
-      const cells = group[f]!.coordinates.length * rows
-      values.set(column.values.subarray(column.offset, column.offset + cells), into)
-      into += cells
+
+  /** The bytes its pages take. */
+  get bytes(): number {
+    return this.#pages.reduce((bytes, page) => bytes + page.byteLength, 0)
+  }
+
+  at(frame: number): number {
+    return this.#pages[Math.floor(frame / this.#page)]![frame % this.#page]!
+  }
+
+  push(times: Float64Array): void {
+    for (let from = 0; from < times.length;) {
+      const p = Math.floor(this.#count / this.#page)
+      const at = this.#count % this.#page
+      const count = Math.min(times.length - from, this.#page - at)
+      let page = this.#pages[p] ?? new Float64Array(0)
+      if (page.length < at + count) {
+        const grown = new Float64Array(
+          Math.min(this.#page, Math.max(FIRST_TIMES, 2 * page.length, at + count)),
+        )
+        grown.set(page.subarray(0, at))
+        this.#pages[p] = page = grown
+      }
+      page.set(times.subarray(from, from + count), at)
+      from += count
+      this.#count += count
     }
-    return {
-      ...head,
-      coordinates,
-      columns: {
-        [name!]: {
-          kind: 'numeric' as const,
-          values,
-          offset: 0,
-          length: values.length,
-          frameStride: rows,
-          rowStride: 1,
-        },
+  }
+
+  /** The times of frames `first` up to `first + count`, which one chunk holds: part of one page. */
+  of(first: number, count: number): Float64Array {
+    const at = first % this.#page
+    return this.#pages[Math.floor(first / this.#page)]!.subarray(at, at + count)
+  }
+
+  /** Every time, as one array. */
+  all(): Float64Array {
+    const times = new Float64Array(this.#count)
+    this.#pages.forEach((page, p) =>
+      times.set(
+        page.subarray(0, Math.min(this.#page, this.#count - p * this.#page)),
+        p * this.#page,
+      ),
+    )
+    return times
+  }
+}
+
+/** Frames `from` up to `to` of `batch`'s field `name`, of the rows at `places` among those it holds
+ *  (every one when absent), named as `rows`: arrays of their own, frame by frame, to send. */
+function copied(
+  batch: Data.SampleBatch,
+  name: string,
+  from: number,
+  to: number,
+  rows: Index.Rows,
+  places?: Uint32Array,
+): Data.SampleBatch {
+  const column = batch.columns[name]!
+  const width = places?.length ?? rowCount(batch.rows)
+  const at = from - batch.firstFrame
+  const count = to - from
+  const values = new Float64Array(count * width)
+  for (let t = 0; t < count; t++)
+    for (let r = 0; r < width; r++)
+      values[t * width + r] =
+        column.values[
+          column.offset + (at + t) * column.frameStride + (places?.[r] ?? r) * column.rowStride
+        ]!
+  return {
+    kind: 'samples',
+    index: batch.index,
+    // The reply's arrays move to the extension, so the rows it names are a copy, never the field's own.
+    rows: rows.kind === 'indices' ? { kind: 'indices', values: rows.values.slice() } : rows,
+    firstFrame: from,
+    coordinates: batch.coordinates.slice(at, at + count),
+    columns: {
+      [name]: {
+        kind: 'numeric',
+        values,
+        offset: 0,
+        length: values.length,
+        frameStride: width,
+        rowStride: 1,
       },
-    }
-  })
+    },
+  }
+}
+
+/** `decoded`, each the frames after the last, as one. */
+function joined(decoded: readonly Decoded[], coordinates: Float64Array): Decoded {
+  const count = coordinates.length
+  return {
+    firstFrame: decoded[0]!.firstFrame,
+    count,
+    coordinates,
+    values: decoded[0]!.values.map((head, f) => {
+      if (decoded.length === 1) return head
+      const values = new Float64Array((head.length / decoded[0]!.count) * count)
+      let into = 0
+      for (const each of decoded) {
+        values.set(each.values[f]!, into)
+        into += each.values[f]!.length
+      }
+      return values
+    }),
+  }
 }
 
 /** Why results that were closed read nothing more: whoever asks of them stops, and says nothing. */
 export const closed = () => problem('results-closed', 'These results are closed.')
 
-/** What a reading of a results file is, besides the file: the id it is held by, the case revision
- *  it is read against, and the solver file whose run writes it and the times that run covers. */
+/** What a reading of a results file is, besides the file: the case revision it is read against,
+ *  and the solver file whose run writes it and the times that run covers. */
 export interface Reading {
-  readonly id: string
   readonly revision: Revision
   readonly path: string
   readonly solver?: string
@@ -139,132 +197,198 @@ export interface Reading {
 }
 
 /** A GridKit results file read for a case, in chunks of frames that every process cuts alike: the
- *  header's width sets how many frames each holds. The header says what the file holds, whether a
- *  run writes it or it was opened alone. Only it changes what it says of itself. */
+ *  header's width sets how many frames each holds. Its CSV is read once, as it is written or
+ *  opened, into a store of Studio's own, which every read after reads: whatever becomes of the CSV,
+ *  what the views draw is what was read. Only it changes what it says of itself. */
 export class ResultsFile {
-  readonly #info: Results
-  /** The file as read, in runs of whole frames. */
-  readonly #segments: Segment[] = []
-  /** Every frame's time. */
-  #times = new Float64Array(FIRST_TIMES)
-  /** While the file is read through, the decoded frames of the chunk not yet whole, in order, and
-   *  those frames as one. */
-  #tail: Frames[] = []
-  #joined?: { count: number; frames: Frames }
-  #ingesting = false
-  /** The file's size and time once read through. Its bytes are found again by where they are, so
-   *  one written again since reads no further. */
-  #stamp?: { size: number; mtimeMs: number }
-  /** How every segment of this file reads, from its header. */
-  readonly #layout: Layout = {}
+  #layout: ResultsLayout
+  readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] }
+  /** How the file reads, from its header. */
+  readonly #decode: Layout = {}
+  #times?: Times
+  /** The frames read of the chunk not yet whole, in order, and those frames as one. */
+  #tail: Decoded[] = []
+  #joined?: { readonly count: number; readonly frames: Frames }
+  /** The chunks being written to the store, which a read of one waits for. */
+  readonly #writing = new Map<number, Promise<void>>()
+  /** The fields of chunks being read from the store, by their keys, which a read of one shares. */
+  readonly #reading = new Map<number, Promise<Data.SampleBatch>>()
+  /** The file's size and time as it was read through. */
+  #stamp?: { readonly size: number; readonly mtimeMs: number }
   /** Who reads the file now, each done once its promise settles. */
-  readonly #leases = new Map<AbortController, Promise<void>>()
+  readonly #readers = new Map<AbortController, Promise<void>>()
   #retired = false
 
   constructor(
     readonly kase: Case,
     readonly cache: ResultCache,
-    { id, revision, path, solver, span }: Reading,
+    /** Where its frames are kept. */
+    readonly store: Store,
+    { revision, path, solver, span }: Reading,
   ) {
-    this.#info = {
-      id,
+    this.#layout = {
       revision: { uri: revision.uri, version: revision.version },
       fingerprint: kase.version,
       name: basename(path),
       path,
       outputs: [],
-      frames: 0,
-      domain: [0, 0],
-      domains: {},
       chunk: 0,
-      growing: false,
       ...(solver && { solver }),
       ...(span && { span }),
     }
+    this.#progress = { frames: 0, domain: [0, 0], domains: {}, growing: false }
   }
 
-  /** What the file holds, as read so far. */
-  get info(): Readonly<Results> {
-    return this.#info
+  /** The results file `store`, read through, holds: read from the store alone. */
+  static async stored(
+    kase: Case,
+    cache: ResultCache,
+    store: Store,
+    reading: Reading,
+  ): Promise<ResultsFile> {
+    const manifest = store.manifest!
+    const file = new ResultsFile(kase, cache, store, reading)
+    Object.assign(file.#decode, layoutFrom(manifest.header, kase))
+    file.#learned(manifest.chunk)
+    file.#times!.push(await store.times())
+    Object.assign(file.#progress, {
+      frames: manifest.frames,
+      domain: manifest.domain,
+      domains: manifest.domains,
+    })
+    file.#stamp = { size: manifest.size, mtimeMs: manifest.mtimeMs }
+    return file
+  }
+
+  /** What the file is: fixed once its header is read. */
+  get layout(): ResultsLayout {
+    return this.#layout
+  }
+
+  /** How far it is read. */
+  get progress(): ResultsProgress {
+    return this.#progress
   }
 
   /** What the file holds, once its header is read. */
   get fields(): readonly Field[] {
-    return this.#layout.read?.fields ?? []
+    return this.#decode.read?.fields ?? []
+  }
+
+  /** Whether it is the file at `path`. */
+  of(path: string): boolean {
+    return fileKey(path) === this.store.key
+  }
+
+  /** Whether the file at its path, of the size and time `now` says, is what it read: being read
+   *  now, or read through and unchanged since. */
+  current(now: { readonly size: number; readonly mtimeMs: number }): boolean {
+    return (
+      this.#progress.growing ||
+      (this.#stamp?.size === now.size && this.#stamp.mtimeMs === now.mtimeMs)
+    )
+  }
+
+  /** What it keeps alive of its own while nothing holds it: its case, and every frame's time. */
+  get bytes(): number {
+    return this.kase.bytes + (this.#times?.bytes ?? 0)
   }
 
   /** Reads the file with `read` until it settles. Retiring the file stops it, and waits for it. */
   async use<R>(signal: AbortSignal, read: (signal: AbortSignal) => Promise<R>): Promise<R> {
     signal.throwIfAborted()
     if (this.#retired) throw closed()
-    const lease = new AbortController()
+    const reader = new AbortController()
     let done!: () => void
-    this.#leases.set(lease, new Promise<void>((resolve) => (done = resolve)))
+    this.#readers.set(reader, new Promise<void>((resolve) => (done = resolve)))
     try {
-      return await read(AbortSignal.any([signal, lease.signal]))
+      return await read(AbortSignal.any([signal, reader.signal]))
     } finally {
-      this.#leases.delete(lease)
+      this.#readers.delete(reader)
       done()
     }
   }
 
-  /** Stops whoever reads the file, waits for them, and lets go of its chunks. The file stays. */
+  /** Stops whoever reads the file, waits for them, and lets go of its chunks. The file stays, and
+   *  its store is its owner's to keep or let go of. */
   async retire(): Promise<void> {
     this.#retired = true
-    const leases = [...this.#leases]
-    for (const [lease] of leases) lease.abort(closed())
-    await Promise.all(leases.map(([, done]) => done))
+    const readers = [...this.#readers]
+    for (const [reader] of readers) reader.abort(closed())
+    await Promise.all(readers.map(([, done]) => done))
+    await Promise.allSettled(this.#writing.values())
     this.cache.drop(this)
     this.#tail = []
     this.#joined = undefined
   }
 
   /** Follows the results file as it is written, reading each segment as it comes, and tells
-   *  `progress` after each. Returns once `ended` and the file has nothing more. Meanwhile it grows;
-   *  why it stops short, if it does, it says. */
-  async ingest(signal: AbortSignal, ended: () => boolean, progress: () => Promise<void> | void) {
-    this.#ingesting = true
-    this.#info.growing = true
+   *  `progress` after each. Returns once `writer` is done and the file has nothing more, the store
+   *  then saying what it holds. Meanwhile it grows; why it stops short, if it does, it says, and
+   *  keeps what it read. */
+  async ingest(
+    signal: AbortSignal,
+    writer: () => Writer,
+    progress: () => Promise<void> | void,
+  ): Promise<void> {
+    this.#progress.growing = true
     try {
-      for await (const piece of follow(this.#info.path, signal, ended)) {
+      for await (const piece of follow(this.#layout.path, signal, writer)) {
         if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
-        else {
-          await this.#append(piece, signal)
+        else if (piece.kind === 'segment') {
+          await this.#append(piece.bytes, signal)
           await progress()
-        }
+        } else this.#stamp = piece.stamp
       }
-      const { size, mtimeMs } = await stat(this.#info.path)
-      this.#stamp = { size, mtimeMs }
+      await this.#settle()
+      const { frames, domain, domains } = this.#progress
+      // A file written to as it was read through is read again whole when opened again.
+      if (this.#stamp && this.#decode.header)
+        await this.store.finish(
+          {
+            path: this.#layout.path,
+            ...this.#stamp,
+            fingerprint: this.kase.version,
+            header: this.#decode.header,
+            frames,
+            chunk: this.#layout.chunk,
+            domain,
+            domains: domains ?? {},
+          },
+          this.#times?.all() ?? new Float64Array(0),
+        )
     } catch (error) {
-      if (!signal.aborted) this.#info.error = message(error)
+      if (!signal.aborted) {
+        this.#progress.error = message(error)
+        await this.#settle().catch(() => {})
+      }
       throw error
     } finally {
-      this.#ingesting = false
-      this.#info.growing = false
-      this.#settle()
+      this.#progress.growing = false
     }
   }
 
   /** The first frame time after `at`, or the last before it when `direction` is -1: the first or
    *  last time when there is none. */
   step(at: number, direction: -1 | 1): number {
-    const { frames, domain } = this.#info
+    const { frames, domain } = this.#progress
     const times = this.#times
+    if (!times) return domain[0]
     if (direction > 0) {
-      const next = firstWhere(frames, (i) => times[i]! > at)
-      return next === frames ? domain[1] : times[next]!
+      const next = firstWhere(frames, (i) => times.at(i) > at)
+      return next === frames ? domain[1] : times.at(next)
     }
-    const previous = firstWhere(frames, (i) => times[i]! >= at) - 1
-    return previous < 0 ? domain[0] : times[previous]!
+    const previous = firstWhere(frames, (i) => times.at(i) >= at) - 1
+    return previous < 0 ? domain[0] : times.at(previous)
   }
 
   /** The case's data with the chunks whose frames reach over `window`: of the fields of type
    *  `from`, as a query of its rows reads, else of every field. */
   async data(window: Domain, signal: AbortSignal, from?: string): Promise<Data> {
-    const { chunk } = this.#info
-    const fields = from
-      ? this.fields.flatMap((field, f) => (field.index.type === from ? [f] : []))
-      : undefined
+    const { chunk } = this.#layout
+    const fields = this.fields.flatMap((field, f) =>
+      from === undefined || field.index.type === from ? [f] : [],
+    )
     const [first, end] = this.#span(window)
     let data = this.kase.data
     for (let k = Math.floor(first / chunk); chunk && k * chunk < end; k++)
@@ -278,9 +402,14 @@ export class ResultsFile {
     { field, window, held, near, bytes }: SamplesInput,
     signal: AbortSignal,
   ): Promise<Data.SampleBatch[]> {
-    const { chunk, frames } = this.#info
+    const { chunk } = this.#layout
+    const { frames } = this.#progress
     const f = this.#fieldOf(field)
     if (!chunk || f < 0) return []
+    const places = this.#placesOf(f, field)
+    if (places?.length === 0) return []
+    const { name, rows } = this.fields[f]!
+    const named = places ? axisOf(places.map((place) => rows[place]!)) : this.fields[f]!.axis
     const [first, end] = this.#span(window)
     const chunks: number[] = []
     for (let k = Math.floor(first / chunk); k * chunk < end; k++) chunks.push(k)
@@ -292,20 +421,23 @@ export class ResultsFile {
       const to = Math.min(frames, (k + 1) * chunk)
       if (from >= to) continue
       if (reply.length && size >= bytes) break
-      const batch = this.#pick(slice(await this.#chunk(k, signal, [f]), from, to), field)
-      if (!batch) continue
-      reply.push(batch)
-      size += blockByteLength([batch])
+      const { batch, chosen } = await this.#rowsOf(k, f, places, signal)
+      const sent = copied(batch, name, from, to, named, chosen ? undefined : places)
+      reply.push(sent)
+      size += blockByteLength([sent])
     }
     return reply
   }
 
-  /** Copies the file to `path`: it is GridKit's CSV already. */
+  /** Copies the file to `path`: it is GridKit's CSV already, as long as it is still the file read. */
   async exportCsv(path: string) {
-    if (resolve(path) === resolve(this.#info.path))
-      throw new Error('Choose a different file from the open results.')
+    if (this.of(path)) throw new Error('Choose a different file from the open results.')
+    if (!this.current(await stat(this.#layout.path)))
+      throw new Error(
+        `${this.#layout.name} was written again after it was read. Open it again to export what it holds now.`,
+      )
     await mkdir(dirname(path), { recursive: true })
-    await copyFile(this.#info.path, path)
+    await copyFile(this.#layout.path, path)
   }
 
   /** Where `from`'s `select`ed field is among those the file holds; -1 where it holds none. */
@@ -313,59 +445,36 @@ export class ResultsFile {
     return this.fields.findIndex((field) => field.index.type === from && field.name === name)
   }
 
-  /** `frames`' samples of `field`: the rows of it the file holds, or those of them it names, as one
-   *  batch of arrays of its own, to send. */
-  #pick(
-    frames: Frames,
-    { from, select: [name], rows }: Query.Selection,
-  ): Data.SampleBatch | undefined {
-    const batch = frames.find((each) => each.index.type === from && name! in each.columns)
-    const held = this.fields.find((field) => field.index.type === from && field.name === name)
-    if (!batch || !held) return undefined
-    const column = batch.columns[name!]!
-    // Where each row sent sits among those the file holds.
-    let places: Uint32Array | undefined
-    if (rows) {
-      const wanted = selectRows(this.kase.data.tables[from]!, rows)
-      const found: number[] = []
-      for (let i = 0; i < rowCount(wanted); i++) {
-        const place = seek(held.rows, rowAt(wanted, i))
-        if (held.rows[place] === rowAt(wanted, i)) found.push(place)
-      }
-      places = Uint32Array.from(found.sort((a, b) => a - b))
+  /** Where the rows `selection` names sit among those field `f` holds, ascending; undefined when
+   *  it names none, and so every one the file holds. */
+  #placesOf(f: number, { from, rows }: Query.Selection): Uint32Array | undefined {
+    if (!rows) return undefined
+    const held = this.fields[f]!.rows
+    const wanted = selectRows(this.kase.data.tables[from]!, rows)
+    const found: number[] = []
+    for (let i = 0; i < rowCount(wanted); i++) {
+      const place = seek(held, rowAt(wanted, i))
+      if (held[place] === rowAt(wanted, i)) found.push(place)
     }
-    const width = places?.length ?? held.rows.length
-    if (!width) return undefined
-    const count = batch.coordinates.length
-    const values = new Float64Array(count * width)
-    for (let t = 0; t < count; t++)
-      for (let r = 0; r < width; r++)
-        values[t * width + r] =
-          column.values[
-            column.offset + t * column.frameStride + (places?.[r] ?? r) * column.rowStride
-          ]!
-    return {
-      kind: 'samples',
-      index: batch.index,
-      // The reply's arrays move to the extension, so the rows it names are a copy, never the field's own.
-      rows: places
-        ? axisOf(places.map((place) => held.rows[place]!))
-        : held.axis.kind === 'indices'
-          ? { kind: 'indices', values: held.axis.values.slice() }
-          : held.axis,
-      firstFrame: batch.firstFrame,
-      coordinates: batch.coordinates.slice(),
-      columns: {
-        [name!]: {
-          kind: 'numeric',
-          values,
-          offset: 0,
-          length: values.length,
-          frameStride: width,
-          rowStride: 1,
-        },
-      },
-    }
+    return Uint32Array.from(found.sort((a, b) => a - b))
+  }
+
+  /** Field `f` of chunk `k`, of the rows at `places` when given: those alone, `chosen`, when only
+   *  they are read from the store, else every row the file holds. */
+  async #rowsOf(
+    k: number,
+    f: number,
+    places: Uint32Array | undefined,
+    signal: AbortSignal,
+  ): Promise<{ batch: Data.SampleBatch; chosen: boolean }> {
+    const whole = () =>
+      this.#chunk(k, signal, [f]).then(([batch]) => ({ batch: batch!, chosen: false }))
+    if (!places || this.#tailHolds(k) || this.cache.get(this, this.#keyOf(k, f))) return whole()
+    await this.#writing.get(k)
+    signal.throwIfAborted()
+    const count = this.#countOf(k)
+    const values = await this.store.read(k, f, count, places)
+    return { batch: this.#stored(k, f, count, values, places), chosen: true }
   }
 
   /** Reads the file's header alone, which gives the layout every segment is read with. */
@@ -374,225 +483,203 @@ export class ResultsFile {
       Readable.from([header]),
       this.kase,
       { signal, publish: () => {} },
-      this.#layout,
+      this.#decode,
     )
-    this.#learned()
+    this.#learned(chunkFrames(this.fields))
   }
 
-  /** Says what the file holds and how it is cut, once its header says. */
-  #learned() {
-    if (this.#info.outputs.length || !this.fields.length) return
-    this.#info.outputs = selectionsOf(this.fields)
-    this.#info.chunk = chunkFrames(this.fields)
+  /** Says what the file holds and how it is cut, `chunk` frames a chunk, once its header says. */
+  #learned(chunk: number) {
+    if (this.#layout.outputs.length || !this.fields.length) return
+    this.#layout = { ...this.#layout, outputs: selectionsOf(this.fields), chunk }
+    this.store.shape(
+      this.fields.map((field) => field.rows.length),
+      chunk,
+    )
+    this.#times = new Times(chunk)
   }
 
-  /** Read through, the chunk not yet whole is kept as the whole ones are: in the cache, under its
-   *  budget, and decoded again from the file once the cache lets go of it. */
-  #settle() {
-    const { chunk, frames } = this.#info
+  /** Read through, the chunk not yet whole is kept as the whole ones are: in the store, and the
+   *  cache. */
+  async #settle() {
     if (this.#tail.length && !this.#retired)
-      joined(this.#tail).forEach((batch, f) =>
-        this.cache.put(this, this.#keyOf(Math.floor(frames / chunk), f), [batch]),
-      )
-    this.#tail = []
-    this.#joined = undefined
+      await this.#keep(Math.floor(this.#progress.frames / this.#layout.chunk))
   }
 
-  /** The frames whose samples reach over `[a, b]`: from the last at or before `a` up to the first
+  /** How many frames chunk `k` holds now. */
+  #countOf(k: number): number {
+    const { chunk } = this.#layout
+    return Math.min(chunk, this.#progress.frames - k * chunk)
+  }
+
+  /** Whether chunk `k` is the one the frames not yet kept fill. */
+  #tailHolds(k: number): boolean {
+    return this.#tail.length > 0 && k === Math.floor(this.#progress.frames / this.#layout.chunk)
+  }
+
+  /** The frames from where they reach over `[a, b]`: from the last at or before `a` up to the first
    *  at or after `b`, as a frame and the frame past the last. */
   #span([a, b]: Domain): [number, number] {
-    const { frames } = this.#info
-    if (!frames) return [0, 0]
+    const { frames } = this.#progress
     const times = this.#times
-    const first = Math.max(0, firstWhere(frames, (i) => times[i]! > a) - 1)
+    if (!frames || !times) return [0, 0]
+    const first = Math.max(0, firstWhere(frames, (i) => times.at(i) > a) - 1)
     const last = Math.min(
       frames - 1,
-      firstWhere(frames, (i) => times[i]! >= b),
+      firstWhere(frames, (i) => times.at(i) >= b),
     )
     return [first, Math.max(first, last) + 1]
   }
 
   /** How far chunk `k`'s times lie from `at`; while a playhead plays, time behind it counts more. */
   #distance(k: number, { at, travel }: { at: number; travel: number }): number {
-    const { chunk, frames } = this.#info
-    const start = this.#times[k * chunk]!
-    const end = this.#times[Math.min(frames, (k + 1) * chunk) - 1]!
+    const { chunk } = this.#layout
+    const times = this.#times!
+    const start = times.at(k * chunk)
+    const end = times.at(k * chunk + this.#countOf(k) - 1)
     if (at < start) return (start - at) * (travel < 0 ? BEHIND : 1)
     if (at > end) return (at - end) * (travel > 0 ? BEHIND : 1)
     return 0
   }
 
   /** The cache's key for field `f` of chunk `k`. Each field of a chunk is kept apart, so a view's
-   *  field is decoded alone, and the fields views read stay as the rest go. */
+   *  field is read alone, and the fields views read stay as the rest go. */
   #keyOf(k: number, f: number): number {
     return k * this.fields.length + f
   }
 
-  /** Chunk `k`'s frames read so far of `fields`, by their place among the file's, one batch each;
-   *  of every field when none are named. A chunk that is whole, or the last once the file is read
-   *  through, comes from the cache, or is decoded again into it from the segments that hold it,
-   *  with only the fields missing read as numbers. */
-  async #chunk(k: number, signal: AbortSignal, fields?: readonly number[]): Promise<Frames> {
-    const { chunk, frames } = this.#info
-    if (k * chunk >= frames) return []
-    const wanted = fields ?? this.fields.map((_, f) => f)
-    if ((k + 1) * chunk > frames && this.#ingesting) {
-      if (this.#joined?.count !== frames)
-        this.#joined = { count: frames, frames: joined(this.#tail) }
-      const tail = this.#joined.frames
-      return tail.length ? wanted.map((f) => tail[f]!) : []
-    }
-    const found = new Map<number, Data.SampleBatch>()
-    for (const f of wanted) {
-      const cached = this.cache.get(this, this.#keyOf(k, f))?.[0]
-      if (cached) found.set(f, cached)
-    }
-    const missing = wanted.filter((f) => !found.has(f))
-    if (missing.length) {
-      await this.#verify()
-      // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
-      // whole is kept, so a segment longer than a chunk decodes once.
-      const groups = new Map<number, Frames[]>()
-      const [first, end] = [k * chunk, (k + 1) * chunk]
-      let from = Infinity
-      let to = -Infinity
-      for (const segment of this.#segments) {
-        if (segment.first + segment.count <= first || segment.first >= end) continue
-        from = Math.min(from, segment.first)
-        to = Math.max(to, segment.first + segment.count)
-        await this.#decode(
-          await this.#read(segment.start, segment.end),
-          segment.first,
-          signal,
-          (group) => {
-            const j = Math.floor(group[0]!.firstFrame / chunk)
-            const held = groups.get(j)
-            if (held) held.push(group)
-            else groups.set(j, [group])
-          },
-          missing,
-        )
-      }
-      for (const [j, held] of groups)
-        if (j === k || (j * chunk >= from && (j + 1) * chunk <= Math.min(to, frames))) {
-          const whole = joined(held)
-          missing.forEach((f, i) => {
-            const batch = whole[i]
-            if (!batch) return
-            this.cache.put(this, this.#keyOf(j, f), [batch])
-            if (j === k) found.set(f, batch)
-          })
-        }
-    }
-    return wanted.flatMap((f) => found.get(f) ?? [])
+  /** Field `f` of chunk `k`, `count` frames of `values` as the store keeps them, row by row: of the
+   *  rows at `places` when given, else of every one. */
+  #stored(
+    k: number,
+    f: number,
+    count: number,
+    values: Float64Array,
+    places?: Uint32Array,
+  ): Data.SampleBatch {
+    const field = this.fields[f]!
+    return {
+      kind: 'samples',
+      index: field.index,
+      rows: places ? axisOf(places.map((place) => field.rows[place]!)) : field.axis,
+      firstFrame: k * this.#layout.chunk,
+      coordinates: this.#times!.of(k * this.#layout.chunk, count),
+      columns: {
+        [field.name]: {
+          kind: 'numeric',
+          values,
+          offset: 0,
+          length: values.length,
+          frameStride: 1,
+          rowStride: count,
+        },
+      },
+    } as Data.SampleBatch
   }
 
-  /** Decodes `bytes`, whose first frame is `first`, handing `publish` each group of frames: one
-   *  batch per field, of `only` when given, never crossing into the next chunk. A segment is rows
-   *  alone, read with the layout its header gave. */
-  async #decode(
-    bytes: Uint8Array,
-    first: number,
-    signal: AbortSignal,
-    publish: (group: Frames) => void,
-    only?: readonly number[],
-  ) {
+  /** Chunk `k`'s frames read so far of `fields`, by their place among the file's, one batch each:
+   *  the frames not yet kept from memory, the rest from the cache, else the store, into the cache
+   *  as a view read them. */
+  async #chunk(k: number, signal: AbortSignal, fields: readonly number[]): Promise<Frames> {
+    const { chunk } = this.#layout
+    if (k * chunk >= this.#progress.frames) return []
+    if (this.#tailHolds(k)) {
+      const { frames } = this.#progress
+      if (this.#joined?.count !== frames)
+        this.#joined = {
+          count: frames,
+          frames: samplesOf(
+            this.fields,
+            joined(this.#tail, this.#times!.of(k * chunk, frames - k * chunk)),
+          ),
+        }
+      const tail = this.#joined.frames
+      return fields.map((f) => tail[f]!)
+    }
+    await this.#writing.get(k)
+    const count = this.#countOf(k)
+    return Promise.all(
+      fields.map(async (f) => {
+        const key = this.#keyOf(k, f)
+        const cached = this.cache.get(this, key)?.[0]
+        if (cached) return cached
+        signal.throwIfAborted()
+        // Asked for meanwhile, as the Network and the Monitor do at once, it is read once.
+        let read = this.#reading.get(key)
+        if (!read) {
+          read = this.store
+            .read(k, f, count)
+            .then((values) => {
+              const batch = this.#stored(k, f, count, values)
+              this.cache.put(this, key, [batch], true)
+              return batch
+            })
+            .finally(() => this.#reading.delete(key))
+          this.#reading.set(key, read)
+        }
+        return read
+      }),
+    )
+  }
+
+  /** Reads the segment `bytes`: each group of its frames in turn. */
+  async #append(bytes: Uint8Array, signal: AbortSignal) {
     await readResults(
       Readable.from([bytes]),
       this.kase,
-      {
-        signal,
-        first,
-        ...(only && { only }),
-        publish: (frames) => publish(samplesOf(this.fields, frames, only)),
-      },
-      this.#layout,
+      { signal, first: this.#progress.frames, publish: (frames) => this.#add(frames) },
+      this.#decode,
     )
-    this.#learned()
   }
 
-  /** Refuses a file written again since it was read through: its bytes are found again by where
-   *  they are, so no view mixes two runs' samples. */
-  async #verify(): Promise<void> {
-    const stamp = this.#stamp
-    if (!stamp) return
-    const { size, mtimeMs } = await stat(this.#info.path)
-    if (size !== stamp.size || mtimeMs !== stamp.mtimeMs)
-      throw problem(
-        'results-changed',
-        `${this.#info.name} was written again after it was read. Open it again to read what it holds now.`,
-      )
-  }
-
-  /** Bytes `start` to `end` of the file. */
-  async #read(start: number, end: number): Promise<Uint8Array> {
-    const file = await open(this.#info.path, 'r')
-    try {
-      const bytes = new Uint8Array(end - start)
-      let read = 0
-      while (read < bytes.length) {
-        const { bytesRead } = await file.read(bytes, read, bytes.length - read, start + read)
-        if (!bytesRead) throw new Error(`${this.#info.name} changed while it was read.`)
-        read += bytesRead
-      }
-      return bytes
-    } finally {
-      await file.close()
-    }
-  }
-
-  /** Reads the segment between `start` and `end`, `bytes`: each group of its frames in turn. */
-  async #append({ start, end, bytes }: Extract<Piece, { kind: 'segment' }>, signal: AbortSignal) {
-    const first = this.#info.frames
-    await this.#decode(bytes, first, signal, (group) => this.#add(group))
-    const count = this.#info.frames - first
-    if (count) this.#segments.push({ start, end, first, count })
-  }
-
-  /** Takes in `group`, the next frames read: their times, the ranges of their values, and the chunk
-   *  they fill. A whole chunk goes to the cache: the frames ingested are decoded once. */
-  #add(group: Frames) {
-    const times = group[0]?.coordinates
-    if (!times?.length) return
-    // The header was read before any frame.
-    this.#learned()
-    const { frames } = this.#info
-    if (times[0]! < (frames ? this.#times[frames - 1]! : -Infinity))
+  /** Takes in `frames`, the next read: their times, the ranges of their values, and the chunk they
+   *  fill, which, once whole, is kept. */
+  async #add(frames: Decoded) {
+    const { count, coordinates, values } = frames
+    if (!count) return
+    const times = this.#times!
+    const progress = this.#progress
+    if (coordinates[0]! < (progress.frames ? times.at(progress.frames - 1) : -Infinity))
       throw new Error('Result times must be nondecreasing.')
-    if (frames + times.length > this.#times.length) {
-      const grown = new Float64Array(Math.max(2 * this.#times.length, frames + times.length))
-      grown.set(this.#times.subarray(0, frames))
-      this.#times = grown
-    }
-    this.#times.set(times, frames)
+    times.push(coordinates)
     // Measured once, as frames are read: every view uses these ranges, and scrubbing never
     // rescans history or normalizes one frame.
-    const domains = (this.#info.domains ??= {})
-    for (const batch of group) {
-      const fields = (domains[batch.index.type] ??= {})
-      const rows = rowCount(batch.rows)
-      for (const [name, column] of Object.entries(batch.columns)) {
-        let [min, max] = fields[name] ?? [Infinity, -Infinity]
-        for (let frame = 0; frame < batch.coordinates.length; frame++)
-          for (let row = 0; row < rows; row++) {
-            const at = column.offset + frame * column.frameStride + row * column.rowStride
-            const value = column.values[at]!
-            if (!bitAt(column.validity, at) || !Number.isFinite(value)) continue
-            min = Math.min(min, value)
-            max = Math.max(max, value)
-          }
-        if (min <= max) fields[name] = [min, max]
-      }
-    }
-    this.#info.frames = frames + times.length
-    this.#info.domain = [this.#times[0]!, times.at(-1)!]
-    this.#tail.push(group)
-    const { chunk } = this.#info
-    if (this.#info.frames % chunk === 0) {
-      const k = this.#info.frames / chunk - 1
-      joined(this.#tail).forEach((batch, f) => this.cache.put(this, this.#keyOf(k, f), [batch]))
-      this.#tail = []
-      this.#joined = undefined
+    const domains = (progress.domains ??= {})
+    this.fields.forEach((field, f) => {
+      const ranges = (domains[field.index.type] ??= {})
+      let [min, max] = ranges[field.name] ?? [Infinity, -Infinity]
+      for (const value of values[f]!)
+        if (Number.isFinite(value)) {
+          if (value < min) min = value
+          if (value > max) max = value
+        }
+      if (min <= max) ranges[field.name] = [min, max]
+    })
+    progress.frames += count
+    progress.domain = [times.at(0), coordinates[count - 1]!]
+    this.#tail.push(frames)
+    this.#joined = undefined
+    const { chunk } = this.#layout
+    if (progress.frames % chunk === 0) await this.#keep(progress.frames / chunk - 1)
+  }
+
+  /** Chunk `k`, of the frames not yet kept, is whole, or the last once read through: written to
+   *  the store, and kept cold in the cache meanwhile, as no view has read it yet. */
+  async #keep(k: number): Promise<void> {
+    const tail = this.#tail
+    this.#tail = []
+    this.#joined = undefined
+    const count = tail.reduce((sum, each) => sum + each.count, 0)
+    const frames = joined(tail, this.#times!.of(k * this.#layout.chunk, count))
+    const written = this.store.write(k, count, frames.values)
+    this.#writing.set(k, written)
+    samplesOf(this.fields, frames).forEach((batch, f) =>
+      this.cache.put(this, this.#keyOf(k, f), [batch], false),
+    )
+    try {
+      await written
+    } finally {
+      this.#writing.delete(k)
     }
   }
 }

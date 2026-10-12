@@ -95,6 +95,10 @@ export interface Shape {
 
 export const SIGNAL = 'Signal'
 export const CASE = 'Case'
+/** The catalog's codes for its types: the bus's, the signal's, then each device class's. */
+export const BUS_CODE = 0
+export const SIGNAL_CODE = 1
+export const DEVICE_CODES = 2
 /** The Case table's one row. */
 export const CASE_ROW = 'case'
 

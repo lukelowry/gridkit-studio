@@ -35,7 +35,7 @@ export const affects = (
   id?: keyof Runtime,
 ) => event.affectsConfiguration(id ? `${PREFIX}.${id}` : PREFIX, scope)
 
-/** The GridKit the settings name for the case at `uri`; a relative path resolves against its
+/** The GridKit the settings name for the file at `uri`; a relative path resolves against its
  *  workspace folder. */
 export function gridkitOf(uri: vscode.Uri): GridKit {
   const path = setting('gridkitPath', uri).trim()
@@ -81,16 +81,19 @@ export function choicesOf(id: keyof SettingsValues): { label: string; value: unk
   return definition && 'options' in definition ? [...definition.options] : []
 }
 
-/** Sets the display setting `id` for the case at `uri`: in its workspace when one is open, else for
- *  the user. */
+/** Sets the display setting `id` for the case at `uri`: in its workspace folder when it is in one,
+ *  which in a workspace of several folders is the case's alone; else in the workspace when one is
+ *  open; else for the user. */
 export function choose(id: keyof SettingsValues, value: unknown, uri: vscode.Uri) {
   return vscode.workspace
     .getConfiguration(PREFIX, uri)
     .update(
       id,
       value,
-      vscode.workspace.workspaceFolders?.length
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global,
+      vscode.workspace.getWorkspaceFolder(uri)
+        ? vscode.ConfigurationTarget.WorkspaceFolder
+        : vscode.workspace.workspaceFolders?.length
+          ? vscode.ConfigurationTarget.Workspace
+          : vscode.ConfigurationTarget.Global,
     )
 }

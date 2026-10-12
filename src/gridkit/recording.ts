@@ -4,7 +4,9 @@
 import type { SourceEdit, Summary } from '../shared/messages.js'
 import type { Sink } from '../shared/study.js'
 import type { Case, Table } from './case.js'
-import { textOffset } from './edits.js'
+import { STEP_RECORDS } from './columns.js'
+import { textOffsets } from './edits.js'
+import { Turns } from './turns.js'
 
 const decoder = new TextDecoder()
 
@@ -25,30 +27,41 @@ function listed(kase: Case, table: Table, row: number): string[] {
 }
 
 /** What the case records: how many of each type's elements list each output, and the monitor
- *  GridKit writes to, its last CSV one as GridKit takes it. */
-export function recordingOf(kase: Case): Summary['recording'] {
+ *  GridKit writes to, its last CSV one as GridKit takes it. Read a slice at a time, until `signal`
+ *  lets go. */
+export async function recordingOf(
+  kase: Case,
+  signal = AbortSignal.any([]),
+): Promise<Summary['recording']> {
+  const work = new Turns(signal)
   const listedCounts: Record<string, Record<string, number>> = {}
   for (const table of kase.tables.values()) {
     if (!table.shape.array || !table.shape.outputOrder.size) continue
     const fields = new Map(
       [...table.shape.outputOrder.keys()].map((field) => [outputName(table, field), field]),
     )
-    for (let row = 0; row < table.records.length; row++)
+    /** The last row each field was counted for: a list that names an output twice counts once. */
+    const counted = new Map<string, number>()
+    for (let row = 0; row < table.records.length; row++) {
+      if ((row & STEP_RECORDS) === 0) await work.step()
       for (const name of listed(kase, table, row)) {
         const field = fields.get(name)
-        if (field === undefined) continue
+        if (field === undefined || counted.get(field) === row) continue
+        counted.set(field, row)
         const counts = (listedCounts[table.shape.type] ??= {})
         counts[field] = (counts[field] ?? 0) + 1
       }
+    }
   }
   const monitor = monitorOf(kase)
   return { listed: listedCounts, ...(monitor && { monitor }) }
 }
 
 function monitorOf(kase: Case): Sink | undefined {
-  if (!kase.monitors) return undefined
+  const monitors = kase.member('monitors')
+  if (!monitors) return undefined
   const sinks = JSON.parse(
-    decoder.decode(kase.file.subarray(kase.monitors.value, kase.monitors.end)),
+    decoder.decode(kase.file.subarray(monitors.value, monitors.end)),
   ) as unknown
   if (!Array.isArray(sinks)) return undefined
   for (const sink of sinks.toReversed()) {
@@ -58,36 +71,62 @@ function monitorOf(kase: Case): Sink | undefined {
   return undefined
 }
 
-/** The edits that make every element of `type` list the outputs in `add` and none in `remove`. A
- *  list keeps its order, and what it gains goes last. A record with no list gains one. */
-export function recordEdits(
-  kase: Case,
-  type: string,
-  add: readonly string[],
-  remove: readonly string[],
-): SourceEdit[] {
-  const table = kase.table(type)
-  const array = table.shape.array && kase.arrays[table.shape.array]
-  if (!array) return []
-  const adding = add.map((field) => outputName(table, field))
-  const removing = remove.map((field) => outputName(table, field))
-  const edits: SourceEdit[] = []
-  for (let row = 0; row < table.records.length; row++) {
-    const before = listed(kase, table, row)
-    const kept = before.filter((name) => !removing.includes(name))
-    const after = [...kept, ...adding.filter((name) => !kept.includes(name))]
-    if (after.length === before.length && after.every((name, n) => name === before[n])) continue
-    const record = table.records[row]!
-    const from = array.mons[2 * record]!
-    const brace = array.ends[record]! - 1
-    const [start, end] = from > 0 ? [from, array.mons[2 * record + 1]!] : [brace, brace]
-    const offset = textOffset(kase, start)
-    const text = JSON.stringify(after)
-    edits.push({
-      offset,
-      length: textOffset(kase, end) - offset,
-      text: from > 0 ? text : `, "mon": ${text}`,
-    })
+/** What one type of a case is to record: the outputs each of its elements is to list, and those
+ *  none is to. */
+export interface Recording {
+  readonly type: string
+  readonly add: readonly string[]
+  readonly remove: readonly string[]
+}
+
+/** The edits that make every element of each type `recordings` name list the outputs in its `add`
+ *  and none in its `remove`. A list keeps its order, and what it gains goes last. A record with no
+ *  list gains one. Edits of records near one another, of whatever type, are one edit, with what lies
+ *  between them: listing a field on every element is then a few edits, not one per element. */
+export function recordEdits(kase: Case, recordings: readonly Recording[]): SourceEdit[] {
+  /** Each record's change, by where it is in the file. */
+  const changes: { start: number; end: number; text: string }[] = []
+  for (const { type, add, remove } of recordings) {
+    const table = kase.table(type)
+    const array = table.shape.array && kase.arrays[table.shape.array]
+    if (!array) continue
+    const adding = add.map((field) => outputName(table, field))
+    const removing = remove.map((field) => outputName(table, field))
+    for (let row = 0; row < table.records.length; row++) {
+      const before = listed(kase, table, row)
+      const kept = before.filter((name) => !removing.includes(name))
+      const after = [...kept, ...adding.filter((name) => !kept.includes(name))]
+      if (after.length === before.length && after.every((name, n) => name === before[n])) continue
+      const record = table.records[row]!
+      const from = array.mons[2 * record]!
+      const brace = array.ends[record]! - 1
+      changes.push(
+        from > 0
+          ? { start: from, end: array.mons[2 * record + 1]!, text: JSON.stringify(after) }
+          : { start: brace, end: brace, text: `, "mon": ${JSON.stringify(after)}` },
+      )
+    }
   }
+  changes.sort((a, b) => a.start - b.start)
+  const offsetOf = textOffsets(kase)
+  const edits: SourceEdit[] = []
+  /** The edit being made, and where it ends in the file, which the next change joins when near. */
+  let last: { offset: number; length: number; text: string; end: number } | undefined
+  for (const { start, end, text } of changes) {
+    const offset = offsetOf(start)
+    const length = offsetOf(end) - offset
+    if (last && offset - (last.offset + last.length) <= JOIN_CHARS) {
+      last.text += decoder.decode(kase.file.subarray(last.end, start)) + text
+      last.length = offset + length - last.offset
+      last.end = end
+      continue
+    }
+    if (last) edits.push({ offset: last.offset, length: last.length, text: last.text })
+    last = { offset, length, text, end }
+  }
+  if (last) edits.push({ offset: last.offset, length: last.length, text: last.text })
   return edits
 }
+
+/** How near one record's change must be to the last for the two to be one edit, in characters. */
+const JOIN_CHARS = 4096

@@ -30,6 +30,7 @@ export function registerNavigation(studio: Sessions) {
         {
           uri: document.uri.toString(),
           version: summary.version,
+          attachmentId: summary.attachmentId,
           offset: document.offsetAt(position),
         },
         signal,
@@ -78,7 +79,12 @@ export function registerNavigation(studio: Sessions) {
         const range = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'locate',
-            { uri: document.uri.toString(), version: context.summary.version, id },
+            {
+              uri: document.uri.toString(),
+              version: context.summary.version,
+              attachmentId: context.summary.attachmentId,
+              id,
+            },
             signal,
           ),
         )
@@ -96,7 +102,12 @@ export function registerNavigation(studio: Sessions) {
         const symbols = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'symbols',
-            { uri: document.uri.toString(), version: summary.version, limit },
+            {
+              uri: document.uri.toString(),
+              version: summary.version,
+              attachmentId: summary.attachmentId,
+              limit,
+            },
             signal,
           ),
         )

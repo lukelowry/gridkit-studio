@@ -278,6 +278,25 @@ describe('Transport', () => {
     transport.dispose()
   })
 
+  it('plays on through a span longer than a timer can wait, and pauses only at its end', () => {
+    vi.useFakeTimers()
+    const { transport, wait } = rig()
+    // A thousand days, which no single timer waits out.
+    const days = 1_000
+    const day = 86_400_000
+    transport.setSpan([0, days * 86_400])
+    transport.play()
+    for (let elapsed = 0; elapsed < days; elapsed += 10) {
+      wait(10 * day)
+      vi.advanceTimersByTime(10 * day)
+      if (elapsed + 10 < days) expect(transport.state.status).toBe('playing')
+    }
+    wait(day)
+    vi.advanceTimersByTime(day)
+    expect(transport.state).toMatchObject({ status: 'paused', t: days * 86_400 })
+    transport.dispose()
+  })
+
   it('settles at the edge when paused after the end has passed', () => {
     const { transport, wait } = rig()
     transport.setSpan([0, 1])

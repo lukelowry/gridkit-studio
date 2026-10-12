@@ -1,5 +1,5 @@
 import { failure } from '@latkit/model'
-import { findNodeAtLocation, parseTree } from 'jsonc-parser'
+import { findNodeAtLocation } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import type { Case } from './case.js'
@@ -11,6 +11,7 @@ import {
   nativePath,
   realText,
   textOffset,
+  treeOf,
   withValue,
 } from './edits.js'
 
@@ -84,7 +85,7 @@ export function createRecords(
       }
       text = withValue(text, nativePath(plan), native)
       if (plan.definition.type === 'float64' && typeof native === 'number') {
-        const node = findNodeAtLocation(parseTree(text)!, nativePath(plan))!
+        const node = findNodeAtLocation(treeOf(text), nativePath(plan))!
         text = apply(text, [{ offset: node.offset, length: node.length, text: realText(native) }])
       }
     }

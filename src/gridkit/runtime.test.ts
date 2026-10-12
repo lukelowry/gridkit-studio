@@ -1,10 +1,12 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { abandoned, containerArgs, runtimeOf } from './runtime.js'
+import { abandoned, containerArgs, runtimeOf, sweepOrphans, writeDown } from './runtime.js'
 
 const exe = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
 
@@ -139,4 +141,74 @@ describe('a container run', () => {
     expect(podman).toContain('--userns keep-id')
     expect(podman).not.toContain('--user ')
   })
+})
+
+describe('runs a window that died left running', () => {
+  let folder: string
+  beforeEach(async () => {
+    folder = await mkdtemp(join(tmpdir(), 'gridkit-runs-'))
+  })
+  afterEach(() => rm(folder, { recursive: true, force: true }))
+
+  /** A process that runs until it is ended, in a group of its own, as GridKit runs. */
+  const runner = () =>
+    spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: process.platform !== 'win32',
+      stdio: 'ignore',
+    })
+  /** The id of a window that has exited. */
+  async function exited(): Promise<number> {
+    const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
+    await once(child, 'exit')
+    return child.pid!
+  }
+  const running = (pid: number) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('crosses out a run it cannot tell is the process written down, ending nothing', async () => {
+    const other = runner()
+    try {
+      const host = await exited()
+      await writeFile(
+        join(folder, `${host}-${other.pid}.json`),
+        JSON.stringify({ host, pid: other.pid, identity: 'a process the system since gave away' }),
+      )
+      await sweepOrphans(folder)
+      expect(running(other.pid!)).toBe(true)
+      expect(await readdir(folder)).toEqual([])
+    } finally {
+      other.kill()
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'ends the runs of windows that exited, and leaves those of windows still open',
+    async () => {
+      const orphan = runner()
+      const gone = once(orphan, 'exit')
+      try {
+        const crossOut = await writeDown(folder, orphan.pid!)
+        // This window is open, and ends its own runs.
+        await sweepOrphans(folder)
+        expect(running(orphan.pid!)).toBe(true)
+        const [name] = await readdir(folder)
+        expect(name).toBeDefined()
+        const written = JSON.parse(await readFile(join(folder, name!), 'utf8')) as object
+        // The same run, written down by a window since exited.
+        await writeFile(join(folder, name!), JSON.stringify({ ...written, host: await exited() }))
+        await sweepOrphans(folder)
+        await gone
+        expect(await readdir(folder)).toEqual([])
+        await crossOut()
+      } finally {
+        orphan.kill()
+      }
+    },
+  )
 })

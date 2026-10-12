@@ -7,6 +7,7 @@ import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 import type { Mutation, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
+import { revisionOf } from '../rows.js'
 import { layoutOf } from './options.js'
 
 /** The moves that put each block where `positions` says. */
@@ -59,7 +60,7 @@ export function editing(
     busy = true
     try {
       await bridge.request('transact', {
-        version: current.summary.version,
+        revision: revisionOf(current.summary),
         mutations: changes,
         label,
       })

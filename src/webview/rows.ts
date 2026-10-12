@@ -71,7 +71,8 @@ export interface Snapshot {
 }
 
 const nameOf = (type: string, field: string) => type + '.' + field
-const revisionOf = ({ uri, version, attachmentId }: Summary): Revision => ({
+/** The revision a summary describes, as a request names it. */
+export const revisionOf = ({ uri, version, attachmentId }: Revision): Revision => ({
   uri,
   version,
   ...(attachmentId !== undefined && { attachmentId }),

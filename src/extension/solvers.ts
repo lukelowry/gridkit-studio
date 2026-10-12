@@ -33,6 +33,14 @@ export const exists = (uri: vscode.Uri) =>
     () => false,
   )
 
+/** Whether `uri` names a file that is gone: one that cannot be reached now, on a remote or network
+ *  drive, is not. */
+export const gone = (uri: vscode.Uri) =>
+  Promise.resolve(vscode.workspace.fs.stat(uri)).then(
+    () => false,
+    (error: unknown) => error instanceof vscode.FileSystemError && error.code === 'FileNotFound',
+  )
+
 /** The file the solver file at `path` writes now for the case `summary` reads, when it names that
  *  case and the file is there. */
 export async function writtenNow(path: string, summary: Summary): Promise<string | undefined> {

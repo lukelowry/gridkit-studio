@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 
-import { superseded } from '../shared/errors.js'
+import { defect, failedWith, superseded } from '../shared/errors.js'
 import type {
   Element,
   Mutation,
@@ -22,6 +22,22 @@ export function isWritable(document: vscode.TextDocument) {
 /** Where `range` lies in `document`. */
 export const rangeOf = (document: vscode.TextDocument, { offset, length }: SourceRange) =>
   new vscode.Range(document.positionAt(offset), document.positionAt(offset + length))
+
+/** How long `document`'s text is, without copying it. */
+const lengthOf = (document: vscode.TextDocument) =>
+  document.offsetAt(document.lineAt(document.lineCount - 1).range.end)
+
+/** `document`'s whole text, which must be its text at `version`: one sent under another version
+ *  would be read as that version's. */
+function wholeAt(document: vscode.TextDocument, version: number): SourceDelta {
+  if (document.version !== version) throw superseded()
+  return { text: document.getText() }
+}
+
+/** Whether `error` says what is wrong with a case's source, rather than why Studio could not read
+ *  it. */
+const inSource = (error: unknown) =>
+  !defect(error) && (failedWith(error, 'invalid-input') || failedWith(error, 'resource-limit'))
 
 /** An open case document as Studio reads it: its last summary, and whether it is behind its
  *  document, and why its revision does not read. */
@@ -63,7 +79,11 @@ export class Documents implements vscode.Disposable {
   readonly closed = new vscode.EventEmitter<string>()
   readonly diagnostics = vscode.languages.createDiagnosticCollection('gridkit')
   readonly #disposables: vscode.Disposable[]
-  constructor(readonly client: Client) {
+  /** `report` says why a case could not be read where Problems does not. */
+  constructor(
+    readonly client: Client,
+    private readonly report: (error: unknown) => void,
+  ) {
     this.#disposables = [
       vscode.workspace.onDidChangeTextDocument((event) => {
         const entry = this.#entries.get(event.document.uri.toString())
@@ -106,35 +126,45 @@ export class Documents implements vscode.Disposable {
     return this.#entries.get(uri)
   }
 
-  /** The case `document` reads as, or undefined when it does not: Problems says why. */
+  /** The case `document` reads as now, through every read a newer one replaces while it is read;
+   *  why it does not read, thrown. */
+  async read(document: vscode.TextDocument): Promise<Summary> {
+    for (;;)
+      try {
+        return await this.ensure(document)
+      } catch (error) {
+        if (!failedWith(error, 'superseded') || document.isClosed) throw error
+      }
+  }
+
+  /** The case `document` reads as now, or undefined when it does not: Problems, or the
+   *  notification of why the case worker stopped, says why. */
   parsed(document: vscode.TextDocument): Promise<Summary | undefined> {
-    return this.ensure(document).catch(() => undefined)
+    return this.read(document).catch(() => undefined)
   }
 
   /** A new case worker reads the open cases again, unless the reading may be what stops it: then
-   *  each waits until it changes or opens again. Returns why, to say once. */
+   *  each waits until it changes or opens again, and asked of meanwhile, says why. Returns why, to
+   *  say once. */
   restart(error: Error): Error {
     const retry = this.client.cases.steady
+    const why = new Error(
+      `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads each case ` +
+        'again once you edit or reopen it.',
+    )
     for (const [uri, entry] of this.#entries) {
       entry.controller?.abort()
       clearTimeout(entry.timer)
       entry.stale = true
       entry.error = error.message
-      entry.failed = retry
-        ? undefined
-        : { version: entry.document.version, reason: diagnosed(new Error(error.message)) }
+      entry.failed = retry ? undefined : { version: entry.document.version, reason: why }
       entry.workerVersion = undefined
       entry.changes = []
       entry.pending = undefined
       this.changed.fire(uri)
       if (retry) void this.parse(entry.document).catch(() => {})
     }
-    return retry
-      ? error
-      : new Error(
-          `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads each case ` +
-            'again once you edit or reopen it.',
-        )
+    return retry ? error : why
   }
 
   async ensure(document: vscode.TextDocument): Promise<Summary> {
@@ -160,33 +190,37 @@ export class Documents implements vscode.Disposable {
   }
 
   /** What brings the case worker's copy of `document` to its version: the changes since the
-   *  version the worker holds, or, before it holds one, the whole text. */
-  #delta(entry: Entry, document: vscode.TextDocument): SourceDelta {
+   *  version the worker holds, with the length of the text they make, which the worker checks; or,
+   *  before it holds one, the whole text. Unless `peek`, the worker is taken to hold it once sent. */
+  #delta(entry: Entry, document: vscode.TextDocument, peek = false): SourceDelta {
     const delta: SourceDelta =
       entry.workerVersion !== undefined
-        ? { baseVersion: entry.workerVersion, changes: entry.changes }
+        ? {
+            baseVersion: entry.workerVersion,
+            changes: [...entry.changes],
+            length: lengthOf(document),
+          }
         : { text: document.getText() }
-    entry.changes = []
-    entry.workerVersion = document.version
+    if (!peek) {
+      entry.changes = []
+      entry.workerVersion = document.version
+    }
     return delta
   }
 
   /** The fields that complete at `offset` of `document`. Only what changed since the case worker's
-   *  copy crosses, and the worker reads no further than the cursor. */
+   *  copy crosses, the worker reads no further than the cursor, and the copy stays as it was: a
+   *  completion let go of, as one is at each keystroke, leaves the edits for the next read. */
   complete(document: vscode.TextDocument, offset: number, signal: AbortSignal) {
     const entry = this.#entry(document)
-    const revision = {
-      uri: document.uri.toString(),
-      version: document.version,
-      attachmentId: entry.attachmentId,
-      offset,
-    }
+    const version = document.version
+    const revision = { uri: document.uri.toString(), version, attachmentId: entry.attachmentId }
     return resent(
       (source: SourceDelta) =>
-        this.client.cases.call('complete', { ...revision, ...source }, signal),
+        this.client.cases.call('complete', { ...revision, offset, ...source }, signal),
       'stale-source',
-      this.#delta(entry, document),
-      () => ({ text: document.getText() }),
+      this.#delta(entry, document, true),
+      () => wholeAt(document, version),
       signal,
     )
   }
@@ -201,13 +235,12 @@ export class Documents implements vscode.Disposable {
     const version = document.version
     const current = entry
     const revision = { uri, version, attachmentId: entry.attachmentId }
-    // A change since aborts the read, so the whole text is sent only for this version.
     const pending = resent(
       (source: SourceDelta) =>
         this.client.cases.call('parse', { ...revision, ...source }, controller.signal),
       'stale-source',
       this.#delta(entry, document),
-      () => ({ text: document.getText() }),
+      () => wholeAt(document, version),
       controller.signal,
     )
       .then(
@@ -225,24 +258,30 @@ export class Documents implements vscode.Disposable {
             if (!controller.signal.aborted && this.#entries.get(uri) === current) {
               current.error = error.message
               this.changed.fire(uri)
+              this.report(error)
             }
           })
           return summary
         },
         (error) => {
-          if (!controller.signal.aborted && document.version === version) {
-            current.stale = true
-            current.error = error.message
-            current.failed = { version, reason: diagnosed(error) }
+          // A read a newer one replaced failed nothing.
+          if (controller.signal.aborted || document.version !== version) throw error
+          // What is wrong with the source Problems says, where it can; any other failure is said.
+          const wrong = inSource(error)
+          const reason = wrong ? diagnosed(error) : error
+          current.stale = true
+          current.error = error.message
+          current.failed = { version, reason }
+          if (wrong)
             this.diagnostics.set(document.uri, [
               new vscode.Diagnostic(
                 rangeOf(document, { offset: error.offset ?? 0, length: error.length ?? 1 }),
                 error.message,
               ),
             ])
-            this.changed.fire(uri)
-          }
-          throw diagnosed(error)
+          else this.report(reason)
+          this.changed.fire(uri)
+          throw reason
         },
       )
       .finally(() => {
@@ -303,19 +342,25 @@ export class Documents implements vscode.Disposable {
   }
 
   /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
-   *  checked against revision `expected`: or, for mutations no revision changes the meaning of, as
-   *  what the elements record, against the latest. */
+   *  checked against revision `expected`, of the document `attachmentId` names when given: or, for
+   *  mutations no revision changes the meaning of, as what the elements record, against the
+   *  latest. */
   transact(
     uri: string,
     expected: number | 'latest',
     mutations: readonly Mutation[],
     label = 'Edit GridKit case',
+    attachmentId?: string,
   ): Promise<void> {
     const entry = this.#entries.get(uri)
     if (!entry) return Promise.reject(closedDocument())
     const check = (version: number) => {
       if (entry.document.isClosed || this.#entries.get(uri) !== entry) throw closedDocument()
-      if (entry.document.version !== version || entry.stale)
+      if (
+        entry.document.version !== version ||
+        entry.stale ||
+        (attachmentId !== undefined && entry.attachmentId !== attachmentId)
+      )
         throw new Error('The document changed. Refresh before editing.')
       if (!isWritable(entry.document)) throw new Error('This document is read-only.')
     }
@@ -355,11 +400,13 @@ export class Documents implements vscode.Disposable {
     const document =
       this.#entries.get(uri)?.document ??
       (await vscode.workspace.openTextDocument(vscode.Uri.parse(uri)))
-    const source = element
+    const read = element && (await this.read(document))
+    const source = read
       ? await this.client.cases.call('locate', {
           uri,
-          version: (await this.ensure(document)).version,
-          ...element,
+          version: read.version,
+          attachmentId: read.attachmentId,
+          ...element!,
         })
       : { offset: 0, length: 0 }
     const editor = await vscode.window.showTextDocument(document, {

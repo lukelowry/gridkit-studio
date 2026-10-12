@@ -21,6 +21,29 @@ describe('CSV results', () => {
       ...tokens.map((token) => Number(token.trim().replaceAll('"', ''))),
     ])
     expect(await numbers('0,nan,-inf,Infinity,\n', 5)).toEqual([0, NaN, -Infinity, Infinity, NaN])
+    // As MSVC prints them, which a GridKit built on Windows writes.
+    const windows = ['-nan(ind)', 'nan(snan)', '1.#QNAN', '-1.#IND', '1.#INF', '-1.#INF']
+    expect(await numbers(`0,${windows.join(',')}\n`, 1 + windows.length)).toEqual([
+      0,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      Infinity,
+      -Infinity,
+    ])
+  })
+
+  it('numbers a frame from the start of its file, wherever a read of it starts', async () => {
+    const read = async () => {
+      for await (const _ of csvMessages(
+        Readable.from([Buffer.from('0,1\n1,2,3\n')]),
+        ['t', 'a'],
+        undefined,
+        1000,
+      ));
+    }
+    await expect(read()).rejects.toThrow('CSV frame 1002 does not match its header.')
   })
 
   it('leaves out a last row its writer never finished, and keeps one only its newline misses', async () => {

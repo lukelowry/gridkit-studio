@@ -31,6 +31,7 @@ it('keeps scheduling the playhead after a transient renderer exception', () => {
   const clock = createClock(paint)
   transport.listener({
     kind: 'clock',
+    uri: 'file:///case.case.json',
     seq: 0,
     live: false,
     clock: { ...IDLE, status: 'playing', span: [0, 10] },

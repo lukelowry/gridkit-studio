@@ -16,9 +16,10 @@
     tableFields,
   } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import type { TableState, Value, ViewState } from '../../shared/messages.js'
+  import type { Revision, TableState, Value, ViewState } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
+  import { revisionOf } from '../rows.js'
   import { appearance } from '../theme.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
@@ -58,7 +59,7 @@
    *  was read. */
   let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
   let editing = $state<
-    | { id: string; field: string; text: string; version: number; row: number; column: number }
+    | { id: string; field: string; text: string; revision: Revision; row: number; column: number }
     | undefined
   >()
   let scroll: HTMLDivElement
@@ -187,6 +188,8 @@
     const request = (controller = new AbortController())
     const current = ++generation
     const at = offset
+    // The rows are of the revision on show now, whatever the panel shows by the time they come.
+    const revision = revisionOf(summary)
     loading = true
     try {
       // The filter matches a row's name, else its identity.
@@ -208,10 +211,14 @@
         ...(order ? { orderBy: [order] } : {}),
         ...(where.length ? { where } : {}),
       }
-      const blocks = await bridge.request('query', $state.snapshot(query), request.signal)
+      const blocks = await bridge.request(
+        'query',
+        { revision, query: $state.snapshot(query) },
+        request.signal,
+      )
       if (generation !== current) return
       const references = await referenceNames(blocks, (query) =>
-        bridge.request('query', query, request.signal),
+        bridge.request('query', { revision, query }, request.signal),
       )
       if (generation !== current) return
       page = { offset: at, rows: rowsOf(blocks, references) }
@@ -286,7 +293,7 @@
       field,
       row,
       column,
-      version: summary.version,
+      revision: revisionOf(summary),
       text:
         spec?.type === 'text'
           ? String(value ?? '')
@@ -314,7 +321,8 @@
             : edit.text
           : JSON.parse(edit.text)
       await bridge.request('transact', {
-        version: edit.version,
+        // The edit's state is reactive; a message carries plain values.
+        revision: $state.snapshot(edit.revision),
         mutations: [{ kind: 'set', id: edit.id, field: edit.field, value }],
         label: 'Edit ' + leaf(edit.field),
       })
@@ -352,13 +360,17 @@
     equal = undefined
     order = undefined
     try {
+      if (!summary) return
       const blocks = await bridge.request('query', {
-        kind: 'rows',
-        from: next,
-        select: [],
-        ids: true,
-        rows: { kind: 'ids', ids: [id] },
-        limit: 1,
+        revision: revisionOf(summary),
+        query: {
+          kind: 'rows',
+          from: next,
+          select: [],
+          ids: true,
+          rows: { kind: 'ids', ids: [id] },
+          limit: 1,
+        },
       })
       // The page holding the row loads, and `scrolled` brings the row into view once it is drawn.
       const row = rowsOf(blocks)[0]
@@ -441,7 +453,7 @@
     })
     // Before VS Code, and anything else, reads what a right-click carries.
     window.addEventListener('contextmenu', contextmenu, true)
-    bridge.send({ kind: 'ready' })
+    bridge.ready()
     return () => {
       stop()
       window.removeEventListener('contextmenu', contextmenu, true)

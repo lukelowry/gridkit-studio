@@ -28,7 +28,8 @@ export const noCase = () => new Error('Open a GridKit case first.')
 
 /** `reason`, which a case's diagnostic in Problems says already: nothing says it again. */
 export const diagnosed = <E extends Error>(reason: E) => Object.assign(reason, { diagnosed: true })
-const saidInProblems = (reason: unknown) =>
+/** Whether a case's diagnostic in Problems says `reason` already. */
+export const saidInProblems = (reason: unknown) =>
   (reason as { diagnosed?: unknown } | null)?.diagnosed === true
 
 /** How many of the errors logged a test can look at. */

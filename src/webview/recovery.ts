@@ -49,6 +49,16 @@ export class Recovery {
     }, delay)
   }
 
+  /** The view starts over, as the user reloads it: a failure it said is said again should it
+   *  recur, and restarts back off from the first. */
+  reset(): void {
+    clearTimeout(this.#timer)
+    this.#timer = this.#healthy = undefined
+    this.#reported = ''
+    this.#attempt = 0
+    this.blocked = false
+  }
+
   /** A single successful frame does not erase a repeated-failure backoff. */
   presented(): void {
     this.blocked = false

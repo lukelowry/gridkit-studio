@@ -13,7 +13,7 @@ describe('indexed case opening', () => {
     const kase = await Case.parse(text, catalog)
     const kv = kase.table('Bus').fields.get('params.kv')!
     const decoding = vi.spyOn(kv, 'chunks', 'get')
-    expect(summarize(kase, { uri: 'file:///one', version: 1 }).validation).toBe('pending')
+    expect((await summarize(kase, { uri: 'file:///one', version: 1 })).validation).toBe('pending')
     const data = kase.data
     const names = data.tables.Bus!.fields.name!
     expect(names.length).toBeGreaterThan(0)

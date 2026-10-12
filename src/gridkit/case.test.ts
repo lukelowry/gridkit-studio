@@ -11,11 +11,12 @@ import {
 import { describe, expect, it } from 'vitest'
 
 import { rowsOf } from '../shared/cells.js'
+import type { Value } from '../shared/messages.js'
 import { diagramOf, networkOf, positionOf } from '../shared/schema.js'
 import { Case } from './case.js'
 import { catalog } from './definition.js'
-import { diagnose, editField, sourceRange } from './edits.js'
-import { completionsAt, outline } from './navigation.js'
+import { diagnose, editCase, editField, minimal, sourceRange } from './edits.js'
+import { completionsAt, outline, sourceContext } from './navigation.js'
 
 const source = `{
  "header": {"case_name": "東京 ⚡"},
@@ -140,6 +141,14 @@ describe('single catalog and source ownership', () => {
       [source.replace('"kv":115.0', '"kv":115.0,"kv":116.0'), 'kv'],
       [source.replace('"line"', '"line","id":"again"'), 'id'],
       [source.replace(/}\s*$/, ',"signals":[]}'), 'signals'],
+      // In an object of many keys, found by its hash.
+      [
+        source.replace(
+          '"keep":1.000',
+          Array.from({ length: 100 }, (_, i) => `"k${i}":${i}`).join(',') + ',"k50":0',
+        ),
+        'k50',
+      ],
     ] as const)
       await expect(Case.parse(text, catalog)).rejects.toThrow('Duplicate JSON property: ' + key)
     // Escapes JSON has read as their text, and a value nests as deep as it is written.
@@ -151,6 +160,118 @@ describe('single catalog and source ownership', () => {
       catalog,
     )
     expect(kase.cell(kase.table('Bus'), 'name', 1)).toBe('Seven "7"/\\')
+  })
+  it('says where each problem a parse finds is: the record it refuses, or the second of an id', async () => {
+    const fault = '{"class":"BusFault","id":"fault"'
+    for (const [text, record, said] of [
+      // A bus, a signal and the case are types of their own, never a device's class.
+      ...['Bus', 'Signal', 'Case'].map((type) => {
+        const named = fault.replace('BusFault', type)
+        return [source.replace(fault, named), named, `${type} is not a device class.`] as const
+      }),
+      [
+        source.replace('"number":7', '"number":42'),
+        '{"class":"Bus","number":42,"name":"Seven"',
+        'Two rows share the number 42.',
+      ],
+      [
+        source.replace('"id":"disconnected"', '"id":"fault"'),
+        '{"class":"BusFault","id":"fault","ports":{"bus":7}}',
+        'Two rows share the id fault.',
+      ],
+    ] as const) {
+      const error = await Case.parse(text, catalog).catch((reason: unknown) => reason)
+      expect(error).toMatchObject({ code: 'invalid-input', message: said })
+      // Where the editor finds the record, in UTF-16 units past the header's characters.
+      expect(error).toMatchObject({ offset: text.indexOf(record) })
+      expect((error as { length: number }).length).toBeGreaterThan(record.length - 1)
+    }
+  })
+  it('reads an integer at either end of its range back as written', async () => {
+    for (const value of [-0x8000_0000, 0x7fff_ffff]) {
+      const kase = await Case.parse(
+        source.replace(
+          ']\n}',
+          `,\n  {"class":"Esdc1a","id":"exciter","params":{"UEL":${value}}}\n ]\n}`,
+        ),
+        catalog,
+      )
+      expect(kase.cell(kase.table('Esdc1a'), 'params.UEL', 0)).toBe(value)
+    }
+  })
+  it('refuses to read into a record nested deeper than the stack holds, as its own problem', async () => {
+    const deep = '['.repeat(100_000) + ']'.repeat(100_000)
+    const text = source.replace('"unknown":{"keep":1.000}', `"unknown":${deep}`)
+    const kase = await Case.parse(text, catalog)
+    const tooDeep = { code: 'invalid-input', message: expect.stringMatching(/too deeply/) }
+    for (const read of [
+      () => sourceRange(kase, 'Branch/line', 'ports.bus1'),
+      () => editField(kase, 'Branch/line', 'ports.bus2', 'Bus/42'),
+      () => sourceContext(kase, text.indexOf('"bus1"')),
+    ]) {
+      const error = (() => {
+        try {
+          read()
+        } catch (reason) {
+          return reason
+        }
+      })()
+      expect(error).toMatchObject(tooDeep)
+    }
+  })
+  it('edits the case’s own fields in its header and params, each changed in one edit', async () => {
+    const kase = await Case.parse(source, catalog)
+    // A field written, and one not yet, of the header; and one of params, which the case lacks.
+    const edits = editCase(
+      kase,
+      new Map<string, Value>([
+        ['header.case_name', 'Kanto'],
+        ['header.case_comments', 'Edited'],
+        ['params.freq_base', 60],
+      ]),
+    )
+    // Nothing past the header is touched but where params is made, before it.
+    const header = source.indexOf('{"case_name"')
+    expect(edits.every(({ offset }) => offset <= header + 30)).toBe(true)
+    const next = JSON.parse(apply(source, edits)) as Record<string, Record<string, unknown>>
+    expect(next.header).toEqual({ case_name: 'Kanto', case_comments: 'Edited' })
+    expect(next.params).toEqual({ freq_base: 60 })
+    expect(apply(source, edits)).toContain('"freq_base": 60.0')
+    // A field of the case where it is, as Problems would place it.
+    const range = sourceRange(kase, 'Case/case', 'header.case_name')
+    expect(source.slice(range.offset, range.offset + range.length)).toBe('"東京 ⚡"')
+  })
+  it('validates the case’s own fields without reading past them', async () => {
+    const mistyped = await Case.parse(source.replace('"東京 ⚡"', '7'), catalog)
+    const issues = await diagnose(mistyped, AbortSignal.any([]))
+    expect(issues).toContainEqual(
+      expect.objectContaining({ id: 'Case/case', field: 'header.case_name', severity: 'error' }),
+    )
+  })
+  it('edits whole characters, never half of a surrogate pair', () => {
+    for (const [before, after] of [
+      ['"😀"', '"😁"'],
+      ['"a😀"', '"a😁b"'],
+      ['"😀"', '"🈀"'],
+    ]) {
+      const edit = minimal(before, after, 0)
+      const made =
+        before.slice(0, edit.offset) + edit.text + before.slice(edit.offset + edit.length)
+      expect(made).toBe(after)
+      expect(edit.text).not.toMatch(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/)
+      expect(before.slice(edit.offset, edit.offset + edit.length)).not.toMatch(
+        /^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/,
+      )
+    }
+  })
+  it('names the output a `mon` entry lists, where the cursor is in it', async () => {
+    const text = source.replace('"ports":{"bus1":42,"bus2":7}', '$&,"mon":["p1","q1"]')
+    const kase = await Case.parse(text, catalog)
+    const at = text.indexOf('"q1"') + 1
+    expect(sourceContext(kase, at)).toMatchObject({
+      element: { id: 'Branch/line', field: 'q1' },
+      range: { offset: at - 1, length: 4 },
+    })
   })
   it('handles native infinite buses and reports invalid known values from the catalog', async () => {
     const kase = await Case.parse(await readFile('cases/TwoBusBasic.case.json', 'utf8'), catalog)
@@ -172,6 +293,22 @@ describe('single catalog and source ownership', () => {
     const text = '{"buses":[{"class":"Bus","number":1,"params":{"k'
     expect(completionsAt(catalog, text, text.length).map((field) => field.name)).toContain('kv')
   })
+  it('completes from the record the cursor is in alone, where the case read before still has it', async () => {
+    const read = { kase: await Case.parse(source, catalog), text: source }
+    const names = (text: string, offset: number, from?: typeof read) =>
+      completionsAt(catalog, text, offset, from).map((field) => field.name)
+    // A key typed into the Branch's params, as the case read before has the Branch.
+    const at = source.indexOf('"unknown"')
+    const typing = '"params":{"'
+    const typed = source.slice(0, at) + typing + source.slice(at)
+    expect(names(typed, at + typing.length, read)).toEqual(names(typed, at + typing.length))
+    expect(names(typed, at + typing.length, read).length).toBeGreaterThan(0)
+    // A record added since: no record the case read before holds the cursor.
+    const end = source.lastIndexOf(']')
+    const adding = ',{"class":"Genrou","params":{"'
+    const added = source.slice(0, end) + adding + source.slice(end)
+    expect(names(added, end + adding.length, read)).toEqual(names(added, end + adding.length))
+  })
   it('completes by the class of the record the cursor is in, past the records before it', () => {
     const names = (text: string) => completionsAt(catalog, text, text.length).map((f) => f.name)
     const alone = names('{"devices":[{"class":"Genrou","params":{"')
@@ -185,7 +322,7 @@ describe('single catalog and source ownership', () => {
   })
   it('outlines every record in file order under its array, where the editor finds each', async () => {
     const kase = await Case.parse(source, catalog)
-    const symbols = outline(kase, new AbortController().signal)
+    const symbols = await outline(kase, new AbortController().signal)
     expect(symbols.map(({ name, detail }) => [name, detail])).toEqual([
       ['buses', '2'],
       ['signals', '1'],
@@ -200,7 +337,7 @@ describe('single catalog and source ownership', () => {
         expect({ offset, length }).toEqual(sourceRange(kase, name))
     }
     // Past VS Code's limit for a JSON file's outline, each array says how many it lists.
-    const limited = outline(kase, new AbortController().signal, 3)
+    const limited = await outline(kase, new AbortController().signal, 3)
     expect(limited.map(({ detail, children }) => [detail, children!.length])).toEqual([
       ['2', 2],
       ['1', 1],

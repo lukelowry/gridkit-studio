@@ -35,6 +35,11 @@ export class TextCases {
       .digest('hex')
   }
 
+  /** Whether a case read from `text` may be small enough to keep: one that cannot is never hashed. */
+  fits(text: string): boolean {
+    return Case.leastBytes(text) <= this.limit
+  }
+
   find(key: string): Case | undefined {
     const entry = this.#entries.get(key)
     if (!entry) return undefined
@@ -45,13 +50,7 @@ export class TextCases {
 
   /** Keeps `kase` by the key `keyOf` gives, asked only for a case small enough to keep. */
   keep(kase: Case, keyOf: () => string): void {
-    // The source, its spans and the columns decoded from it, conservatively.
-    const bytes =
-      kase.file.byteLength * 4 +
-      [...kase.tables.values()].reduce(
-        (sum, table) => sum + table.records.length * (24 * table.fields.size + 16),
-        0,
-      )
+    const { bytes } = kase
     if (bytes > this.limit) return
     const key = keyOf()
     if (this.#entries.has(key)) return
@@ -68,7 +67,17 @@ export class TextCases {
   }
 }
 
-export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: Issue[]): Summary {
+/** What the extension is told of `kase`, read at `revision`: what it counts, and what it records,
+ *  read until `signal` lets go. */
+export async function summarize(
+  kase: Case,
+  revision: Revision,
+  {
+    parseMs = 0,
+    issues,
+    signal,
+  }: { parseMs?: number; issues?: Issue[]; signal?: AbortSignal } = {},
+): Promise<Summary> {
   return {
     ...revision,
     name: kase.name,
@@ -86,7 +95,7 @@ export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: 
     counts: Object.fromEntries(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
-    recording: recordingOf(kase),
+    recording: await recordingOf(kase, signal),
     issues: issues ?? [],
     validation: issues ? 'complete' : 'pending',
     parseMs,

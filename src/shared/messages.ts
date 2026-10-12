@@ -8,10 +8,25 @@ import type { Problem } from './errors.js'
 import type { ViewCommandName } from './ids.js'
 import type { SettingsValues } from './preferences.js'
 import type { Cancel, Reply, Request } from './rpc.js'
-import type { Results, Run, RunRequest, RuntimeProcess } from './simulation.js'
+import type {
+  Results,
+  ResultsLayout,
+  ResultsProgress,
+  Run,
+  RunRequest,
+  RuntimeProcess,
+} from './simulation.js'
 import type { Sink } from './study.js'
 import type { ClockState, LoopMode } from './transport.js'
-export type { GridKit, Results, Run, RunRequest, RuntimeProcess } from './simulation.js'
+export type {
+  GridKit,
+  Results,
+  ResultsLayout,
+  ResultsProgress,
+  Run,
+  RunRequest,
+  RuntimeProcess,
+} from './simulation.js'
 
 /** A JSON value of a case record: what a cell shows and an edit writes. */
 export type Value = number | string | boolean | null | readonly Value[]
@@ -122,10 +137,12 @@ export interface OfResults {
   results: string
 }
 
-/** What brings the case worker's copy of a document to a revision: its whole text, or the changes
- *  since the version the worker holds. */
+/** What brings the case worker's copy of a document to a revision: its whole text at that revision,
+ *  or the changes since the version the worker holds, with the length of the text they make, which
+ *  the worker checks: changes applied to any other text are refused. */
 export type SourceDelta =
-  { text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] }
+  | { text: string }
+  | { baseVersion: number; changes: readonly (readonly SourceEdit[])[]; length: number }
 
 /** What the case worker answers: each open case's source, parsed as the user edits it, and what
  *  the editor and the views read of it. */
@@ -159,8 +176,17 @@ export interface CaseApi {
 
 /** What the extension starts the results worker with. */
 export interface ResultsOptions {
-  /** How many bytes of decoded frames stay read past what views read now. */
+  /** How many bytes of decoded frames, and of results files nothing holds, stay read past what
+   *  views read now. */
   readonly cacheBytes: number
+  /** The folder the results files read are kept in, decoded, so a window opened again reads them
+   *  from there. */
+  readonly store: string
+  /** The results files saved sessions name, whose stores are kept; the rest go. */
+  readonly saved: readonly string[]
+  /** The folder this machine's windows write their GridKit runs in while they run, so one whose
+   *  window died mid-run is ended by the next; none where processes end with their window. */
+  readonly runs?: string
 }
 
 /** What the results worker answers: GridKit's runs, and the results files Studio reads, each with
@@ -177,6 +203,8 @@ export interface ResultsApi {
     input: CaseSource & OfResults & { path: string; solver?: string }
     output: Results
   }
+  /** Holds the results `results` hold by `as` too, as an export does while it reads them. */
+  share: { input: OfResults & { as: string }; output: Results }
   /** Lets go of `results`; asked of again, they answer `results-closed`. Their file stays. */
   close: { input: OfResults; output: null }
   /** How many bytes of decoded frames stay read past what views read now. */
@@ -195,20 +223,37 @@ export interface ResultsApi {
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
   /** What it holds: results files, the cases they and the runs under way read, and decoded bytes. */
+  /** What it holds: the results the extension holds, their files, the files resting that
+   *  nothing holds, the cases they and the runs under way read, and the bytes kept. */
   stats: {
     input: Record<string, never>
-    output: { memory: Memory; files: number; cases: number; runs: number; cacheBytes: number }
+    output: {
+      memory: Memory
+      results: number
+      files: number
+      resting: number
+      cases: number
+      runs: number
+      cacheBytes: number
+    }
   }
 }
 
 /** What a worker tells the extension besides its replies. */
 export type WorkerEvent =
-  /** The GridKit process a case's run started, or none once it ends. */
-  | { kind: 'process'; uri: string; process?: RuntimeProcess }
+  /** The GridKit process the run `run` started, or none once it ends. */
+  | { kind: 'process'; run: string; process?: RuntimeProcess }
   /** A run started, or ended. */
   | { kind: 'run'; run: Run }
-  /** How far a results file has been read: a run's as it writes it, or one opened. */
-  | { kind: 'results'; uri: string; results: Results }
+  /** How far the results `results` have been read: a run's as it writes them, or ones opened;
+   *  and their layout, the first time, and again once their header is read. */
+  | {
+      kind: 'results'
+      uri: string
+      results: string
+      progress: ResultsProgress
+      layout?: ResultsLayout
+    }
   /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
    *  where they differ. Without, a line of Studio's own. */
   | {
@@ -269,9 +314,8 @@ export interface Cameras {
   diagram?: unknown
 }
 
-/** What a command asks of a view, or the extension tells it: `shown` whether VS Code shows it. */
+/** What a command asks of a view. */
 export type ViewAction =
-  | 'shown'
   | 'fit'
   | 'reloadView'
   | 'neighborhood'
@@ -291,12 +335,21 @@ export type ViewAction =
   | 'filterText'
   | 'clearFilters'
 
+/** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
+ *  most and change seldom, are left out once the view holds them. */
+export type SentState = Omit<ViewState, 'results'> & {
+  results?: Omit<Results, 'outputs'> & { outputs?: Results['outputs'] }
+}
+
+/** What the extension sends a view. A clock and an action name the case they are of: a view drops
+ *  those of a case it no longer shows. Whether VS Code shows the view is the page's own, of any case. */
 export type ToView =
-  | { kind: 'state'; state: ViewState }
+  | { kind: 'state'; state: SentState }
+  | { kind: 'shown'; shown: boolean }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
-  | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
+  | { kind: 'clock'; uri: string; clock: ClockState; live: boolean; seq: number }
   | Reply
-  | { kind: 'action'; command: ViewAction; value?: unknown }
+  | { kind: 'action'; uri: string | undefined; command: ViewAction; value?: unknown }
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
 export type TransportAction =
@@ -305,10 +358,14 @@ export type TransportAction =
   | { action: 'step'; value: 1 | -1 }
   | { action: 'playPause' | 'goLive' }
 
-/** What a view asks of the extension. */
+/** What a view asks of the extension. Each request names what it is of: a revision of a case, or
+ *  results by their id. */
 export interface ViewApi {
-  /** Rows of the case, or of the shown results when the query has an `at`. */
-  query: { input: Query.Rows; output: Block.Rows[] }
+  /** Rows of a revision of the case, or, `at` a time, of results. */
+  query: {
+    input: { revision: Revision; query: Query.Rows } | { results: string; query: Query.Rows }
+    output: Block.Rows[]
+  }
   /** The static fields a view draws, of a case's revision or of the case results were read
    *  against. */
   rows: {
@@ -319,23 +376,28 @@ export interface ViewApi {
    *  read against. */
   presentation: { input: Revision | OfResults; output: Record<string, Layout.Positions> }
   samples: { input: SamplesInput; output: Data.SampleBatch[] }
+  /** Edits the revision of the case the view made `mutations` against. */
   transact: {
-    input: { version: number; mutations: readonly Mutation[]; label?: string }
+    input: { revision: Revision; mutations: readonly Mutation[]; label?: string }
     output: void
   }
-  /** Asks the user where to save a video: a file handle, or null when they cancel. */
-  videoOpen: { input: { name: string; format: 'mp4' | 'webm' }; output: number | null }
-  /** How the Network and Diagram were last framed, for an export to keep. */
-  cameras: { input: Record<string, never>; output: Cameras }
+  /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
+   *  cancel. */
+  videoOpen: { input: { uri: string; name: string; format: 'mp4' | 'webm' }; output: number | null }
+  /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
+  cameras: { input: { uri: string }; output: Cameras }
   videoWrite: { input: { file: number; position: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished video's path. */
   videoClose: { input: { file: number; abort?: boolean }; output: string | null }
+  /** Holds results under an id of the view's own, while it reads them for an export: whatever
+   *  shows meanwhile, they stay until it lets go of them, or the view goes. */
+  share: { input: OfResults; output: Results }
+  unshare: { input: OfResults; output: null }
 }
 
-export type FromView =
-  | { kind: 'ready' }
-  | Request
-  | Cancel
+/** What a view says of the case it shows. Its bridge names that case on each, and the extension
+ *  drops one of a case the view no longer shows. */
+export type ViewMessage =
   | { kind: 'command'; command: ViewCommandName; value?: unknown }
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */
@@ -346,6 +408,12 @@ export type FromView =
   | { kind: 'tableState'; table: TableState; shown: number }
   /** Whether the view is mid-task, as an export is, and keeps the case it works on. */
   | { kind: 'busy'; busy: boolean }
+
+export type FromView =
+  | { kind: 'ready' }
+  | Request
+  | Cancel
+  | (ViewMessage & { uri: string | undefined })
   /** Why something in the view failed, which the extension tells the user, and what the view was
    *  doing, for the log. */
   | { kind: 'error'; problem: Problem; context?: unknown }

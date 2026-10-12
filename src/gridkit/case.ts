@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 
-import type { Data, Index, Schema } from '@latkit/model'
+import type { Data, Failure, Index, Schema } from '@latkit/model'
 import { createData, failure } from '@latkit/model'
 import { printParseErrorCode, visit } from 'jsonc-parser'
 
@@ -36,6 +36,7 @@ import {
 } from './definition.js'
 import {
   ARRAYS,
+  type Coding,
   type Found,
   type IndexedChunk,
   type Layout,
@@ -46,6 +47,7 @@ import {
   Parser,
   type Range,
   type Records,
+  recordsBetween,
   scan,
 } from './parse.js'
 
@@ -74,6 +76,10 @@ interface RecordArray extends Records {
 
 const RANGE_BYTES = 256 << 10
 const UTF8 = new TextEncoder()
+/** What a case keeps alive per byte of its source, and per field and per record of its tables. */
+const SOURCE_BYTES = 4
+const FIELD_BYTES = 24
+const RECORD_BYTES = 80
 
 export class Case {
   #signalsChecked = false
@@ -95,31 +101,52 @@ export class Case {
     const file = UTF8.encode(text)
     let layout: Layout
     try {
-      layout = scan(file)
+      layout = await scan(file, signal)
     } catch (error) {
       const byte = (error as { byte?: number }).byte
       if (byte === undefined) throw error
-      // A file that is not JSON is read again the slower way, which says why as an editor does.
-      syntax(text)
-      throw Object.assign(error as Error, {
-        offset: Buffer.from(file.subarray(0, byte)).toString('utf8').length,
-      })
+      // A file that is not JSON is read again the slower way, which says why as an editor does,
+      // unless it nests deeper than that way reads.
+      try {
+        syntax(text)
+      } catch (reason) {
+        if (!(reason instanceof RangeError)) throw reason
+      }
+      throw Object.assign(error as Error, { offset: charsBefore(file, byte) })
     }
-    const ranges = rangesOf(layout)
-    const { parsed, shapes } = await parseAll(file, ranges, catalog, signal)
-    const version = createHash('sha256')
-      .update(catalog.text)
-      .update(file)
-      .digest('hex')
-      .slice(0, 32)
-    const kase = joined(parsed, shapes, ranges, file, layout, catalog, version, name)
-    // Build the identity indexes here, so duplicate IDs fail the parse.
-    for (const table of kase.tables.values()) {
-      if (table.shape.identity.type === 'text') textIds(table.ids)
-      else numberIds(table.ids)
+    try {
+      const parser = new Parser(catalog)
+      const parts = await partsOf(file, rangesOf(layout), parser, signal)
+      return assembled(file, layout, parts, parser.coding, catalog, name)
+    } catch (error) {
+      // A record the parse refused, or the second of an id, says so where it is.
+      const target = (error as Failure).target
+      throw target?.kind === 'path'
+        ? placed(error, file, layout.arrays[target.path[0] as ArrayName], target.path[1])
+        : error
     }
-    return kase
   }
+
+  /** The case `text` holds, read from `previous`, a case of an earlier text, as `name` names it when
+   *  its header gives none. When the text differs only among the records of one array, those records
+   *  alone are read again, and the ranges the edit leaves alone are kept, moved as it moved them:
+   *  what they decoded stays decoded. Otherwise, and wherever the text does not read, it is read
+   *  whole, which says why. */
+  static async revise(
+    previous: Case,
+    text: string,
+    name = 'Case',
+    signal?: AbortSignal,
+  ): Promise<Case> {
+    signal?.throwIfAborted()
+    const file = UTF8.encode(text)
+    const edit = changed(previous.file, file)
+    const revised =
+      edit && (await revisionOf(previous, file, edit, name, signal).catch(() => undefined))
+    signal?.throwIfAborted()
+    return revised ?? Case.parse(text, previous.catalog, name, signal)
+  }
+
   constructor(
     readonly name: string,
     readonly version: Index['version'],
@@ -132,15 +159,38 @@ export class Case {
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
     /** The top-level object's closing brace. */
     readonly close: number,
-    /** The case's own `monitors` member: where GridKit writes what the case records. */
-    readonly monitors: Member | undefined,
+    /** The case's own members, in file order: its header, params, arrays and monitors. */
+    readonly members: readonly Member[],
     /** Every field the catalog does not know, where it is first. */
     readonly found: readonly FoundField[],
+    /** The ranges its records were read in, which a revision of it keeps where an edit leaves
+     *  them alone, and how their tables were coded. */
+    readonly parts: readonly Part[],
+    readonly coding: Coding,
   ) {}
+
+  /** The case's own member `name`, as `monitors`, where GridKit writes what the case records. */
+  member(name: string): Member | undefined {
+    return this.members.find((member) => member.name === name)
+  }
 
   /** One immutable Data facade. Each field and row-ID column decodes on its first read. */
   get data(): Data {
     return (this.#data ??= dataOf(this.schema, this.tables))
+  }
+
+  /** The fewest bytes a case read from `text` keeps alive: its source and the spans into it. */
+  static leastBytes(text: string): number {
+    return text.length * SOURCE_BYTES
+  }
+
+  /** About how many bytes the case keeps alive, conservatively: its source and the spans into it,
+   *  then per record its columns, and the indexes and graph built over its records. */
+  get bytes(): number {
+    let bytes = this.file.byteLength * SOURCE_BYTES
+    for (const table of this.tables.values())
+      bytes += table.records.length * (FIELD_BYTES * table.fields.size + RECORD_BYTES)
+    return bytes
   }
 
   table(type: string): Table {
@@ -170,10 +220,10 @@ export class Case {
   /** The row with this native identity, or -1. */
   rowOf(table: Table, native: string | number): number {
     if (table.shape.identity.type === 'text')
-      return typeof native === 'string' ? textIds(table.ids).row(native) : -1
+      return typeof native === 'string' ? textIds(table).row(native) : -1
     const number =
       typeof native === 'number' ? native : /^(0|[1-9][0-9]*)$/.test(native) ? Number(native) : -1
-    return number >= 0 && number <= 0xffffffff ? numberIds(table.ids).row(number) : -1
+    return number >= 0 && number <= 0xffffffff ? numberIds(table).row(number) : -1
   }
 
   /** A row's id: its type and native identity, such as `Bus/16`. */
@@ -216,55 +266,119 @@ export class Case {
   }
 }
 
-/** Each array's records, cut at record boundaries into ranges of about RANGE_BYTES. */
-function rangesOf(layout: Layout): Range[] {
-  const ranges: Range[] = []
-  for (const array of ARRAYS) {
+/** A range of records as a revision of a case read it: where it is in that revision's file, just
+ *  past its last record, what was read of it, and how far its bytes lie past where they were read.
+ *  A later revision keeps the ranges an edit leaves alone, moved as the edit moved them. */
+export interface Part {
+  readonly range: Range
+  readonly end: number
+  readonly parsed: Parsed
+  readonly shift: number
+}
+
+/** A range of records, and just past its last. */
+type Cut = Range & { readonly end: number }
+
+/** The records of each array `layout` lays out, cut at record boundaries into ranges of about
+ *  RANGE_BYTES. */
+function rangesOf(layout: Layout): Cut[] {
+  return ARRAYS.flatMap((array) => {
     const records = layout.arrays[array]
-    if (records === undefined) continue
-    const { starts, ends } = records
-    for (let first = 0; first < starts.length;) {
-      let last = first + 1
-      while (last < starts.length && ends[last]! - starts[first]! < RANGE_BYTES) last++
-      ranges.push({ array, first, starts: starts.subarray(first, last) })
-      first = last
-    }
+    return records ? cut(array, 0, records.starts, records.ends) : []
+  })
+}
+
+/** Records `first` on of `array`, starting at `starts` and ending at `ends`, cut at record
+ *  boundaries into ranges of about RANGE_BYTES. */
+function cut(array: ArrayName, first: number, starts: Uint32Array, ends: Uint32Array): Cut[] {
+  const ranges: Cut[] = []
+  for (let from = 0; from < starts.length;) {
+    let to = from + 1
+    while (to < starts.length && ends[to]! - starts[from]! < RANGE_BYTES) to++
+    ranges.push({
+      array,
+      first: first + from,
+      starts: starts.subarray(from, to),
+      end: ends[to - 1]!,
+    })
+    from = to
   }
   return ranges
 }
 
-/** Parses range by range, yielding between ranges so `signal` can cancel; returns every table's
- *  shape by code, the classes found included. */
-async function parseAll(
+/** `ranges` of `bytes` read by `parser`, range by range, yielding between ranges so `signal` can
+ *  cancel. What a range refuses fails them all, saying where the first refusal is. */
+async function partsOf(
   bytes: Uint8Array,
-  ranges: readonly Range[],
-  catalog: Catalog,
+  ranges: readonly Cut[],
+  parser: Parser,
   signal?: AbortSignal,
-): Promise<{ parsed: Parsed[]; shapes: readonly Shape[] }> {
-  const parser = new Parser(catalog)
-  const parsed: Parsed[] = []
-  for (const range of ranges) {
+): Promise<Part[]> {
+  const parts: Part[] = []
+  for (const { end, ...range } of ranges) {
     signal?.throwIfAborted()
-    parsed.push(parser.parse(bytes, range.array, range.first, range.starts))
+    const parsed = parser.parse(bytes, range.array, range.first, range.starts)
+    parts.push({ range, end, parsed, shift: 0 })
     await setImmediate()
   }
-  const problems = parsed.flatMap((range) => range.problems)
-  if (problems.length)
-    throw failure('invalid-input', problems[0]!.message, { issues: problems.slice(0, 100) })
-  return { parsed, shapes: parser.shapes }
+  const problems = parts.flatMap(({ parsed }) => parsed.problems)
+  const [first] = problems
+  if (first)
+    throw failure('invalid-input', first.message, {
+      issues: problems.slice(0, 100),
+      ...(first.target && { target: first.target }),
+    })
+  return parts
 }
 
-/** The parsed ranges as one case: chunks joined in file order, ports resolved, records placed. */
+/** The case of `file`, as `layout` lays it out and `parts`, coded as `coding` says, read its
+ *  records; `name` names it when its header gives none. Its identity indexes are built, so an id
+ *  two rows share fails it. */
+function assembled(
+  file: Uint8Array,
+  layout: Layout,
+  parts: readonly Part[],
+  coding: Coding,
+  catalog: Catalog,
+  name: string,
+): Case {
+  // What each range has yet to decode is read from this file, where its bytes lie now.
+  for (const { parsed, shift } of parts) {
+    parsed.source.bytes = file
+    parsed.source.shift = shift
+  }
+  const version = createHash('sha256').update(catalog.text).update(file).digest('hex').slice(0, 32)
+  const kase = joined(parts, coding, file, layout, catalog, version, name)
+  for (const table of kase.tables.values())
+    if (table.shape.identity.type === 'text') textIds(table)
+    else numberIds(table)
+  return kase
+}
+
+/** `spans`, pairs of a start and an end, `shift` further on; a pair 0, 0 says none, and stays. */
+function shifted(spans: Uint32Array, shift: number): Uint32Array {
+  if (!shift) return spans
+  const moved = new Uint32Array(spans.length)
+  for (let i = 0; i < spans.length; i += 2)
+    if (spans[i] !== 0) {
+      moved[i] = spans[i]! + shift
+      moved[i + 1] = spans[i + 1]! + shift
+    }
+  return moved
+}
+
+/** The parsed ranges as one case: chunks joined in file order, ports resolved, records placed. A
+ *  class the catalog does not know that no record has any more has no table. */
 function joined(
-  parsed: readonly Parsed[],
-  shapes: readonly Shape[],
-  ranges: readonly Range[],
+  parts: readonly Part[],
+  coding: Coding,
   file: Uint8Array,
   layout: Layout,
   catalog: Catalog,
   version: Index['version'],
   fallback: string,
 ): Case {
+  const { shapes } = coding
   const chunks = shapes.map((shape) => ({
     ids: [] as Chunk[],
     fields: shape.fields.map((): IndexedChunk[] => []),
@@ -273,11 +387,17 @@ function joined(
   const records = shapes.map((): number[] => [])
   const found: (Found & { readonly first: number })[] = []
   const mons = new Map<ArrayName, Uint32Array[]>()
-  ranges.forEach((range, r) => {
-    const { tables, codes, mons: spans } = parsed[r]!
+  for (const { range, parsed, shift } of parts) {
+    const { tables, codes } = parsed
     for (let i = 0; i < codes.length; i++)
       if (codes[i] !== NONE) records[codes[i]!]!.push(range.first + i)
-    for (const member of parsed[r]!.found) found.push({ ...member, first: range.first })
+    for (const member of parsed.found)
+      found.push({
+        ...member,
+        first: range.first,
+        value: member.value + shift,
+        end: member.end + shift,
+      })
     tables.forEach((table, code) => {
       if (table === null) return
       const into = chunks[code]!
@@ -285,11 +405,12 @@ function joined(
       table.fields.forEach((field, i) => into.fields[i]!.push(...field))
       table.ports.forEach((port, i) => into.ports[i]!.push(...port))
     })
-    mons.set(range.array, [...(mons.get(range.array) ?? []), spans])
-  })
+    mons.set(range.array, [...(mons.get(range.array) ?? []), shifted(parsed.mons, shift)])
+  }
   const tables = new Map<string, Table>()
   const index = (type: string): Index => ({ source: version, type, version })
   shapes.forEach((shape, code) => {
+    if (code >= catalog.codes.length && !records[code]!.length) return
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
     const starts = startsOf(ids)
@@ -353,9 +474,202 @@ function joined(
     file,
     arrays,
     layout.close,
-    layout.members.find((member) => member.name === 'monitors'),
+    layout.members,
     fields,
+    parts,
+    coding,
   )
+}
+
+/** How many bytes are compared at once, natively, as two files are told apart. */
+const COMPARED_BYTES = 1 << 16
+
+/** Whether `count` bytes of `a` at `at` are those of `b` at `bt`. */
+const same = (a: Uint8Array, at: number, b: Uint8Array, bt: number, count: number) =>
+  Buffer.from(a.buffer, a.byteOffset + at, count).equals(
+    Buffer.from(b.buffer, b.byteOffset + bt, count),
+  )
+
+/** Where `after` differs from `before`: from `start`, which both share the bytes before, up to
+ *  `before` in the one and `after` in the other, past which both share the rest; undefined where
+ *  they are the same. */
+function changed(
+  before: Uint8Array,
+  after: Uint8Array,
+): { start: number; before: number; after: number } | undefined {
+  const shorter = Math.min(before.length, after.length)
+  let start = 0
+  while (start + COMPARED_BYTES <= shorter && same(before, start, after, start, COMPARED_BYTES))
+    start += COMPARED_BYTES
+  while (start < shorter && before[start] === after[start]) start++
+  if (start === shorter && before.length === after.length) return undefined
+  // The bytes both end with, as far back as the bytes neither shares at their start.
+  const room = shorter - start
+  let tail = 0
+  while (
+    tail + COMPARED_BYTES <= room &&
+    same(
+      before,
+      before.length - tail - COMPARED_BYTES,
+      after,
+      after.length - tail - COMPARED_BYTES,
+      COMPARED_BYTES,
+    )
+  )
+    tail += COMPARED_BYTES
+  while (tail < room && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++
+  return { start, before: before.length - tail, after: after.length - tail }
+}
+
+/** `previous` read again as `file`, which differs from its file only from `edit.start`, as
+ *  `changed` says: undefined unless the edit lies among the records of one array, past its opening
+ *  bracket and before its closing one. Then the records from the range the edit begins in to the
+ *  range it ends in are read again, and the rest are kept, those after the edit moved by as much as
+ *  it grew. */
+async function revisionOf(
+  previous: Case,
+  file: Uint8Array,
+  edit: { start: number; before: number; after: number },
+  name: string,
+  signal?: AbortSignal,
+): Promise<Case | undefined> {
+  const grown = edit.after - edit.before
+  const array = ARRAYS.find((each) => {
+    const records = previous.arrays[each]
+    return records && records.open < edit.start && edit.before <= records.close
+  })
+  if (!array) return undefined
+  const old = previous.arrays[array]!
+  const parts = previous.parts
+  const own = parts.flatMap((part, p) => (part.range.array === array ? [p] : []))
+  // The ranges the edit begins and ends in, or none, where it begins before the first record or
+  // ends past the last: what they hold is read again, from the first range's first record, or the
+  // array's start, to the last range's last record, or the array's end.
+  const first = own.findLast((p) => parts[p]!.range.starts[0]! < edit.start)
+  const last = own.find((p) => parts[p]!.end - 1 >= edit.before)
+  if (first !== undefined && last !== undefined && last < first) return undefined
+  const from = first === undefined ? old.open + 1 : parts[first]!.range.starts[0]!
+  const closing = last === undefined
+  const to = closing ? old.close + grown : parts[last]!.end + grown
+  const read = await recordsBetween(file, from, to, closing, signal)
+  // The ranges of the array kept before and after those read again, and how many records the edit
+  // took and gave.
+  const before = own.filter((p) => first !== undefined && p < first).map((p) => parts[p]!)
+  const after = own.filter((p) => last !== undefined && p > last).map((p) => parts[p]!)
+  const recordsBefore = first === undefined ? 0 : parts[first]!.range.first
+  const removed =
+    old.starts.length -
+    [...before, ...after].reduce((sum, part) => sum + part.range.starts.length, 0)
+  const added = read.starts.length - removed
+  const parser = new Parser(previous.catalog, previous.coding)
+  const fresh = await partsOf(
+    file,
+    cut(array, recordsBefore, read.starts, read.ends),
+    parser,
+    signal,
+  )
+  /** `part`, kept where the edit leaves it, or moved past it. */
+  const moved = (part: Part): Part =>
+    part.range.starts[0]! < edit.start
+      ? part
+      : {
+          range: {
+            array: part.range.array,
+            first: part.range.first + (part.range.array === array ? added : 0),
+            starts: part.range.starts.map((start) => start + grown),
+          },
+          end: part.end + grown,
+          parsed: part.parsed,
+          shift: part.shift + grown,
+        }
+  const ordered = ARRAYS.flatMap((each) =>
+    each === array
+      ? [...before, ...fresh, ...after.map(moved)]
+      : parts.filter((part) => part.range.array === each).map(moved),
+  )
+  const at = (offset: number) => (offset >= edit.before ? offset + grown : offset)
+  const layout: Layout = {
+    members: previous.members.map((member) =>
+      member.start >= edit.before
+        ? {
+            name: member.name,
+            start: member.start + grown,
+            value: member.value + grown,
+            end: member.end + grown,
+          }
+        : member.end >= edit.before
+          ? { ...member, end: member.end + grown }
+          : member,
+    ),
+    close: previous.close + grown,
+    arrays: Object.fromEntries(
+      ARRAYS.flatMap((each): [ArrayName, Records][] => {
+        const records = previous.arrays[each]
+        if (!records) return []
+        if (each !== array) {
+          if (records.open < edit.start) return [[each, records]]
+          return [
+            [
+              each,
+              {
+                open: records.open + grown,
+                close: records.close + grown,
+                starts: records.starts.map((start) => start + grown),
+                ends: records.ends.map((end) => end + grown),
+              },
+            ],
+          ]
+        }
+        const keptBefore = recordsBefore
+        const keptAfter = old.starts.length - keptBefore - removed
+        const join = (column: Uint32Array, middle: Uint32Array) => {
+          const joined = new Uint32Array(keptBefore + middle.length + keptAfter)
+          joined.set(column.subarray(0, keptBefore))
+          joined.set(middle, keptBefore)
+          joined.set(
+            column.subarray(keptBefore + removed).map((offset) => offset + grown),
+            keptBefore + middle.length,
+          )
+          return joined
+        }
+        return [
+          [
+            each,
+            {
+              open: records.open,
+              close: at(records.close),
+              starts: join(records.starts, read.starts),
+              ends: join(records.ends, read.ends),
+            },
+          ],
+        ]
+      }),
+    ),
+  }
+  return assembled(file, layout, ordered, parser.coding, previous.catalog, name)
+}
+
+/** How many UTF-16 units, as VS Code counts, the first `byte` bytes of `file` decode to. Only a
+ *  failure is placed, so the file is decoded up to it. */
+const charsBefore = (file: Uint8Array, byte: number) =>
+  Buffer.from(file.buffer, file.byteOffset, byte).toString('utf8').length
+
+/** `error`, placed on record `record` of `records`: where that record lies in `file`. */
+function placed(
+  error: unknown,
+  file: Uint8Array,
+  records: Records | undefined,
+  record: unknown,
+): unknown {
+  if (!records || typeof record !== 'number' || !(record < records.starts.length)) return error
+  const start = records.starts[record]!
+  const offset = charsBefore(file, start)
+  const length = Buffer.from(
+    file.buffer,
+    file.byteOffset + start,
+    records.ends[record]! - start,
+  ).toString('utf8').length
+  return Object.assign(error as Error, { offset, length })
 }
 
 /** Throws why `text` is not JSON, as an editor says it: the first problem, at its place in the
@@ -501,6 +815,8 @@ function caseTable(
   version: Index['version'],
 ): Table {
   const values = new Map<string, Value>()
+  /** The fields the file writes a value for, whether or not it reads as one. */
+  const supplied = new Set<string>()
   const members = new Members()
   for (const member of layout.members) {
     if ((member.name !== 'header' && member.name !== 'params') || file[member.value] !== 0x7b)
@@ -518,16 +834,18 @@ function caseTable(
       const field = fields.get(key)
       if (field === undefined) continue
       const value: unknown = JSON.parse(utf8(file, spans[4 * m + 2]!, spans[4 * m + 3]!))
+      if (value !== null) supplied.add(field.name)
       const text = field.definition.type === 'text'
       if (text ? typeof value === 'string' : typeof value === 'number')
         values.set(field.name, value as Value)
     }
   }
   const starts = Uint32Array.of(0, 1)
-  const column = (type: Schema.FieldType, value: Value): Column => ({
+  const column = (type: Schema.FieldType, value: Value, given = value !== null): Column => ({
     type,
     chunks: [chunkOf(type, [value])],
     starts,
+    supplied: () => given,
   })
   return {
     shape,
@@ -537,7 +855,7 @@ function caseTable(
     fields: new Map(
       shape.fields.map((field) => [
         field.name,
-        column(field.definition.type, values.get(field.name) ?? null),
+        column(field.definition.type, values.get(field.name) ?? null, supplied.has(field.name)),
       ]),
     ),
     records: new Uint32Array(1),
@@ -562,7 +880,7 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
 
 /** A port's native numbers as rows of `target`; a number no row holds is null. */
 function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
-  const ids = native.length === 0 ? undefined : numberIds(target.ids)
+  const ids = native.length === 0 ? undefined : numberIds(target)
   const decode = deferred(() =>
     native.map((source): Chunk.Reference => {
       const port = source.read() as Chunk.Numeric
@@ -715,18 +1033,26 @@ function decimal(value: number, bytes: Uint8Array, at: number): number {
 }
 
 // Identity indexes, built on first lookup: hash tables of UTF-8 text; direct or sorted numbers.
+
 const TEXT = new WeakMap<Column, TextIds>()
 const NUMBER = new WeakMap<Column, NumberIds>()
 
-function textIds(column: Column): TextIds {
-  let ids = TEXT.get(column)
-  if (ids === undefined) TEXT.set(column, (ids = new TextIds(column)))
+/** What a failure to index `table` says of its row `row`, which repeats an id: the record it is,
+ *  as a parse problem names one. */
+const repeated = (table: Table, row: number) =>
+  table.shape.array === null
+    ? {}
+    : ({ target: { kind: 'path', path: [table.shape.array, table.records[row]!] } } as const)
+
+function textIds(table: Table): TextIds {
+  let ids = TEXT.get(table.ids)
+  if (ids === undefined) TEXT.set(table.ids, (ids = new TextIds(table)))
   return ids
 }
 
-function numberIds(column: Column): NumberIds {
-  let ids = NUMBER.get(column)
-  if (ids === undefined) NUMBER.set(column, (ids = new NumberIds(column)))
+function numberIds(table: Table): NumberIds {
+  let ids = NUMBER.get(table.ids)
+  if (ids === undefined) NUMBER.set(table.ids, (ids = new NumberIds(table)))
   return ids
 }
 
@@ -735,8 +1061,8 @@ class TextIds {
   readonly #slots: Uint32Array
   readonly #column: Column
 
-  constructor(column: Column) {
-    this.#column = column
+  constructor(table: Table) {
+    const column = (this.#column = table.ids)
     let size = 16
     while (size < rowCount(column.starts) * 2) size *= 2
     const slots = new Uint32Array(size)
@@ -754,6 +1080,7 @@ class TextIds {
             throw failure(
               'invalid-input',
               `Two rows share the id ${utf8(chunk.bytes, start, end)}.`,
+              repeated(table, first + at),
             )
           slot = (slot + 1) & mask
         }
@@ -797,7 +1124,8 @@ class NumberIds {
   readonly #keys: Uint32Array
   readonly #rows: Uint32Array
 
-  constructor(column: Column) {
+  constructor(table: Table) {
+    const column = table.ids
     const count = rowCount(column.starts)
     const keys = new Uint32Array(count)
     const rows = new Uint32Array(count)
@@ -816,13 +1144,13 @@ class NumberIds {
       }
     })
     this.#min = min
-    const duplicate = (key: number): never => {
-      throw failure('invalid-input', `Two rows share the number ${key}.`)
+    const duplicate = (key: number, row: number): never => {
+      throw failure('invalid-input', `Two rows share the number ${key}.`, repeated(table, row))
     }
     if (size > 0 && max - min < 4 * size + 64) {
       const dense = new Uint32Array(max - min + 1)
       for (let i = 0; i < size; i++) {
-        if (dense[keys[i]! - min] !== 0) duplicate(keys[i]!)
+        if (dense[keys[i]! - min] !== 0) duplicate(keys[i]!, rows[i]!)
         dense[keys[i]! - min] = rows[i]! + 1
       }
       this.#dense = dense
@@ -836,7 +1164,8 @@ class NumberIds {
     for (let i = 0; i < size; i++) {
       this.#keys[i] = keys[order[i]!]!
       this.#rows[i] = rows[order[i]!]!
-      if (i > 0 && this.#keys[i] === this.#keys[i - 1]) duplicate(this.#keys[i]!)
+      if (i > 0 && this.#keys[i] === this.#keys[i - 1])
+        duplicate(this.#keys[i]!, Math.max(this.#rows[i]!, this.#rows[i - 1]!))
     }
   }
 

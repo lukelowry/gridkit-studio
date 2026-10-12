@@ -43,7 +43,7 @@ describe('errors for people and for the log', () => {
     expect(cancelled(undefined)).toBe(false)
     for (const code of ['superseded', 'results-closed', 'closed', 'aborted'] as const)
       expect(quiet(problem(code, 'Nothing failed.'))).toBe(true)
-    expect(quiet(problem('results-changed', 'The file changed.'))).toBe(false)
+    expect(quiet(problem('needs-source', 'Send the case again.'))).toBe(false)
     expect(passing(problem('device-lost', 'Lost.'))).toBe(true)
     expect(passing(problem('invalid-input', 'Wrong.'))).toBe(false)
   })

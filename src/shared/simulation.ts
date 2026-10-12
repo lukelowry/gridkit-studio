@@ -21,38 +21,47 @@ export interface RuntimeProcess {
   container?: { cli: string; name: string }
 }
 
-/** A GridKit results file read for a case: what the views draw, whether a run writes it or it was
- *  opened. Its frames only grow while a run writes it, and no frame read ever changes. */
-export interface Results {
-  /** The id the extension chose for it, which it holds the results by until it closes them. */
-  id: string
+/** What a GridKit results file read for a case is: fixed once its header is read. */
+export interface ResultsLayout {
   /** The case revision it is read against, and that case's content. */
-  revision: Revision
-  fingerprint: string
+  readonly revision: Revision
+  readonly fingerprint: string
   /** The file's name. */
-  name: string
-  path: string
+  readonly name: string
+  readonly path: string
   /** What the file holds, once its header is read. */
-  outputs: readonly Query.Selection[]
-  frames: number
-  domain: Domain
-  /** Finite value ranges over every frame read, shared by all views and time windows. */
-  domains?: Record<string, Record<string, Domain>>
+  readonly outputs: readonly Query.Selection[]
   /** Frames per chunk, from the header's width, 0 before it is read. Chunk `k` holds frames
    *  `k * chunk` up to `(k + 1) * chunk`, so every process cuts the file alike. */
-  chunk: number
-  /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
-  growing: boolean
-  /** Why reading it stopped before its end, when it did. */
-  error?: string
+  readonly chunk: number
   /** The times a run will cover, as its solver file says. */
-  span?: Domain
+  readonly span?: Domain
   /** The solver file whose run wrote it, when one did. */
-  solver?: string
+  readonly solver?: string
+}
+
+/** How far a results file is read: what grows as its frames come. */
+export interface ResultsProgress {
+  readonly frames: number
+  readonly domain: Domain
+  /** Finite value ranges over every frame read, shared by all views and time windows. */
+  readonly domains?: Record<string, Record<string, Domain>>
+  /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
+  readonly growing: boolean
+  /** Why reading it stopped before its end, when it did. */
+  readonly error?: string
+}
+
+/** A GridKit results file read for a case, as the views draw it, whether a run writes it or it was
+ *  opened. Its frames only grow while a run writes it, and no frame read ever changes. */
+export interface Results extends ResultsLayout, ResultsProgress {
+  /** The id the extension chose for it, which it holds the results by until it closes them. */
+  readonly id: string
 }
 
 /** A run of GridKit's DynamicSimulation on a solver file. */
 export interface Run {
+  /** The id the extension chose for it, which everything said of the run carries. */
   id: string
   /** The case it runs. */
   uri: string
@@ -65,6 +74,8 @@ export interface Run {
 /** A run on a solver file, with what Studio read of it and of its case, which the results are read
  *  against. */
 export interface RunRequest extends CaseSource {
+  /** The run's id. */
+  run: string
   /** The id of the results the run writes, which the extension then holds. */
   results: string
   /** The .solver.json GridKit runs, in its folder. */

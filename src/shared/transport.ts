@@ -85,6 +85,8 @@ interface SpanOptions {
 
 /** How long past the computed end the end timer fires, so it never lands short of the edge. */
 const SLACK_MS = 50
+/** The longest a timer waits: a longer one fires at once. */
+const LONGEST_WAIT_MS = 2 ** 31 - 1
 
 /** The playback clock: seeking, loops, and following a live head. Between changes, readers compute
  *  the playhead with `advance`. */
@@ -269,16 +271,19 @@ export class Transport {
     const { status, loop, span, t, rate, direction } = this.#state
     if (status !== 'playing' || loop !== 'none') return
     const left = direction === 1 ? span[1] - t : t - span[0]
+    const wait = Math.max(SLACK_MS, (left / rate) * 1000 + SLACK_MS)
     this.#alarm = setTimeout(
       () => {
         this.#alarm = null
         this.#settle()
         if (this.#state.status !== 'playing') return
+        // A wait longer than a timer holds wakes before the edge, and waits on.
+        if (wait > LONGEST_WAIT_MS) return this.#arm()
         const edge = this.#state.direction === 1 ? this.#state.span[1] : this.#state.span[0]
         const { t, direction } = fold(edge, this.#state.span, 'none', this.#state.direction)
         this.#commit({ ...this.#state, status: 'paused', t, direction })
       },
-      Math.max(SLACK_MS, (left / rate) * 1000 + SLACK_MS),
+      Math.min(wait, LONGEST_WAIT_MS),
     )
   }
 

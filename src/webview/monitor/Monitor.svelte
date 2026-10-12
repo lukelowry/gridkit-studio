@@ -50,6 +50,8 @@
   let colors = $state.raw(theme())
   /** Bumped on GPU loss or retry; canvases remount while lane state survives. */
   let epoch = $state(0)
+  /** How many times the user asked the Monitor to try again. */
+  let retries = $state(0)
   /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
   let visible = $state(true)
   let hidden = $state(document.hidden)
@@ -146,10 +148,12 @@
             wants = new Map()
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
-        } else if (incoming.kind === 'action') {
-          if (incoming.command === 'shown') visible = incoming.value === true
-          else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
+        } else if (incoming.kind === 'shown') visible = incoming.shown
+        else if (incoming.kind === 'action') {
+          if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
           else if (incoming.command === 'retryMonitor') {
+            recovery.reset()
+            retries++
             epoch++
             cases.retry()
             samples.retry()
@@ -168,7 +172,7 @@
       budget: samples.budget,
       ...samples.stats(),
     })
-    bridge.send({ kind: 'ready' })
+    bridge.ready()
     return () => {
       document.removeEventListener('visibilitychange', visibility)
       clearTimeout(telling)
@@ -211,6 +215,7 @@
           {gpu}
           {paused}
           generation={epoch}
+          {retries}
           ticks={i === plots.length - 1}
           {streaming}
           onframe={() => recovery.presented()}

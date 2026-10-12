@@ -3,7 +3,15 @@
 
 import { problemOf, quiet } from '../shared/errors.js'
 import type { ViewCommandName } from '../shared/ids.js'
-import type { FromView, Results, ToView, ViewApi, ViewState } from '../shared/messages.js'
+import type {
+  FromView,
+  Results,
+  SentState,
+  ToView,
+  ViewApi,
+  ViewMessage,
+  ViewState,
+} from '../shared/messages.js'
 import { Caller } from '../shared/rpc.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
@@ -13,13 +21,21 @@ declare function acquireVsCodeApi(): {
 const api = acquireVsCodeApi()
 const listeners = new Set<(message: ToView) => void>()
 const extension = new Caller<ViewApi>((message) => api.postMessage(message))
+/** The case the view shows, as the last state it was sent names it: what the view says is of it, and
+ *  what the extension says of another is no longer the view's. */
+let subject: string | undefined
 
 export const bridge = {
-  send(message: FromView) {
-    api.postMessage(message)
+  /** Says `message` of the case the view shows. */
+  send(message: ViewMessage) {
+    api.postMessage({ ...message, uri: subject } satisfies FromView)
   },
   command(command: ViewCommandName, value?: unknown) {
-    api.postMessage({ kind: 'command', command, value } satisfies FromView)
+    bridge.send({ kind: 'command', command, value })
+  },
+  /** Tells the extension the page has loaded, and listens. */
+  ready() {
+    api.postMessage({ kind: 'ready' } satisfies FromView)
   },
   on(listener: (message: ToView) => void) {
     listeners.add(listener)
@@ -62,23 +78,31 @@ const sameResults = (a: Results | undefined, b: Results | undefined) =>
     a.outputs.length === b.outputs.length)
 
 /** Applies a state message. Each carries the whole state except `summary` and `settings`, which
- *  are large and sent only when they change, as they do with the case a view shows. A part that
- *  did not change stays the object it was, so what a view made of it is not made again. */
-export function merged(state: ViewState, incoming: ViewState): ViewState {
+ *  are large and sent only when they change, as they do with the case a view shows, and the
+ *  results' outputs, sent only when they change. A part that did not change stays the object it
+ *  was, so what a view made of it is not made again. */
+export function merged(state: ViewState, incoming: SentState): ViewState {
+  const { results, ...rest } = incoming
   const next: ViewState = {
     ...(incoming.uri === state.uri && { summary: state.summary, settings: state.settings }),
-    ...incoming,
+    ...rest,
+    ...(results && {
+      results: { ...results, outputs: results.outputs ?? state.results?.outputs ?? [] },
+    }),
   }
   const kept = next as Record<(typeof SMALL)[number], unknown>
   for (const key of SMALL)
     if (JSON.stringify(incoming[key]) === JSON.stringify(state[key])) kept[key] = state[key]
-  if (sameResults(state.results, incoming.results)) next.results = state.results
+  if (sameResults(state.results, next.results)) next.results = state.results
   return next
 }
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
   if (message.kind === 'reply') return extension.settle(message)
+  if (message.kind === 'state') subject = message.state.uri
+  // A clock or an action of a case the view no longer shows is not the view's.
+  else if (message.kind !== 'shown' && message.uri !== subject) return
   // One listener's failure leaves the others their message.
   for (const listener of listeners)
     try {

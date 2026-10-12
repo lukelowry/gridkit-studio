@@ -15,17 +15,20 @@ import {
   channelsFor,
   type FieldRef,
 } from '../shared/bindings.js'
-import { message } from '../shared/errors.js'
+import { failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
-import { savedKey } from '../shared/ids.js'
+import { followed, savedKey, savedUri } from '../shared/ids.js'
 import type {
   Cameras,
   CaseSource,
   Element,
   Plot,
   Results,
+  ResultsLayout,
+  ResultsProgress,
   Run,
   RunRequest,
+  Summary,
   TableState,
   ViewKind,
 } from '../shared/messages.js'
@@ -33,10 +36,10 @@ import { plotsFor, samePlot } from '../shared/plots.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { elementType, networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
-import { noCase, notice, SHOW_OUTPUT } from './report.js'
+import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
 import type { Sessions } from './sessions.js'
 import { displayOf } from './settings.js'
-import { nameOf, writtenNow } from './solvers.js'
+import { gone, nameOf, writtenNow } from './solvers.js'
 
 /** Why a session is kept: an editor has its case open, the views follow it, a run writes for it,
  *  or an export draws it. */
@@ -51,23 +54,53 @@ interface Saved {
   readonly results?: { readonly path: string; readonly solver?: string }
 }
 
+/** The results files the sessions saved in `state` name: the last each case showed. */
+export function savedResults(state: vscode.Memento): string[] {
+  return state.keys().flatMap((key) => {
+    const path = savedUri(key) === undefined ? undefined : state.get<Saved>(key)?.results?.path
+    return path ? [path] : []
+  })
+}
+
 /** What a run of the session's case takes besides the case: the solver file, where it writes, when
  *  it ends, the folder a container mounts, and where GridKit runs. */
-export type RunPlan = Omit<RunRequest, keyof CaseSource | 'results'>
+export type RunPlan = Omit<RunRequest, keyof CaseSource | 'run' | 'results'>
 
 /** Whether `results` were read to their end and stopped short of it. */
 const unread = (results?: Results) => !!results?.error && !results.growing
+
+/** A run under way. Everything said of it carries its id, so what is said of a run before it is
+ *  not taken for it. */
+interface Running {
+  readonly id: string
+  /** The results it writes. */
+  readonly results: string
+  readonly stop: AbortController
+  /** Whether the results worker said it began; until it does, the run ends with its request. */
+  began: boolean
+  /** Whether its results stay off show: let go of, as Clear Results does, or replaced by others. */
+  hidden: boolean
+  /** How far it has written. */
+  written?: Results
+  /** Hears how it ended. */
+  readonly ended: (run?: Run) => void
+}
 
 export class Session {
   readonly transport: Transport
   readonly #studio: Sessions
   readonly #holds = new Set<Hold>()
   #closed = false
-  /** Whether the results it saved have been read again, which they are once, as the views first
-   *  follow it. */
-  #restored = false
-  /** The results file it saved, until it is read again or other results take its place. */
+  /** Whether its case was renamed, moved or deleted. */
+  #moved = false
+  /** The results file it saved, or that the results worker held as it stopped, until it is read
+   *  again or other results take its place. */
   #pending?: Saved['results']
+  /** When that file is due to be read again: as the views follow the session, or, as the case did
+   *  not read, as it reads. */
+  #due?: 'following' | 'read'
+  /** The results file being read to show, which other results shown meanwhile take the place of. */
+  #loading?: object
   #settings: SettingsValues
   #bindings: Bindings
   #plots: Plot[]
@@ -83,10 +116,13 @@ export class Session {
   #window?: readonly [number, number]
   /** The results file the views draw: a run's, or one opened. */
   #results?: Results
-  /** The latest run of the case. */
+  /** The case the results on show were read against, as the results worker read it: asked once
+   *  for each results, and unknown until it answers. */
+  #described?: { readonly results: string; summary?: Summary }
+  /** The latest run of the case, as the results worker last told of it. */
   #run?: Run
-  /** The run under way: what stops it, and the results it writes until they are let go of. */
-  #running?: { readonly stop: AbortController; results?: string }
+  /** The run under way, from its start until the results worker's last word of it. */
+  #running?: Running
 
   constructor(
     readonly uri: string,
@@ -98,6 +134,7 @@ export class Session {
     this.#plots = saved.plots ?? []
     this.#table = saved.table ?? {}
     this.#pending = saved.results
+    if (saved.results) this.#due = 'following'
     this.#settings = displayOf(vscode.Uri.parse(uri))
     this.transport = new Transport(() => studio.clock.fire(uri))
   }
@@ -135,6 +172,11 @@ export class Session {
   get results(): Results | undefined {
     return this.#results
   }
+  /** The case the results on show were read against, once the results worker says what it is. */
+  get described(): Summary | undefined {
+    const described = this.#described
+    return described?.results === this.#results?.id ? described?.summary : undefined
+  }
   get run(): Run | undefined {
     return this.#run
   }
@@ -146,10 +188,17 @@ export class Session {
   /** Keeps the session for `why`. The views following it first read again the results it saved. */
   hold(why: Hold): void {
     this.#holds.add(why)
-    if (why === 'active' && !this.#restored) {
-      this.#restored = true
-      void this.#restore()
-    }
+    if (why === 'active') this.restore('following')
+  }
+
+  /** Reads again the results file it saved, or that the results worker held as it stopped, once
+   *  that is due and the views follow the session: `because` they follow it now, or the case reads
+   *  now. */
+  restore(because: 'following' | 'read'): void {
+    if (!this.#due || !this.#holds.has('active')) return
+    if (because === 'read' && this.#due !== 'read') return
+    this.#due = undefined
+    void this.#restore()
   }
 
   /** Lets go of the session for `why`; once nothing holds it, it closes. */
@@ -166,12 +215,22 @@ export class Session {
       if (results) this.#studio.closeResults(results.id)
       return
     }
-    // Whatever shows now takes the place of the results saved before.
-    this.#pending = undefined
     const shown = this.#results
-    if (!results && !shown) return
+    // Whatever shows now takes the place of the results saved before, of those being read to
+    // show, and of those a run under way writes.
+    const dropped = this.#pending !== undefined
+    this.#pending = this.#due = undefined
+    if (!results || results.id !== shown?.id) this.#loading = undefined
+    const running = this.#running
+    if (running && results && results.id !== running.results) running.hidden = true
+    if (!results && !shown) {
+      if (dropped) this.#save()
+      return
+    }
     if (shown && shown.id !== results?.id) this.#studio.closeResults(shown.id)
     this.#results = results
+    if (!results) this.#described = undefined
+    else if (this.#described?.results !== results.id) void this.#describe(results.id)
     /** Whether what it saves changed: other results, or the plots they hold. */
     let saving = shown?.id !== results?.id
     const { transport } = this
@@ -207,48 +266,75 @@ export class Session {
     this.#changed()
   }
 
-  /** Reads the results file at `path`, which `solver`'s run wrote when it names one, and shows it. */
+  /** Reads the results file at `path`, which `solver`'s run wrote when it names one, and shows it,
+   *  unless other results showed meanwhile, as a later load's do. */
   async load(path: string, solver?: string, signal?: AbortSignal): Promise<void> {
-    this.show(await this.#read(path, solver, signal))
+    const loading = (this.#loading = {})
+    const results = await this.#read(path, solver, signal)
+    if (this.#loading === loading) this.show(results)
+    else this.#studio.closeResults(results.id)
   }
 
   /** Lets go of the results on show, stopping a run that writes them. Their file stays. */
   clear(): void {
-    if (this.#running) {
-      this.#running.results = undefined
-      this.#running.stop.abort()
+    const running = this.#running
+    if (running) {
+      running.hidden = true
+      running.stop.abort()
     }
     this.show(undefined)
   }
 
-  /** Takes the latest of the results the worker reads for the case: those on show, or those the
-   *  session's run writes, which take their place and are followed live. */
-  reading(results: Results): void {
-    const writing = this.#running?.results === results.id && this.#run?.state === 'running'
-    if (writing || this.#results?.id === results.id) this.show(results, writing)
+  /** Takes how far the worker has read the results `id` of the case, and their `layout` when
+   *  it changed: those on show, or those the session's run writes, which take their place and are
+   *  followed live. */
+  reading(id: string, progress: ResultsProgress, layout?: ResultsLayout): void {
+    const running = this.#running
+    const writing = running?.results === id
+    const known = writing ? running.written : this.#results?.id === id ? this.#results : undefined
+    const base = layout ?? known
+    if (!base) return
+    const results: Results = { ...base, ...progress, id }
+    if (writing) {
+      running.written = results
+      if (!running.hidden) this.show(results, true)
+    } else if (this.#results?.id === id) this.show(results)
   }
 
-  /** Runs GridKit as `plan` says, holding the session until the run ends. Its results replace those
-   *  on show as they come; Stop Simulation and Clear Results stop it. */
-  async start(plan: RunPlan, signal: AbortSignal): Promise<Run> {
+  /** Runs GridKit as `plan` says, holding the session until the run ends, and answers how it
+   *  ended. Its results replace those on show as they come; Stop Simulation and Clear Results stop
+   *  it. */
+  async start(plan: RunPlan, signal: AbortSignal): Promise<Run | undefined> {
     if (this.#running) throw new Error(`${nameOf(vscode.Uri.parse(this.uri))} is already running.`)
-    const results = randomUUID()
-    const running = (this.#running = { stop: new AbortController(), results })
+    let ended!: (run?: Run) => void
+    const end = new Promise<Run | undefined>((resolve) => (ended = resolve))
+    const running: Running = {
+      id: randomUUID(),
+      results: randomUUID(),
+      stop: new AbortController(),
+      began: false,
+      hidden: false,
+      ended,
+    }
+    this.#running = running
     this.hold('run')
     try {
-      return await this.#studio.withCase(this.uri, (source) =>
+      await this.#studio.withCase(this.uri, (source) =>
         this.#studio.client.results.call(
           'run',
-          { ...source, ...plan, results },
+          { ...source, ...plan, run: running.id, results: running.results },
           AbortSignal.any([signal, running.stop.signal]),
         ),
       )
-    } finally {
-      if (this.#running === running) this.#running = undefined
-      // Results the run wrote and nothing shows are let go of.
-      if (this.#results?.id !== results) this.#studio.closeResults(results)
-      this.release('run')
+    } catch (error) {
+      // A run the worker never began ends with its request. One it began ends with the worker's
+      // last word of it, which follows however the request ends, even as the run is stopped.
+      if (!running.began) {
+        this.#end(running)
+        throw error
+      }
     }
+    return end
   }
 
   /** Stops the run under way. */
@@ -256,30 +342,30 @@ export class Session {
     this.#running?.stop.abort()
   }
 
-  /** Takes the latest state of the session's run: a run's start lets go of the results on show,
-   *  and the log hears how it starts and ends, and the user, once, why it failed. */
+  /** Takes what the results worker says of the run under way. As it begins, it lets go of the
+   *  results on show and the log hears; as it ends, the log hears how, and the user why it failed.
+   *  What is said of any other run is past. */
   ran(next: Run): void {
-    const before = this.#run
+    const running = this.#running
+    if (next.id !== running?.id) return
     this.#run = next
     const { output } = this.#studio.reporter
     if (next.state === 'running') {
-      if (before?.id !== next.id) {
+      if (!running.began) {
+        running.began = true
         output.info(`▶ ${next.command}`)
         this.show(undefined)
       }
       return this.#changed()
     }
-    const ended = before?.id === next.id && before.state === 'running'
-    const written = this.#results?.id === this.#running?.results ? this.#results : undefined
-    if (written) this.transport.setLive(false)
+    if (this.#results?.id === running.results) this.transport.setLive(false)
+    const { written } = running
     if (next.state === 'failed') {
-      if (before?.id !== next.id || before.state !== 'failed') {
-        const why = next.message ?? 'GridKit stopped'
-        this.#studio.reporter.report(
-          notice(`${next.command} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
-        )
-      }
-    } else if (ended) {
+      const why = next.message ?? 'GridKit stopped'
+      this.#studio.reporter.report(
+        notice(`${next.command} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
+      )
+    } else {
       const samples = `${(written?.frames ?? 0).toLocaleString()} samples`
       output.info(
         next.state === 'complete'
@@ -287,28 +373,41 @@ export class Session {
           : `■ ${next.command} stopped at t = ${formatNumber(written?.domain[1] ?? 0)} s · ${samples}`,
       )
     }
-    this.#changed()
+    this.#end(running, next)
   }
 
-  /** The results worker stopped. A run under way was interrupted, and what was on show is read
-   *  again from its file, as far as it was written, under an id the views start over with: at once
-   *  while the views follow the session, unless `steady` says the worker keeps stopping, else once
-   *  they follow it again. */
+  /** Ends `running` as `run` says it ended: the results it wrote that nothing shows are let go of,
+   *  and the session, for the run. */
+  #end(running: Running, run?: Run): void {
+    if (this.#running !== running) return
+    this.#running = undefined
+    if (this.#results?.id !== running.results) this.#studio.closeResults(running.results)
+    running.ended(run)
+    this.#changed()
+    this.release('run')
+  }
+
+  /** The results worker stopped. A run under way was interrupted, and what was on show, or being
+   *  read again, is read again from its file, as far as it was written, under an id the views start
+   *  over with: at once while the views follow the session, unless `steady` says the worker keeps
+   *  stopping, else once they follow it again. */
   lost(error: Error, steady: boolean): void {
-    if (this.#run?.state === 'running')
+    // A run the worker began ends here, as no last word of it will come; one it did not, with its
+    // request.
+    if (this.#running?.began && this.#run)
       this.ran({ ...this.#run, state: 'interrupted', message: error.message })
     const shown = this.#results
-    if (!shown) return
-    // The worker holds them no more, so there is nothing to let go of.
-    this.#results = undefined
-    this.#pending = { path: shown.path, ...(shown.solver && { solver: shown.solver }) }
-    this.#restored = steady && this.#holds.has('active')
-    if (this.#restored) void this.#restore()
-    else {
+    if (shown) {
+      // The worker holds them no more, so there is nothing to let go of.
+      this.#results = this.#described = undefined
+      this.#pending = { path: shown.path, ...(shown.solver && { solver: shown.solver }) }
       this.#window = undefined
       this.transport.clear()
       this.#changed()
     }
+    if (!this.#pending) return
+    this.#due = 'following'
+    if (steady) this.restore('following')
   }
 
   /** Steps one frame through the results on show, then pauses. */
@@ -345,6 +444,7 @@ export class Session {
       await this.#studio.client.cases.call('query', {
         uri: this.uri,
         version: summary.version,
+        attachmentId: summary.attachmentId,
         query: {
           kind: 'rows',
           from: elementType(id),
@@ -354,8 +454,11 @@ export class Session {
           limit: 1,
         },
       })
-    } catch {
+    } catch (error) {
+      // The case refuses an id it does not hold. A read a newer revision replaced, or one the case
+      // worker stopped during, says nothing of the element.
       if (
+        failedWith(error, 'invalid-input') &&
         this.#selection?.id === id &&
         this.#studio.documents.get(this.uri)?.summary?.version === summary.version
       )
@@ -427,6 +530,12 @@ export class Session {
     this.#changed()
   }
 
+  /** Its case was renamed, moved or deleted: what it saved went with the case, and it saves under
+   *  the case's old name no more. */
+  moved(): void {
+    this.#moved = true
+  }
+
   /** Saves what it saves, and stops its clock, as the extension stops. */
   dispose(): void {
     this.#save()
@@ -435,19 +544,27 @@ export class Session {
 
   /** Reads again the results file the Monitor last showed: a simulation's from where its solver
    *  file writes now, when that file is there. Results shown meanwhile, as a run started, show
-   *  instead; a file that no longer reads is forgotten. */
+   *  instead. Of a case that does not read, they are read once it does; a file that is gone is
+   *  forgotten, and one that does not read is kept, to try when Studio opens again. */
   async #restore(): Promise<void> {
     const saved = this.#pending
     if (!saved) return
+    let path = saved.path
     try {
       const { summary } = await this.#studio.caseOf(this.uri)
-      const path = (saved.solver && (await writtenNow(saved.solver, summary))) || saved.path
+      path = (saved.solver && (await writtenNow(saved.solver, summary))) || saved.path
       const results = await this.#read(path, saved.solver)
       if (this.#pending === saved) this.show(results)
       else this.#studio.closeResults(results.id)
     } catch (error) {
-      this.#studio.reporter.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
-      if (this.#pending === saved) {
+      if (this.#pending !== saved) return
+      // Problems says why the case does not read.
+      if (saidInProblems(error)) {
+        this.#due = 'read'
+        return
+      }
+      this.#studio.reporter.output.warn(`Could not read ${path} again: ${message(error)}`)
+      if ((await gone(vscode.Uri.file(path))) && this.#pending === saved) {
         this.#pending = undefined
         this.#save()
       }
@@ -473,6 +590,20 @@ export class Session {
     }
   }
 
+  /** Asks the results worker which case the results `id` were read against. */
+  async #describe(id: string): Promise<void> {
+    const described: { results: string; summary?: Summary } = { results: id }
+    this.#described = described
+    try {
+      described.summary = await this.#studio.client.results.call('describe', { results: id })
+      if (this.#described === described) this.#changed()
+    } catch (error) {
+      if (this.#described === described) this.#described = undefined
+      // Results let go of as the worker answered are no failure.
+      if (!quiet(error)) this.#studio.reporter.report(error)
+    }
+  }
+
   /** Finds what the network draws for the selected element `id`. */
   async #anchor(id: string): Promise<void> {
     const summary = this.#studio.documents.get(this.uri)?.summary
@@ -484,6 +615,7 @@ export class Session {
       const anchors = await this.#studio.client.cases.call('anchors', {
         uri: this.uri,
         version: summary.version,
+        attachmentId: summary.attachmentId,
         id,
         drawn,
       })
@@ -508,6 +640,7 @@ export class Session {
   /** Saves the session's mappings, plots, table, and the results file on show, or, until it is
    *  read again or replaced, the one it saved before. */
   #save(): void {
+    if (this.#moved || !followed(this.uri)) return
     const shown = this.#results
     const results = shown
       ? { path: shown.path, ...(shown.solver && { solver: shown.solver }) }

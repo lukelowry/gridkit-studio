@@ -12,13 +12,25 @@ import {
   CHUNK_ROWS,
   deferred,
   hash,
+  isInt32,
   type ListBuilder,
   NumericBuilder,
+  STEP_RECORDS,
   type TextBuilder,
   utf8,
   type VectorBuilder,
 } from './columns.js'
-import { type ArrayName, type Catalog, type Shape, unknownShape } from './definition.js'
+import {
+  type ArrayName,
+  BUS_CODE,
+  CASE,
+  type Catalog,
+  DEVICE_CODES,
+  type Shape,
+  SIGNAL_CODE,
+  unknownShape,
+} from './definition.js'
+import { Turns } from './turns.js'
 
 const QUOTE = 0x22
 const BACKSLASH = 0x5c
@@ -59,8 +71,10 @@ export interface Layout {
 }
 
 /** The case's members, and each array's records, found as the whole file is checked to be JSON
- *  with no object that repeats a key: what is read after takes the JSON as it is. */
-export function scan(bytes: Uint8Array): Layout {
+ *  with no object that repeats a key: what is read after takes the JSON as it is. Read a slice at a
+ *  time, until `signal` lets go. */
+export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Promise<Layout> {
+  const work = new Turns(signal)
   if (bytes.length >= 0xffffffff)
     throw failure('resource-limit', 'A case file must be smaller than 4 GiB.')
   let i = skipSpace(bytes, bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0)
@@ -81,7 +95,7 @@ export function scan(bytes: Uint8Array): Layout {
     const value = skipSpace(bytes, i + 1)
     let end: number
     if ((ARRAYS as readonly string[]).includes(name) && bytes[value] === OPEN_ARRAY) {
-      const records = recordsOf(bytes, value)
+      const records = await recordsOf(bytes, value, work)
       arrays[name as ArrayName] = records
       end = records.close + 1
     } else end = checkValue(bytes, value)
@@ -94,12 +108,31 @@ export function scan(bytes: Uint8Array): Layout {
   return { members, close: i, arrays }
 }
 
-function recordsOf(bytes: Uint8Array, open: number): Records {
+async function recordsOf(bytes: Uint8Array, open: number, work: Turns): Promise<Records> {
+  return { open, ...(await recordsFrom(bytes, open + 1, work)) }
+}
+
+/** The records of an array of `bytes` from `from`, a record's start or just past the array's
+ *  opening bracket, each checked as JSON whole, and where they end: just past the record that ends
+ *  at `to`, when given, else at the array's closing bracket. */
+async function recordsFrom(
+  bytes: Uint8Array,
+  from: number,
+  work: Turns,
+  to?: number,
+): Promise<{ close: number; starts: Uint32Array; ends: Uint32Array }> {
   let starts: Uint32Array = new Uint32Array(1024)
   let ends: Uint32Array = new Uint32Array(1024)
   let count = 0
-  let i = skipSpace(bytes, open + 1)
-  while (bytes[i] !== CLOSE_ARRAY) {
+  const done = (close: number) => ({
+    close,
+    starts: starts.slice(0, count),
+    ends: ends.slice(0, count),
+  })
+  let i = skipSpace(bytes, from)
+  if (to === undefined && bytes[i] === CLOSE_ARRAY) return done(i)
+  for (;;) {
+    if ((count & STEP_RECORDS) === 0) await work.step()
     expect(bytes, i, OPEN_OBJECT, 'a record')
     const end = checkValue(bytes, i)
     if (count === starts.length) {
@@ -108,11 +141,29 @@ function recordsOf(bytes: Uint8Array, open: number): Records {
     }
     starts[count] = i
     ends[count++] = end
+    if (end === to) return done(-1)
+    if (to !== undefined && end > to) malformed(i, 'a record that ends where one ended')
     i = skipSpace(bytes, end)
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
-    else if (bytes[i] !== CLOSE_ARRAY) malformed(i, 'a comma or the end of the array')
+    else if (to === undefined && bytes[i] === CLOSE_ARRAY) return done(i)
+    else malformed(i, 'a comma or the end of the array')
   }
-  return { open, close: i, starts: starts.slice(0, count), ends: ends.slice(0, count) }
+}
+
+/** The records of an array of `bytes` from `from` up to `to`, checked as `scan` checks them, each a
+ *  start and an end: `from` is a record's start or just past the array's opening bracket, and `to`
+ *  is just past a record, or, when `closing`, the array's closing bracket. */
+export async function recordsBetween(
+  bytes: Uint8Array,
+  from: number,
+  to: number,
+  closing: boolean,
+  signal = AbortSignal.any([]),
+): Promise<{ starts: Uint32Array; ends: Uint32Array }> {
+  const work = new Turns(signal)
+  const read = await recordsFrom(bytes, from, work, closing ? undefined : to)
+  if (closing && read.close !== to) malformed(read.close, 'the end of the array where it was')
+  return read
 }
 
 /** Where each open object's keys are, and their hashes, as `checkValue` reads: a key is compared
@@ -125,9 +176,11 @@ let keyHashes: Int32Array = new Int32Array(256)
  *  commas, and no object in it that repeats a key. A value nests as deep as it likes: the open
  *  objects and arrays are counted, never recursed into. */
 function checkValue(bytes: Uint8Array, start: number): number {
-  /** Per open container, 1 for an object, 0 for an array; and where an object's keys begin. */
+  /** Per open container, 1 for an object, 0 for an array; where an object's keys begin; and, once
+   *  it has many, its keys by hash. */
   const objects: number[] = []
   const firsts: number[] = []
+  const indexes: (Map<number, number[]> | undefined)[] = []
   let keys = 0
   let i = start
   /** Reads the key at `i`, a repeat of none before it in its object; returns past its colon. */
@@ -135,9 +188,23 @@ function checkValue(bytes: Uint8Array, start: number): number {
     expect(bytes, i, QUOTE, 'a member name')
     const end = checkString(bytes, i)
     const hashed = hash(bytes, i, end) | 0
-    for (let k = firsts.at(-1)!; k < keys; k++)
-      if (keyHashes[k] === hashed && sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
-        malformed(i, 'a member name its object has not used')
+    const first = firsts.at(-1)!
+    // A few keys are compared in turn; an object with many finds those that hash alike.
+    let index = indexes.at(-1)
+    if (!index && keys - first >= INDEXED_KEYS) {
+      index = new Map()
+      for (let k = first; k < keys; k++) indexed(index, keyHashes[k]!, k)
+      indexes[indexes.length - 1] = index
+    }
+    if (index) {
+      for (const k of index.get(hashed) ?? [])
+        if (sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
+          malformed(i, 'a member name its object has not used')
+      indexed(index, hashed, keys)
+    } else
+      for (let k = first; k < keys; k++)
+        if (keyHashes[k] === hashed && sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
+          malformed(i, 'a member name its object has not used')
     if (keys === keyStarts.length) {
       keyStarts = grownInt(keyStarts)
       keyEnds = grownInt(keyEnds)
@@ -160,6 +227,7 @@ function checkValue(bytes: Uint8Array, start: number): number {
       if (bytes[i] !== (object ? CLOSE_OBJECT : CLOSE_ARRAY)) {
         objects.push(object ? 1 : 0)
         firsts.push(keys)
+        indexes.push(undefined)
         if (object) i = key()
         continue
       }
@@ -183,9 +251,20 @@ function checkValue(bytes: Uint8Array, start: number): number {
         malformed(i, object ? 'a comma or the end of an object' : 'a comma or the end of an array')
       i++
       objects.pop()
+      indexes.pop()
       keys = firsts.pop()!
     }
   }
+}
+
+/** How many keys an object has before its keys are found by hash rather than compared in turn. */
+const INDEXED_KEYS = 128
+
+/** Notes key `k`, which hashes as `hashed`, in `index`. */
+function indexed(index: Map<number, number[]>, hashed: number, k: number): void {
+  const alike = index.get(hashed)
+  if (alike) alike.push(k)
+  else index.set(hashed, [k])
 }
 
 const TRUE = UTF8.encode('true')
@@ -387,6 +466,8 @@ export interface Found {
 }
 
 export interface Parsed {
+  /** Where the range's bytes are, which its columns not yet decoded read. */
+  readonly source: Source
   /** By table code; null where the range has no record of the table. */
   readonly tables: readonly (ParsedTable | null)[]
   readonly found: readonly Found[]
@@ -451,6 +532,53 @@ const RECORD_KEYS: Record<ArrayName, Keys> = {
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
 const OWN = new Keys(['diagram'])
 
+/** Where the bytes of a range were parsed from are now: the file that holds them, and how far past
+ *  where they were parsed they lie. A range a later revision keeps is pointed at that revision's
+ *  file, so what it has yet to decode reads the same bytes there, and no older file stays alive
+ *  for it. */
+export interface Source {
+  bytes: Uint8Array
+  shift: number
+}
+
+/** A column of the rows whose values `spans` place in `source`, each a start and an end, -1 where
+ *  a row has none: decoded on its first read, when it lets go of its spans and its source. A
+ *  port's value is the number of the row it names. */
+function lazyColumn(
+  source: Source,
+  spans: Int32Array,
+  type: Schema.FieldType,
+  port: boolean,
+): IndexedChunk {
+  // Held apart, so the decoded column keeps nothing of the file alive.
+  let unread: { source: Source; spans: Int32Array } | undefined = { source, spans }
+  const decode = deferred(() => {
+    const { source, spans: own } = unread!
+    unread = undefined
+    const { bytes, shift } = source
+    const rows = own.length / 2
+    const target = builder(type)
+    const supplied = new Uint8Array(Math.ceil(rows / 8))
+    for (let row = 0; row < rows; row++) {
+      const at = own[2 * row]!
+      const value = at < 0 ? at : at + shift
+      const end = own[2 * row + 1]! + shift
+      if (value >= 0 && bytes[value] !== 0x6e) supplied[row >>> 3]! |= 1 << (row & 7)
+      if (port) {
+        const number = value < 0 ? NaN : parseNumber(bytes, value, end)
+        if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
+          (target as NumericBuilder).pushNumber(number)
+        else target.push(null)
+      } else if (value < 0 || !into(bytes, target, type, value, end)) target.push(null)
+    }
+    return { chunk: target.finish(), supplied }
+  })
+  return {
+    read: () => decode().chunk,
+    supplied: (row) => (decode().supplied[row >>> 3]! & (1 << (row & 7))) !== 0,
+  }
+}
+
 /** One table's identities and value spans, cut into chunks of at most CHUNK_ROWS rows. */
 class Rows {
   readonly types: readonly Schema.FieldType[]
@@ -471,7 +599,7 @@ class Rows {
 
   constructor(
     readonly shape: Shape,
-    readonly bytes: Uint8Array,
+    readonly source: Source,
   ) {
     this.#width = 2 * (shape.fields.length + shape.ports.length)
     this.types = shape.fields.map((field) => field.definition.type)
@@ -526,38 +654,25 @@ class Rows {
   #flush(): void {
     if (this.#count === 0) return
     this.#chunks.ids.push(this.ids.finish())
-    const spans = this.#spans.slice(0, this.#count * this.#width)
-    const { bytes } = this
-    const width = this.#width
-    const column = (type: Schema.FieldType, slot: number, port = false): IndexedChunk => {
-      const decode = deferred(() => {
-        const target = builder(type)
-        const supplied = new Uint8Array(Math.ceil(spans.length / width / 8))
-        for (let at = 2 * slot; at < spans.length; at += width) {
-          const value = spans[at]!
-          const end = spans[at + 1]!
-          const row = (at - 2 * slot) / width
-          if (value >= 0 && bytes[value] !== 0x6e) supplied[row >>> 3]! |= 1 << (row & 7)
-          if (port) {
-            const number = value < 0 ? NaN : parseNumber(bytes, value, end)
-            if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
-              (target as NumericBuilder).pushNumber(number)
-            else target.push(null)
-          } else if (value < 0 || !into(bytes, target, type, value, end)) target.push(null)
-        }
-        return { chunk: target.finish(), supplied }
-      })
-      return {
-        read: () => decode().chunk,
-        supplied: (row) => (decode().supplied[row >>> 3]! & (1 << (row & 7))) !== 0,
-      }
-    }
-    this.types.forEach((type, i) => this.#chunks.fields[i]!.push(column(type, i)))
+    const fields = this.types.length
+    this.types.forEach((type, i) =>
+      this.#chunks.fields[i]!.push(lazyColumn(this.source, this.#slot(i), type, false)),
+    )
     this.shape.ports.forEach((_, i) =>
-      this.#chunks.ports[i]!.push(column('uint32', this.types.length + i, true)),
+      this.#chunks.ports[i]!.push(lazyColumn(this.source, this.#slot(fields + i), 'uint32', true)),
     )
     this.#count = 0
     this.#fresh()
+  }
+
+  /** Each row's value of slot `slot`, as its start and end, of the rows staged. */
+  #slot(slot: number): Int32Array {
+    const spans = new Int32Array(2 * this.#count)
+    for (let row = 0, at = 2 * slot; row < this.#count; row++, at += this.#width) {
+      spans[2 * row] = this.#spans[at]!
+      spans[2 * row + 1] = this.#spans[at + 1]!
+    }
+    return spans
   }
 
   #fresh(): void {
@@ -566,12 +681,20 @@ class Rows {
   }
 }
 
+/** How a parser codes the tables it reads: each shape by its code, the catalog's, then each class it
+ *  does not know, as found, by its name. */
+export interface Coding {
+  readonly shapes: readonly Shape[]
+  readonly unknown: ReadonlyMap<string, number>
+}
+
 export class Parser {
   readonly #classes: Keys
   readonly #bus: Keys
   /** Every table's shape by code: the catalog's, then each class it does not know, as found. */
   readonly #shapes: Shape[]
-  readonly #unknown = new Map<string, number>()
+  readonly #unknown: Map<string, number>
+  #source: Source = { bytes: new Uint8Array(0), shift: 0 }
   readonly #members = new Members()
   readonly #nested = new Members()
   /** The record being read: each field's and port's value as a start and end, -1 where absent. */
@@ -588,19 +711,23 @@ export class Parser {
   #found: Found[] = []
   #problems: Failure.Problem[] = []
 
-  constructor(catalog: Catalog) {
+  /** A parser of `catalog`'s cases, coding tables as `coding` did when given, so ranges it reads join
+   *  those another parser read with it. */
+  constructor(catalog: Catalog, coding?: Coding) {
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
     this.#bus = new Keys([catalog.bus, 'BusInfinite'])
-    this.#shapes = [...catalog.codes]
+    this.#shapes = [...(coding?.shapes ?? catalog.codes)]
+    this.#unknown = new Map(coding?.unknown)
   }
 
-  /** Every table's shape by code, the classes found so far included. */
-  get shapes(): readonly Shape[] {
-    return this.#shapes
+  /** How it codes tables, the classes found so far included. */
+  get coding(): Coding {
+    return { shapes: [...this.#shapes], unknown: new Map(this.#unknown) }
   }
 
   parse(bytes: Uint8Array, array: ArrayName, first: number, starts: Uint32Array): Parsed {
     this.#bytes = bytes
+    this.#source = { bytes, shift: 0 }
     this.#array = array
     this.#first = first
     this.#tables = []
@@ -614,6 +741,7 @@ export class Parser {
       mons[2 * record + 1] = this.#monEnd
     }
     return {
+      source: this.#source,
       tables: Array.from(this.#shapes, (_, code) => this.#tables[code]?.finish() ?? null),
       found: this.#found,
       codes,
@@ -628,9 +756,13 @@ export class Parser {
     const spans = this.#members.spans
     this.#mon = this.#monEnd = 0
     const code =
-      this.#array === 'buses' ? 0 : this.#array === 'signals' ? 1 : this.#classOf(count, record)
+      this.#array === 'buses'
+        ? BUS_CODE
+        : this.#array === 'signals'
+          ? SIGNAL_CODE
+          : this.#classOf(count, record)
     if (code === NONE) return NONE
-    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!, bytes))
+    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!, this.#source))
     this.#stage(rows)
     const keys = RECORD_KEYS[this.#array]
     const names = RECORD[this.#array]
@@ -672,9 +804,14 @@ export class Parser {
       const end = spans[4 * m + 3]!
       if (bytes[value] !== QUOTE) break
       const code = this.#classes.find(bytes, value + 1, end - 1)
-      if (code >= 2) return code
-      // A class the catalog does not know is a table of its own, its members found as they are.
+      if (code >= DEVICE_CODES) return code
       const name = utf8(bytes, value + 1, end - 1)
+      // A bus, a signal and the case are types of their own, never a device's class.
+      if (code >= 0 || name === CASE) {
+        this.#problem(record, `${name} is not a device class.`)
+        return NONE
+      }
+      // A class the catalog does not know is a table of its own, its members found as they are.
       let found = this.#unknown.get(name)
       if (found === undefined) {
         found = this.#shapes.push(unknownShape(name)) - 1
@@ -773,8 +910,7 @@ function into(
   if (type === 'float64' || type === 'int32') {
     const number = parseNumber(bytes, value, end)
     if (!Number.isFinite(number)) return false
-    if (type === 'int32' && (!Number.isInteger(number) || Math.abs(number) > 0x7fffffff))
-      return false
+    if (type === 'int32' && !isInt32(number)) return false
     ;(target as NumericBuilder).pushNumber(number)
     return true
   }

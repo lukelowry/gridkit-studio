@@ -23,6 +23,13 @@ export function deferred<T>(decode: () => T): () => T {
 /** Rows per parsed column chunk. */
 export const CHUNK_ROWS = 65_536
 
+/** How many records a long walk through a case reads between asking whether to yield, less one. */
+export const STEP_RECORDS = 1023
+
+/** Whether `value` is an int32 field's value: a whole number in a 32-bit signed integer's range. */
+export const isInt32 = (value: number) =>
+  Number.isInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff
+
 export interface Column {
   readonly type: Schema.FieldType
   readonly chunks: readonly Chunk[]

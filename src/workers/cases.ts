@@ -48,14 +48,20 @@ function latest({ uri, version, attachmentId }: Revision) {
   return read
 }
 
+/** Why the worker's copy of a document cannot take the changes it was sent: the extension sends the
+ *  whole text instead. */
+const stale = () => problem('stale-source', 'Source mirror is stale.')
+
 /** The text of `input`'s revision: sent whole, or its changes applied to the source the worker holds,
- *  which must be at their base. */
+ *  which must be at their base and make a text of the length the extension's has. */
 function sourceOf(input: Revision & SourceDelta): string {
   if ('text' in input) return input.text
   const known = documents.get(input.uri)
   if (known?.source.version !== input.baseVersion || known.attachmentId !== input.attachmentId)
-    throw problem('stale-source', 'Source mirror is stale.')
-  return applyChanges(known.source.text, input.changes)
+    throw stale()
+  const text = applyChanges(known.source.text, input.changes)
+  if (text.length !== input.length) throw stale()
+  return text
 }
 
 serve<CaseApi>(
@@ -65,23 +71,37 @@ serve<CaseApi>(
       const known = documents.get(uri)
       const text = sourceOf(input)
       const parsing = {}
-      documents.set(uri, { attachmentId, source: { version, text }, parsing })
+      // The last case read of this document answers for its own revision until this one reads.
+      const read = known && known.attachmentId === attachmentId ? known.read : undefined
+      documents.set(uri, { attachmentId, source: { version, text }, parsing, read })
       const started = performance.now()
       const name = nameOf(uri)
       // The same text again, as when the extension sends it whole once more, is the case read. A
-      // whole text read before, as when a document opens again, is found by its hash; an edit is
-      // never hashed.
-      const reread = known?.read?.text === text
-      const key = 'text' in input && !reread ? TextCases.key(text, catalog, name) : undefined
+      // document opened, whose whole text may have been read before, is found by its hash, unless
+      // it is too large to keep; an edit, or the whole text sent again, is never hashed.
+      const reread = read?.text === text
+      const key =
+        'text' in input && !known && !reread && opened.fits(text)
+          ? TextCases.key(text, catalog, name)
+          : undefined
+      // An edit of a case read before reads again only the records it changed.
       const kase = reread
-        ? known!.read!.kase
+        ? read!.kase
         : ((key === undefined ? undefined : opened.find(key)) ??
-          (await Case.parse(text, catalog, name, signal)))
+          (read
+            ? await Case.revise(read.kase, text, name, signal)
+            : await Case.parse(text, catalog, name, signal)))
       if (key) opened.keep(kase, () => key)
       signal.throwIfAborted()
       const document = documents.get(uri)
       if (document?.parsing !== parsing) throw superseded()
-      const summary = summarize(kase, { uri, version, attachmentId }, performance.now() - started)
+      const summary = await summarize(
+        kase,
+        { uri, version, attachmentId },
+        { parseMs: performance.now() - started, signal },
+      )
+      // A parse begun meanwhile replaced the document this one began with.
+      if (documents.get(uri) !== document) throw superseded()
       document.read = { kase, summary, text }
       return summary
     },
@@ -93,22 +113,21 @@ serve<CaseApi>(
       return issues
     },
     anchors: async (input, signal) => anchors(latest(input).kase, input, signal),
-    // Completion brings the source of a document the worker holds up to the revision typed, and
-    // reads it up to the cursor alone. Only a parse makes a document the worker holds, and only a
-    // release lets go of one.
-    async complete(input) {
-      const text = sourceOf(input)
-      const known = documents.get(input.uri)
-      if (known && known.attachmentId === input.attachmentId)
-        known.source = { version: input.version, text }
-      return completionsAt(catalog, text, input.offset)
+    // Completion reads the revision typed up to the cursor alone, and leaves the copy the worker
+    // holds as it was: a parse brings that up to date, and only a release lets go of it.
+    // The case last read of the same document finds the record the cursor is in, which alone is
+    // read.
+    complete: async (input) => {
+      const document = documents.get(input.uri)
+      const read = document?.attachmentId === input.attachmentId ? document?.read : undefined
+      return completionsAt(catalog, sourceOf(input), input.offset, read)
     },
     context: async (input) => sourceContext(latest(input).kase, input.offset),
     symbols: async ({ limit, ...revision }, signal) =>
       outline(latest(revision).kase, signal, limit),
     locate: async (input) => sourceRange(latest(input).kase, input.id, input.field),
     transact: async (input) => transaction(latest(input).kase, input.mutations),
-    presentation: async (revision) => presentation(latest(revision).kase),
+    presentation: (revision, signal) => presentation(latest(revision).kase, signal),
     query: ({ query, ...revision }, signal) => queried(latest(revision).kase.data, query, signal),
     rows: ({ fields, ...revision }, signal) => rowsOf(latest(revision).kase, fields, signal),
     async release({ uri, attachmentId }) {

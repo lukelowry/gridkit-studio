@@ -2,7 +2,7 @@
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
-  import type { VideoView, ViewState } from '../../shared/messages.js'
+  import type { Results, VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { plotStatics, rowsOnce, staticNeeds } from '../rows.js'
@@ -84,9 +84,9 @@
   /** Export to a file the user picks, written as frames are encoded. */
   async function start(): Promise<void> {
     const chosen = settings
-    const state = view
-    const { summary, results } = state
-    if (busy || !ready || !summary) return
+    const shown = view
+    const { summary, uri } = shown
+    if (busy || !ready || !summary || !uri) return
     const control = (stop = new AbortController())
     const { signal } = control
     /** Aborted once the export ends, however it ends. */
@@ -98,18 +98,23 @@
     slices = 0
     bridge.send({ kind: 'busy', busy: true })
     let file: number | null = null
+    /** The results the export draws, held for it: whatever shows meanwhile, they stay till it ends. */
+    let results: Results | undefined
     try {
+      results =
+        shown.results && (await bridge.request('share', { results: shown.results.id }, signal))
+      const state: ViewState = { ...shown, ...(results && { results }) }
       const name = summary.name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
       file = await bridge.request(
         'videoOpen',
-        { name: `${name}.${chosen.format}`, format: chosen.format },
+        { uri, name: `${name}.${chosen.format}`, format: chosen.format },
         signal,
       )
       if (file === null) {
         status = 'idle'
         return
       }
-      const cameras = await bridge.request('cameras', {}, signal)
+      const cameras = await bridge.request('cameras', { uri }, signal)
       // The case the results were read against, which the summary then describes: what its views
       // draw of it, or, for the Monitor's part alone, the rows its plots draw.
       const of = { summary, ...(results?.frames && { results: results.id }) }
@@ -187,6 +192,7 @@
       plotting.clear()
       mapping.clear()
       if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
+      if (results) await bridge.request('unshare', { results: results.id }).catch(() => {})
       bridge.send({ kind: 'busy', busy: false })
     }
   }
@@ -217,7 +223,7 @@
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
       }),
     ]
-    bridge.send({ kind: 'ready' })
+    bridge.ready()
     return () => {
       stop?.abort()
       for (const off of stops) off()

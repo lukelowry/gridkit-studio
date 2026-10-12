@@ -28,7 +28,7 @@ parentPort.on('message', (message) => {
   if (message.method === 'run')
     return parentPort.postMessage({
       kind: 'process',
-      uri: message.input.uri,
+      run: message.input.run,
       process: { pid: message.input.pid, executable: 'node' },
     })
   parentPort.postMessage({ kind: 'reply', id: message.id, value: 'ok' })
@@ -38,10 +38,12 @@ parentPort.on('message', (message) => {
 })
 
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
+/** The results worker as the tests start it, keeping what it reads under the tests' output. */
+const options = () => ({ ...OPTIONS, store: resolve('output/tests/client-store') })
 
 describe('the workers the extension asks', () => {
   it('asks each worker its own methods, and only those running what they hold', async () => {
-    const client = new Client(shipped, () => OPTIONS)
+    const client = new Client(shipped, options)
     try {
       expect(await client.stats()).toEqual({})
       const summary = await client.cases.call('parse', {
@@ -70,7 +72,7 @@ describe('the workers the extension asks', () => {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-    const client = new Client(crashing, () => OPTIONS)
+    const client = new Client(crashing, options)
     const stopped = vi.fn()
     const casesStopped = vi.fn()
     client.results.failure.event(stopped)
@@ -78,6 +80,7 @@ describe('the workers the extension asks', () => {
     try {
       const run = client.results.call('run', {
         uri: 'file:///one',
+        run: 'first',
         pid: gridkit.pid,
       } as unknown as RunRequest)
       // Answered after the worker reported the process, which the client now owns.

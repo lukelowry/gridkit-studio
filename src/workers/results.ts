@@ -220,8 +220,10 @@ serve<ResultsApi>(
     },
     query: ({ results, query }, signal) =>
       withResults(results, signal, async (file, s) => {
-        const at = query.kind === 'rows' ? query.at : undefined
-        return queried(at === undefined ? file.kase.data : await file.data([at, at], s), query, s)
+        // Rows at a time read the samples of their own type alone.
+        if (query.kind !== 'rows' || query.at === undefined)
+          return queried(file.kase.data, query, s)
+        return queried(await file.data([query.at, query.at], s, query.from), query, s)
       }),
     rows: ({ results, fields }, signal) => rowsOf(shelf.find(results).kase, fields, signal),
     presentation: async ({ results }) => presentation(shelf.find(results).kase),

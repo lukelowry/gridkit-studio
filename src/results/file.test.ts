@@ -320,6 +320,47 @@ describe('native results and ownership', () => {
     expect(results.info.domains).toEqual({ Bus: { Vm: [1, 1.0999] } })
   })
 
+  it('decodes a field again alone exactly as it read it beside the others', async () => {
+    const two = await Case.parse(
+      '{"buses":[{"class":"Bus","number":1,"name":"A"},{"class":"Bus","number":2,"name":"B"}]}',
+      catalog,
+    )
+    const path = join(directory, 'wide.csv')
+    const frames = 250_000
+    const rows = Array.from(
+      { length: frames },
+      (_, i) => `${i / 1000},${1 + i / 1e6},${i / 1e5},${0.9 + i / 1e6},${-i / 1e5}`,
+    )
+    await writeFile(path, 'time,Bus_A_Vm,Bus_A_Va,Bus_B_Vm,Bus_B_Va\n' + rows.join('\n'))
+    const read = async (cache: ResultCache) => {
+      const results = file(path, cache, two)
+      await results.ingest(
+        signal,
+        () => true,
+        () => {},
+      )
+      expect(Math.ceil(frames / results.info.chunk)).toBeGreaterThan(1)
+      return Promise.all(
+        ['Vm', 'Va'].map((field) =>
+          results.samples(
+            {
+              results: results.info.id,
+              field: { from: 'Bus', select: [field] },
+              window: [0, frames / 1000],
+              held: {},
+              bytes: Infinity,
+            },
+            signal,
+          ),
+        ),
+      )
+    }
+    // Every chunk kept as the file was read, against each field decoded again alone with none kept.
+    const [kept, again] = await Promise.all([read(new ResultCache()), read(new ResultCache(0))])
+    expect(again).toEqual(kept)
+    expect(kept[1]![0]!.columns.Va).toBeDefined()
+  })
+
   it('sends about as many bytes as asked, a chunk at least, nearest first', async () => {
     const results = file(large.path)
     await results.ingest(

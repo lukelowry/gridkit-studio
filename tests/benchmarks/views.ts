@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
@@ -24,6 +24,8 @@ const CASES = [
   ['cases/ACTIVSg10k.case.json', 10000],
 ] as const
 const RUNS = 5
+/** Exports per case, each a second of video. */
+const EXPORTS = 3
 /** Counters that only grow, compared per run. */
 const WORK = [
   'queries',
@@ -166,6 +168,8 @@ export async function run() {
   const global = vscode.ConfigurationTarget.Global
   for (const [key, value] of Object.entries(STILL)) await settings.update(key, value, global)
   const gridkit = await bench.gridkit()
+  /** The GridKit build the runs use, which compare.mjs matches between runs. */
+  const build = gridkit ? await bench.gridkitBuild() : undefined
   await simpleDialog(true)
   try {
     for (const [path, buses] of CASES) {
@@ -282,11 +286,17 @@ export async function run() {
       // ── Case panel ──
       const counts = summary().counts
       const rows = (count: number) => `table[aria-rowcount="${count + 1}"]`
-      let started = performance.now()
-      await vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri)
-      // The panel takes up each case on a page of its own, so the page is found again each look.
-      const table = await shows('case', rows(counts.Bus!))
-      timings[`case ${size} > open`] = [performance.now() - started]
+      // The panel's page goes when it hides, so each open loads it anew. The page is found again
+      // each look, as the panel takes up each case on a page of its own.
+      let table!: Frame
+      await time(`case ${size} > open`, RUNS, {
+        ready: async () => {
+          await vscode.commands.executeCommand('workbench.action.closePanel')
+          await pause(300)
+        },
+        act: () => vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri),
+        done: async () => (table = await shows('case', rows(counts.Bus!))),
+      })
       // The type with the most rows besides buses, and back.
       const [other] = Object.entries(counts)
         .filter(([type]) => type !== 'Bus')
@@ -294,12 +304,12 @@ export async function run() {
       const choose = (type: string) =>
         bench.studio.action.fire({ uri: key, view: 'case', command: 'type', value: type })
       if (other)
-        await time(`case ${size} > change type`, 2, {
+        await time(`case ${size} > change type`, 2 * RUNS, {
           act: (i) => choose(i % 2 ? 'Bus' : other[0]),
           done: (i) =>
             table.locator(rows(i % 2 ? counts.Bus! : other[1])).waitFor({ timeout: 60_000 }),
         })
-      await time(`case ${size} > filter`, 2, {
+      await time(`case ${size} > filter`, 2 * RUNS, {
         act: (i) =>
           bench.studio.action.fire({
             uri: key,
@@ -333,7 +343,7 @@ export async function run() {
         const id = ran()?.results
         return id && session.results?.id === id ? session.results : undefined
       }
-      started = performance.now()
+      const started = performance.now()
       const since = () => performance.now() - started
       bench.run('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
@@ -420,18 +430,28 @@ export async function run() {
 
       // ── Plots ──
       const first = bus
+      const alone = session.plots
       const lanesBefore = (await plots(monitor)).length
-      await time(`monitor ${size} > add plot`, 1, {
+      /** Until the Monitor draws `count` plots. */
+      const lanes = (count: number) =>
+        monitor.waitForFunction(
+          `(count) => document.querySelectorAll('canvas[data-rendered=true]').length === count`,
+          count,
+          { polling: 'raf', timeout: 60_000 },
+        )
+      // Each sample adds the plot afresh: the one the sample before added goes first, untimed.
+      await time(`monitor ${size} > add plot`, RUNS, {
+        ready: async () => {
+          if (session.plots === alone) return
+          session.plots = alone
+          bench.studio.changed.fire(key)
+          await lanes(lanesBefore)
+        },
         act: () => {
-          session.plots = [...session.plots, { from: 'Bus', field: 'Vm', id: first }]
+          session.plots = [...alone, { from: 'Bus', field: 'Vm', id: first }]
           bench.studio.changed.fire(key)
         },
-        done: () =>
-          monitor.waitForFunction(
-            `(count) => document.querySelectorAll('canvas[data-rendered=true]').length > count`,
-            lanesBefore,
-            { polling: 'raf', timeout: 60_000 },
-          ),
+        done: () => lanes(lanesBefore + 1),
       })
       // A new range colors the drawn lines again, and draws none of them.
       const recolored = await steady(monitor)
@@ -478,7 +498,12 @@ export async function run() {
         }
         return times
       })()`)
-      await time(`monitor ${size} > select`, 1, {
+      // Each sample selects the trace afresh, from nothing selected.
+      await time(`monitor ${size} > select`, RUNS, {
+        ready: async () => {
+          bench.studio.select(key)
+          await settle(() => session.selection === undefined, 'nothing selected')
+        },
         act: () =>
           monitor
             .locator('canvas')
@@ -507,18 +532,30 @@ export async function run() {
       await exporter.locator('[role="option"][data-value="webm"]').click()
       await exporter.locator('[data-testid="video-resolution"]').click()
       await exporter.locator('[role="option"][data-value="720"]').click()
-      const video = vscode.Uri.joinPath(uri, '..', `bench ${buses}.webm`)
-      await exporter.locator('[data-testid="video-start"]').click()
-      await bench.dialog(video.fsPath)
-      started = performance.now()
-      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 300_000 })
-      timings[`export ${size} > network 1 s at 720p`] = [performance.now() - started]
-      work[`export ${size} > network 1 s at 720p`] = { bytes: (await stat(video.fsPath)).size }
+      // Each export writes a file of its own, and is timed from the file chosen to the video done.
+      const video = (i: number) => vscode.Uri.joinPath(uri, '..', `bench ${buses} ${i}.webm`)
+      await time(`export ${size} > network 1 s at 720p`, EXPORTS, {
+        ready: async (i) => {
+          await exporter.locator('[data-testid="video-start"]').click()
+          await bench.dialog(video(i).fsPath)
+        },
+        act: () => {},
+        done: (i) =>
+          exporter
+            .locator('[data-testid="video-done"]', { hasText: basename(video(i).fsPath) })
+            .waitFor({ timeout: 300_000 }),
+      })
+      work[`export ${size} > network 1 s at 720p`] = {
+        bytes: (await stat(video(EXPORTS - 1).fsPath)).size,
+      }
       bench.studio.select(key)
     }
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')
     await mkdir(output, { recursive: true })
-    await writeFile(join(output, 'head.json'), JSON.stringify({ timings, work, stages }, null, 2))
+    await writeFile(
+      join(output, 'head.json'),
+      JSON.stringify({ gridkit: build, timings, work, stages }, null, 2),
+    )
     console.log(`Benchmarks: ${Object.keys(timings).length} timed, written to ${output}`)
     assert.deepEqual(bench.studio.errors, [], 'Studio reported no error')
   } finally {

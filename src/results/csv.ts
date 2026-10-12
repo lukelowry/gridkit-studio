@@ -17,10 +17,12 @@ type CsvMessage =
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
  *  `known` is the header's columns, when another read of the same results parsed it: `source` is
- *  then rows alone. */
+ *  then rows alone. With `parse`, only the columns it marks are read as numbers, the time always:
+ *  the others are counted, so each row still matches its header, and left NaN. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
   known?: readonly ArrowField[],
+  parse?: Uint8Array,
 ): AsyncGenerator<CsvMessage> {
   let header = ''
   let quoted = false
@@ -66,7 +68,9 @@ export async function* csvMessages(
         pending += text.slice(start)
         break
       }
-      const token = pending + text.slice(start, end)
+      // A column left unread is never cut out of the text.
+      const read = column === 0 || !parse || parse[column] === 1
+      const token = read ? pending + text.slice(start, end) : ''
       pending = ''
       const last = end === newline
       start = end + 1
@@ -75,7 +79,7 @@ export async function* csvMessages(
       if (last && column === 0 && token.trim() === '') continue
       if (column >= width || (last && column !== width - 1))
         throw failure('io', `CSV frame ${received + rows + 1} does not match its header.`)
-      const value = numberOf(token, received + rows + 1, column + 1)
+      const value = read ? numberOf(token, received + rows + 1, column + 1) : NaN
       if (column === 0) {
         if (!Number.isFinite(value)) throw failure('io', 'A CSV frame must have a finite time.')
         // A batch's buffer grows as its rows arrive, so a page of a few rows allocates little.

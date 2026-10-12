@@ -2,6 +2,7 @@
  *  exports and from outside by Playwright over the window's DevTools port. */
 
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 
@@ -919,6 +920,21 @@ export class TestHost {
     return runtime.then(
       () => true,
       () => false,
+    )
+  }
+
+  /** Which GridKit the runs use: the image's ID, which stays the same however its tags move, or the
+   *  installed program. Runs on different builds time different simulations. */
+  async gridkitBuild(): Promise<string> {
+    const runtime = await available(gridkitOf(this.uri))
+    if (runtime.kind === 'installed') return runtime.program
+    return new Promise((resolve, reject) =>
+      execFile(
+        runtime.cli,
+        ['image', 'inspect', '--format', '{{.Id}}', runtime.image],
+        { windowsHide: true },
+        (error, stdout) => (error ? reject(error) : resolve(stdout.trim())),
+      ),
     )
   }
 

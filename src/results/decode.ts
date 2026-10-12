@@ -27,7 +27,7 @@ interface Frames {
   readonly firstFrame: number
   readonly count: number
   readonly coordinates: Float64Array
-  /** Per output field, `count` frames of its rows, frame-major. */
+  /** Per output decoded, in the order read, `count` frames of its rows, frame-major. */
   readonly values: readonly Float64Array[]
 }
 
@@ -35,6 +35,9 @@ interface Reading {
   readonly signal: AbortSignal
   /** The frame the source starts at, which `publish` hears frames counted from. */
   readonly first?: number
+  /** The outputs to decode, by their place among the file's; every one when absent. The rest are
+   *  never read as numbers. */
+  readonly only?: readonly number[]
   /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
    *  from one chunk into the next. */
   readonly publish: (frames: Frames) => void | Promise<void>
@@ -65,10 +68,16 @@ export function chunkFrames(fields: readonly Field[]): number {
   return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
 }
 
-/** One sample batch per output field, all over the same frames. */
-export function samplesOf(fields: readonly Field[], frames: Frames): Data.SampleBatch[] {
-  return fields.map((field, f) => {
-    const values = frames.values[f]!
+/** One sample batch per output decoded, all over the same frames: of `only`, by their place among
+ *  `fields`, else of every one. */
+export function samplesOf(
+  fields: readonly Field[],
+  frames: Frames,
+  only?: readonly number[],
+): Data.SampleBatch[] {
+  return (only ?? fields.map((_, f) => f)).map((f, i) => {
+    const field = fields[f]!
+    const values = frames.values[i]!
     return {
       kind: 'samples',
       index: field.index,
@@ -101,6 +110,8 @@ export async function readResults(
 ): Promise<void> {
   let plan: Plan | undefined
   let outputs: readonly Field[] = []
+  /** The outputs decoded, by their place among the file's. */
+  let decoding: readonly number[] = []
   let chunk = 1
   const first = reading.first ?? 0
   let received = 0
@@ -109,8 +120,13 @@ export async function readResults(
   try {
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
+    // Rows read with a known header parse only the columns of the outputs asked for.
+    const parse =
+      format === 'csv' && reading.only && layout.header && layout.read
+        ? columnsOf(layout.read.plan, reading.only, layout.header.length)
+        : undefined
     for await (const message of format === 'csv'
-      ? csvMessages(chunks, layout.header)
+      ? csvMessages(chunks, layout.header, parse)
       : messages(chunks)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
@@ -119,6 +135,7 @@ export async function readResults(
         layout.read ??= layoutOf(message.fields, kase)
         plan = layout.read.plan
         outputs = layout.read.fields
+        decoding = reading.only ?? outputs.map((_, f) => f)
         chunk = chunkFrames(outputs)
         continue
       }
@@ -130,7 +147,7 @@ export async function readResults(
         throw failure('resource-limit', 'The results contain too many frames.')
       const decoded =
         message.kind === 'batch'
-          ? arrowInput(message.body, message.batch.buffers, length, plan)
+          ? arrowInput(message.body, message.batch.buffers, length, plan, decoding)
           : undefined
       for (let from = 0, count = 0; from < length; from += count) {
         reading.signal.throwIfAborted()
@@ -143,15 +160,15 @@ export async function readResults(
             throw failure('io', 'Result times must be finite and nondecreasing.')
           lastTime = value
         }
-        // With no outputs, only the times are checked.
-        if (!outputs.length) continue
+        // With no outputs to decode, only the times are checked.
+        if (!decoding.length) continue
         // The copy kernels write every cell, so fresh arrays need no clearing.
         const coordinates = new Float64Array(count)
-        const values = outputs.map((field) => new Float64Array(count * field.rows.length))
+        const values = decoding.map((f) => new Float64Array(count * outputs[f]!.rows.length))
         if (message.kind === 'rows') {
           for (let t = 0; t < count; t++)
             coordinates[t] = message.values[(from + t) * message.width]!
-          copyRows(message.values, message.width, plan, values, from, count)
+          copyRows(message.values, message.width, plan, decoding, values, from, count)
         } else {
           coordinates.set(time!.subarray(from, from + count))
           copyColumns(decoded!, values, from, count)
@@ -186,12 +203,22 @@ interface ArrowInput {
   readonly frames: number
 }
 
-/** Plain native doubles stay in one body view; only float32/null columns need scratch decoding. */
+/** The columns a CSV read parses: the time, and each row of `outputs`. */
+function columnsOf(plan: Plan, outputs: readonly number[], width: number): Uint8Array {
+  const parse = new Uint8Array(width)
+  parse[0] = 1
+  for (const f of outputs) for (const column of plan.columns[f]!) if (column >= 0) parse[column] = 1
+  return parse
+}
+
+/** Plain native doubles stay in one body view; only the float32/null columns of `outputs` need
+ *  scratch decoding. */
 function arrowInput(
   body: Uint8Array,
   buffers: Float64Array,
   frames: number,
   plan: Plan,
+  outputs: readonly number[],
 ): ArrowInput {
   const doubles = new Float64Array(body.buffer, body.byteOffset, body.byteLength >>> 3)
   const regions = new Map<number, number>()
@@ -225,7 +252,7 @@ function arrowInput(
     return -1 - region
   }
   const clock = startOf(0)
-  const starts = plan.columns.map((columns) => Int32Array.from(columns, startOf))
+  const starts = outputs.map((f) => Int32Array.from(plan.columns[f]!, startOf))
   const decoded = new Float64Array(regions.size * frames)
   for (const [column, region] of regions) {
     const into = decoded.subarray(region * frames, (region + 1) * frames)
@@ -277,17 +304,20 @@ function copyColumns(
   }
 }
 
+/** Copies `outputs`' rows into `fields`, one array each in turn. */
 function copyRows(
   source: Float64Array,
   width: number,
   plan: Plan,
+  outputs: readonly number[],
   fields: readonly Float64Array[],
   from: number,
   count: number,
 ): void {
-  for (let f = 0; f < fields.length; f++) {
+  for (let i = 0; i < outputs.length; i++) {
+    const f = outputs[i]!
     const placed = plan.columns[f]!
-    const values = fields[f]!
+    const values = fields[i]!
     const rows = placed.length
     const stride = plan.strides[f]!
     if (stride >= 0) {

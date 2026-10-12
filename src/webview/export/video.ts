@@ -3,7 +3,6 @@
  *  the frame drawn. */
 
 import { createDiagram } from '@latkit/diagram'
-import { createGeography } from '@latkit/geography'
 import {
   createComposition,
   type Gpu,
@@ -22,7 +21,6 @@ import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.j
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
 import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions, plotRows } from '../monitor/plot.js'
-import { loadMap, mapConfig } from '../network/map.js'
 import { isFlat, isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { theme } from '../theme.js'
@@ -90,15 +88,18 @@ function plotsOf({ results, plots = [] }: ViewState): Plot[] {
   )
 }
 
-/** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
- *  time range within the results, an even size up to 4K and a positive speed. */
 /** Starts reading the map a network on Earth shows, as soon as the page knows the case, so an
- *  export never waits for it. A map that fails says so in the Network view. */
+ *  export never waits for it. Only a case on Earth loads the map's code. A map that fails says so
+ *  in the Network view. */
 export function prefetchMap(state: ViewState): void {
   if (state.summary && networkOf(state.summary.schema).geographic)
-    void loadMap(reader(state.settings)).catch(() => {})
+    void import('../network/map.js')
+      .then((maps) => maps.loadMap(reader(state.settings)))
+      .catch(() => {})
 }
 
+/** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
+ *  time range within the results, an even size and a positive speed. */
 export function exportable(settings: VideoSettings, state: ViewState): boolean {
   const range = state.results?.domain
   if (!state.summary || !range || !(range[1] > range[0])) return false
@@ -126,17 +127,21 @@ export async function exportVideo(
   settings: VideoSettings,
   { state, rows, plotted, mapped, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
-  signal: AbortSignal,
+  cancel: AbortSignal,
   onProgress: (progress: VideoProgress) => void,
 ): Promise<void> {
   const preferences = reader(state.settings)
   const { palette: colors, font: face } = theme()
   const still = { input: 'none', motion: 'reduce' } as const
+  /** A view that fails stops the export, which then says why. */
+  const failed = new AbortController()
+  const signal = AbortSignal.any([cancel, failed.signal])
   /** Each view's renderers, in selection order. */
   const cells: View[][] = []
   const made: View[] = []
   const keep = <V extends View>(view: V): V => {
     made.push(view)
+    view.on('error', (reason) => failed.abort(reason))
     return view
   }
   /** Gives the Network the samples of the moment `at`, once they are held. */
@@ -149,13 +154,15 @@ export async function exportVideo(
           projection: projectionOf(preferences.get('network.camera.projection'), geographic),
           fit: true,
         }
-        // The view has said once why a map failed to load; the video then shows the ground alone.
-        const map = geographic ? await loadMap(preferences).catch(() => null) : null
+        // Only a case on Earth loads the map's code. The view has said once why a map failed to
+        // load; the video then shows the ground alone.
+        const maps = geographic ? await import('../network/map.js') : undefined
+        const map = maps && (await maps.loadMap(preferences).catch(() => null))
         const flat = isFlat(camera.projection ?? 'flat')
-        const earth = geographic
+        const earth = maps
           ? keep(
-              createGeography(gpu, {
-                ...mapConfig(preferences, colors, face, map, flat),
+              maps.mountEarth(gpu, {
+                ...maps.mapConfig(preferences, colors, face, map ?? null, flat),
                 ...still,
               }),
             )

@@ -64,6 +64,26 @@ suite('Network', () => {
     )
   })
 
+  test('shrinks its markers as the view zooms out, so neighbors stay apart, and grows them back', async () => {
+    /** How much markers shrink at the drawn zoom: 1 while they have room for their radius. */
+    const fit = () => network.evaluate<number>('gridkitStats().markerFit')
+    const wheel = async (deltaY: number) => {
+      await network.locator('canvas').hover()
+      await bench.page.mouse.wheel(0, deltaY)
+      await idle(network)
+      return fit()
+    }
+    try {
+      await until(async () => (await wheel(-240)) === 1, 'markers at their own size, zoomed in')
+      await until(async () => (await wheel(240)) < 1, 'markers shrink as the view zooms out')
+      const out = await fit()
+      assert.ok(out > 0, 'a shrunken marker still draws')
+      await until(async () => (await wheel(-240)) === 1, 'markers grow back as the view zooms in')
+    } finally {
+      await vscode.commands.executeCommand('gridkitStudio.fit')
+    }
+  })
+
   test('clearing the canvas selection clears the shared selection', async () => {
     const drawn = await frames(network)
     bench.studio.select(bench.key, { id: 'Bus/' + bench.source.buses[0]!.number })

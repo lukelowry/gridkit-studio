@@ -1,5 +1,6 @@
 import * as vscode from 'vscode'
 
+import type { CaseSymbol } from '../shared/messages.js'
 import { cancellable } from './client.js'
 import type { Sessions } from './sessions.js'
 const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
@@ -89,29 +90,36 @@ export function registerNavigation(studio: Sessions) {
       async provideDocumentSymbols(document, token) {
         const summary = await parsed(document)
         if (!summary) return undefined
+        // As many records as VS Code outlines of any JSON file, by its own setting.
+        const limit = vscode.workspace
+          .getConfiguration('json', document)
+          .get<number>('maxItemsComputed', 5000)
         const symbols = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'symbols',
-            { uri: document.uri.toString(), version: summary.version },
+            { uri: document.uri.toString(), version: summary.version, limit },
             signal,
           ),
         )
-        return symbols.map(
-          (symbol) =>
-            new vscode.DocumentSymbol(
-              symbol.name,
-              symbol.detail,
-              vscode.SymbolKind.Object,
-              new vscode.Range(
-                document.positionAt(symbol.offset),
-                document.positionAt(symbol.offset + symbol.length),
-              ),
-              new vscode.Range(
-                document.positionAt(symbol.offset),
-                document.positionAt(symbol.offset + 1),
-              ),
+        // The file's arrays, each holding its records.
+        const symbolOf = (symbol: CaseSymbol): vscode.DocumentSymbol => {
+          const made = new vscode.DocumentSymbol(
+            symbol.name,
+            symbol.detail,
+            symbol.children ? vscode.SymbolKind.Array : vscode.SymbolKind.Object,
+            new vscode.Range(
+              document.positionAt(symbol.offset),
+              document.positionAt(symbol.offset + symbol.length),
             ),
-        )
+            new vscode.Range(
+              document.positionAt(symbol.offset),
+              document.positionAt(symbol.offset + 1),
+            ),
+          )
+          made.children = symbol.children?.map(symbolOf) ?? []
+          return made
+        }
+        return symbols.map(symbolOf)
       },
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {

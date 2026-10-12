@@ -75,15 +75,15 @@ export async function loadMap(s: SettingsReader): Promise<Loaded | null> {
   }
 }
 
-/** The map a network draws beneath it, which tells `report` only of its failures: it takes no
- *  input, so the network answers every gesture. */
+/** The map a network draws beneath it, which tells `report` of its failures, when given: it takes
+ *  no input, so the network answers every gesture. */
 export function mountEarth(
   gpu: Gpu,
   config: Geography.Config,
-  report: (reason: unknown) => void,
+  report?: (reason: unknown) => void,
 ): Geography {
   const earth = createGeography(gpu, config)
-  earth.on('error', report)
+  if (report) earth.on('error', report)
   return earth
 }
 

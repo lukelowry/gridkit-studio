@@ -100,7 +100,10 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "patchedDependencies": {
+      "@latkit/network@0.22.0": "patches/@latkit__network@0.22.0.patch"
+    }
   },
   "capabilities": {
     "untrustedWorkspaces": {

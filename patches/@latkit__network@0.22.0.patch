@@ -1,0 +1,211 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 83be0e0b9edd1b7f7d693867912c4aa8ec42cf23..280d63adb7dcafad63d21eb45070c640859f480c 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -43,6 +43,10 @@ declare namespace Network {
+         /** Logical stroke segments before adaptive GPU tessellation. */
+         readonly segments: number;
+         readonly geometryBytes: number;
++        /** CPU memory the hit-test indexes of the frame on show hold. */
++        readonly pickingBytes: number;
++        /** How much markers shrink at the zoom on show: 1 while they have room for their radius. */
++        readonly markerFit: number;
+     }
+     /** A drawn row: a vertex or an edge. */
+     interface Item extends ModelItem {
+diff --git a/dist/index.js b/dist/index.js
+index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c825bde2770 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2451,35 +2451,21 @@ async function pipelines(gpu, format, msaa, shade) {
+   });
+   const label = d.createBindGroupLayout({ entries: [uniform(0, V | F), storage(1, V)] });
+   const occlusion = d.createBindGroupLayout({ entries: [uniform(0, V | F)] });
+-  const [tessModule, prep, geometry, occludeModule, text] = await Promise.all([
++  const [tessModule, prep, geometry] = await Promise.all([
+     gpu.shaderModule(common + curve_default + kit9.strokeShader() + tessellate_default, "network curves"),
+     gpu.shaderModule(
+       common + kit9.fieldShader({ group: 0, colormap: 2 }) + prepare_default,
+       "network field preparation"
+     ),
+-    geometryModule(gpu, DISC, shade, "network geometry"),
+-    gpu.shaderModule(common + occlude_default, "network globe depth"),
+-    gpu.shaderModule(common + kit9.textShader({ group: 1 }) + labels_default, "network shared text")
++    geometryModule(gpu, DISC, shade, "network geometry")
+   ]);
+   const computeLayout = d.createPipelineLayout({
+     bindGroupLayouts: [gpu.fieldLayout, compute, gpu.colormapLayout]
+   }), markedLayout = d.createPipelineLayout({
+     bindGroupLayouts: [gpu.fieldLayout, markedCompute, gpu.colormapLayout]
+   });
+-  const render = (module, vertex2, fragment, layouts, depthWriteEnabled = true) => gpu.renderPipeline({
+-    layout: d.createPipelineLayout({ bindGroupLayouts: layouts }),
+-    vertex: { module, entryPoint: vertex2 },
+-    fragment: {
+-      module,
+-      entryPoint: fragment,
+-      targets: [{ format, blend: kit9.premultipliedBlend }]
+-    },
+-    primitive: { topology: "triangle-list" },
+-    depthStencil: { format: "depth32float", depthWriteEnabled, depthCompare: "less-equal" },
+-    multisample: { count: msaa }
+-  });
+   const scene = (draws) => geometryPipeline({ gpu, draw: drawLayout, format, msaa }, geometry, draws, "scene");
+-  const [vertex, edge, marked, vertices, edges, poles, occluder, textPipeline, curves] = await Promise.all([
++  const [vertex, edge, marked, vertices, edges, poles, curves] = await Promise.all([
+     gpu.computePipeline({
+       layout: computeLayout,
+       compute: { module: prep, entryPoint: "vertices" }
+@@ -2495,24 +2481,6 @@ async function pipelines(gpu, format, msaa, shade) {
+     scene(MARKERS),
+     scene(LINES),
+     scene(POLES),
+-    gpu.renderPipeline({
+-      layout: d.createPipelineLayout({ bindGroupLayouts: [occlusion] }),
+-      vertex: { module: occludeModule, entryPoint: "occlude_vertex" },
+-      // Depth alone: the color stays the background's.
+-      fragment: {
+-        module: occludeModule,
+-        entryPoint: "occlude_fragment",
+-        targets: [{ format, writeMask: 0 }]
+-      },
+-      primitive: { topology: "triangle-list" },
+-      depthStencil: {
+-        format: "depth32float",
+-        depthWriteEnabled: true,
+-        depthCompare: "less-equal"
+-      },
+-      multisample: { count: msaa }
+-    }),
+-    render(text, "label_vertex", "label_fragment", [label, gpu.textLayout], false),
+     scene(CURVES)
+   ]);
+   const [tessPipeline, finish] = await Promise.all([
+@@ -2546,15 +2514,66 @@ async function pipelines(gpu, format, msaa, shade) {
+     vertices,
+     edges,
+     curves,
+-    poles,
+-    occlude: occluder,
+-    text: textPipeline
++    poles
+   };
+-  void markerPipeline(built, DISC, "focus");
+-  void linePipeline(built, false, "focus");
+-  void linePipeline(built, true, "focus");
+   return built;
+ }
++/** Labels draw with this; it compiles when a frame first has labels, never before a first frame. */
++function textPipeline(pipelines2) {
++  return variant(pipelines2, "text", async () => {
++    const { gpu, format, msaa, label } = pipelines2, d = gpu.device;
++    const module = await gpu.shaderModule(common + kit9.textShader({ group: 1 }) + labels_default, "network shared text");
++    return gpu.renderPipeline({
++      layout: d.createPipelineLayout({ bindGroupLayouts: [label, gpu.textLayout] }),
++      vertex: { module, entryPoint: "label_vertex" },
++      fragment: {
++        module,
++        entryPoint: "label_fragment",
++        targets: [{ format, blend: kit9.premultipliedBlend }]
++      },
++      primitive: { topology: "triangle-list" },
++      depthStencil: { format: "depth32float", depthWriteEnabled: false, depthCompare: "less-equal" },
++      multisample: { count: msaa }
++    });
++  });
++}
++/** The globe's depth, for a globe drawn with neither ground nor grid; it compiles when one first is. */
++function occludePipeline(pipelines2) {
++  return variant(pipelines2, "occlude", async () => {
++    const { gpu, format, msaa, occlusion } = pipelines2, d = gpu.device;
++    const module = await gpu.shaderModule(common + occlude_default, "network globe depth");
++    return gpu.renderPipeline({
++      layout: d.createPipelineLayout({ bindGroupLayouts: [occlusion] }),
++      vertex: { module, entryPoint: "occlude_vertex" },
++      // Depth alone: the color stays the background's.
++      fragment: {
++        module,
++        entryPoint: "occlude_fragment",
++        targets: [{ format, writeMask: 0 }]
++      },
++      primitive: { topology: "triangle-list" },
++      depthStencil: {
++        format: "depth32float",
++        depthWriteEnabled: true,
++        depthCompare: "less-equal"
++      },
++      multisample: { count: msaa }
++    });
++  });
++}
++var warmed = /* @__PURE__ */ new WeakSet();
++/** Selection and hover draw with focus pipelines, compiled once a first frame is presented, so they
++ *  never delay it. */
++function warmFocus(pipelines2) {
++  if (warmed.has(pipelines2)) return;
++  warmed.add(pipelines2);
++  for (const ready of [
++    markerPipeline(pipelines2, DISC, "focus"),
++    linePipeline(pipelines2, false, "focus"),
++    linePipeline(pipelines2, true, "focus")
++  ])
++    void ready.catch(() => void 0);
++}
+ var variants = /* @__PURE__ */ new WeakMap();
+ function variant(pipelines2, key, build) {
+   let byKey = variants.get(pipelines2);
+@@ -3301,8 +3320,14 @@ var Painter = class {
+       layout: pipeline.occlusion,
+       entries: [{ binding: 0, resource: uniform }]
+     }) : void 0;
++    const [text, occlude] = await Promise.all([
++      labels.length ? textPipeline(pipeline) : void 0,
++      occlusion ? occludePipeline(pipeline) : void 0
++    ]);
+     return {
+       pipelines: pipeline,
++      text,
++      occlude,
+       easing,
+       curves: curves && {
+         tessellations,
+@@ -3479,7 +3504,7 @@ var Painter = class {
+       pass.setBindGroup(0, paint.grid.group);
+       pass.draw(3);
+     } else if (paint.occlusion) {
+-      pass.setPipeline(paint.pipelines.occlude);
++      pass.setPipeline(paint.occlude);
+       pass.setBindGroup(0, paint.occlusion);
+       pass.draw(3);
+     }
+@@ -3515,7 +3540,7 @@ var Painter = class {
+     }
+     if (paint.options.lines) for (const item of paint.edges) over(item);
+     if (paint.options.markers) for (const item of paint.vertices) over(item);
+-    pass.setPipeline(paint.pipelines.text);
++    if (paint.text) pass.setPipeline(paint.text);
+     for (const item of paint.labels) {
+       pass.setBindGroup(0, item.group);
+       for (const page of item.pages) {
+@@ -3695,10 +3720,12 @@ var NetworkView = class extends kit11.ProjectedView {
+     return this.shown?.geometry.adjacency.neighborhood(item, this.shown.data) ?? [];
+   }
+   stats() {
++    const shown = this.shown;
+     return {
+       ...super.stats(),
+       ...this.counts,
+-      pickingBytes: this.shown?.picking.bytes ?? 0
++      pickingBytes: shown?.picking.bytes ?? 0,
++      markerFit: shown ? shown.picking.markerFit(shown.projector.camera, shown.options) : 1
+     };
+   }
+   /** Geographic positions start on the mercator plane, as a geography does; others on the plane. */
+@@ -4033,6 +4060,7 @@ var NetworkView = class extends kit11.ProjectedView {
+     this.geometry = pending.geometry;
+     if (pending.begins && this.transition) this.transition.begun = true;
+     if (!frame.presented) return;
++    warmFocus(pending.paint.pipelines);
+     this.shown = pending;
+     this.indexLater(pending);
+     this.counts = {

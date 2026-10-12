@@ -7,6 +7,7 @@ import {
   applyChanges,
   catalog,
   completionsAt,
+  outline,
   presentation,
   sourceContext,
   sourceRange,
@@ -104,21 +105,8 @@ serve<CaseApi>(
       return completionsAt(catalog, text, input.offset)
     },
     context: async (input) => sourceContext(latest(input).kase, input.offset),
-    async symbols(revision, signal) {
-      const { kase } = latest(revision)
-      const symbols = []
-      for (const table of kase.tables.values())
-        for (let row = 0; row < table.records.length && symbols.length < 10000; row++) {
-          signal.throwIfAborted()
-          const id = kase.id(table, row)
-          symbols.push({
-            ...sourceRange(kase, id),
-            name: id,
-            detail: table.shape.definition.label ?? table.shape.type,
-          })
-        }
-      return symbols
-    },
+    symbols: async ({ limit, ...revision }, signal) =>
+      outline(latest(revision).kase, signal, limit),
     locate: async (input) => sourceRange(latest(input).kase, input.id, input.field),
     transact: async (input) => transaction(latest(input).kase, input.mutations),
     presentation: async (revision) => presentation(latest(revision).kase),

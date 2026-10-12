@@ -15,7 +15,7 @@ import { diagramOf, networkOf, positionOf } from '../shared/schema.js'
 import { Case } from './case.js'
 import { catalog } from './definition.js'
 import { diagnose, editField, sourceRange } from './edits.js'
-import { completionsAt } from './navigation.js'
+import { completionsAt, outline } from './navigation.js'
 
 const source = `{
  "header": {"case_name": "東京 ⚡"},
@@ -143,6 +143,33 @@ describe('single catalog and source ownership', () => {
       ),
     ).toEqual(alone)
     expect(names('{"devices":[{"class":"Branch","params":{"')).not.toEqual(alone)
+  })
+  it('outlines every record in file order under its array, where the editor finds each', async () => {
+    const kase = await Case.parse(source, catalog)
+    const symbols = outline(kase, new AbortController().signal)
+    expect(symbols.map(({ name, detail }) => [name, detail])).toEqual([
+      ['buses', '2'],
+      ['signals', '1'],
+      ['devices', '4'],
+    ])
+    for (const array of symbols) {
+      // Counted in UTF-16, past a name outside the Basic Multilingual Plane.
+      expect(source.slice(array.offset, array.offset + array.length)).toMatch(/^\[[\s\S]*\]$/)
+      const offsets = array.children!.map(({ offset }) => offset)
+      expect(offsets).toEqual([...offsets].sort((a, b) => a - b))
+      for (const { name, offset, length } of array.children!)
+        expect({ offset, length }).toEqual(sourceRange(kase, name))
+    }
+    // Past VS Code's limit for a JSON file's outline, each array says how many it lists.
+    const limited = outline(kase, new AbortController().signal, 3)
+    expect(limited.map(({ detail, children }) => [detail, children!.length])).toEqual([
+      ['2', 2],
+      ['1', 1],
+      ['0 of 4', 0],
+    ])
+    expect(limited.map(({ offset, length }) => [offset, length])).toEqual(
+      symbols.map(({ offset, length }) => [offset, length]),
+    )
   })
   it('loads the real TwoArea case', async () => {
     const kase = await Case.parse(await readFile('cases/TwoArea.case.json', 'utf8'), catalog)

@@ -248,13 +248,17 @@ export class ResultsFile {
     return previous < 0 ? domain[0] : times[previous]!
   }
 
-  /** The case's data with the chunks whose frames reach over `window`. */
-  async data(window: Domain, signal: AbortSignal): Promise<Data> {
+  /** The case's data with the chunks whose frames reach over `window`: of the fields of type
+   *  `from`, as a query of its rows reads, else of every field. */
+  async data(window: Domain, signal: AbortSignal, from?: string): Promise<Data> {
     const { chunk } = this.info
+    const fields = from
+      ? this.fields.flatMap((field, f) => (field.index.type === from ? [f] : []))
+      : undefined
     const [first, end] = this.#span(window)
     let data = this.kase.data
     for (let k = Math.floor(first / chunk); chunk && k * chunk < end; k++)
-      data = appendData(data, await this.#chunk(k, signal))
+      data = appendData(data, await this.#chunk(k, signal, fields))
     return data
   }
 
@@ -265,7 +269,8 @@ export class ResultsFile {
     signal: AbortSignal,
   ): Promise<Data.SampleBatch[]> {
     const { chunk, frames } = this.info
-    if (!chunk) return []
+    const f = this.#fieldOf(field)
+    if (!chunk || f < 0) return []
     const [first, end] = this.#span(window)
     const chunks: number[] = []
     for (let k = Math.floor(first / chunk); k * chunk < end; k++) chunks.push(k)
@@ -277,12 +282,17 @@ export class ResultsFile {
       const to = Math.min(frames, (k + 1) * chunk)
       if (from >= to) continue
       if (reply.length && size >= bytes) break
-      const batch = this.#pick(slice(await this.#chunk(k, signal), from, to), field)
+      const batch = this.#pick(slice(await this.#chunk(k, signal, [f]), from, to), field)
       if (!batch) continue
       reply.push(batch)
       size += blockByteLength([batch])
     }
     return reply
+  }
+
+  /** Where `from`'s `select`ed field is among those the file holds; -1 where it holds none. */
+  #fieldOf({ from, select: [name] }: Query.Selection): number {
+    return this.fields.findIndex((field) => field.index.type === from && field.name === name)
   }
 
   /** `frames`' samples of `field`: the rows of it the file holds, or those of them it names, as one
@@ -428,60 +438,88 @@ export class ResultsFile {
     return 0
   }
 
-  /** Chunk `k`'s frames read so far, one batch per field. A whole chunk comes from the cache, or
-   *  is decoded again into it from the segments that hold it. */
-  async #chunk(k: number, signal: AbortSignal): Promise<Frames> {
+  /** The cache's key for field `f` of chunk `k`. Each field of a chunk is kept apart, so a view's
+   *  field is decoded alone, and the fields views read stay as the rest go. */
+  #keyOf(k: number, f: number): string {
+    return `${this.info.id}:${k}:${f}`
+  }
+
+  /** Chunk `k`'s frames read so far of `fields`, by their place among the file's, one batch each;
+   *  of every field when none are named. A whole chunk's field comes from the cache, or is decoded
+   *  again into it from the segments that hold it, with only the fields missing read as numbers. */
+  async #chunk(k: number, signal: AbortSignal, fields?: readonly number[]): Promise<Frames> {
     const { chunk, frames } = this.info
     if (k * chunk >= frames) return []
+    const wanted = fields ?? this.fields.map((_, f) => f)
     if ((k + 1) * chunk > frames) {
       if (this.#joined?.count !== frames)
         this.#joined = { count: frames, frames: joined(this.#tail) }
-      return this.#joined.frames
+      const tail = this.#joined.frames
+      return tail.length ? wanted.map((f) => tail[f]!) : []
     }
-    const keyOf = (j: number) => this.info.id + ':' + j
-    const cached = this.cache.get(keyOf(k))
-    if (cached) return cached
-    // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
-    // whole is kept, so a segment longer than a chunk, as an Arrow batch can be, decodes once.
-    const groups = new Map<number, Frames[]>()
-    const [first, end] = [k * chunk, (k + 1) * chunk]
-    let from = Infinity
-    let to = -Infinity
-    for (const segment of this.#segments) {
-      if (segment.first + segment.count <= first || segment.first >= end) continue
-      from = Math.min(from, segment.first)
-      to = Math.max(to, segment.first + segment.count)
-      await this.#decode(
-        await this.#read(segment.start, segment.end),
-        segment.first,
-        signal,
-        (group) => {
-          const j = Math.floor(group[0]!.firstFrame / chunk)
-          const held = groups.get(j)
-          if (held) held.push(group)
-          else groups.set(j, [group])
-        },
-      )
+    const found = new Map<number, Data.SampleBatch>()
+    for (const f of wanted) {
+      const cached = this.cache.get(this.#keyOf(k, f))?.[0]
+      if (cached) found.set(f, cached)
     }
-    for (const [j, held] of groups)
-      if (j !== k && j * chunk >= from && (j + 1) * chunk <= Math.min(to, frames))
-        this.cache.put(keyOf(j), joined(held))
-    return this.cache.put(keyOf(k), joined(groups.get(k) ?? []))
+    const missing = wanted.filter((f) => !found.has(f))
+    if (missing.length) {
+      // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
+      // whole is kept, so a segment longer than a chunk, as an Arrow batch can be, decodes once.
+      const groups = new Map<number, Frames[]>()
+      const [first, end] = [k * chunk, (k + 1) * chunk]
+      let from = Infinity
+      let to = -Infinity
+      for (const segment of this.#segments) {
+        if (segment.first + segment.count <= first || segment.first >= end) continue
+        from = Math.min(from, segment.first)
+        to = Math.max(to, segment.first + segment.count)
+        await this.#decode(
+          await this.#read(segment.start, segment.end),
+          segment.first,
+          signal,
+          (group) => {
+            const j = Math.floor(group[0]!.firstFrame / chunk)
+            const held = groups.get(j)
+            if (held) held.push(group)
+            else groups.set(j, [group])
+          },
+          missing,
+        )
+      }
+      for (const [j, held] of groups)
+        if (j === k || (j * chunk >= from && (j + 1) * chunk <= Math.min(to, frames))) {
+          const whole = joined(held)
+          missing.forEach((f, i) => {
+            const batch = whole[i]
+            if (!batch) return
+            this.cache.put(this.#keyOf(j, f), [batch])
+            if (j === k) found.set(f, batch)
+          })
+        }
+    }
+    return wanted.flatMap((f) => found.get(f) ?? [])
   }
 
   /** Decodes `bytes`, whose first frame is `first`, handing `publish` each group of frames: one
-   *  batch per field, never crossing into the next chunk. A CSV segment is rows alone, read with the
-   *  layout its header gave; an Arrow batch is read after the schema. */
+   *  batch per field, of `only` when given, never crossing into the next chunk. A CSV segment is
+   *  rows alone, read with the layout its header gave; an Arrow batch is read after the schema. */
   async #decode(
     bytes: Uint8Array,
     first: number,
     signal: AbortSignal,
     publish: (group: Frames) => void,
+    only?: readonly number[],
   ) {
     await readResults(
       Readable.from(this.info.format === 'csv' ? [bytes] : [this.#header, bytes]),
       this.kase,
-      { signal, first, publish: (frames) => publish(samplesOf(this.fields, frames)) },
+      {
+        signal,
+        first,
+        ...(only && { only }),
+        publish: (frames) => publish(samplesOf(this.fields, frames, only)),
+      },
       this.info.format,
       this.#layout,
     )
@@ -552,7 +590,8 @@ export class ResultsFile {
     this.#tail.push(group)
     const { chunk } = this.info
     if (this.info.frames % chunk === 0) {
-      this.cache.put(this.info.id + ':' + (this.info.frames / chunk - 1), joined(this.#tail))
+      const k = this.info.frames / chunk - 1
+      joined(this.#tail).forEach((batch, f) => this.cache.put(this.#keyOf(k, f), [batch]))
       this.#tail = []
       this.#joined = undefined
     }

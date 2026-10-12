@@ -1,9 +1,67 @@
 import { findNodeAtLocation, getLocation, parseTree, visit } from 'jsonc-parser'
 
-import type { SourceContext } from '../shared/messages.js'
-import type { Case } from './case.js'
+import type { CaseSymbol, SourceContext } from '../shared/messages.js'
+import type { Case, Table } from './case.js'
 import { CASE, type Catalog, type FieldPlan, SIGNAL } from './definition.js'
 import { nativePath, recordOf, sourceRange, textOffset } from './edits.js'
+import { ARRAYS } from './parse.js'
+
+/** The case's outline as its file lays it out: each array, holding its records in file order, each
+ *  named by its id, up to `limit` records in all, as VS Code's `json.maxItemsComputed` sets for a
+ *  JSON file's outline. An array listing fewer than it holds says so. The ranges come from the
+ *  offsets the parse kept, counted on through each array once, so no record's text is decoded. */
+export function outline(kase: Case, signal: AbortSignal, limit = Infinity): CaseSymbol[] {
+  const symbols: CaseSymbol[] = []
+  let room = limit
+  for (const name of ARRAYS) {
+    const array = kase.arrays[name]
+    if (!array) continue
+    // Each record's row, by its place in the array.
+    const rows: ({ table: Table; row: number } | undefined)[] = []
+    for (const table of kase.tables.values())
+      if (table.shape.array === name)
+        for (let row = 0; row < table.records.length; row++)
+          rows[table.records[row]!] = { table, row }
+    // UTF-16 offsets, as VS Code counts, of the array's ascending byte offsets.
+    let byte = array.open
+    let chars = textOffset(kase, byte)
+    const at = (to: number) => {
+      for (; byte < to; chars++) {
+        const first = kase.file[byte]!
+        byte += first < 128 ? 1 : first < 224 ? 2 : first < 240 ? 3 : 4
+        if (first >= 240) chars++
+      }
+      return chars
+    }
+    const open = at(array.open)
+    const children: CaseSymbol[] = []
+    let held = 0
+    for (let record = 0; record < array.starts.length; record++) {
+      if ((record & 4095) === 0) signal.throwIfAborted()
+      const found = rows[record]
+      if (!found) continue
+      held++
+      if (children.length >= room) continue
+      const offset = at(array.starts[record]!)
+      children.push({
+        name: kase.id(found.table, found.row),
+        detail: found.table.shape.definition.label ?? found.table.shape.type,
+        offset,
+        length: at(array.ends[record]!) - offset,
+      })
+    }
+    room -= children.length
+    symbols.push({
+      name,
+      detail: children.length < held ? `${children.length} of ${held}` : String(held),
+      offset: open,
+      // The array's end, found from the nearest checkpoint rather than counted on to.
+      length: textOffset(kase, array.close + 1) - open,
+      children,
+    })
+  }
+  return symbols
+}
 
 /** What is at UTF-16 `offset`: its row and field, their range, the row a reference names, and the
  *  fields that complete beside it. */

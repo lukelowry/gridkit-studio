@@ -35,6 +35,13 @@ export interface SourceRange {
   length: number
 }
 
+/** An entry of a case's outline: an array of its file, holding its records, or one of them. */
+export interface CaseSymbol extends SourceRange {
+  name: string
+  detail: string
+  children?: CaseSymbol[]
+}
+
 export interface SourceEdit extends SourceRange {
   text: string
 }
@@ -143,7 +150,8 @@ export interface CaseApi {
     output: SourceContext['completions']
   }
   context: { input: Revision & { offset: number }; output: SourceContext }
-  symbols: { input: Revision; output: (SourceRange & { name: string; detail: string })[] }
+  /** The outline, listing up to `limit` records. */
+  symbols: { input: Revision & { limit: number }; output: CaseSymbol[] }
   locate: { input: Revision & Element; output: SourceRange }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   /** Where the diagram's blocks are arranged. */

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
+import * as vscode from 'vscode'
 
 import { type TestHost, testHost, theme, until, VIEWPORT, visible } from './harness.js'
 
@@ -26,6 +27,22 @@ suite('Appearance', () => {
     await bench.capture('high-contrast-vscode')
     await theme(undefined)
     await until(async () => !(await highContrast()), 'the theme restored')
+  })
+
+  test('raises its contrast as the setting says, whatever the theme', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const focusWidth = () =>
+      exporter.evaluate<string>(
+        `getComputedStyle(document.body).getPropertyValue('--focus-width').trim()`,
+      )
+    try {
+      await settings.update('accessibility.contrast', 'high', vscode.ConfigurationTarget.Global)
+      await until(async () => (await focusWidth()) === '3px', 'thicker focus rings')
+      await settings.update('accessibility.contrast', 'system', vscode.ConfigurationTarget.Global)
+      await until(async () => (await focusWidth()) === '2px', 'the theme’s own again')
+    } finally {
+      await settings.update('accessibility.contrast', undefined, vscode.ConfigurationTarget.Global)
+    }
   })
 
   test('holds its views in a compact window', async () => {

@@ -79,7 +79,7 @@ export function registerRuns(studio: Sessions) {
           title: 'Choose Signals',
           command: 'gridkitStudio.chooseSignals',
         })
-      const { uri: output, format } = writtenBy(solver, study, summary)
+      const output = writtenBy(solver, study, summary)
       // A run removes the file it writes before it starts, so that file must not be one it reads.
       if ([solver, model].some((file) => file.toString() === output.toString()))
         throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
@@ -121,7 +121,6 @@ export function registerRuns(studio: Sessions) {
                   program,
                   solver: solver.fsPath,
                   output: output.fsPath,
-                  format,
                   tmax: study.tmax,
                   // What a container mounts: the solver file's workspace folder.
                   root: (
@@ -152,7 +151,7 @@ export function registerRuns(studio: Sessions) {
     const summary = await studio.documents.ensure(document).catch(() => undefined)
     if (!summary)
       throw notice(`${nameOf(model)} has problems to fix before its results can be read.`, PROBLEMS)
-    const { uri: output } = writtenBy(solver, study, summary)
+    const output = writtenBy(solver, study, summary)
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
     const session = await studio.open(document)

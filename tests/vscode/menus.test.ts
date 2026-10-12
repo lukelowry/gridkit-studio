@@ -10,6 +10,8 @@ import * as vscode from 'vscode'
 
 import { definitions } from '../../src/shared/preferences.js'
 import {
+  clipboard,
+  custom,
   folder,
   frames,
   idle,
@@ -19,17 +21,6 @@ import {
   until,
   visible,
 } from './harness.js'
-
-/** The text on the clipboard. */
-const clipboard = () => vscode.env.clipboard.readText()
-
-/** The custom editor in front: its kind and file. */
-function custom(): { viewType: string; path: string } | undefined {
-  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-  return input instanceof vscode.TabInputCustom
-    ? { viewType: input.viewType, path: input.uri.path.toLowerCase() }
-    : undefined
-}
 
 /** Whether two cameras agree, each number to within a hundredth of its size. */
 function near(a: unknown, b: unknown): boolean {
@@ -47,10 +38,8 @@ suite('Case panel menus', () => {
     JSON.parse(bench.text) as {
       devices: { class: string; id: string; ports: Record<string, number> }[]
     }
-  const header = (field: string): Locator =>
-    table.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
-  const cells = (field: string): Locator =>
-    table.locator(`td[data-vscode-context*='"field":"${field}"'] .cell`)
+  const header = (field: string): Locator => table.locator(`thead th[data-field="${field}"]`)
+  const cells = (field: string): Locator => table.locator(`td[data-field="${field}"] .cell`)
   /** The row header of the element whose own id is `id`. */
   const row = (id: string): Locator =>
     table.locator('tbody th[scope="row"]', { hasText: new RegExp(`^${id}$`) })
@@ -73,13 +62,38 @@ suite('Case panel menus', () => {
     await until(async () => (await clipboard()) === 'params.kv', 'the path copied')
   })
 
+  test('filters its rows by name from the title bar, and clears the filter from a cell', async () => {
+    const { name } = bench.source.buses[12]!
+    const names = () => table.locator('td[data-field="name"] .cell').allInnerTexts()
+    await bench.title('case', 'Filter Rows')
+    await bench.answer(name)
+    await until(() => bench.session.table.filter === name, 'the filter kept')
+    await until(async () => {
+      const shown = await names()
+      return shown.length > 0 && shown.every((each) => each.includes(name))
+    }, 'only the rows whose name holds it')
+    await bench.menu(cells('name').first(), 'Clear Filter')
+    await until(() => !bench.session.table.filter, 'the filter cleared')
+    await until(async () => (await names()).length > 1, 'every row again')
+  })
+
+  test('edits a value from its menu, which undo takes back', async () => {
+    await bench.menu(cells('params.kv').first(), 'Edit Field')
+    await bench.answer('345.0')
+    await until(
+      () => JSON.parse(bench.document.getText()).buses[0].params.kv === 345,
+      'the value written',
+    )
+    await bench.undo('the value as it was')
+  })
+
   test('chooses its columns from the title bar, and resets them from its menu', async () => {
     await bench.title('case', 'Choose Columns')
     await bench.check(['name'], false)
     await until(async () => (await header('name').count()) === 0, 'the name column gone')
-    await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)
+    await visible(table, `thead th[data-field="params.kv"]`)
     await bench.title('case', 'Reset Columns')
-    await visible(table, `thead th[data-vscode-context*='"field":"name"']`)
+    await visible(table, `thead th[data-field="name"]`)
   })
 
   test("goes to a branch's ends, and to the bus a reference names", async () => {
@@ -100,7 +114,7 @@ suite('Case panel menus', () => {
       .locator('tbody tr', {
         has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${branch.id}$`) }),
       })
-      .locator(`td[data-vscode-context*='"field":"ports.bus2"'] .cell`)
+      .locator(`td[data-field="ports.bus2"] .cell`)
     await bench.menu(reference, 'Go to Referenced Element')
     await until(() => selected() === 'Bus/' + branch.ports.bus2, 'the bus it names')
   })
@@ -232,9 +246,27 @@ suite('Network menus', () => {
       await until(async () => (await frames(network)) > drawn + 10, 'drawn as it turns')
       await turn.click()
       await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still')
+      // The Command Palette turns it as the toolbar does, which says so.
+      await bench.palette('Toggle Orbit')
+      await until(async () => (await turn.getAttribute('aria-pressed')) === 'true', 'turning again')
+      await bench.palette('Toggle Orbit')
+      await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still again')
     } finally {
       await bench.page.emulateMedia({ reducedMotion: null })
     }
+  })
+
+  test('edits the selected element from F2, which undo takes back', async () => {
+    const [bus] = bench.source.buses
+    bench.studio.select(bench.key, { id: 'Bus/' + bus!.number })
+    await until(() => bench.keys()['gridkitStudio.hasSelection'] === true, 'a bus selected')
+    await network.locator('canvas').press('F2')
+    await bench.pick('name')
+    await bench.answer('Renamed from F2')
+    await until(() => bench.document.getText().includes('Renamed from F2'), 'the name written')
+    await bench.undo('the name as it was')
+    // Undo brought the case's text to the front.
+    network = await bench.open('network')
   })
 
   test('changes projection from the Command Palette', async () => {
@@ -431,15 +463,19 @@ suite('Monitor menus', () => {
         ),
       'the CSV written',
     )
-    const lines = (await readFile(csv.fsPath, 'utf8')).trim().split('\n')
-    assert.ok(lines.length > 1, 'a header and samples')
+    // GridKit's own CSV, as it wrote it.
+    assert.ok(
+      (await readFile(csv.fsPath)).equals(await readFile(bench.session.results!.path)),
+      'the CSV is the run as GridKit wrote it',
+    )
   })
 
   test('opens results from the title bar, and plots one of their signals', async () => {
     const path = vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath
     await bench.title('monitor', 'Open Results')
     await bench.dialog(path)
-    await bench.pick('Bus.Vm')
+    // Named as its plot is.
+    await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
     // A file read before and unchanged since shows as the results already read.
     await until(() => bench.session.results?.path === path, 'the opened results on show')
     await until(
@@ -449,11 +485,89 @@ suite('Monitor menus', () => {
     await visible(monitor, 'canvas[data-rendered=true]')
   })
 
+  test('keeps decoded no more of the results than its setting says', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const path = vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath
+    const kept = async () =>
+      (await bench.studio.client.results.call('stats', {})) as { cacheBytes: number }
+    try {
+      await settings.update('resultCacheMiB', 0, vscode.ConfigurationTarget.Global)
+      await bench.title('monitor', 'Open Results')
+      await bench.dialog(path)
+      await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
+      await until(() => bench.session.results?.path === path, 'the results on show')
+      await visible(monitor, 'canvas[data-rendered=true]')
+      assert.equal((await kept()).cacheBytes, 0)
+    } finally {
+      await settings.update('resultCacheMiB', undefined, vscode.ConfigurationTarget.Global)
+    }
+  })
+
   test('clears the results from the title bar, and playback leaves the status bar', async () => {
     await bench.title('monitor', 'Clear Results')
     await until(() => !bench.session.results, 'no results')
     await visible(monitor, '.c-empty')
     await until(async () => (await bench.playback('Play').count()) === 0, 'playback gone')
+  })
+})
+
+suite('Monitored Signals menus', () => {
+  let bench: TestHost
+  const vertexColor = () => bench.session.bindings.vertexColor
+
+  suiteSetup(async () => {
+    bench = await testHost()
+    await bench.signals()
+  })
+
+  test('records every signal from its title bar, and no signal again', async () => {
+    await bench.title('signals', 'Record All Signals')
+    await until(() => bench.recorded('Bus', 'Vm'), 'every bus records its voltage')
+    await bench.title('signals', 'Record No Signals')
+    await until(() => !bench.recorded('Bus', 'Vm'), 'no bus records its voltage')
+    // Each was one edit, which undo takes back.
+    await vscode.window.showTextDocument(bench.document)
+    await vscode.commands.executeCommand('undo')
+    await bench.undo('the case records as it did')
+  })
+
+  test("maps a field from the action at its row's right, and changes it from its menu", async () => {
+    // A field the case does not record maps as one it does, but offers no plot.
+    assert.ok(!bench.signalOffered('Bus', 'Vm').includes('Plot Signal…'), 'nothing to plot')
+    bench.signalMenu('Bus', 'Vm', 'Map To', true)
+    await bench.check(['Vertex Color'])
+    await until(
+      () => vertexColor()?.type === 'Bus' && vertexColor()?.field === 'Vm',
+      'the voltage colors the buses',
+    )
+    // Its menu offers what a mapped field's does, once the row hears of the mapping.
+    await until(
+      () => bench.signalOffered('Bus', 'Vm').includes('Remove Mapping'),
+      'the row offers to remove the mapping',
+    )
+    bench.signalMenu('Bus', 'Vm', 'Mapping Range')
+    await bench.answer('0.9, 1.1')
+    await until(() => vertexColor()?.domain?.join() === '0.9,1.1', 'the range set')
+    bench.signalMenu('Bus', 'Vm', 'Remove Mapping')
+    await until(() => !vertexColor(), 'the mapping removed')
+  })
+
+  test('plots a recorded field of every element, and copies its path', async () => {
+    await bench.record('Bus', ['Vm'])
+    await until(
+      () => bench.signalOffered('Bus', 'Vm').includes('Plot Signal…'),
+      'the row offers to plot it',
+    )
+    bench.signalMenu('Bus', 'Vm', 'Plot Signal')
+    await until(
+      () =>
+        bench.session.plots.some(({ from, field, id }) => from === 'Bus' && field === 'Vm' && !id),
+      'every bus plotted',
+    )
+    await vscode.env.clipboard.writeText('')
+    bench.signalMenu('Bus', 'Vm', 'Copy Field Path')
+    await until(async () => (await clipboard()) === 'Vm', 'the path copied')
+    await bench.undo('the case records as it did')
   })
 })
 

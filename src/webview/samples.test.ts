@@ -48,7 +48,6 @@ const results = (frames: number, id = 'results'): Results => ({
   fingerprint: '1',
   name: 'results.csv',
   path: 'results.csv',
-  format: 'csv',
   outputs: [{ from: 'Bus', select: ['Vm', 'Va'] }],
   frames,
   domain: [0, (frames - 1) * STEP],
@@ -180,7 +179,7 @@ describe('the samples a view holds', () => {
     expect(await voltages(samples, [0.04, 0.07])).toEqual([4, 5, 6, 7])
     // Asking again for what it holds asks nothing.
     samples.want(shown, [need], [0.06, 0.06])
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve))
     expect(asked).toHaveLength(1)
   })
 
@@ -297,7 +296,7 @@ describe('the samples a view holds', () => {
     samples.want(results(8), [need], [0, 0])
     await vi.waitFor(() => expect(samples.stuck).toBe(true))
     samples.want(results(8), [need], [0, 0])
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve))
     expect(report).toHaveBeenCalledOnce()
     const gone = vi.fn(async () => {
       throw Object.assign(new Error('Gone'), { code: 'results-unavailable' })

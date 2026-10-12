@@ -87,7 +87,7 @@ describe('the rows a view holds', () => {
     // A mapping taken away changes nothing held, and mapping it again asks for nothing.
     rows.want({ summary: summary(1) }, [kV])
     rows.want({ summary: summary(1) }, [both])
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve))
     expect(asked).toHaveLength(2)
   })
 
@@ -140,7 +140,7 @@ describe('the rows a view holds', () => {
     rows.want({ summary: summary(1) }, [kV])
     await vi.waitFor(() => expect(report).toHaveBeenCalledOnce())
     rows.want({ summary: summary(1) }, [kV])
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve))
     expect(asked).toHaveLength(1)
     fail = false
     rows.retry()
@@ -153,7 +153,7 @@ describe('the rows a view holds', () => {
     const quiet = rowsOf(stale.request)
     quiet.rows.want({ summary: summary(1) }, [kV])
     await vi.waitFor(() => expect(stale.asked).toHaveLength(1))
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve))
     expect(quiet.report).not.toHaveBeenCalled()
   })
 })

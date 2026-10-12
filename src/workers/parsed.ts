@@ -8,6 +8,9 @@ import { editable } from '../gridkit/edits.js'
 import { recordingOf } from '../gridkit/recording.js'
 import type { Issue, Revision, Summary } from '../shared/messages.js'
 
+/** The name of the case at `uri` when its header gives none: its file's, as the Explorer shows it. */
+export const nameOf = (uri: string) => decodeURIComponent(uri.split('/').at(-1) || 'Case')
+
 /** The latest case read for each document, found again while its content is the same, so another
  *  run, open or contingency of it neither sends nor parses the case again, however large. A results
  *  file keeps the case it was read against anyway, so this holds at most each document's newer
@@ -101,19 +104,6 @@ export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: 
     name: kase.name,
     fingerprint: kase.version,
     schema: kase.schema,
-    creation: Object.fromEntries(
-      [...kase.catalog.shapes]
-        .filter(([, shape]) => shape.array)
-        .map(([type, shape]) => [
-          type,
-          {
-            keyType: shape.identity.type,
-            required: [...shape.plan.values()]
-              .filter((plan) => plan.required && plan.source.kind !== 'identity')
-              .map((plan) => plan.name),
-          },
-        ]),
-    ),
     editable: Object.fromEntries(
       [...kase.tables].map(([type, { shape }]) => [
         type,

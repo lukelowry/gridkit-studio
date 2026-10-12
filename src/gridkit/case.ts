@@ -92,38 +92,19 @@ export class Case {
     signal?: AbortSignal,
   ): Promise<Case> {
     signal?.throwIfAborted()
-    const objects: Set<string>[] = []
-    visit(
-      text,
-      {
-        onObjectBegin: () => {
-          objects.push(new Set())
-        },
-        onObjectEnd: () => {
-          objects.pop()
-        },
-        onObjectProperty: (name, offset, length) => {
-          const keys = objects.at(-1)!
-          if (keys.has(name))
-            throw Object.assign(failure('invalid-input', 'Duplicate JSON property: ' + name), {
-              offset,
-              length,
-            })
-          keys.add(name)
-        },
-        onError: (error, offset, length) => {
-          // `PropertyNameExpected` reads as `Invalid JSON: property name expected`.
-          const problem = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
-          throw Object.assign(failure('invalid-input', 'Invalid JSON: ' + problem.toLowerCase()), {
-            offset,
-            length,
-          })
-        },
-      },
-      { disallowComments: true, allowTrailingComma: false },
-    )
     const file = UTF8.encode(text)
-    const layout = scan(file)
+    let layout: Layout
+    try {
+      layout = scan(file)
+    } catch (error) {
+      const byte = (error as { byte?: number }).byte
+      if (byte === undefined) throw error
+      // A file that is not JSON is read again the slower way, which says why as an editor does.
+      syntax(text)
+      throw Object.assign(error as Error, {
+        offset: Buffer.from(file.subarray(0, byte)).toString('utf8').length,
+      })
+    }
     const ranges = rangesOf(layout)
     const { parsed, shapes } = await parseAll(file, ranges, catalog, signal)
     const version = createHash('sha256')
@@ -377,6 +358,41 @@ function joined(
   )
 }
 
+/** Throws why `text` is not JSON, as an editor says it: the first problem, at its place in the
+ *  text, or a key an object repeats. */
+function syntax(text: string): void {
+  const objects: Set<string>[] = []
+  visit(
+    text,
+    {
+      onObjectBegin: () => {
+        objects.push(new Set())
+      },
+      onObjectEnd: () => {
+        objects.pop()
+      },
+      onObjectProperty: (name, offset, length) => {
+        const keys = objects.at(-1)!
+        if (keys.has(name))
+          throw Object.assign(failure('invalid-input', 'Duplicate JSON property: ' + name), {
+            offset,
+            length,
+          })
+        keys.add(name)
+      },
+      onError: (error, offset, length) => {
+        // `PropertyNameExpected` reads as `Invalid JSON: property name expected`.
+        const problem = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
+        throw Object.assign(failure('invalid-input', 'Invalid JSON: ' + problem.toLowerCase()), {
+          offset,
+          length,
+        })
+      },
+    },
+    { disallowComments: true, allowTrailingComma: false },
+  )
+}
+
 /** Each member the catalog does not know as a column of its table, typed by its values: numbers,
  *  booleans or strings as they are, anything else as its JSON text. Tables that have one take a
  *  shape with it; returns where each is first. */
@@ -391,7 +407,8 @@ function foundColumns(
   for (const member of found) {
     let fields = byCode.get(member.code)
     if (!fields) byCode.set(member.code, (fields = new Map()))
-    const name = member.path.join('.')
+    // A key with a point in it is quoted, so it never reads as a path through a known record key.
+    const name = member.path.map((key) => (key.includes('.') ? JSON.stringify(key) : key)).join('.')
     let members = fields.get(name)
     if (!members) fields.set(name, (members = []))
     members.push(member)
@@ -408,20 +425,24 @@ function foundColumns(
         members.map((member) => [rows.get(member.first + member.record)!, member]),
       )
       // JSON syntax is already checked. Its first byte determines the scalar type without
-      // allocating strings or parsing unrelated extension objects on the opening path.
+      // allocating strings or parsing unrelated extension objects on the opening path. A null is
+      // a missing value, which a column of any type holds.
       const kinds = new Set(
-        members.map(({ value }) => {
+        members.flatMap(({ value }) => {
           const first = file[value]!
-          return first === 0x22
-            ? 'string'
-            : first === 0x74 || first === 0x66
-              ? 'boolean'
-              : first === 0x2d || (first >= 0x30 && first <= 0x39)
-                ? 'number'
-                : 'object'
+          if (first === 0x6e) return []
+          return [
+            first === 0x22
+              ? 'string'
+              : first === 0x74 || first === 0x66
+                ? 'boolean'
+                : first === 0x2d || (first >= 0x30 && first <= 0x39)
+                  ? 'number'
+                  : 'object',
+          ]
         }),
       )
-      const scalar = kinds.size === 1 && !kinds.has('object')
+      const scalar = kinds.size <= 1 && !kinds.has('object')
       const type: Schema.FieldType = !scalar
         ? 'text'
         : kinds.has('number')

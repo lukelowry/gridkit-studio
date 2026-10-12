@@ -18,10 +18,8 @@ suite('Links', () => {
   let network: Frame
   let table: Frame
   const shown = () => network.evaluate<Shown | null>('gridkitSelection()')
-  const header = (field: string): Locator =>
-    table.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
-  const cells = (field: string): Locator =>
-    table.locator(`td[data-vscode-context*='"field":"${field}"'] .cell`)
+  const header = (field: string): Locator => table.locator(`thead th[data-field="${field}"]`)
+  const cells = (field: string): Locator => table.locator(`td[data-field="${field}"] .cell`)
   /** Where the Network drew `id` in its latest frame. */
   const point = (id: string) =>
     until(
@@ -159,6 +157,6 @@ suite('Links', () => {
     await bench.menu(header('params.kv'), 'Hide Column')
     await until(async () => (await header('params.kv').count()) === 0, 'the column hidden')
     await vscode.commands.executeCommand('gridkitStudio.resetColumns')
-    await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)
+    await visible(table, `thead th[data-field="params.kv"]`)
   })
 })

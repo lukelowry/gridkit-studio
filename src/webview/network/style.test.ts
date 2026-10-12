@@ -74,7 +74,13 @@ it('uses the same global normalization in Network and Monitor whatever pages are
       for (const channel of ['color', 'z', 'radiusPx'] as const)
         expect(config.vertices.Bus![channel]).toMatchObject({ domain: [0.5, 2] })
       expect(
-        plotBindings(reader(), field, view.bindings, undefined, results).traces.plotted!.color,
+        plotBindings(
+          reader(),
+          { from: field.type, field: field.field },
+          view.bindings,
+          undefined,
+          results,
+        ).traces.plotted!.color,
       ).toMatchObject({ domain: [0.5, 2] })
       const fixed = networkConfig(
         kase.data,

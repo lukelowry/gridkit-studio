@@ -4,12 +4,13 @@
   import type { Gpu } from '@latkit/gpu'
   import { type Block, type Data, type Domain, itemId, type Query, read } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
 
-  import { rowsOf } from '../../shared/cells.js'
+  import { native, rowsOf } from '../../shared/cells.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
+  import { holdsPlot, plotName, samePlot } from '../../shared/plots.js'
   import { reader } from '../../shared/preferences.js'
-  import { fieldName, typeName } from '../../shared/schema.js'
+  import { fieldName } from '../../shared/schema.js'
   import { clamp, type ClockState } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
@@ -21,8 +22,7 @@
   import Icon from '../ui/Icon.svelte'
   import {
     holds,
-    PLOT_LIMITS,
-    plotBindings,
+    plotConfig,
     plotOptions,
     plotRows,
     sameSelection,
@@ -88,49 +88,43 @@
   } = $props()
 
   const id = $props.id()
+  // What the plot reads of the state, each apart: a message that leaves one as it was changes
+  // nothing that depends on it alone, as a selection leaves the plot's options.
   const schema = $derived(view.summary?.schema)
+  const results = $derived(view.results)
+  const mappings = $derived(view.bindings)
+  const settings = $derived(reader(view.settings))
   const definition = $derived(schema?.types[plot.from]?.fields[plot.field])
   const unit = $derived(definition?.unit ? ` ${definition.unit}` : '')
   /** The type, the element when it plots one, and the field: "Bus 16 · Va". */
-  const name = $derived(
-    schema === undefined
-      ? plot.field
-      : typeName(schema, plot.from) +
-          (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
-          ` · ${fieldName(definition, plot.field)}`,
-  )
+  const name = $derived(plotName(schema, plot))
   /** Whether the results on show hold the plotted field. */
-  const recorded = $derived(
-    view.results?.outputs.some(
-      (output) => output.from === plot.from && output.select.includes(plot.field),
-    ) ?? false,
-  )
+  const recorded = $derived(holdsPlot(results, plot))
   /** Whether the samples on hand are the plot's: a plot just added waits for its own. */
-  const streamed = $derived(
-    holds(sampled, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
-  )
-  const settings = $derived(reader(view.settings))
+  const streamed = $derived(holds(sampled, plot))
   const style = $derived(
     plotOptions(settings, theme.palette, theme.font, {
       ticks,
       ...(settings.get('monitor.yAxis.label') && { caption: fieldName(definition, plot.field) }),
     }),
   )
-  const rows = $derived(
-    source && source.tables[plot.from]
-      ? plotRows(source, view.results, { type: plot.from, field: plot.field, id: plot.id })
-      : undefined,
-  )
+  /** The table the plot reads: samples arriving keep its index, and its rows. */
+  const table = $derived(source?.tables[plot.from]?.index)
+  /** What the results hold, which only grows once, as their header is read. */
+  const held = $derived(`${results?.id}:${results?.outputs.length}`)
+  /** The rows the plot draws: of its table and what the results hold, never of the samples, so
+   *  frames arriving find them again for nothing. */
+  const rows = $derived.by(() => {
+    void table
+    void held
+    const { from, field, id } = plot
+    return untrack(() =>
+      source && table ? plotRows(source, results, { from, field, id }) : undefined,
+    )
+  })
   /** How many traces the plot draws, once its case's rows are held. */
-  const traces = $derived(source && rows ? traceCount(source, plot.from, rows) : undefined)
-  const bindings = $derived(
-    plotBindings(
-      settings,
-      { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
-      view.bindings,
-      rows,
-      view.results,
-    ),
+  const traces = $derived(
+    table && rows ? untrack(() => traceCount(source!, plot.from, rows)) : undefined,
   )
 
   let monitor = $state.raw<Monitor | null>(null)
@@ -155,22 +149,16 @@
   )
   let windowUpdate = 0
   let previousFit: boolean | undefined
-  /** The plot's whole config, besides its canvas, time, and camera. A streamed window's frames come
-   *  and go, and never change, so the plot keeps what it drew of them. */
+  /** The plot's whole config, besides its canvas, time, and camera. */
   const config = $derived(
-    source && {
-      ...style,
-      source,
-      ...bindings,
-      limits: PLOT_LIMITS,
-      ...(streaming && { frames: 'stable' as const }),
-    },
+    source &&
+      plotConfig(style, source, settings, plot, { bindings: mappings, results, rows, streaming }),
   )
   /** The values the streamed plot was last given to span. */
   let streamedFor: Domain | undefined
   /** A streamed plot never holds its whole window, so its values span the field's range as the
    *  results measured it while reading, rather than fit what it holds. */
-  const values = () => (streaming ? streamedValues(view.results, plot, streamedFor) : undefined)
+  const values = () => (streaming ? streamedValues(results, plot, streamedFor) : undefined)
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
@@ -353,10 +341,10 @@
       queueMicrotask(() => windowUpdate--)
     }
   })
+  const selected = $derived(view.selection?.id)
   // Highlight the selected element's trace when it is of the plotted type. The plot hears only of
   // another trace: each selection it is given draws the highlighted trace again.
   $effect(() => {
-    const selected = view.selection?.id
     void source // Each new snapshot needs the row found again.
     if (!monitor) return
     const next = traceSelection(monitor.config.source, selected, plot.from, rows)
@@ -414,7 +402,7 @@
           const value = row?.values[field]
           sample = row?.id
             ? {
-                label: row.id.slice(from.length + 1),
+                label: native(row.id),
                 value: typeof value === 'number' ? value : null,
                 t: at,
               }
@@ -437,8 +425,10 @@
   /** The plot's keys; any other key is left to VS Code. */
   const keys: Readonly<Record<string, () => void>> = {
     PageUp: () => (trace = Math.max(0, trace - 1)),
-    PageDown: () => (trace = trace + 1),
+    PageDown: () => (trace = Math.min(Math.max(0, (traces ?? 1) - 1), trace + 1)),
     ' ': () => clock.act({ action: 'playPause' }),
+    ArrowLeft: () => clock.act({ action: 'step', value: -1 }),
+    ArrowRight: () => clock.act({ action: 'step', value: 1 }),
   }
 
   function key(event: KeyboardEvent): void {
@@ -454,9 +444,8 @@
       if (incoming.kind !== 'action' || incoming.command !== 'signalRange') return
       const { plot: target, range } = incoming.value as { plot?: Plot; range?: [number, number] }
       if (
-        target?.from === plot.from &&
-        target.field === plot.field &&
-        target.id === plot.id &&
+        target &&
+        samePlot(target, plot) &&
         range?.length === 2 &&
         range.every(Number.isFinite) &&
         range[0] < range[1]
@@ -524,8 +513,8 @@
     {/if}
   </div>
   <span class="c-sr-only" id={`${id}-keys`}>
-    Page Up and Page Down read traces. Space plays or pauses. Move the pointer over the paused plot
-    to seek.
+    Page Up and Page Down read traces. Space plays or pauses, and Left and Right step through
+    samples. Move the pointer over the paused plot to seek.
   </span>
   <span
     class="c-sr-only"

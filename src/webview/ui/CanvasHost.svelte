@@ -5,18 +5,17 @@
 <script lang="ts">
   import { untrack } from 'svelte'
 
-  import { bridge } from '../bridge.js'
-
   let {
     mount,
     label,
-    onerror = bridge.report,
+    onerror,
   }: {
     /** Starts the renderer on the canvas; resolves to its disposer. */
     readonly mount: (canvas: HTMLCanvasElement, signal: AbortSignal) => Promise<() => void>
     /** The canvas's accessible name. */
     readonly label: string
-    readonly onerror?: (error: unknown) => void
+    /** Hears why the renderer could not start. */
+    readonly onerror: (error: unknown) => void
   } = $props()
 
   let canvas = $state<HTMLCanvasElement>()

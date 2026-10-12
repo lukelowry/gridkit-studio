@@ -74,6 +74,9 @@ export function color(value: string | null, fallback?: RGBA): RGBA | undefined {
 /** `color` with its alpha scaled by `alpha`. */
 export const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
 
+/** A grid's lines: the theme's secondary text, faint whatever its own alpha. */
+export const gridLine = ({ text2: [r, g, b] }: Palette): RGBA => [r, g, b, 0.15]
+
 /** `from` moved `t` of the way toward `to`, keeping its alpha. */
 export const mix = (from: RGBA, to: RGBA, t: number): RGBA => [
   from[0] + (to[0] - from[0]) * t,
@@ -117,7 +120,8 @@ export function viewStyle(
  *  theme's colors, which the watchers hear at once. */
 export function appearance(settings: SettingsValues | undefined) {
   const { dataset } = document.body
-  dataset.motion = settings?.['accessibility.motion'] ?? 'system'
+  const motion = settings?.['accessibility.motion'] ?? 'system'
+  if (dataset.motion !== motion) dataset.motion = motion
   const contrast = settings?.['accessibility.contrast'] ?? 'system'
   if (dataset.contrast === contrast) return
   dataset.contrast = contrast

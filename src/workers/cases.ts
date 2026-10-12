@@ -2,7 +2,7 @@
  *  editor read of it. Results files and runs have a worker of their own, so neither slows editing. */
 
 import { Case } from '../gridkit/case.js'
-import { diagnoseAsync } from '../gridkit/edits.js'
+import { diagnose } from '../gridkit/edits.js'
 import {
   applyChanges,
   catalog,
@@ -15,7 +15,7 @@ import {
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
 import type { CaseApi, Revision, SourceDelta, Summary } from '../shared/messages.js'
-import { summarize, TextCases } from './parsed.js'
+import { nameOf, summarize, TextCases } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
 import { serve } from './serve.js'
 
@@ -33,7 +33,6 @@ interface Document {
 const documents = new Map<string, Document>()
 /** Cases read from whole texts, found again when a document opens again. */
 const opened = new TextCases()
-const nameOf = (uri: string) => uri.split('/').at(-1) ?? 'Case'
 
 /** The case read at `revision`; stale once a newer revision is on its way. */
 function latest({ uri, version, attachmentId }: Revision) {
@@ -56,7 +55,7 @@ function sourceOf(input: Revision & SourceDelta): string {
   if ('text' in input) return input.text
   const known = documents.get(input.uri)
   if (known?.source.version !== input.baseVersion || known.attachmentId !== input.attachmentId)
-    throw new Error('Source mirror is stale.')
+    throw Object.assign(new Error('Source mirror is stale.'), { code: 'stale-source' })
   return applyChanges(known.source.text, input.changes)
 }
 
@@ -89,7 +88,7 @@ serve<CaseApi>(
     },
     async validate(revision, signal) {
       const read = latest(revision)
-      const issues = await diagnoseAsync(read.kase, signal)
+      const issues = await diagnose(read.kase, signal)
       if (latest(revision) !== read) throw new Error('Superseded document revision.')
       read.summary = { ...read.summary, issues, validation: 'complete' }
       return issues

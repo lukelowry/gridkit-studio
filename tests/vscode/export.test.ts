@@ -1,12 +1,21 @@
 /** Video export: a run written to the file the user picks. */
 
 import assert from 'node:assert/strict'
-import { stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
+
+/** The video at `path`: a WebM file, by the EBML header it starts with, holding more than that;
+ *  its size. */
+async function webm(path: string): Promise<number> {
+  const bytes = await readFile(path)
+  assert.deepEqual([...bytes.subarray(0, 4)], [0x1a, 0x45, 0xdf, 0xa3], 'a WebM file')
+  assert.ok(bytes.length > 1000, 'The exported video has frames')
+  return bytes.length
+}
 
 suite('Export', () => {
   let bench: TestHost
@@ -30,9 +39,7 @@ suite('Export', () => {
     await exporter.locator('[data-testid="video-start"]').click()
     await bench.dialog(video.fsPath)
     await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
-    const { size } = await stat(video.fsPath)
-    assert.ok(size > 1000, 'The exported video has frames')
-    bench.report.videoBytes = size
+    bench.report.videoBytes = await webm(video.fsPath)
     await bench.capture('export-vscode')
   }).timeout(180_000)
 
@@ -58,7 +65,7 @@ suite('Export', () => {
       await exporter.locator('[data-testid="video-start"]').click()
       await bench.dialog(video.fsPath)
       await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
-      assert.ok((await stat(video.fsPath)).size > 1000, 'The exported video has frames')
+      await webm(video.fsPath)
       const { moments } = await exporter.evaluate<{ moments: number[] }>('gridkitExport()')
       // Each moment's samples were held when it drew, in order, from either side of both bounds.
       assert.ok(moments.length > 2, moments.join())
@@ -101,7 +108,7 @@ suite('Export', () => {
       await exporter.locator('[data-testid="video-start"]').click()
       await bench.dialog(video.fsPath)
       await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
-      assert.ok((await stat(video.fsPath)).size > 1000, 'The exported video has frames')
+      await webm(video.fsPath)
       const { slices } = await exporter.evaluate<{ slices: number }>('gridkitExport()')
       assert.ok(slices > 1, `${slices} slices streamed through the plots`)
     } finally {

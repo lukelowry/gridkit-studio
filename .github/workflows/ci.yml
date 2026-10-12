@@ -21,11 +21,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # pnpm comes first, so Node's setup can cache its store.
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          package-manager-cache: false
-      - uses: pnpm/action-setup@v6
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm quality
       # An odd minor version (0.5.x) is a pre-release, as VS Code recommends: the Marketplace keeps
@@ -55,12 +56,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          package-manager-cache: false
-      - uses: pnpm/action-setup@v6
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The VS Code builds the suites run in, downloaded once per version.
+      - uses: actions/cache@v4
+        with:
+          path: .vscode-test/vscode-*
+          key: vscode-${{ runner.os }}-${{ matrix.vscode }}-${{ hashFiles('package.json') }}
       - uses: actions/download-artifact@v8
         with:
           name: gridkit-studio
@@ -70,7 +76,8 @@ jobs:
       - run: docker pull "$(jq -r '.contributes.configuration[].properties["gridkitStudio.gridkitImage"].default // empty' package.json)"
       - run: pnpm test:simulation
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
-      - run: dbus-run-session -- xvfb-run -a pnpm test:trust
+      # Workspace Trust, against the same VSIX.
+      - run: dbus-run-session -- xvfb-run -a pnpm test:package --untrusted tests/vscode/trust.ts
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

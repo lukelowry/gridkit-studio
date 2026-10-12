@@ -114,7 +114,6 @@ describe('native results and ownership', () => {
             values.push(...frames.values[0]!)
           },
         },
-        'csv',
         layout,
       )
       return values
@@ -216,6 +215,37 @@ describe('native results and ownership', () => {
     const last = await asked(results, [frames / 1000, frames / 1000])
     expect(framesOf(last)).toEqual([[2 * chunk, frames - 2 * chunk]])
     expect(valuesOf(last).at(-1)).toBe(1 + ((frames - 1) % 1000) / 1e4)
+  })
+
+  it('reads the whole rows of a file whose writer stopped partway through its last', async () => {
+    const path = join(directory, 'stopped.csv')
+    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,')
+    const results = file(path)
+    await results.ingest(
+      signal,
+      () => true,
+      () => {},
+    )
+    expect(results.info.frames).toBe(2)
+    expect(valuesOf(await asked(results, [0, 0.01]))).toEqual([1, 1.5])
+  })
+
+  it('counts the bytes each chunk keeps of its own against the cache', async () => {
+    const cache = new ResultCache()
+    const results = file(large.path, cache)
+    await results.ingest(
+      signal,
+      () => true,
+      () => {},
+    )
+    // One value and one time per frame of each whole chunk kept: nothing the chunks share.
+    const { chunk, frames } = results.info
+    expect(cache.bytes).toBe(Math.floor(frames / chunk) * chunk * 16)
+    // A lower limit lets go of what is past it at once, the least recently used first.
+    cache.limit = chunk * 16
+    expect(cache.bytes).toBe(chunk * 16)
+    cache.limit = 0
+    expect(cache.bytes).toBe(0)
   })
 
   it('keeps the frames it read: what a view asks for needs no second read of the file', async () => {

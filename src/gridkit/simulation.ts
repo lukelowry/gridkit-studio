@@ -45,7 +45,7 @@ export async function simulate(
   cache: ResultCache,
   context: RunContext,
 ): Promise<ResultsFile> {
-  const { program, solver, output, root, gridkit, format } = request
+  const { program, solver, output, root, gridkit } = request
   const folder = dirname(solver)
   // GridKit names a study's files from its output's stem alone, so they land where it runs.
   const ext = extname(output)
@@ -81,11 +81,7 @@ export async function simulate(
   )
   /** The file at `path`, read as the run's results. */
   const reading = (path: string, more: Parameters<typeof described>[3]) => {
-    const file = new ResultsFile(
-      described(kase, request, path, { format, solver, ...more }),
-      kase,
-      cache,
-    )
+    const file = new ResultsFile(described(kase, request, path, { solver, ...more }), kase, cache)
     run.results = file.info.id
     context.reading(file)
     return file

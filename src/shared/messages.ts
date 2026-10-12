@@ -60,7 +60,6 @@ export interface Element {
 }
 
 export interface Summary extends Revision {
-  creation?: Record<string, { keyType: string; required: string[] }>
   /** The fields of each type the user can edit. */
   editable: Record<string, string[]>
   name: string

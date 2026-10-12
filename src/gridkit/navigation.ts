@@ -1,9 +1,10 @@
 import { findNodeAtLocation, getLocation, parseTree, visit } from 'jsonc-parser'
 
 import type { CaseSymbol, SourceContext } from '../shared/messages.js'
+import { withUnit } from '../shared/schema.js'
 import type { Case, Table } from './case.js'
 import { CASE, type Catalog, type FieldPlan, SIGNAL } from './definition.js'
-import { nativePath, recordOf, sourceRange, textOffset } from './edits.js'
+import { nativePath, recordAt, sourceRange, textOffset, utf8Width } from './edits.js'
 import { ARRAYS } from './parse.js'
 
 /** The case's outline as its file lays it out: each array, holding its records in file order, each
@@ -27,9 +28,9 @@ export function outline(kase: Case, signal: AbortSignal, limit = Infinity): Case
     let chars = textOffset(kase, byte)
     const at = (to: number) => {
       for (; byte < to; chars++) {
-        const first = kase.file[byte]!
-        byte += first < 128 ? 1 : first < 224 ? 2 : first < 240 ? 3 : 4
-        if (first >= 240) chars++
+        const width = utf8Width(kase.file[byte]!)
+        byte += width
+        if (width === 4) chars++
       }
       return chars
     }
@@ -80,7 +81,7 @@ export function sourceContext(kase: Case, offset: number): SourceContext {
     const row = low - 1
     if (row < 0 || offset > textOffset(kase, records.ends[indexes[row]!]!)) continue
     const id = kase.id(table, row)
-    const record = recordOf(kase, id)
+    const record = recordAt(kase, table, row)
     const location = getLocation(record.text, offset - record.offset)
     const path = location.path.filter((key): key is string => typeof key === 'string')
     const group = path.slice(0, -1)
@@ -190,7 +191,7 @@ function completion(name: string, plan: FieldPlan): SourceContext['completions']
   const { type, unit, description } = plan.definition
   return {
     name,
-    detail: (typeof type === 'string' ? type : type.kind) + (unit ? ' [' + unit + ']' : ''),
+    detail: withUnit(typeof type === 'string' ? type : type.kind, unit),
     description,
   }
 }

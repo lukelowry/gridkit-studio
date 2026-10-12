@@ -2,8 +2,6 @@
  *  and its native menu. */
 
 import assert from 'node:assert/strict'
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
 
 import type { Data } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
@@ -56,6 +54,9 @@ suite('Monitor', () => {
     const paused = transport().currentT()
     await bench.playback('Next sample').click()
     await until(() => transport().currentT() > paused, 'a frame step from the status bar')
+    const stepped = transport().currentT()
+    await bench.playback('Previous sample').click()
+    await until(() => transport().currentT() < stepped, 'a frame step back from the status bar')
     await bench.playback('Speed').click()
     await bench.pick('2')
     await until(() => transport().state.rate === 2, 'a faster speed')
@@ -64,54 +65,66 @@ suite('Monitor', () => {
     await until(() => transport().currentT() === transport().state.span[1], 'the run ends')
   })
 
+  test('goes to the time it is told, from the Command Palette', async () => {
+    await bench.palette('Go to Time…')
+    await bench.answer('0.25')
+    await until(() => transport().currentT() === 0.25, 'the playhead at 0.25 s')
+    assert.equal(transport().state.status, 'paused')
+  })
+
+  test('steps and plays from its keys while it has focus', async () => {
+    transport().pause()
+    transport().seek(0.5)
+    const canvas = monitor.locator('canvas').first()
+    await canvas.focus()
+    const at = transport().currentT()
+    await canvas.press('ArrowRight')
+    await until(() => transport().currentT() > at, 'Right steps forward')
+    await canvas.press('ArrowLeft')
+    await until(() => transport().currentT() === at, 'Left steps back')
+    await canvas.press(' ')
+    await until(() => transport().state.status === 'playing', 'Space plays')
+    await canvas.press(' ')
+    await until(() => transport().state.status === 'paused', 'Space pauses')
+  })
+
   test('opens its settings from its menu', async () => {
     await bench.menu(monitor.locator('canvas'), 'Monitor Settings')
     await bench.settings(/gridkitStudio\.monitor/)
   })
 
   test('keeps its plots while another panel takes its place', async () => {
+    const plots = structuredClone(bench.session.plots)
     await visible(await bench.show('case'), 'tbody .cell')
     monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
+    assert.deepEqual(bench.session.plots, plots)
+    assert.equal(await monitor.locator('.lane').count(), plots.length)
   })
 
-  test('preserves legacy Full motion and lets an explicit current preference override it', async () => {
-    const path = join(process.env.GRIDKIT_TEST_PROFILE!, 'User', 'settings.json')
-    const original = await readFile(path, 'utf8')
+  test("moves as the motion setting says, over the device's own preference", async () => {
     const settings = vscode.workspace.getConfiguration('gridkitStudio')
-    try {
-      await writeFile(
-        path,
-        JSON.stringify({ ...JSON.parse(original), 'studio.display.motion': 'full' }),
-      )
-      await until(
-        () => bench.session.settings['accessibility.motion'] === 'full',
-        'legacy Full is respected',
-      )
-      await bench.page.emulateMedia({ reducedMotion: 'reduce' })
-      const motion = () =>
-        monitor.evaluate(`({
-        preference: document.body.dataset.motion,
+    const motion = () =>
+      monitor.evaluate(`({
         duration: getComputedStyle(document.body).getPropertyValue('--motion-fast').trim(),
         renderer: document.querySelector('canvas').gridkitPlot().motion
-      })`) as Promise<{ preference: string; duration: string; renderer: string }>
-      await until(async () => (await motion()).renderer === 'full', 'renderer uses Full')
-      assert.equal((await motion()).duration, '80ms', 'Full overrides reduced-motion media')
-      await settings.update('accessibility.motion', 'reduce', vscode.ConfigurationTarget.Global)
-      await until(
-        async () => (await motion()).renderer === 'reduce',
-        'explicit Reduce overrides legacy Full',
-      )
+      })`) as Promise<{ duration: string; renderer: string }>
+    const set = (value: string | undefined) =>
+      settings.update('accessibility.motion', value, vscode.ConfigurationTarget.Global)
+    try {
+      await bench.page.emulateMedia({ reducedMotion: 'reduce' })
+      await set('full')
+      await until(async () => (await motion()).renderer === 'full', 'Full overrides the device')
+      assert.equal((await motion()).duration, '80ms')
+      await set('reduce')
+      await until(async () => (await motion()).renderer === 'reduce', 'Reduce')
       assert.equal((await motion()).duration, '0ms')
-      await settings.update('accessibility.motion', 'system', vscode.ConfigurationTarget.Global)
+      await set('system')
       await until(async () => (await motion()).renderer === 'auto', 'System follows the device')
       assert.equal((await motion()).duration, '0ms')
-      await settings.update('accessibility.motion', 'full', vscode.ConfigurationTarget.Global)
-      await until(async () => (await motion()).renderer === 'full', 'explicit Full restored')
-      assert.equal((await motion()).duration, '80ms')
     } finally {
       await bench.page.emulateMedia({ reducedMotion: null })
-      await writeFile(path, original)
+      await set(undefined)
     }
   })
 

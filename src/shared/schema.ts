@@ -46,8 +46,15 @@ function fieldsOf(schema: Schema, type: string): Readonly<Record<string, Schema.
   return schema.types[type]?.fields ?? {}
 }
 
+/** `type`'s `field`, when both are named and the schema has it. */
+export const fieldOf = (
+  schema: Schema,
+  type: string | undefined,
+  field: string | undefined,
+): Schema.Field | undefined => (type && field ? schema.types[type]?.fields[field] : undefined)
+
 /** The one format for a name with a unit. */
-function withUnit(name: string, unit: string | undefined): string {
+export function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 

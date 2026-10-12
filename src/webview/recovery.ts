@@ -1,3 +1,5 @@
+import { cancelled } from '../shared/format.js'
+
 /** Coalesce failures and back off repeated restarts, without abandoning a recoverable view. */
 export class Recovery {
   blocked = false
@@ -12,14 +14,15 @@ export class Recovery {
     private readonly report: (error: unknown) => void,
   ) {}
 
+  /** Whether a restart waits out its backoff: until it comes, nothing else restarts the view. */
+  get pending(): boolean {
+    return this.#timer !== undefined
+  }
+
   fail(error: unknown): void {
     if (this.#closed || this.#timer !== undefined) return
     const code = String((error as { code?: unknown } | null)?.code ?? '')
-    if (
-      ['aborted', 'cancelled', 'superseded', 'closed'].includes(code) ||
-      (error as Error)?.name === 'AbortError'
-    )
-      return
+    if (cancelled(error) || ['aborted', 'cancelled', 'closed'].includes(code)) return
     if (!['device-lost', 'timeout', 'unavailable'].includes(code)) {
       this.blocked = true
       const key = code + ':' + String((error as Error)?.message ?? error)

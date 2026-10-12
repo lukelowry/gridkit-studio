@@ -12,6 +12,14 @@ suite('Diagram', () => {
   let bench: TestHost
   let diagram: Frame
   const editing = () => bench.session.diagramEditing
+  /** The titles the Diagram's title bar offers now. */
+  const offered = () =>
+    bench.menus
+      .offered('editor/title', {
+        ...bench.keys(),
+        activeCustomEditorId: 'gridkitStudio.diagram',
+      })
+      .map(({ title }) => title)
 
   suiteSetup(async () => {
     bench = await testHost()
@@ -20,22 +28,30 @@ suite('Diagram', () => {
   })
   suiteTeardown(async () => {
     if (editing())
-      await vscode.commands.executeCommand('gridkitStudio.toggleDiagramEditing', bench.uri)
+      await vscode.commands.executeCommand('gridkitStudio.finishDiagramEditing', bench.uri)
   })
 
   test('draws the case beside its Network', async () => {
-    bench.report.diagram = await stats(diagram)
+    const drawn = await stats(diagram)
+    assert.ok(drawn.frames > 0, 'the Diagram drew')
+    assert.ok(await bench.view('network'), 'the Network stays open beside it')
+    bench.report.diagram = drawn
     await bench.capture('diagram-vscode')
   })
 
-  test('enters editing from its command', async () => {
-    await vscode.commands.executeCommand('gridkitStudio.toggleDiagramEditing', bench.uri)
+  test('enters editing from its title bar, which then offers to finish instead', async () => {
+    await bench.title('editor', 'Edit Diagram')
     await until(
       async () =>
         (await diagram.locator('canvas').getAttribute('aria-label'))?.includes('Diagram editing.'),
       'diagram edit mode',
     )
     assert.ok(editing())
+    await until(
+      () => offered().includes('Finish Diagram Editing'),
+      'the title bar offers to finish',
+    )
+    assert.ok(!offered().includes('Edit Diagram'), 'the title bar shows the Diagram edits')
   })
 
   test('writes an arrangement into the case, which native undo takes back', async () => {
@@ -85,5 +101,13 @@ suite('Diagram', () => {
       for (const key of keys)
         await settings.update(key, undefined, vscode.ConfigurationTarget.Workspace)
     }
+  })
+
+  test('finishes editing from its title bar', async () => {
+    // Undo brought the case's text to the front.
+    await bench.open('diagram', vscode.ViewColumn.Beside)
+    await bench.title('editor', 'Finish Diagram Editing')
+    await until(() => !editing(), 'editing finished')
+    await until(() => offered().includes('Edit Diagram'), 'the title bar offers to edit again')
   })
 })

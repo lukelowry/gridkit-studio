@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { Case } from '../gridkit/case.js'
 import { catalog, catalogOf } from '../gridkit/definition.js'
-import { diagnose, diagnoseAsync } from '../gridkit/edits.js'
+import { diagnose } from '../gridkit/edits.js'
 import { CaseCache, summarize, TextCases } from './parsed.js'
 
 const text = '{"buses":[{"class":"Bus","number":1,"name":"one","params":{"kv":230}}]}'
@@ -21,8 +21,8 @@ describe('indexed case opening', () => {
     const values = data.tables.Bus!.fields['params.kv']!
     expect(values).toBe(data.tables.Bus!.fields['params.kv'])
     expect(decoding).toHaveBeenCalled()
-    const issues = await diagnoseAsync(kase, signal())
-    expect(diagnose(kase)).toBe(issues)
+    const issues = await diagnose(kase, signal())
+    expect(await diagnose(kase, signal())).toBe(issues)
     expect(kase.data).toBe(data)
     expect(data.tables.Bus!.fields.name).toBe(names)
   })
@@ -77,7 +77,9 @@ describe('indexed case opening', () => {
     await expect(
       cache.parse('file:///one', text, catalog, 'one', controller.signal),
     ).rejects.toThrow('superseded')
-    await expect(diagnoseAsync(kase, controller.signal)).rejects.toThrow('superseded')
-    expect(await diagnoseAsync(kase, signal())).toEqual(diagnose(kase))
+    await expect(diagnose(kase, controller.signal)).rejects.toThrow('superseded')
+    expect(await diagnose(kase, signal())).toEqual(
+      await diagnose(await Case.parse(text, catalog), signal()),
+    )
   })
 })

@@ -36,7 +36,7 @@ interface Place {
 const MACHINE = 'gridkit-studio.machine=' + hostname()
 
 /** Whether process `pid` is running. */
-export function alive(pid: number): boolean {
+function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
@@ -400,25 +400,26 @@ export async function launch(
     ended = true
     signal.removeEventListener('abort', onAbort)
     await cleanup
+    // A run stopped while the engine still made its container leaves one the first removal missed;
+    // with the CLI gone, nothing makes it any more.
+    if (cleanup && container) await removeContainer(container)
     lifecycle()
   })
   void done.catch(() => {})
   return { done, stop, ended: () => ended, failed: (): ReadonlySet<string> => failed, runtime }
 }
 
+/** Removes the container `cli` runs by `name`, whether it runs or not; one already gone is fine. */
+const removeContainer = ({ cli, name }: { cli: string; name: string }) =>
+  new Promise<void>((resolve) =>
+    execFile(cli, ['rm', '--force', name], { windowsHide: true, timeout: 30_000 }, () => resolve()),
+  )
+
 /** Stops the process `owned` names and every process it started, and removes its container. The
  *  extension also calls it, should the data worker exit before cleaning up. */
 export async function terminateRuntime(owned: RuntimeProcess): Promise<void> {
   // Ending the CLI leaves its container running: the engine removes it by name.
-  if (owned.container)
-    await new Promise<void>((resolve) =>
-      execFile(
-        owned.container!.cli,
-        ['rm', '--force', owned.container!.name],
-        { windowsHide: true, timeout: 30_000 },
-        () => resolve(),
-      ),
-    )
+  if (owned.container) await removeContainer(owned.container)
   if (!owned.pid) return
   if (process.platform === 'win32')
     await new Promise<void>((resolve) => {

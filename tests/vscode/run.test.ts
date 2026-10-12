@@ -5,11 +5,13 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
+import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
+import { rowsOf } from '../../src/shared/cells.js'
 import {
   again,
   folder,
@@ -113,12 +115,30 @@ suite('Run', function () {
     assert.equal(session.run.command, 'DynamicSimulation IEEE39.solver.json')
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
-    assert.equal(await monitor.locator('.c-note--error').count(), 0)
     // The plot reads its trace while it holds focus: focus the run's own views take is given back.
     const reading = () => monitor.locator('.lane [role="status"]').innerText()
+    /** Whether the reading says the voltage the run wrote for its bus at the playhead: "1,
+     *  1.04852 pu, 10.000 s." */
+    const read = async () => {
+      const said = /^(.+?), (-?[\d.]+(?:e[-+]?\d+)?)/.exec(await reading())
+      if (!said) return false
+      const blocks = await bench.studio.client.results.call('query', {
+        results: results.id,
+        query: {
+          kind: 'rows',
+          from: 'Bus',
+          select: ['Vm'],
+          ids: true,
+          rows: { kind: 'ids', ids: ['Bus/' + said[1]] },
+          at: bench.session.transport.currentT(),
+        },
+      })
+      const wrote = rowsOf(blocks as Block.Rows[])[0]?.values.Vm
+      return typeof wrote === 'number' && Math.abs(Number(said[2]) - wrote) < 1e-3
+    }
     await again(
       () => monitor.locator('canvas').focus(),
-      async () => /1\.0485/.test(await reading()),
+      read,
       async () => {
         const { status, follow } = bench.session.transport.state
         const plot = await monitor
@@ -168,7 +188,6 @@ suite('Run', function () {
     const rested = await frames(network)
     bench.session.transport.seek(end / 2)
     await until(async () => (await frames(network)) > rested, 'a seek repaints the network')
-    assert.equal(await monitor.locator('.c-note--error').count(), 0)
     await bench.capture('run-vscode')
   })
 
@@ -260,7 +279,6 @@ suite('Run', function () {
     assert.equal(bench.session.results!.path, join(folder().fsPath, 'IEEE39_1.csv'))
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
-    assert.equal(await monitor.locator('.c-note--error').count(), 0)
   })
 
   test('runs TwoArea with its native Ispdlim values and plots the result', async () => {

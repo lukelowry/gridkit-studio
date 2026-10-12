@@ -115,49 +115,64 @@ describe('Transport', () => {
     expect(changes).toHaveLength(3)
   })
 
-  it('follows a live head without a word, lets go on a seek back, and latches again at the head', () => {
+  it('follows a live head, lets go on a seek back, and latches again at the head', () => {
     const { transport, changes } = rig()
     transport.setSpan([0, 1], { live: true, headTolerance: 0.25 })
-    expect(transport.noteHead(0.75)).toBe(true)
+    transport.grow(0.75)
     expect(transport.state.t).toBe(0.75)
-    expect(changes).toHaveLength(1)
+    expect(changes).toHaveLength(2)
 
     transport.seek(0.2)
     expect(transport.state).toMatchObject({ t: 0.2, follow: false })
-    expect(transport.noteHead(0.9)).toBe(false)
+    // A playhead behind the head stays put, and nothing changes that anyone need hear of.
+    transport.grow(0.9)
     expect(transport.state.t).toBe(0.2)
+    expect(changes).toHaveLength(3)
 
     transport.seek(0.7)
     expect(transport.state).toMatchObject({ t: 0.9, follow: true, status: 'paused' })
     transport.setLive(true)
-    expect(changes).toHaveLength(3)
+    expect(changes).toHaveLength(4)
     transport.setLive(false)
     expect(transport.state).toMatchObject({ t: 0.9, follow: false })
-    expect(changes).toHaveLength(4)
+    expect(changes).toHaveLength(5)
   })
 
   it('widens its span as frames arrive past it, keeping the epoch and where the playhead is', () => {
     const { transport, changes } = rig()
-    transport.extend(5)
+    transport.grow(5)
     expect(transport.state.status).toBe('idle')
     transport.setSpan([0, 1])
     transport.seek(0.5)
-    transport.extend(3)
+    transport.grow(3)
     expect(transport.state).toMatchObject({ span: [0, 3], t: 0.5, epoch: 1 })
-    transport.extend(2)
+    transport.grow(2)
     expect(transport.state.span).toEqual([0, 3])
     expect(changes).toHaveLength(3)
+  })
+
+  it('moves a following playhead with the span as it widens, in one change each time', () => {
+    const { transport, changes } = rig()
+    transport.setSpan([0, 1], { live: true })
+    transport.grow(2)
+    expect(transport.state).toMatchObject({ span: [0, 2], t: 2, follow: true })
+    // Frames that reach no further still move the head the playhead follows.
+    transport.seek(0)
+    transport.seek(2)
+    transport.grow(2)
+    expect(changes).toHaveLength(5)
+    expect(transport.state.t).toBe(2)
   })
 
   it('keeps a playhead that stopped following where it is when frames stop', () => {
     const { transport, changes } = rig()
     transport.setSpan([0, 1], { live: true })
-    transport.noteHead(0.5)
+    transport.grow(0.5)
     transport.seek(0)
     expect(transport.state.follow).toBe(false)
     transport.setLive(false)
     expect(transport.state.t).toBe(0)
-    expect(changes).toHaveLength(2)
+    expect(changes).toHaveLength(3)
   })
 
   it('plays a finished span that plays once from its start again, and never an empty one', () => {
@@ -178,7 +193,7 @@ describe('Transport', () => {
   it('keeps a live span where it is when played at its end, since more is coming', () => {
     const { transport } = rig()
     transport.setSpan([0, 2], { live: true })
-    transport.noteHead(2)
+    transport.grow(2)
     transport.play()
     expect(transport.state).toMatchObject({ t: 2, status: 'playing', follow: false })
     transport.dispose()
@@ -187,7 +202,7 @@ describe('Transport', () => {
   it('jumps back to the head and follows it, without the clock drifting between frames', () => {
     const { transport, wait } = rig()
     transport.setSpan([5, 15], { live: true })
-    transport.noteHead(7)
+    transport.grow(7)
     transport.seek(5)
     transport.play()
     wait(100)
@@ -195,7 +210,7 @@ describe('Transport', () => {
     expect(transport.state).toMatchObject({ t: 7, status: 'paused', follow: true })
     wait(500)
     expect(transport.currentT()).toBe(7)
-    transport.noteHead(8)
+    transport.grow(8)
     expect(transport.currentT()).toBe(8)
 
     transport.play()

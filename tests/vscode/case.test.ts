@@ -13,8 +13,7 @@ suite('Case', () => {
   let bench: TestHost
   let view: Frame
   /** The header of the Bus column `field`. */
-  const header = (field: string): Locator =>
-    view.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
+  const header = (field: string): Locator => view.locator(`thead th[data-field="${field}"]`)
 
   suiteSetup(async () => {
     bench = await testHost()
@@ -34,7 +33,7 @@ suite('Case', () => {
     )
     assert.equal(await view.locator('thead th', { hasText: /^Element$/ }).count(), 0)
     assert.equal(await view.locator('thead tr').count(), 1)
-    await visible(view, `thead th[data-vscode-context*='"field":"init.Vr"']`)
+    await visible(view, `thead th[data-field="init.Vr"]`)
     await bench.capture('case-vscode')
   })
 
@@ -45,7 +44,7 @@ suite('Case', () => {
       'generators listed',
     )
     await bench.caseType('Bus')
-    await visible(view, `thead th[data-vscode-context*='"field":"params.kv"']`)
+    await visible(view, `thead th[data-field="params.kv"]`)
     // The unit kv already says goes unsaid.
     assert.equal((await header('params.kv').innerText()).trim(), 'kv')
   })
@@ -83,7 +82,7 @@ suite('Case', () => {
     const { document, text } = bench
     const kv = bench.source.buses[0]!.params.kv + 1
     // From the cell's keyboard, through the worker, to a WorkspaceEdit.
-    await view.locator('td[data-vscode-context*="kv"] .cell').first().dblclick()
+    await view.locator('td[data-field="params.kv"] .cell').first().dblclick()
     await visible(view, 'input[aria-label="Edit kv"]')
     await view.locator('input[aria-label="Edit kv"]').fill(String(kv))
     await view.locator('input[aria-label="Edit kv"]').press('Enter')
@@ -100,9 +99,7 @@ suite('Case', () => {
   })
 
   test('offers a field its commands in its menu', async () => {
-    const offered = await bench.offered(
-      view.locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`).first(),
-    )
+    const offered = await bench.offered(view.locator(`td[data-field="params.kv"] .cell`).first())
     for (const item of ['Edit Field…', 'Map To…'])
       assert.ok(offered.includes(item), `${item} offered: ${offered.join(', ')}`)
   })

@@ -13,7 +13,7 @@ import { solverLine } from '../gridkit/solver.js'
 import { described, PROGRESS_MS, ResultCache, ResultsFile } from '../results/index.js'
 import { defect, detail, message } from '../shared/format.js'
 import type { CaseSource, ResultsApi, Run } from '../shared/messages.js'
-import { CaseCache, summarize } from './parsed.js'
+import { CaseCache, nameOf, summarize } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
 import { send, serve } from './serve.js'
 import { Shelf } from './shelf.js'
@@ -24,7 +24,6 @@ const sources = new CaseCache()
 const running = new Map<string, { controller: AbortController; done: Promise<Run> }>()
 const shelf = new Shelf()
 const cache = new ResultCache()
-const nameOf = (uri: string) => uri.split('/').at(-1) ?? 'Case'
 /** The case `source` names: one read before, by its fingerprint, else its text, which the extension
  *  sends again when asked. */
 async function caseOf({ uri, fingerprint, text }: CaseSource, signal: AbortSignal) {
@@ -231,8 +230,8 @@ serve<ResultsApi>(
       withResults(input.results, signal, (file, s) => file.samples(input, s)),
     step: async ({ results, at, direction }) => shelf.find(results).step(at, direction),
     export: ({ results, path }, signal) =>
-      withResults(results, signal, async (file, s) => {
-        await file.exportCsv(path, s)
+      withResults(results, signal, async (file) => {
+        await file.exportCsv(path)
         return null
       }),
     // Studio lets go of the case's results, stopping a run under way. Their files are the user's,

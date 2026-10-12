@@ -20,10 +20,10 @@ import {
   catalog,
   diagnose,
   recordingOf,
-  type Runtime,
   simulate,
 } from '../../src/gridkit/index.js'
 import { recordEdits } from '../../src/gridkit/recording.js'
+import type { Runtime } from '../../src/gridkit/runtime.js'
 import { ResultCache, type ResultsFile } from '../../src/results/index.js'
 import type {
   GridKit,
@@ -115,7 +115,6 @@ describe("GridKit's programs on solver files", () => {
       program,
       solver: solverPath,
       output: join(folder, sink.file),
-      format: sink.format,
       tmax: study.tmax,
       root: mount,
       gridkit: using,
@@ -173,7 +172,9 @@ describe("GridKit's programs on solver files", () => {
     it(`${name}: writes where its solver file says, from the case's power flow, and every sample reads back`, async ({
       signal,
     }) => {
-      expect(diagnose(await Case.read(`cases/${name}.case.json`, catalog))).toEqual([])
+      expect(
+        await diagnose(await Case.read(`cases/${name}.case.json`, catalog), AbortSignal.any([])),
+      ).toEqual([])
       const { folder, done, released } = await run(
         name,
         name,
@@ -301,7 +302,6 @@ describe("GridKit's programs on solver files", () => {
         program: 'DynamicSimulation',
         solver: join(folder, 'IEEE39.solver.json'),
         output: join(folder, 'out.csv'),
-        format: 'csv',
         tmax: 0.05,
         root,
         gridkit,

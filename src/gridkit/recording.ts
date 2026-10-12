@@ -9,7 +9,7 @@ import { textOffset } from './edits.js'
 const decoder = new TextDecoder()
 
 /** GridKit's name for `field`, an output of `table`. */
-function outputName(table: Table, field: string): string {
+export function outputName(table: Table, field: string): string {
   const source = table.shape.plan.get(field)?.source
   return source?.kind === 'output' ? source.name : field
 }
@@ -25,7 +25,7 @@ function listed(kase: Case, table: Table, row: number): string[] {
 }
 
 /** What the case records: how many of each type's elements list each output, and the monitor
- *  GridKit writes to, its last CSV one as GridKit takes it, or an Arrow one Studio reads too. */
+ *  GridKit writes to, its last CSV one as GridKit takes it. */
 export function recordingOf(kase: Case): Summary['recording'] {
   const listedCounts: Record<string, Record<string, number>> = {}
   for (const table of kase.tables.values()) {
@@ -53,8 +53,7 @@ function monitorOf(kase: Case): Sink | undefined {
   if (!Array.isArray(sinks)) return undefined
   for (const sink of sinks.toReversed()) {
     const { file_name: file, format } = (sink ?? {}) as Record<string, unknown>
-    if (typeof file === 'string' && file && /^(csv|arrow)$/i.test(String(format)))
-      return { file, format: String(format).toLowerCase() as Sink['format'] }
+    if (typeof file === 'string' && file && /^csv$/i.test(String(format))) return { file }
   }
   return undefined
 }

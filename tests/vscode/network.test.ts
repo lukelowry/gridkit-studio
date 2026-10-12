@@ -11,7 +11,6 @@ import {
   fills,
   frames,
   idle,
-  pause,
   stats,
   type TestHost,
   testHost,
@@ -44,7 +43,7 @@ suite('Network', () => {
   })
 
   test('draws the case, filling its editor', async () => {
-    assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, 39)
+    assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, bench.source.buses.length)
     assert.equal(await network.locator('.status').count(), 0)
     assert.ok(await fills(network), 'Network must fill its editor')
     bench.report.network = await stats(network)
@@ -53,7 +52,8 @@ suite('Network', () => {
 
   test('carries its projections and rotation, and Fit in the editor title bar', async () => {
     await visible(network, '[data-testid="view-toolbar"]')
-    assert.equal(await network.locator('.toolbar button').count(), 4)
+    for (const name of ['Flat', 'Tilt', 'Globe', 'Auto-rotate'])
+      assert.equal(await network.getByRole('button', { name, exact: true }).count(), 1, name)
     await bench.page
       .locator('.part.editor')
       .getByRole('button', { name: /^Fit All/ })
@@ -119,10 +119,11 @@ suite('Network', () => {
   test('draws nothing while hidden, though the clock plays on', async () => {
     const { transport } = bench.session
     await bench.open('diagram')
-    await pause(300)
-    const hidden = await frames(network)
+    const hidden = (await idle(network)).frames
+    const from = transport.currentT()
     transport.play()
-    await pause(500)
+    // Time enough for the visible view to have drawn many frames.
+    await until(() => transport.currentT() > from + 0.2, 'the clock plays on')
     assert.equal(transport.state.status, 'playing')
     assert.equal(await frames(network), hidden)
     transport.pause()

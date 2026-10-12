@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bound, channelsFor, channelsOf, fullNames, recordedWhole, shortNames } from './bindings.js'
+import { bound, channelsFor, channelsOf, recordedWhole, shortNames } from './bindings.js'
 
 const vm = { type: 'Bus', field: 'Vm' }
 const kv = { type: 'Bus', field: 'params.kv' }
@@ -54,8 +54,7 @@ describe('bindings', () => {
     expect(recordedWhole([{ from: 'Branch', select: ['Vm'] }], 2, vm)).toBe(false)
   })
 
-  it('names channels in full and by one word each', () => {
-    expect(fullNames(['vertexColor', 'vertexHeight'])).toBe('Vertex Color, Vertex Height')
+  it('names channels by one word each', () => {
     expect(shortNames(['vertexColor', 'vertexHeight'])).toBe('color, height')
     expect(shortNames([])).toBe('')
   })

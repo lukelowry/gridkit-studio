@@ -2,11 +2,10 @@
 
 import { failure } from '@latkit/model'
 
-import type { ArrowField } from './arrow.js'
 import { BATCH_BYTES } from './limits.js'
 
 type CsvMessage =
-  | { readonly kind: 'schema'; readonly fields: readonly ArrowField[] }
+  | { readonly kind: 'schema'; readonly names: readonly string[] }
   | {
       readonly kind: 'rows'
       readonly length: number
@@ -16,12 +15,13 @@ type CsvMessage =
     }
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
- *  `known` is the header's columns, when another read of the same results parsed it: `source` is
+ *  `known` is the header's names, when another read of the same results parsed it: `source` is
  *  then rows alone. With `parse`, only the columns it marks are read as numbers, the time always:
- *  the others are counted, so each row still matches its header, and left NaN. */
+ *  the others are counted, so each row still matches its header, and left NaN. A last row cut
+ *  short, as a writer that was stopped leaves it, is left out. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
-  known?: readonly ArrowField[],
+  known?: readonly string[],
   parse?: Uint8Array,
 ): AsyncGenerator<CsvMessage> {
   let header = ''
@@ -34,15 +34,15 @@ export async function* csvMessages(
   let rows = 0
   let received = 0
   let pending = ''
-  const schema = (fields: readonly ArrowField[]): CsvMessage => {
+  const schema = (names: readonly string[]): CsvMessage => {
     headed = true
-    width = fields.length
+    width = names.length
     capacity = Math.max(1, Math.floor(BATCH_BYTES / (8 * width)))
-    return { kind: 'schema', fields }
+    return { kind: 'schema', names }
   }
   if (known) yield schema(known)
 
-  for await (const text of textChunks(source)) {
+  for await (const [text, closing] of textChunks(source)) {
     let start = 0
     if (!headed) {
       for (; start < text.length; start++) {
@@ -52,9 +52,7 @@ export async function* csvMessages(
       }
       header += text.slice(0, start)
       if (start === text.length) continue
-      yield schema(
-        headerOf(header).map((name, i) => ({ name, type: 'float64' as const, nullable: i !== 0 })),
-      )
+      yield schema(headerOf(header))
       header = ''
       start++
     }
@@ -70,13 +68,17 @@ export async function* csvMessages(
       }
       // A column left unread is never cut out of the text.
       const read = column === 0 || !parse || parse[column] === 1
-      const token = read ? pending + text.slice(start, end) : ''
+      const carried = pending
+      const token = read ? carried + text.slice(start, end) : ''
       pending = ''
       const last = end === newline
       start = end + 1
       if (last) newline = text.indexOf('\n', start)
       else comma = text.indexOf(',', start)
       if (last && column === 0 && token.trim() === '') continue
+      // The newline that closes the source ends a row only its writer's newline is missing from;
+      // one cut short, or cut after its last comma, it never finished.
+      if (closing && (column !== width - 1 || carried === '')) break
       if (column >= width || (last && column !== width - 1))
         throw failure('io', `CSV frame ${received + rows + 1} does not match its header.`)
       const value = read ? numberOf(token, received + rows + 1, column + 1) : NaN
@@ -104,10 +106,12 @@ export async function* csvMessages(
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
 }
 
-/** `source` as text, with a newline after it to end a last record that has none. Each part is
- *  decoded whole, several times faster than streaming, once the bytes of a character it ends
- *  partway through are carried to the next. */
-async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
+/** `source` as text, then a closing newline to end a last record that has none, each with whether
+ *  it is that newline. Each part is decoded whole, several times faster than streaming, once the
+ *  bytes of a character it ends partway through are carried to the next. */
+async function* textChunks(
+  source: AsyncIterable<Uint8Array>,
+): AsyncGenerator<readonly [string, boolean]> {
   const decoder = new TextDecoder('utf-8', { fatal: true })
   let carried: Uint8Array = new Uint8Array(0)
   for await (const part of source) {
@@ -120,10 +124,10 @@ async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<st
     } catch {
       throw failure('io', 'The CSV results are not valid UTF-8.')
     }
-    yield text
+    yield [text, false]
   }
   if (carried.length) throw failure('io', 'The CSV results end inside a UTF-8 character.')
-  yield '\n'
+  yield ['\n', true]
 }
 
 /** How many of the last of `bytes` begin a UTF-8 character that they do not finish. */

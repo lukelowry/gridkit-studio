@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, open } from 'node:fs/promises'
-import { basename, dirname, extname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 
 import {
@@ -9,7 +9,6 @@ import {
   blockByteLength,
   type Data,
   type Domain,
-  type Index,
   type Query,
   rowAt,
   rowCount,
@@ -21,8 +20,8 @@ import type { Case } from '../gridkit/index.js'
 import type { Results, Revision, SamplesInput } from '../shared/messages.js'
 import type { Frames, ResultCache } from './cache.js'
 import {
+  axisOf,
   chunkFrames,
-  columnName,
   type Field,
   type Layout,
   readResults,
@@ -73,12 +72,6 @@ function slice(frames: Frames, from: number, to: number): Data.SampleBatch[] {
     }
   })
 }
-
-/** `rows`, ascending, as the briefest axis. */
-const axisOf = (rows: Uint32Array): Index.Rows =>
-  rows.every((row, i) => row === rows[0]! + i)
-    ? { kind: 'range', offset: rows[0] ?? 0, count: rows.length }
-    : { kind: 'indices', values: rows }
 
 /** The first of `rows`, ascending, at or past `row`. */
 function seek(rows: Uint32Array, row: number): number {
@@ -143,7 +136,6 @@ export function described(
     fingerprint: kase.version,
     name: basename(path),
     path,
-    format: extname(path).toLowerCase() === '.csv' ? 'csv' : 'arrow',
     outputs: [],
     frames: 0,
     domain: [0, 0],
@@ -171,8 +163,6 @@ export class ResultsFile {
   /** The decoded frames of the chunk not yet whole, in order, and those frames as one. */
   #tail: Frames[] = []
   #joined?: { count: number; frames: Frames }
-  /** The header's bytes: the CSV header line, or the Arrow schema message. */
-  #header: Uint8Array = new Uint8Array()
   /** How every segment of this file reads, from its header. */
   readonly #layout: Layout = {}
   /** Who reads the file now, each done once its promise settles. */
@@ -226,7 +216,7 @@ export class ResultsFile {
   /** Follows the results file as the run writes it, reading each segment as it comes, and tells
    *  `progress` after each. Returns once `ended` and the file has nothing more. */
   async ingest(signal: AbortSignal, ended: () => boolean, progress: () => Promise<void> | void) {
-    for await (const piece of follow(this.info.path, this.info.format, signal, ended)) {
+    for await (const piece of follow(this.info.path, signal, ended)) {
       if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
       else {
         await this.#append(piece, signal)
@@ -350,41 +340,12 @@ export class ResultsFile {
     }
   }
 
-  async exportCsv(path: string, signal: AbortSignal) {
+  /** Copies the file to `path`: it is GridKit's CSV already. */
+  async exportCsv(path: string) {
     if (resolve(path) === resolve(this.info.path))
       throw new Error('Choose a different file from the open results.')
     await mkdir(dirname(path), { recursive: true })
-    if (this.info.format === 'csv') return copyFile(this.info.path, path)
-    const file = await open(path, 'w')
-    try {
-      const names = [
-        'time',
-        ...this.fields.flatMap((field) => {
-          const table = this.kase.table(field.index.type)
-          return Array.from(field.rows, (row) => columnName(this.kase, table, row, field.name))
-        }),
-      ]
-      await file.write(names.map((n) => '"' + n.replaceAll('"', '""') + '"').join(',') + '\n')
-      const { chunk, frames } = this.info
-      for (let k = 0; chunk && k * chunk < frames; k++) {
-        const fields = await this.#chunk(k, signal)
-        const [first] = fields
-        for (let t = 0; first && t < first.coordinates.length; t++) {
-          const values = fields.flatMap((batch) =>
-            Object.values(batch.columns).flatMap((column) =>
-              Array.from(
-                { length: rowCount(batch.rows) },
-                (_, r) =>
-                  column.values[column.offset + t * column.frameStride + r * column.rowStride]!,
-              ),
-            ),
-          )
-          await file.write([first.coordinates[t], ...values].join(',') + '\n')
-        }
-      }
-    } finally {
-      await file.close()
-    }
+    await copyFile(this.info.path, path)
   }
 
   /** Drops the file's cached chunks. */
@@ -392,16 +353,12 @@ export class ResultsFile {
     this.cache.drop(this.info.id + ':')
   }
 
-  /** Keeps the file's header, which a CSV file's segments are read with. Read alone, it gives the
-   *  layout every segment is read with. */
+  /** Reads the file's header alone, which gives the layout every segment is read with. */
   async #learn(header: Uint8Array, signal: AbortSignal) {
-    this.#header = header
-    if (this.info.format !== 'csv') return
     await readResults(
       Readable.from([header]),
       this.kase,
       { signal, publish: () => {} },
-      'csv',
       this.#layout,
     )
     this.#learned()
@@ -465,7 +422,7 @@ export class ResultsFile {
     const missing = wanted.filter((f) => !found.has(f))
     if (missing.length) {
       // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
-      // whole is kept, so a segment longer than a chunk, as an Arrow batch can be, decodes once.
+      // whole is kept, so a segment longer than a chunk decodes once.
       const groups = new Map<number, Frames[]>()
       const [first, end] = [k * chunk, (k + 1) * chunk]
       let from = Infinity
@@ -502,8 +459,8 @@ export class ResultsFile {
   }
 
   /** Decodes `bytes`, whose first frame is `first`, handing `publish` each group of frames: one
-   *  batch per field, of `only` when given, never crossing into the next chunk. A CSV segment is
-   *  rows alone, read with the layout its header gave; an Arrow batch is read after the schema. */
+   *  batch per field, of `only` when given, never crossing into the next chunk. A segment is rows
+   *  alone, read with the layout its header gave. */
   async #decode(
     bytes: Uint8Array,
     first: number,
@@ -512,7 +469,7 @@ export class ResultsFile {
     only?: readonly number[],
   ) {
     await readResults(
-      Readable.from(this.info.format === 'csv' ? [bytes] : [this.#header, bytes]),
+      Readable.from([bytes]),
       this.kase,
       {
         signal,
@@ -520,7 +477,6 @@ export class ResultsFile {
         ...(only && { only }),
         publish: (frames) => publish(samplesOf(this.fields, frames, only)),
       },
-      this.info.format,
       this.#layout,
     )
     this.#learned()

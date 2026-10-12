@@ -19,6 +19,14 @@ export default [
       'imports/imports': 'error',
       'imports/exports': 'error',
       'one-var': ['error', 'never'],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "MemberExpression[object.name=/^(test|it|suite|describe)$/][property.name='only']",
+          message: 'Run one test with GRIDKIT_TEST_GREP, or vitest -t, never .only.',
+        },
+      ],
     },
   },
   {

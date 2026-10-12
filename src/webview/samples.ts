@@ -7,6 +7,7 @@ import { appendData, blockByteLength, type Data, type Domain, type Query } from 
 import { recordedWhole } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
 import type { Results, ViewState } from '../shared/messages.js'
+import { holdsPlot } from '../shared/plots.js'
 import type { Asker } from './asker.js'
 
 /** The samples a view holds besides those it needs now, in bytes. */
@@ -61,8 +62,7 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
   if (!results?.frames || !summary) return []
   const fields = new Map<string, { from: string; field: string; ids?: string[] }>()
   for (const { from, field, id } of plots) {
-    if (!results.outputs.some((output) => output.from === from && output.select.includes(field)))
-      continue
+    if (!holdsPlot(results, { from, field })) continue
     const found = fields.get(from + '\n' + field)
     if (!found) fields.set(from + '\n' + field, { from, field, ...(id && { ids: [id] }) })
     else if (!id) delete found.ids
@@ -115,7 +115,7 @@ export function streamSlice(
 }
 
 /** What names a selection of fields and rows, so equal selections compare equal. */
-export function selectionKey({ from, select, rows }: Query.Selection): string {
+function selectionKey({ from, select, rows }: Query.Selection): string {
   return `${from}\n${select.join(',')}\n${rows ? JSON.stringify(rows) : ''}`
 }
 
@@ -188,6 +188,9 @@ export class Samples {
   #flight?: { ask: Ask; controller: AbortController }
   #pumping = false
   #again = false
+  /** Whether it has asked for all it can since anything changed: a playhead moving through what it
+   *  holds then asks for nothing, and so is not walked through each frame. */
+  #idle = false
   /** Who waits on what the view holds, hearing each change. */
   readonly #waiters = new Set<() => void>()
 
@@ -219,9 +222,12 @@ export class Samples {
     near?: Near,
   ): void {
     if (results?.id !== this.#results?.id) this.#reset()
+    // More frames read, or other needs, may have more to ask for.
+    if (results !== this.#results) this.#idle = false
     this.#results = results
     const named = needs.map(({ selection }) => selectionKey(selection)).join('\t')
     if (named !== this.#named) {
+      this.#idle = false
       this.#named = named
       this.#needs = needs
       const keys = new Set(needs.map(({ selection }) => selectionKey(selection)))
@@ -240,7 +246,24 @@ export class Samples {
         : !this.holds(this.#required))
     )
       flight.controller.abort()
+    if (this.#idle && this.holds(this.#required)) return
     this.#pump()
+  }
+
+  /** Ask for what plots of `needs` draw over `window`: all of it when it fits the budget, then what
+   *  lies around `near`; else the slice from where their drawing stands, `wants`. Returns that
+   *  slice, null once they have drawn the window, or undefined when they read it whole. */
+  plot(
+    results: Results | undefined,
+    needs: readonly Need[],
+    window: Domain,
+    wants: Wants,
+    near?: Near,
+  ): Domain | null | undefined {
+    const slice = streamSlice(results, needs, window, this.budget, wants)
+    if (slice === undefined) this.want(results, needs, window, near)
+    else this.want(results, needs, slice ?? undefined)
+    return slice
   }
 
   /** `rows` with the samples held. The same value stays while nothing arrives; one that arrives
@@ -357,6 +380,7 @@ export class Samples {
   /** Ask again for what failed, or brought nothing, as when the user reloads a view. */
   retry(): void {
     this.#spent.clear()
+    this.#idle = false
     this.#pump()
   }
 
@@ -381,6 +405,7 @@ export class Samples {
   #gone() {
     this.#generation++
     this.#arrived = []
+    this.#idle = false
   }
 
   #drop(key: string) {
@@ -486,6 +511,7 @@ export class Samples {
 
   /** Ask for what the view lacks, one ask at a time, until it lacks nothing it can have. */
   async #serve() {
+    this.#idle = false
     for (let ask = this.#next(); ask; ask = this.#next()) {
       const results = this.#results!
       const controller = new AbortController()
@@ -522,6 +548,7 @@ export class Samples {
       }
       if (tell) this.#tell()
     }
+    this.#idle = true
   }
 
   /** The frames of each chunk `key` holds. */

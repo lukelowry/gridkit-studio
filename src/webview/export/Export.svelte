@@ -5,15 +5,8 @@
   import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
-  import { rowsOnce, staticNeeds } from '../rows.js'
-  import {
-    networkNeeds,
-    plotBudget,
-    plotNeeds,
-    Samples,
-    streamSlice,
-    type Wants,
-  } from '../samples.js'
+  import { plotStatics, rowsOnce, staticNeeds } from '../rows.js'
+  import { networkNeeds, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -96,6 +89,8 @@
     if (busy || !ready || !summary) return
     const control = (stop = new AbortController())
     const { signal } = control
+    /** Aborted once the export ends, however it ends. */
+    const done = new AbortController()
     status = 'running'
     cancelled = false
     progress = null
@@ -115,12 +110,15 @@
         return
       }
       const cameras = await bridge.request('cameras', {}, signal)
-      // The case the results were read against, which the summary then describes.
+      // The case the results were read against, which the summary then describes: what its views
+      // draw of it, or, for the Monitor's part alone, the rows its plots draw.
       const of = { summary, ...(results?.frames && { results: results.id }) }
       const held = await rowsOnce(
         bridge,
         of,
-        staticNeeds(summary, state.bindings, false),
+        chosen.views.some((each) => each !== 'monitor')
+          ? staticNeeds(summary, state.bindings, false)
+          : plotStatics(summary, state.plots ?? []),
         chosen.views.includes('diagram'),
         signal,
       )
@@ -128,31 +126,27 @@
       // The Monitor's part plots the whole time range, so every sample of it comes first; a range
       // holding more than a page keeps streams through the plots a slice at a time instead.
       const plotted = chosen.views.includes('monitor') ? plotNeeds(state) : []
-      const slice = (wants: Wants) =>
-        streamSlice(results, plotted, chosen.timeRange, plotting.budget, wants)
+      const first = plotting.plot(results, plotted, chosen.timeRange, 'start')
+      if (first) slices++
+      await plotting.until(first ?? chosen.timeRange, signal)
       const stream =
-        slice('start') === undefined
+        first === undefined
           ? undefined
           : async (wants: Wants) => {
-              const next = slice(wants)
+              const next = plotting.plot(results, plotted, chosen.timeRange, wants)
               if (!next) return undefined
               slices++
-              plotting.want(results, plotted, next)
               await plotting.until(next, signal)
               return plotting.data(rows)
             }
-      if (stream) await stream('start')
-      else {
-        plotting.want(results, plotted, chosen.timeRange)
-        await plotting.until(chosen.timeRange, signal)
-      }
       const mapped = chosen.views.includes('network') ? networkNeeds(state) : []
       const gpu = await owner.get()
       signal.throwIfAborted()
-      // Each export follows the device it draws on, which an earlier export may have created.
+      // Each export follows the device it draws on, which an earlier export may have created; the
+      // export's end lets go of it.
       const lost = () => control.abort(new Error('WebGPU device lost.'))
       if (gpu.signal.aborted) lost()
-      gpu.signal.addEventListener('abort', lost, { once: true, signal })
+      gpu.signal.addEventListener('abort', lost, { once: true, signal: done.signal })
       const handle = file
       const output = new WritableStream<VideoWrite>({
         write: ({ position, bytes }) =>
@@ -188,6 +182,7 @@
       if (!cancelled)
         bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
     } finally {
+      done.abort()
       // The samples served this export alone.
       plotting.clear()
       mapping.clear()

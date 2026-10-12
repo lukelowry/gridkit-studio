@@ -2,7 +2,7 @@
  *  messages it hears. */
 
 import { cancelled, defect, detail, message } from '../shared/format.js'
-import type { FromView, ToView, ViewApi, ViewState } from '../shared/messages.js'
+import type { FromView, Results, ToView, ViewApi, ViewState } from '../shared/messages.js'
 import { Caller } from '../shared/rpc.js'
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
@@ -52,10 +52,31 @@ export const bridge = {
     return extension.call(method, input, signal)
   },
 }
+/** The small parts of a state message, which are compared whole. */
+const SMALL = ['bindings', 'plots', 'selection', 'anchors', 'table', 'window'] as const
+
+/** Whether two readings of results stand alike: what they hold only grows as they are read. */
+const sameResults = (a: Results | undefined, b: Results | undefined) =>
+  a === b ||
+  (!!a &&
+    !!b &&
+    a.id === b.id &&
+    a.frames === b.frames &&
+    a.growing === b.growing &&
+    a.error === b.error &&
+    a.chunk === b.chunk &&
+    a.outputs.length === b.outputs.length)
+
 /** Applies a state message. Each carries the whole state except `summary` and `settings`, which
- *  are large and sent only when they change. */
+ *  are large and sent only when they change. A part that did not change stays the object it was,
+ *  so what a view made of it is not made again. */
 export function merged(state: ViewState, incoming: ViewState): ViewState {
-  return { summary: state.summary, settings: state.settings, ...incoming }
+  const next: ViewState = { summary: state.summary, settings: state.settings, ...incoming }
+  const kept = next as Record<(typeof SMALL)[number], unknown>
+  for (const key of SMALL)
+    if (JSON.stringify(incoming[key]) === JSON.stringify(state[key])) kept[key] = state[key]
+  if (sameResults(state.results, incoming.results)) next.results = state.results
+  return next
 }
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data

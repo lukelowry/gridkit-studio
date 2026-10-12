@@ -72,8 +72,23 @@ describe('a request across a channel', () => {
     controller.abort()
     await expect(call).rejects.toMatchObject({ name: 'AbortError' })
     expect(heard?.aborted).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // The answer settles in microtasks alone, all run before the next macrotask.
+    await new Promise((resolve) => setImmediate(resolve))
     expect(sent.map(({ kind }) => kind)).toEqual(['request', 'cancel'])
+  })
+
+  it('fails a call whose input cannot cross, and keeps nothing of it', async () => {
+    const post = vi.fn(() => {
+      throw new DOMException('could not be cloned', 'DataCloneError')
+    })
+    const caller = new Caller<Echo>(post)
+    const controller = new AbortController()
+    await expect(caller.call('echo', { text: 'hi' }, controller.signal)).rejects.toThrow(
+      'could not be cloned',
+    )
+    // Nothing waits on it any more, so letting go of it sends no cancellation.
+    controller.abort()
+    expect(post).toHaveBeenCalledTimes(1)
   })
 
   it('answers a value that cannot cross as a defect', async () => {

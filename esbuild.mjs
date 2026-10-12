@@ -18,6 +18,8 @@ const common = {
   sourcemap: true,
   logLevel: 'warning',
   minify: !watch,
+  // Minified, a defect's stack in the log still names the functions it passed through.
+  keepNames: true,
 }
 const builds = [
   {
@@ -46,7 +48,8 @@ const builds = [
     format: 'esm',
     splitting: true,
     target: 'es2022',
-    conditions: ['browser'],
+    // Svelte's production build, without its checks for development.
+    conditions: ['browser', watch ? 'development' : 'production'],
     plugins: [svelte({ compilerOptions: { css: 'external' } })],
   },
 ]

@@ -5,7 +5,7 @@ import { findNodeAtLocation, parseTree } from 'jsonc-parser'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf } from '../shared/schema.js'
 import type { Case } from './case.js'
-import { apply, recordOf } from './edits.js'
+import { apply, recordAt } from './edits.js'
 import { planTransaction } from './plan.js'
 
 /** The source edits that make `mutations`, by row ID; only the records they touch are read. */
@@ -34,7 +34,7 @@ export function presentation(kase: Case): Record<string, Layout.Positions> {
     const xs: number[] = []
     const ys: number[] = []
     for (let row = 0; row < table.records.length; row++) {
-      const record = recordOf(kase, kase.id(table, row))
+      const record = recordAt(kase, table, row)
       const position = findNodeAtLocation(parseTree(record.text)!, [
         'extension',
         'diagram',

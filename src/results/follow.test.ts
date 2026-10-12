@@ -19,7 +19,7 @@ const text = (bytes: Uint8Array) => Buffer.from(bytes).toString('utf8')
 /** Every piece of the file at `path`, followed until `ended`, each as it came. */
 async function pieces(path: string, ended: () => boolean = () => true, each?: () => unknown) {
   const all: Piece[] = []
-  for await (const piece of follow(path, 'csv', signal, ended)) {
+  for await (const piece of follow(path, signal, ended)) {
     all.push({ ...piece, bytes: piece.bytes.slice() })
     await each?.()
   }
@@ -68,6 +68,14 @@ describe('a results file followed as it is written', () => {
     const rows = all.filter((piece) => piece.kind === 'segment').map(({ bytes }) => text(bytes))
     expect(rows.join('')).toBe('0,1\n0.01,1.5\n0.02,1.25\n')
     expect(rows.every((segment) => segment.endsWith('\n'))).toBe(true)
+  })
+
+  it('keeps its header apart from the read it came in', async () => {
+    const path = join(directory, 'header.csv')
+    const header = 'time,Bus_A_Vm\n'
+    await writeFile(path, header + '0,1\n')
+    for await (const piece of follow(path, signal, () => true))
+      if (piece.kind === 'header') expect(piece.bytes.buffer.byteLength).toBe(header.length)
   })
 
   it('says a finished file without a header has none', async () => {

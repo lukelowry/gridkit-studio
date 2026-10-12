@@ -58,19 +58,24 @@ export interface Layout {
   readonly arrays: Readonly<Partial<Record<ArrayName, Records>>>
 }
 
+/** The case's members, and each array's records, found as the whole file is checked to be JSON
+ *  with no object that repeats a key: what is read after takes the JSON as it is. */
 export function scan(bytes: Uint8Array): Layout {
   if (bytes.length >= 0xffffffff)
     throw failure('resource-limit', 'A case file must be smaller than 4 GiB.')
   let i = skipSpace(bytes, bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0)
   expect(bytes, i, OPEN_OBJECT, 'a case object')
   const members: Member[] = []
+  const names = new Set<string>()
   const arrays: Partial<Record<ArrayName, Records>> = {}
   i = skipSpace(bytes, i + 1)
   while (bytes[i] !== CLOSE_OBJECT) {
     expect(bytes, i, QUOTE, 'a member name')
     const start = i
-    const keyEnd = stringEnd(bytes, i)
+    const keyEnd = checkString(bytes, i)
     const name = keyOf(bytes, start, keyEnd)
+    if (names.has(name)) malformed(start, 'a member name the case has not used')
+    names.add(name)
     i = skipSpace(bytes, keyEnd)
     expect(bytes, i, COLON, 'a colon')
     const value = skipSpace(bytes, i + 1)
@@ -79,7 +84,7 @@ export function scan(bytes: Uint8Array): Layout {
       const records = recordsOf(bytes, value)
       arrays[name as ArrayName] = records
       end = records.close + 1
-    } else end = skipValue(bytes, value)
+    } else end = checkValue(bytes, value)
     members.push({ name, start, value, end })
     i = skipSpace(bytes, end)
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
@@ -96,7 +101,7 @@ function recordsOf(bytes: Uint8Array, open: number): Records {
   let i = skipSpace(bytes, open + 1)
   while (bytes[i] !== CLOSE_ARRAY) {
     expect(bytes, i, OPEN_OBJECT, 'a record')
-    const end = skipValue(bytes, i)
+    const end = checkValue(bytes, i)
     if (count === starts.length) {
       starts = grown(starts)
       ends = grown(ends)
@@ -110,7 +115,155 @@ function recordsOf(bytes: Uint8Array, open: number): Records {
   return { open, close: i, starts: starts.slice(0, count), ends: ends.slice(0, count) }
 }
 
-/** Just past the JSON value at `i`. */
+/** Where each open object's keys are, and their hashes, as `checkValue` reads: a key is compared
+ *  only with those of its own object that hash alike. Grown as needed, and kept between calls. */
+let keyStarts: Int32Array = new Int32Array(256)
+let keyEnds: Int32Array = new Int32Array(256)
+let keyHashes: Int32Array = new Int32Array(256)
+
+/** Just past the JSON value at `i`, checked as JSON whole: its grammar, without comments or trailing
+ *  commas, and no object in it that repeats a key. A value nests as deep as it likes: the open
+ *  objects and arrays are counted, never recursed into. */
+function checkValue(bytes: Uint8Array, start: number): number {
+  /** Per open container, 1 for an object, 0 for an array; and where an object's keys begin. */
+  const objects: number[] = []
+  const firsts: number[] = []
+  let keys = 0
+  let i = start
+  /** Reads the key at `i`, a repeat of none before it in its object; returns past its colon. */
+  const key = (): number => {
+    expect(bytes, i, QUOTE, 'a member name')
+    const end = checkString(bytes, i)
+    const hashed = hash(bytes, i, end) | 0
+    for (let k = firsts.at(-1)!; k < keys; k++)
+      if (keyHashes[k] === hashed && sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
+        malformed(i, 'a member name its object has not used')
+    if (keys === keyStarts.length) {
+      keyStarts = grownInt(keyStarts)
+      keyEnds = grownInt(keyEnds)
+      keyHashes = grownInt(keyHashes)
+    }
+    keyStarts[keys] = i
+    keyEnds[keys] = end
+    keyHashes[keys++] = hashed
+    const colon = skipSpace(bytes, end)
+    expect(bytes, colon, COLON, 'a colon')
+    return colon + 1
+  }
+  for (;;) {
+    // A value at `i`.
+    i = skipSpace(bytes, i)
+    const first = bytes[i]
+    if (first === OPEN_OBJECT || first === OPEN_ARRAY) {
+      const object = first === OPEN_OBJECT
+      i = skipSpace(bytes, i + 1)
+      if (bytes[i] !== (object ? CLOSE_OBJECT : CLOSE_ARRAY)) {
+        objects.push(object ? 1 : 0)
+        firsts.push(keys)
+        if (object) i = key()
+        continue
+      }
+      i++
+    } else if (first === QUOTE) i = checkString(bytes, i)
+    else if (first === 0x74) i = checkWord(bytes, i, TRUE)
+    else if (first === 0x66) i = checkWord(bytes, i, FALSE)
+    else if (first === 0x6e) i = checkWord(bytes, i, NULL)
+    else i = checkNumber(bytes, i)
+    // Past a value: the next of its container's, or the container's end, and so on out.
+    for (;;) {
+      if (!objects.length) return i
+      i = skipSpace(bytes, i)
+      const object = objects.at(-1) === 1
+      if (bytes[i] === COMMA) {
+        i = skipSpace(bytes, i + 1)
+        if (object) i = key()
+        break
+      }
+      if (bytes[i] !== (object ? CLOSE_OBJECT : CLOSE_ARRAY))
+        malformed(i, object ? 'a comma or the end of an object' : 'a comma or the end of an array')
+      i++
+      objects.pop()
+      keys = firsts.pop()!
+    }
+  }
+}
+
+const TRUE = UTF8.encode('true')
+const FALSE = UTF8.encode('false')
+const NULL = UTF8.encode('null')
+
+/** Just past the literal `word` at `i`. */
+function checkWord(bytes: Uint8Array, i: number, word: Uint8Array): number {
+  for (let k = 0; k < word.length; k++) if (bytes[i + k] !== word[k]) malformed(i, 'a value')
+  return i + word.length
+}
+
+/** Just past the JSON number at `i`: a sign, an integer part without leading zeros, and a fraction
+ *  and an exponent, each with digits. */
+function checkNumber(bytes: Uint8Array, i: number): number {
+  const start = i
+  const digits = () => {
+    const from = i
+    while (bytes[i]! >= 0x30 && bytes[i]! <= 0x39) i++
+    if (i === from) malformed(start, 'a value')
+  }
+  if (bytes[i] === 0x2d) i++
+  if (bytes[i] === 0x30) i++
+  else digits()
+  if (bytes[i] === 0x2e) {
+    i++
+    digits()
+  }
+  if (bytes[i] === 0x65 || bytes[i] === 0x45) {
+    i++
+    if (bytes[i] === 0x2b || bytes[i] === 0x2d) i++
+    digits()
+  }
+  return i
+}
+
+/** Just past the JSON string whose opening quote is at `i`: no control character in it, and each
+ *  escape one JSON has. */
+function checkString(bytes: Uint8Array, i: number): number {
+  for (let at = i + 1; at < bytes.length; at++) {
+    const c = bytes[at]!
+    if (c === QUOTE) return at + 1
+    if (c < 0x20) malformed(at, 'a string without control characters')
+    if (c !== BACKSLASH) continue
+    const escaped = bytes[++at]
+    if (escaped === 0x75) {
+      for (let k = 1; k <= 4; k++) if (!isHex(bytes[at + k])) malformed(at, 'four hex digits')
+      at += 4
+    } else if (!ESCAPES.has(escaped!)) malformed(at, 'an escape JSON has')
+  }
+  return malformed(i, 'a closed string')
+}
+
+/** `"`, `\`, `/`, `b`, `f`, `n`, `r` and `t`, as an escape names them. */
+const ESCAPES = new Set([0x22, 0x5c, 0x2f, 0x62, 0x66, 0x6e, 0x72, 0x74])
+
+const isHex = (c: number | undefined) =>
+  c !== undefined && ((c >= 0x30 && c <= 0x39) || ((c | 0x20) >= 0x61 && (c | 0x20) <= 0x66))
+
+/** Whether the keys at `[a, aEnd)` and `[b, bEnd)` name the same: their bytes, or, with escapes,
+ *  the text they decode to. */
+function sameKey(bytes: Uint8Array, a: number, aEnd: number, b: number, bEnd: number): boolean {
+  if (aEnd - a === bEnd - b) {
+    let same = true
+    for (let k = 0; k < aEnd - a && same; k++) same = bytes[a + k] === bytes[b + k]
+    if (same) return true
+  }
+  const escaped = (from: number, to: number) => bytes.subarray(from, to).includes(BACKSLASH)
+  return (escaped(a, aEnd) || escaped(b, bEnd)) && keyOf(bytes, a, aEnd) === keyOf(bytes, b, bEnd)
+}
+
+function grownInt(array: Int32Array): Int32Array {
+  const next = new Int32Array(array.length * 2)
+  next.set(array)
+  return next
+}
+
+/** Just past the JSON value at `i`, which `scan` has checked. */
 function skipValue(bytes: Uint8Array, i: number): number {
   const first = bytes[i]
   if (first === QUOTE) return stringEnd(bytes, i)
@@ -193,7 +346,10 @@ function expect(bytes: Uint8Array, i: number, code: number, what: string): void 
 }
 
 function malformed(at: number, what: string): never {
-  throw failure('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`)
+  throw Object.assign(
+    failure('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`),
+    { byte: at },
+  )
 }
 
 function grown(array: Uint32Array): Uint32Array {

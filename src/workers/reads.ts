@@ -23,10 +23,11 @@ export async function queried(data: Data, query: Query, signal: AbortSignal) {
 /** `fields` of `kase`'s rows, with their ids, in batches of their own, to send. A field the case
  *  samples comes with a results file, never with the rows. */
 export async function rowsOf(kase: Case, fields: readonly Query.Selection[], signal: AbortSignal) {
+  // A field a later revision dropped, as a mapping's can be, is the query's to refuse.
   const statics = fields
     .map((field) => ({
       ...field,
-      select: field.select.filter((name) => !kase.schema.types[field.from]!.fields[name]!.sampled),
+      select: field.select.filter((name) => !kase.schema.types[field.from]?.fields[name]?.sampled),
     }))
     .filter((field) => field.select.length > 0)
   const batches: Data.RowBatch[] = []

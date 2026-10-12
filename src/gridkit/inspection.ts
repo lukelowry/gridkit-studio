@@ -1,5 +1,6 @@
 import { setImmediate as yieldTurn } from 'node:timers/promises'
 
+import { elementType } from '../shared/schema.js'
 import type { Case } from './case.js'
 
 type Edge = { from: string; field: string; to: string; direction: string }
@@ -46,10 +47,9 @@ export async function anchors(
   if (!kase.locate(input.id)) throw new Error('Unknown element: ' + input.id)
   const graph = await graphOf(kase, signal)
   const drawn = new Set(input.drawn)
-  const typeOf = (id: string) => id.slice(0, id.indexOf('/'))
   const found: string[] = []
   const seen = new Set([input.id])
-  let frontier = drawn.has(typeOf(input.id)) ? [] : [input.id]
+  let frontier = drawn.has(elementType(input.id)) ? [] : [input.id]
   while (frontier.length && !found.length) {
     const next: string[] = []
     for (const id of frontier)
@@ -57,7 +57,7 @@ export async function anchors(
         const other = edge.from === id ? edge.to : edge.from
         if (seen.has(other)) continue
         seen.add(other)
-        ;(drawn.has(typeOf(other)) ? found : next).push(other)
+        ;(drawn.has(elementType(other)) ? found : next).push(other)
       }
     frontier = next
   }

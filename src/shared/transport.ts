@@ -151,22 +151,17 @@ export class Transport {
     })
   }
 
-  /** Widens the span to `end` as frames arrive past it; the playhead stays where it is. */
-  extend(end: number): void {
+  /** Frames now reach `end`: the span widens to it, and a following playhead moves with the head,
+   *  as one change. Any other playhead stays where it is. */
+  grow(end: number): void {
+    if (this.#state.status === 'idle') return
+    this.#head = end
     const [start, last] = this.#state.span
-    if (this.#state.status === 'idle' || !(end > last)) return
+    const widened = end > last
+    if (!widened && !this.#state.follow) return
     this.#settle()
-    this.#commit({ ...this.#state, span: [start, end] })
-  }
-
-  /** Records the head at `t`. A following playhead moves with it, unreported, and returns true: the
-   *  data that moved the head is the news. */
-  noteHead(t: number): boolean {
-    this.#head = t
-    if (!this.#state.follow) return false
-    this.#state = { ...this.#state, t: clamp(t, this.#state.span) }
-    this.#since = this.now()
-    return true
+    const span: [number, number] = widened ? [start, end] : [start, last]
+    this.#commit({ ...this.#state, span, ...(this.#state.follow && { t: clamp(end, span) }) })
   }
 
   /** When frames stop arriving, a following playhead stays where the head stopped. */

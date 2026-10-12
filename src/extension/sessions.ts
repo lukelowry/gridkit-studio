@@ -20,6 +20,7 @@ import type {
   TableState,
   ViewState,
 } from '../shared/messages.js'
+import { holdsPlot } from '../shared/plots.js'
 import {
   defaults,
   definitions,
@@ -73,18 +74,7 @@ function settingsFor(uri: vscode.Uri): SettingsValues {
   const configuration = vscode.workspace.getConfiguration('gridkitStudio', uri)
   const result = { ...defaults }
   for (const { id } of definitions) {
-    let value = configuration.get(id)
-    // Older releases called this studio.display.motion. Keep the user's explicit preference
-    // until they choose its replacement; a default in the new schema is not an override.
-    if (id === 'accessibility.motion') {
-      const chosen = configuration.inspect(id)
-      if (
-        [chosen?.globalValue, chosen?.workspaceValue, chosen?.workspaceFolderValue].every(
-          (entry) => entry === undefined,
-        )
-      )
-        value = vscode.workspace.getConfiguration('studio', uri).get('display.motion') ?? value
-    }
+    const value = configuration.get(id)
     if (value === undefined) continue
     try {
       Object.assign(result, validateSettings({ [id]: value }))
@@ -109,29 +99,12 @@ export const notice = (text: string, ...offers: Offer[]) =>
 
 /** The plots `results` can draw: those of fields they hold, else their first field. */
 export function plotsFor(results: Results, plots: readonly Plot[]): Plot[] {
-  const kept = plots.filter((plot) =>
-    results.outputs.some(({ from, select }) => from === plot.from && select.includes(plot.field)),
-  )
+  const kept = plots.filter((plot) => holdsPlot(results, plot))
   const first = results.outputs.find(({ select }) => select.length > 0)
   return kept.length || !first ? kept : [{ from: first.from, field: first.select[0]! }]
 }
 
 export class Sessions {
-  /** A requested setup or diagnostic command's result, also kept in the extension log. */
-  inform(text: string, action?: { label: string; invoke(): unknown }) {
-    this.output.info(text)
-    void vscode.window
-      .showInformationMessage(text, ...(action ? [action.label] : []))
-      .then(async (choice) => {
-        if (choice && action) {
-          try {
-            await action.invoke()
-          } catch (error) {
-            this.report(error)
-          }
-        }
-      })
-  }
   readonly client: Client
   readonly documents: Documents
   readonly all = new Map<string, Session>()
@@ -150,6 +123,9 @@ export class Sessions {
   readonly errors: string[] = []
   readonly disposables: vscode.Disposable[] = []
   readonly contexts = new Map<string, unknown>()
+  /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
+   *  menu offers, and what it carries to the commands there. */
+  signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
   active?: string
   /** The errors already logged, so one reported twice, as a stopped worker's is, shows once. */
   readonly #logged = new WeakSet<object>()
@@ -173,9 +149,10 @@ export class Sessions {
   readonly #showing = new Set<string>()
   /** Tell the user why something failed. This, and the log behind it, is the one place Studio
    *  says so: views show state, never failures. A defect points to the log, a notice offers its
-   *  own choices, a cancellation says nothing, and an error already on show is not shown again. */
+   *  own choices, a cancellation says nothing, a case's diagnostic in Problems says it already,
+   *  and an error already on show is not shown again. */
   report(reason: unknown) {
-    if (cancelled(reason)) return
+    if (cancelled(reason) || (reason as { diagnosed?: boolean } | null)?.diagnosed) return
     if (reason instanceof Object) {
       if (this.#reported.has(reason)) return
       this.#reported.add(reason)
@@ -255,7 +232,7 @@ export class Sessions {
       this.changed.event(() => this.updateContexts()),
       // Either worker stopping is said. A run under way when the results worker stops is
       // interrupted; its file stays.
-      this.client.cases.failure.event((error) => this.report(error)),
+      this.client.cases.failure.event((error) => this.report(this.documents.restart(error))),
       this.client.results.failure.event((error) => {
         this.report(error)
         for (const session of this.all.values()) {
@@ -325,10 +302,7 @@ export class Sessions {
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
         for (const session of this.all.values())
-          if (
-            event.affectsConfiguration('gridkitStudio', vscode.Uri.parse(session.uri)) ||
-            event.affectsConfiguration('studio.display.motion', vscode.Uri.parse(session.uri))
-          ) {
+          if (event.affectsConfiguration('gridkitStudio', vscode.Uri.parse(session.uri))) {
             session.settings = settingsFor(vscode.Uri.parse(session.uri))
             this.changed.fire(session.uri)
           }
@@ -351,11 +325,11 @@ export class Sessions {
     const values = {
       hasCase: !!session,
       diagramEditing: !!session?.diagramEditing,
-      ready: !!entry?.summary && !entry.stale,
       editable: !!entry && !entry.stale && isWritable(entry.document),
       running: session?.run?.state === 'running',
       contingency: !!session?.results?.contingency,
       fromSolver: !!session?.results?.solver,
+      hasResults: !!session?.results,
       hasSamples: (session?.results?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
       caseReady: !!entry?.summary,
@@ -368,6 +342,8 @@ export class Sessions {
       }
   }
   activate(uri: string) {
+    // Tabs change often, as a case's editor turns dirty: only another case is news.
+    if (this.active === uri && this.all.has(uri)) return this.all.get(uri)!
     this.active = uri
     if (!this.all.has(uri)) {
       const saved = this.context.workspaceState.get<Saved>('case:' + uri, {})
@@ -411,7 +387,13 @@ export class Sessions {
           )
         })().then(
           (results) => {
-            if (session.results || this.all.get(session.uri) !== session) return
+            // A run started meanwhile shows its own, though a study has none until it ends.
+            if (
+              session.results ||
+              session.run?.state === 'running' ||
+              this.all.get(session.uri) !== session
+            )
+              return
             this.show(session, results, false)
             this.changed.fire(session.uri)
           },
@@ -430,7 +412,7 @@ export class Sessions {
       const solver = vscode.Uri.file(path)
       const { study, model } = await solverAt(solver)
       if (model.toString() !== summary.uri) return undefined
-      const { uri } = writtenBy(solver, study, summary)
+      const uri = writtenBy(solver, study, summary)
       return (await exists(uri)) ? uri.fsPath : undefined
     } catch {
       return undefined
@@ -601,11 +583,10 @@ export class Sessions {
       session.window = undefined
       transport.setSpan(results.domain, { live })
       if (study) transport.seek(at)
-      else if (live && transport.noteHead(results.domain[1])) this.clock.fire(session.uri)
+      else if (live) transport.grow(results.domain[1])
       return
     }
-    transport.extend(results.domain[1])
-    if (transport.noteHead(results.domain[1])) this.clock.fire(session.uri)
+    transport.grow(results.domain[1])
     transport.setLive(live)
   }
   /** Step one frame through the shown results, then pause. */

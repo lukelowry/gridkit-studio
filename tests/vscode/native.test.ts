@@ -10,16 +10,10 @@ import { suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { named } from '../menus.js'
-import { idle, type TestHost, testHost, until, visible } from './harness.js'
+import { clipboard, custom, idle, type TestHost, testHost, until, visible } from './harness.js'
 
-/** The text on the clipboard. */
-const clipboard = () => vscode.env.clipboard.readText()
-
-/** The custom editor in front. */
-const front = () => {
-  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-  return input instanceof vscode.TabInputCustom ? input.viewType : undefined
-}
+/** The kind of custom editor in front. */
+const front = () => custom()?.viewType
 
 /** Whether a popup showed each of `titles`, and only those when `only`. */
 function showed(shown: readonly string[], titles: readonly string[], only: boolean) {
@@ -40,6 +34,7 @@ suite('Native menus', () => {
     const known = new Set([
       ...Object.keys(bench.keys()),
       'view',
+      'viewItem',
       'activeCustomEditorId',
       'resourceFilename',
     ])
@@ -51,8 +46,8 @@ suite('Native menus', () => {
   test("a cell of the Case panel shows its menu's items, and runs the one chosen", async () => {
     const table = await bench.show('case')
     await bench.caseType('Bus')
-    await visible(table, `td[data-vscode-context*='"field":"params.kv"'] .cell`)
-    const cell = table.locator(`td[data-vscode-context*='"field":"params.kv"'] .cell`).first()
+    await visible(table, `td[data-field="params.kv"] .cell`)
+    const cell = table.locator(`td[data-field="params.kv"] .cell`).first()
     const offered = await bench.offered(cell)
     await vscode.env.clipboard.writeText('')
     const kv = String(bench.source.buses[0]!.params.kv)
@@ -101,6 +96,18 @@ suite('Native menus', () => {
     )
     showed(shown, offered, true)
     await bench.settings(/gridkitStudio\.monitor/)
+  })
+
+  test("a field in Monitored Signals shows its menu's items, and runs the one chosen", async () => {
+    const line = await bench.signalLine('Bus', 'Vm')
+    const offered = bench.signalOffered('Bus', 'Vm')
+    await vscode.env.clipboard.writeText('')
+    const shown = await bench.native(
+      () => line.click({ button: 'right', timeout: 2000 }),
+      'Copy Field Path',
+      async () => (await clipboard()) === 'Vm',
+    )
+    showed(shown, offered, true)
   })
 
   test("the editor's title bar shows Studio's More Actions, and runs the one chosen", async () => {

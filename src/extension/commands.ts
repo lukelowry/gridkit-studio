@@ -1,4 +1,4 @@
-import type { Block, Query } from '@latkit/model'
+import type { Block, Query, Schema } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import {
@@ -9,15 +9,16 @@ import {
   type FieldRef,
   NUMERIC,
 } from '../shared/bindings.js'
-import { display, leaf, rowsOf } from '../shared/cells.js'
+import { COLUMNS, display, leaf, rowsOf, tableFields } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
 import { detail } from '../shared/format.js'
-import type { Value } from '../shared/messages.js'
-import type { Element, Plot, Results, Summary } from '../shared/messages.js'
+import type { Element, Plot, Results, Summary, Value } from '../shared/messages.js'
+import { plotName, samePlot } from '../shared/plots.js'
 import { definitions } from '../shared/preferences.js'
 import {
   elementType,
   fieldName,
+  fieldOf,
   networkOf,
   placementOf,
   typeName,
@@ -45,12 +46,24 @@ function localPath(uri: vscode.Uri): string {
   if (uri.scheme !== 'file') throw new Error('Choose a file on this machine.')
   return uri.fsPath
 }
-/** `low, high` as a mapping range: two finite numbers, low first. */
+/** `low, high` as a range: two finite numbers, low first, apart by a comma, spaces, or both. */
 function rangeOf(text: string): [number, number] | undefined {
-  const [low, high, ...rest] = text.split(',').map((value) => Number(value.trim()))
-  return !rest.length && Number.isFinite(low) && Number.isFinite(high) && low! < high!
-    ? [low!, high!]
-    : undefined
+  const parts = text.trim().split(/\s*,\s*|\s+/)
+  if (parts.length !== 2 || parts.includes('')) return undefined
+  const [low, high] = parts.map(Number) as [number, number]
+  return Number.isFinite(low) && Number.isFinite(high) && low < high ? [low, high] : undefined
+}
+/** Ask for a range, checked as it is typed; `empty` lets the box be left empty, which resolves to
+ *  null. Undefined when cancelled. */
+async function askRange(title: string, value?: string, empty?: string) {
+  const text = await vscode.window.showInputBox({
+    title,
+    prompt: empty ? `Low and high values; empty ${empty}` : 'Low and high values',
+    value,
+    validateInput: (input) =>
+      (empty && !input.trim()) || rangeOf(input) ? null : 'Two numbers, low then high',
+  })
+  return text === undefined ? undefined : (rangeOf(text) ?? null)
 }
 
 export function registerCommands(studio: Sessions) {
@@ -81,13 +94,12 @@ export function registerCommands(studio: Sessions) {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
     const session = studio.all.get(uri) ?? (await studio.open(document))
     const summary = await studio.documents.ensure(document)
-    if (target && target.version !== summary.version)
+    // A plot names a type's field, which an edit leaves as it was: the Monitor reads the results
+    // against the revision they were opened at, so its menus are of that one.
+    if (target && target.origin !== 'monitor' && target.version !== summary.version)
       throw new Error('The document changed. Open the context menu again.')
-    const element =
-      target?.element ??
-      (value && typeof value === 'object' && 'id' in value && typeof value.id === 'string'
-        ? (value as Element)
-        : session.selection)
+    // A menu acts on what it was opened on, and only that; any other command on the selection.
+    const element = target ? target.element : session.selection
     return {
       session,
       summary,
@@ -103,6 +115,14 @@ export function registerCommands(studio: Sessions) {
     )
   const command = (id: string, run: (context: Context, value?: unknown) => unknown) =>
     register(id, async (value, supplied) => run(await resolve(value, supplied), value))
+  /** A command on the case's clock or results alone, which neither reads the case nor needs it to
+   *  read: a key held down plays on while the case is edited, or broken. */
+  const onSession = (id: string, run: (session: Session, value?: unknown) => unknown) =>
+    register(id, (value, supplied) => {
+      const session = studio.all.get(targetOf(value, supplied).uri)
+      if (!session) throw new Error('Open a GridKit case first.')
+      return run(session, value)
+    })
   const changed = (session: Session) => {
     studio.persist(session)
     studio.changed.fire(session.uri)
@@ -163,6 +183,12 @@ export function registerCommands(studio: Sessions) {
     })
     return row?.id
   }
+  /** A signal as every picker shows it: named as its plot is, with what the catalog says of it. */
+  const signalItem = (schema: Schema, plot: Plot) => ({
+    label: plotName(schema, plot),
+    detail: schema.types[plot.from]?.fields[plot.field]?.description,
+    plot,
+  })
   /** The recorded field in context, or one the user picks: of the element in context, or, from
    *  the Monitor, of any type. */
   const chooseSignal = async (
@@ -178,37 +204,21 @@ export function registerCommands(studio: Sessions) {
         .flatMap(([type, definition]) =>
           Object.entries(definition.fields)
             .filter(([, field]) => counts[type] && field.sampled)
-            .map(([field, spec]) => ({
-              label: type + '.' + field,
-              description: unitOf(spec, field),
-              detail: spec.description,
-              type,
-              field,
-            })),
+            .map(([field]) => signalItem(schema, { from: type, field })),
         ),
       { title: own && context.element ? 'Plot a signal of ' + context.element.id : 'Plot signal' },
     )
-    return choice ? { type: choice.type, field: choice.field } : undefined
+    return choice && { type: choice.plot.from, field: choice.plot.field }
   }
-  const pickPlot = (session: Session, title: string) =>
-    vscode.window.showQuickPick(
-      session.plots.map((plot) => ({
-        label: plot.from + '.' + plot.field,
-        description: plot.id,
-        ...plot,
-      })),
-      { title },
-    )
-  /** Ask for an increasing `minimum, maximum` pair; undefined if cancelled. */
-  const askRange = async (title: string, value?: string) => {
-    const text = await vscode.window.showInputBox({ title, prompt: 'Minimum, maximum', value })
-    if (text === undefined) return
-    const range = text.split(/[, ]+/).map(Number)
-    if (range.length !== 2 || !range.every(Number.isFinite) || range[0]! >= range[1]!)
-      throw new Error('Enter two increasing finite bounds.')
-    return [range[0]!, range[1]!] as const
-  }
-  /** Search the `type` elements by name, or by exact id once the input starts with `type/`. */
+  const pickPlot = async ({ session, summary }: Context, title: string) =>
+    (
+      await vscode.window.showQuickPick(
+        session.plots.map((plot) => signalItem(summary.schema, plot)),
+        { title },
+      )
+    )?.plot
+  /** Search the `type` elements by name, or by exact id once the input starts with `type/`: every
+   *  one that matches. */
   const pickReference = (context: Context, type: string): Promise<string | undefined> => {
     const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { id: string }>()
     picker.title = 'Choose ' + type
@@ -231,7 +241,6 @@ export function registerCommands(studio: Sessions) {
             kind: 'rows',
             from: type,
             select: name ? [name] : [],
-            limit: 100,
             ids: true,
             ...(exact
               ? { rows: { kind: 'ids', ids: [picker.value] } }
@@ -356,7 +365,9 @@ export function registerCommands(studio: Sessions) {
     }
     await studio.documents.edit(session.uri, summary.version, { id: element.id, field }, value)
   })
-  command('copyReference', (context) => vscode.env.clipboard.writeText(context.element?.id ?? ''))
+  command('copyReference', async ({ element }) => {
+    if (element) await vscode.env.clipboard.writeText(element.id)
+  })
   command('copyValue', async (context) => {
     if (context.element && context.type && context.field)
       await vscode.env.clipboard.writeText(
@@ -391,7 +402,7 @@ export function registerCommands(studio: Sessions) {
       ),
     )
   })
-  command('clearResults', async ({ session }) => {
+  onSession('clearResults', async (session) => {
     // The views let go of the results before they go, and of those a running run's end reports.
     studio.show(session, undefined)
     changed(session)
@@ -410,39 +421,27 @@ export function registerCommands(studio: Sessions) {
   }
   command('plot', plot)
   // From the Monitor's title: a signal the results on show hold, of every element.
-  command('addPlot', async (context) => {
-    const { schema } = context.summary
-    const { session } = context
+  command('addPlot', async ({ summary, session }) => {
     const choice = await vscode.window.showQuickPick(
       (session.results?.outputs ?? []).flatMap(({ from, select }) =>
-        select.map((field) => ({
-          label: `${typeName(schema, from)} · ${fieldName(schema.types[from]?.fields[field], field)}`,
-          from,
-          field,
-        })),
+        select.map((field) => signalItem(summary.schema, { from, field })),
       ),
       { title: 'Add plot', placeHolder: 'A recorded signal, of every element' },
     )
-    if (choice) await showPlot(studio, session, { from: choice.from, field: choice.field })
+    if (choice) await showPlot(studio, session, choice.plot)
   })
   command('removePlot', async (context) => {
     const { session } = context
-    const selected = context.target?.plot ?? (await pickPlot(session, 'Remove plot'))
+    const selected = context.target?.plot ?? (await pickPlot(context, 'Remove plot'))
     if (!selected) return
-    session.plots = session.plots.filter(
-      (plot) =>
-        !(plot.from === selected.from && plot.field === selected.field && plot.id === selected.id),
-    )
+    session.plots = session.plots.filter((plot) => !samePlot(plot, selected))
     changed(session)
   })
   command('signalElements', async (context) => {
     // The session's own plot: a menu's target carries a copy of it.
     const target = context.target?.plot
     const plot = target
-      ? context.session.plots.find(
-          ({ from, field, id }) =>
-            from === target.from && field === target.field && id === target.id,
-        )
+      ? context.session.plots.find((each) => samePlot(each, target))
       : context.session.plots.at(-1)
     if (!plot) return
     const id = await pickReference(context, plot.from)
@@ -454,7 +453,7 @@ export function registerCommands(studio: Sessions) {
   // Any GridKit results file, read for the case as a run's own is.
   command('openResults', async (context) => {
     const selected = await vscode.window.showOpenDialog({
-      filters: { 'GridKit results': ['arrow', 'csv'] },
+      filters: { 'GridKit results': ['csv'] },
       canSelectMany: false,
     })
     if (!selected?.[0]) return
@@ -470,8 +469,7 @@ export function registerCommands(studio: Sessions) {
     )
     await plot(context)
   })
-  command('exportCsv', async (context) => {
-    const { results } = context.session
+  onSession('exportCsv', async ({ results }) => {
     if (!results) throw new Error('There are no results to export.')
     const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
     if (path)
@@ -487,15 +485,13 @@ export function registerCommands(studio: Sessions) {
     )
     studio.output.show()
   })
-  command('toggleTimeline', ({ session }) => session.transport.playPause())
+  onSession('toggleTimeline', ({ transport }) => transport.playPause())
   // To the head while frames arrive, else to the run's last sample.
-  command('followTime', ({ session }) => {
-    const { transport } = session
+  onSession('followTime', ({ transport }) => {
     if (transport.live) transport.goLive()
     else transport.seek(transport.state.span[1])
   })
-  command('seekTime', async ({ session }, value) => {
-    const { transport } = session
+  onSession('seekTime', async ({ transport }, value) => {
     if (transport.state.status === 'idle') return
     const text =
       typeof value === 'number'
@@ -503,9 +499,10 @@ export function registerCommands(studio: Sessions) {
         : await vscode.window.showInputBox({
             title: 'Time [s]',
             value: String(transport.currentT()),
+            validateInput: (input) =>
+              input.trim() && Number.isFinite(Number(input)) ? null : 'A finite time',
           })
     if (text === undefined) return
-    if (!text.trim() || !Number.isFinite(Number(text))) throw new Error('Time must be finite.')
     transport.pause()
     transport.seek(Number(text))
   })
@@ -513,8 +510,8 @@ export function registerCommands(studio: Sessions) {
     ['previousSample', -1],
     ['nextSample', 1],
   ] as const)
-    command(id, ({ session }) => studio.step(session, direction))
-  command('loopTime', async ({ session }) => {
+    onSession(id, (session) => studio.step(session, direction))
+  onSession('loopTime', async ({ transport }) => {
     const loop = await vscode.window.showQuickPick<{ label: string; value: LoopMode }>(
       [
         { label: 'Once', value: 'none' },
@@ -523,27 +520,27 @@ export function registerCommands(studio: Sessions) {
       ],
       { title: 'Repeat playback' },
     )
-    if (loop) session.transport.setLoop(loop.value)
+    if (loop) transport.setLoop(loop.value)
   })
-  command('timeSpeed', async ({ session }) => {
+  onSession('timeSpeed', async ({ transport }) => {
     const rate = await vscode.window.showQuickPick(['0.5', '1', '2', '4'], {
       title: 'Simulated seconds per second',
     })
-    if (rate) session.transport.setRate(Number(rate))
+    if (rate) transport.setRate(Number(rate))
   })
-  for (const id of ['orbit', 'retryMonitor'] as const)
-    command(id, (context) =>
-      action(context, id, undefined, id === 'retryMonitor' ? 'monitor' : undefined),
-    )
-  // From the editor's title bar, the canvas in front; from a menu, the one it was opened on.
-  command('fit', (context) => {
+  command('orbit', (context) => action(context, 'orbit', undefined, 'network'))
+  command('retryMonitor', (context) => action(context, 'retryMonitor', undefined, 'monitor'))
+  /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
+   *  bar, the one in front. */
+  const canvasOf = (context: Context) => {
+    if (context.target) return context.target.origin
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-    const front =
-      input instanceof vscode.TabInputCustom
-        ? input.viewType.slice('gridkitStudio.'.length)
-        : undefined
-    action(context, 'fit', undefined, context.target?.origin ?? front)
-  })
+    return input instanceof vscode.TabInputCustom
+      ? input.viewType.slice('gridkitStudio.'.length)
+      : undefined
+  }
+  command('fit', (context) => action(context, 'fit', undefined, canvasOf(context)))
+  command('reloadView', (context) => action(context, 'reloadView', undefined, canvasOf(context)))
   // A neighborhood shows in a canvas, so from the Case panel the Network frames it.
   command('neighborhood', (context) => {
     if (!context.element) return
@@ -555,12 +552,12 @@ export function registerCommands(studio: Sessions) {
       context.target?.origin === 'diagram' ? 'diagram' : 'network',
     )
   })
-  command('resetMonitorWindow', (context) => {
-    context.session.window = undefined
-    action(context, 'resetMonitorWindow', undefined, 'monitor')
-    changed(context.session)
+  onSession('resetMonitorWindow', (session) => {
+    session.window = undefined
+    studio.action.fire({ uri: session.uri, command: 'resetMonitorWindow', view: 'monitor' })
+    changed(session)
   })
-  command('monitorWindow', async ({ session }) => {
+  onSession('monitorWindow', async (session) => {
     const range = await askRange(
       'Time window [s]',
       (session.window ?? session.results?.domain)?.join(', '),
@@ -581,14 +578,12 @@ export function registerCommands(studio: Sessions) {
     if (selected) studio.select(context.session.uri, selected.element)
   })
   command('chooseColumns', async (context) => {
-    const { schema, identities } = context.summary
+    const { schema } = context.summary
     const { table } = context.session
     const type = table.type ?? context.type ?? Object.keys(context.summary.counts)[0]
     const definitions = type ? schema.types[type]?.fields : undefined
     if (!type || !definitions) throw new Error('This case has no elements to show.')
-    const fields = Object.keys(definitions).filter(
-      (field) => !definitions[field]!.sampled && field !== identities[type],
-    )
+    const fields = tableFields(context.summary, type)
     const selected = await vscode.window.showQuickPick(
       fields.map((field) => ({
         label: leaf(field),
@@ -599,7 +594,7 @@ export function registerCommands(studio: Sessions) {
           .filter(Boolean)
           .join(' · '),
         field,
-        picked: (table.columns?.[type] ?? fields.slice(0, 12)).includes(field),
+        picked: (table.columns?.[type] ?? fields.slice(0, COLUMNS)).includes(field),
       })),
       { title: typeName(schema, type) + ' columns', canPickMany: true },
     )
@@ -702,13 +697,18 @@ export function registerCommands(studio: Sessions) {
       )
       if (target) studio.select(context.session.uri, { id: target })
     })
-  command('toggleDiagramEditing', (context) => {
-    context.session.diagramEditing = !context.session.diagramEditing
-    changed(context.session)
-    action(context, 'diagramEditing', context.session.diagramEditing, 'diagram')
-  })
+  // The title bar offers whichever is not the case now, so its icon shows whether the Diagram edits.
+  for (const [id, editing] of [
+    ['editDiagram', true],
+    ['finishDiagramEditing', false],
+  ] as const)
+    command(id, (context) => {
+      if (context.session.diagramEditing === editing) return
+      context.session.diagramEditing = editing
+      changed(context.session)
+      action(context, 'diagramEditing', editing, 'diagram')
+    })
   command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
-  command('reloadView', (context) => action(context, 'reloadView'))
   command('projection', async (context) => {
     const value = await vscode.window.showQuickPick(['flat', 'tilt', 'globe'], {
       title: 'Network projection',
@@ -717,8 +717,7 @@ export function registerCommands(studio: Sessions) {
   })
   /** The numeric field in context, which a network channel can show. */
   const mappable = ({ summary, type, field }: Context): FieldRef => {
-    const definition = type && field ? summary.schema.types[type]?.fields[field] : undefined
-    if (!type || !field || !NUMERIC.has(definition?.type))
+    if (!type || !field || !NUMERIC.has(fieldOf(summary.schema, type, field)?.type))
       throw new Error('Choose a numeric field to map.')
     return { type, field }
   }
@@ -745,22 +744,20 @@ export function registerCommands(studio: Sessions) {
   command('mapRange', async (context) => {
     const field = mappable(context)
     const { bindings } = context.session
-    const text = await vscode.window.showInputBox({
-      title: 'Mapping range of ' + leaf(field.field),
-      prompt: 'Low and high values; empty measures the values shown',
-      value: domainOf(bindings, field)?.join(', ') ?? '',
-      validateInput: (value) =>
-        !value.trim() || rangeOf(value) ? null : 'Two numbers, low then high',
-    })
-    if (text !== undefined)
-      studio.bind(context.session.uri, field, channelsOf(bindings, field), rangeOf(text))
+    const range = await askRange(
+      'Mapping range of ' + leaf(field.field),
+      domainOf(bindings, field)?.join(', ') ?? '',
+      'measures the values shown',
+    )
+    if (range !== undefined)
+      studio.bind(context.session.uri, field, channelsOf(bindings, field), range ?? undefined)
   })
   command('unbind', (context) => studio.bind(context.session.uri, mappable(context), []))
   command('signalRange', async (context) => {
     const { plots } = context.session
     const plot =
       context.target?.plot ??
-      (plots.length === 1 ? plots[0] : await pickPlot(context.session, 'Choose plot'))
+      (plots.length === 1 ? plots[0] : await pickPlot(context, 'Choose plot'))
     if (!plot) return
     const range = await askRange('Plot value range')
     if (!range) return

@@ -46,7 +46,6 @@ export interface Results {
   /** The file's name. */
   name: string
   path: string
-  format: 'arrow' | 'csv'
   /** What the file holds, once its header is read. */
   outputs: readonly Query.Selection[]
   frames: number
@@ -91,9 +90,8 @@ export interface RunRequest extends CaseSource {
   program: Program
   /** The .solver.json GridKit runs, in its folder. */
   solver: string
-  /** Where GridKit writes its samples, and how, as the solver file and its case say. */
+  /** Where GridKit writes its samples, as the solver file and its case say. */
   output: string
-  format: 'arrow' | 'csv'
   /** When the run ends, for its progress. */
   tmax: number
   /** The folder a container mounts. */

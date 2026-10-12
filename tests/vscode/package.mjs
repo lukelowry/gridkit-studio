@@ -93,10 +93,12 @@ try {
     ['cases.cjs', 'extension.cjs', 'results.cjs'],
     'Ship only the native extension and its two worker bundles',
   )
-  const entries = process.argv.slice(2)
+  // Flags, such as --untrusted, go to each launch as they do to launch.mjs itself.
+  const flags = process.argv.slice(2).filter((arg) => arg.startsWith('--'))
+  const entries = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
   if (!entries.length) entries.push('tests/vscode/index.ts')
   for (const entry of entries)
-    await run(process.execPath, [join(root, 'tests/vscode/launch.mjs'), entry], {
+    await run(process.execPath, [join(root, 'tests/vscode/launch.mjs'), ...flags, entry], {
       ELECTRON_RUN_AS_NODE: undefined,
       GRIDKIT_TEST_EXTENSION_PATH: target,
       GRIDKIT_TEST_OUTPUT: scratch,

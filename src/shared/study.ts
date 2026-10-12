@@ -13,10 +13,9 @@ export interface Solver {
   readonly output?: string
 }
 
-/** A file GridKit writes samples to, and how. */
+/** A CSV file GridKit writes samples to. */
 export interface Sink {
   readonly file: string
-  readonly format: 'csv' | 'arrow'
 }
 
 /** The solver file `name` read from its `text`, or why it can't run. */
@@ -44,7 +43,7 @@ export function readSolver(name: string, text: string): Solver {
  *  the solver file's output_file. */
 export function outputOf(name: string, solver: Solver, monitor: Sink | undefined): Sink {
   if (monitor) return monitor
-  if (solver.output !== undefined) return { file: solver.output, format: 'csv' }
+  if (solver.output !== undefined) return { file: solver.output }
   throw new Error(
     `${name} names no output_file and its case has no monitor, so a run would write nothing to show.`,
   )

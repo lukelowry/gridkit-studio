@@ -16,10 +16,10 @@ export interface Problem {
   readonly length?: number
 }
 
-/** `error` as it crosses a boundary; `aborted` when whoever asked let go of it. */
-export function problemOf(error: unknown, aborted = false): Problem {
+/** `error` as it crosses a boundary. */
+export function problemOf(error: unknown): Problem {
   const value = error as { code?: unknown; offset?: unknown; length?: unknown } | null
-  const gone = aborted || cancelled(error)
+  const gone = cancelled(error)
   return {
     message: error instanceof Error ? error.message || error.name : String(error),
     code: typeof value?.code === 'string' ? value.code : gone ? 'cancelled' : 'operation-failed',

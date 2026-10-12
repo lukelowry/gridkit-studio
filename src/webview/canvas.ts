@@ -20,6 +20,16 @@ import { appearance, watchTheme } from './theme.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
+/** What of the state a canvas draws from; the selection it shows apart. */
+const DRAWN = [
+  'summary',
+  'settings',
+  'bindings',
+  'results',
+  'diagramEditing',
+  'writable',
+  'stale',
+] as const satisfies readonly (keyof ViewState)[]
 
 const mark = (name: string) => {
   if (!performance.getEntriesByName(name).length) performance.mark(name)
@@ -102,7 +112,7 @@ function boot() {
   }, error)
   /** Replace a lost GPU and redraw where the camera was. */
   const lost = (reason: unknown) => {
-    restore = view?.camera
+    restore = view?.camera ?? restore
     drop()
     recovery.fail(reason)
   }
@@ -124,7 +134,10 @@ function boot() {
     rendered: () => !!canvas.dataset.rendered,
     closed: () => closed,
     received: () => void received++,
-    render: () => void render().catch(error),
+    // A restart waiting out its backoff is the one that draws again: the clock does not.
+    render: () => {
+      if (!recovery.pending) void render().catch(error)
+    },
     paint,
     paintNow,
     drop,
@@ -265,6 +278,7 @@ function boot() {
   })
   bridge.on((message) => {
     if (message.kind === 'state') {
+      const before = state
       state = merged(state, message.state)
       // The rows this state draws: a case read again is asked for once it reads.
       if (state.summary && !state.stale) {
@@ -283,7 +297,8 @@ function boot() {
       )
       say()
       selection()
-      paint()
+      // Only what the view draws from restyles it: a selection, say, it shows on its own.
+      if (DRAWN.some((key) => state[key] !== before[key])) paint()
     } else if (message.kind === 'action') {
       if (message.command === 'shown') {
         shown = message.value === true

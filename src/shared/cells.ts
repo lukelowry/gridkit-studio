@@ -10,6 +10,8 @@ import {
   textAt,
 } from '@latkit/model'
 
+import type { Summary } from './messages.js'
+
 /** The most rows one rows query may return. */
 const PAGE = 100
 
@@ -67,6 +69,21 @@ export function rowsOf(
       ),
     }))
   })
+}
+
+/** How many columns the Case panel shows of a type until the user picks them. */
+export const COLUMNS = 12
+
+/** The fields the Case panel can show of `type`: its static ones besides its identity, which heads
+ *  each row. Its sampled ones belong to the Monitor. */
+export function tableFields(
+  { schema, identities }: Pick<Summary, 'schema' | 'identities'>,
+  type: string,
+): string[] {
+  const fields = schema.types[type]?.fields ?? {}
+  return Object.keys(fields).filter(
+    (field) => !fields[field]!.sampled && field !== identities[type],
+  )
 }
 
 /** An element's id without its type: `7` of `Bus/7`. */

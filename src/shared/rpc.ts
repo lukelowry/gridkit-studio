@@ -62,7 +62,13 @@ export class Caller<A extends Api<A>> {
           reject(error)
         },
       })
-      this.post({ kind: 'request', id, method, input })
+      try {
+        this.post({ kind: 'request', id, method, input })
+      } catch (error) {
+        // An input that cannot cross is never answered: the call fails now.
+        this.#pending.get(id)?.fail(error as Error)
+        this.#pending.delete(id)
+      }
     })
   }
 

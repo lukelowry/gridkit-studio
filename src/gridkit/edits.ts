@@ -6,7 +6,7 @@ import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-pars
 import { message } from '../shared/format.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
-import type { Case } from './case.js'
+import type { Case, Table } from './case.js'
 import type { FieldPlan } from './definition.js'
 
 const decoder = new TextDecoder()
@@ -18,6 +18,11 @@ export function realText(value: number): string {
   return /[.eE]/.test(text) ? text : `${text}.0`
 }
 
+/** How many bytes the UTF-8 character whose first byte is `first` takes; one of four takes two
+ *  UTF-16 units, the others one. */
+export const utf8Width = (first: number) =>
+  first < 128 ? 1 : first < 224 ? 2 : first < 240 ? 3 : 4
+
 /** The UTF-16 offset of `byte` in the case's file, as VS Code counts. Checkpoints every 4 KiB fall on
  *  code-point boundaries, so only the bytes past one are decoded. */
 export function textOffset(kase: Case, byte: number): number {
@@ -27,8 +32,7 @@ export function textOffset(kase: Case, byte: number): number {
     let chars = 0
     let next = 4096
     for (let at = 0; at < kase.file.length;) {
-      const first = kase.file[at]!
-      const width = first < 128 ? 1 : first < 224 ? 2 : first < 240 ? 3 : 4
+      const width = utf8Width(kase.file[at]!)
       at += width
       chars += width === 4 ? 2 : 1
       if (at >= next) {
@@ -123,7 +127,11 @@ export function nativePath(field: FieldPlan): string[] {
 export function recordOf(kase: Case, id: string) {
   const located = kase.locate(id)
   if (!located) throw failure('invalid-input', 'This element no longer exists.')
-  const { table, row } = located
+  return recordAt(kase, located.table, located.row)
+}
+
+/** The record of `row` of `table`, as `recordOf` gives it, found by its place alone. */
+export function recordAt(kase: Case, table: Table, row: number) {
   const array = table.shape.array === null ? undefined : kase.arrays[table.shape.array]!
   const record = table.records[row]!
   const start = array ? array.starts[record]! : 0
@@ -174,9 +182,15 @@ export function editField(
   )
   const type = plan.definition.type
   const path = nativePath(plan)
-  const real = type === 'float64' && typeof value === 'number'
   // An existing value's token alone is replaced; anything else is inserted through jsonc-parser.
   const node = findNodeAtLocation(parseTree(record.text)!, path)
+  // A key the catalog does not know keeps how it was written: GridKit may read an integer there.
+  const integer =
+    plan.source.kind === 'found' &&
+    !!node &&
+    !/[.eE]/.test(record.text.slice(node.offset, node.offset + node.length)) &&
+    Number.isInteger(value)
+  const real = type === 'float64' && typeof value === 'number' && !integer
   if (node) {
     const text = real ? realText(value as number) : JSON.stringify(value)
     return [{ offset: record.offset + node.offset, length: node.length, text }]
@@ -195,19 +209,9 @@ export function editField(
  *  warnings, each class and field the catalog does not know. */
 const diagnoses = new WeakMap<Case, Issue[]>()
 
-/** All callers share validation of the same immutable source. */
-export function diagnose(kase: Case): Issue[] {
-  const cached = diagnoses.get(kase)
-  if (cached) return cached
-  const work = diagnostics(kase)
-  let next = work.next()
-  while (!next.done) next = work.next()
-  diagnoses.set(kase, next.value)
-  return next.value
-}
-
-/** Background validation yields to topology queries and can be cancelled between slices. */
-export async function diagnoseAsync(kase: Case, signal: AbortSignal): Promise<Issue[]> {
+/** The case's issues, which every caller shares of the same immutable source. Found a slice at a
+ *  time, yielding to topology queries between, and cancelled between slices. */
+export async function diagnose(kase: Case, signal: AbortSignal): Promise<Issue[]> {
   signal.throwIfAborted()
   const cached = diagnoses.get(kase)
   if (cached) return cached
@@ -269,7 +273,7 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
         else {
           // Ordinary records use presence bits instead of reparsing absent optional values.
           if (!record) {
-            record = recordOf(kase, kase.id(table, row))
+            record = recordAt(kase, table, row)
             tree = parseTree(record.text)
           }
           const node = tree && findNodeAtLocation(tree, nativePath(plan))

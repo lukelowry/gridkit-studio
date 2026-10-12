@@ -24,12 +24,19 @@ interface Entry {
   editing?: Promise<void>
   stale: boolean
   error?: string
-  diagnosticsVersion?: number
+  /** The version that failed to read, and why: it is not read again until it changes. */
+  failed?: { version: number; reason: Error }
 }
-/** A worker that stops this many times within `CRASH_MS` is not restarted to read the cases again
- *  until one of them changes. */
+/** A worker that stops this many times within `CRASH_MS` has the cases read again only once one of
+ *  them changes or opens again, so a case it cannot read does not stop it over and over. */
 const CRASHES = 3
 const CRASH_MS = 60_000
+
+/** Why a read failed, which its diagnostic says already: whoever awaited it need not say it. */
+const diagnosed = (reason: Error) => Object.assign(reason, { diagnosed: true })
+
+/** Whether the case worker's copy of a document was not at the base of the changes it was sent. */
+const stale = (error: unknown) => (error as { code?: unknown } | null)?.code === 'stale-source'
 
 export class Documents {
   readonly entries = new Map<string, Entry>()
@@ -72,31 +79,42 @@ export class Documents {
           .call('release', { uri, attachmentId: entry.attachmentId })
           .catch(() => {})
       }),
-      // A new case worker reads the open cases again, unless the reading may be what stops it.
-      this.client.cases.failure.event((error) => {
-        const now = Date.now()
-        this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
-        const retry = this.#crashes.length < CRASHES
-        for (const [uri, entry] of this.entries) {
-          entry.controller?.abort()
-          clearTimeout(entry.timer)
-          entry.stale = true
-          entry.error = retry
-            ? error.message
-            : `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads the case again once you edit or reopen it.`
-          entry.workerVersion = undefined
-          entry.changes = []
-          entry.pending = undefined
-          this.changed.fire(uri)
-          if (retry) void this.parse(entry.document).catch(() => {})
-        }
-      }),
     ]
+  }
+  /** A new case worker reads the open cases again, unless the reading may be what stops it: then
+   *  each waits until it changes or opens again. Returns why, to say once. */
+  restart(error: Error): Error {
+    const now = Date.now()
+    this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
+    const retry = this.#crashes.length < CRASHES
+    for (const [uri, entry] of this.entries) {
+      entry.controller?.abort()
+      clearTimeout(entry.timer)
+      entry.stale = true
+      entry.error = error.message
+      entry.failed = retry
+        ? undefined
+        : { version: entry.document.version, reason: diagnosed(new Error(error.message)) }
+      entry.workerVersion = undefined
+      entry.changes = []
+      entry.pending = undefined
+      this.changed.fire(uri)
+      if (retry) void this.parse(entry.document).catch(() => {})
+    }
+    return retry
+      ? error
+      : new Error(
+          `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads each case ` +
+            'again once you edit or reopen it.',
+        )
   }
   async ensure(document: vscode.TextDocument): Promise<Summary> {
     const entry = this.entries.get(document.uri.toString())
     if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
-    return entry?.pending ?? this.parse(document)
+    if (entry?.pending) return entry.pending
+    // A version that failed to read fails again without another read: Problems says why.
+    if (entry?.failed?.version === document.version) throw entry.failed.reason
+    return this.parse(document)
   }
   /** `document`'s entry, made on first use. */
   #entry(document: vscode.TextDocument): Entry {
@@ -133,8 +151,7 @@ export class Documents {
       )
     return call(this.#delta(entry, document)).catch((error: Error) => {
       // The worker's copy is not at the delta's base: send the whole text.
-      if (error.message === 'Source mirror is stale.' && !signal.aborted)
-        return call({ text: document.getText() })
+      if (stale(error) && !signal.aborted) return call({ text: document.getText() })
       throw error
     })
   }
@@ -157,11 +174,7 @@ export class Documents {
       .call('parse', input, controller.signal)
       .catch((error) => {
         // The worker's mirror is not at the delta's base: resend the whole text.
-        if (
-          error.message === 'Source mirror is stale.' &&
-          !controller.signal.aborted &&
-          document.version === version
-        )
+        if (stale(error) && !controller.signal.aborted && document.version === version)
           return this.client.cases.call(
             'parse',
             { uri, version, attachmentId: current.attachmentId, text: document.getText() },
@@ -176,6 +189,7 @@ export class Documents {
           current.summary = summary
           current.stale = false
           current.error = undefined
+          current.failed = undefined
           this.diagnostics.delete(document.uri)
           this.changed.fire(uri)
           // The view can request topology immediately. Diagnostics decode remaining columns
@@ -192,7 +206,7 @@ export class Documents {
           if (!controller.signal.aborted && document.version === version) {
             current.stale = true
             current.error = error.message
-            current.diagnosticsVersion = version
+            current.failed = { version, reason: diagnosed(error) }
             this.diagnostics.set(document.uri, [
               new vscode.Diagnostic(
                 new vscode.Range(
@@ -204,8 +218,7 @@ export class Documents {
             ])
             this.changed.fire(uri)
           }
-          // The diagnostic shows why; whoever awaited this need not say it again.
-          throw Object.assign(error, { diagnosed: true })
+          throw diagnosed(error)
         },
       )
       .finally(() => {
@@ -231,7 +244,6 @@ export class Documents {
           throw new Error('Superseded revision')
         const validated: Summary = { ...summary, issues, validation: 'complete' }
         entry.summary = validated
-        entry.diagnosticsVersion = summary.version
         this.diagnostics.set(
           document.uri,
           issues.map((issue) => {
@@ -267,33 +279,36 @@ export class Documents {
     )
   }
   /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
-   *  checked against revision `expected`. */
+   *  checked against revision `expected`: or, for mutations no revision changes the meaning of, as
+   *  what the elements record, against the latest. */
   transact(
     uri: string,
-    expected: number,
+    expected: number | 'latest',
     mutations: readonly Mutation[],
     label = 'Edit GridKit case',
   ): Promise<void> {
     const entry = this.entries.get(uri)
     if (!entry) return Promise.reject(new Error('The case document is closed.'))
-    const check = () => {
+    const check = (version: number) => {
       if (entry.document.isClosed || this.entries.get(uri) !== entry)
         throw new Error('The case document is closed.')
-      if (entry.document.version !== expected || entry.stale)
+      if (entry.document.version !== version || entry.stale)
         throw new Error('The document changed. Refresh before editing.')
       if (!isWritable(entry.document)) throw new Error('This document is read-only.')
     }
     const pending = (entry.editing ?? Promise.resolve())
       .catch(() => {})
       .then(async () => {
-        check()
+        const version =
+          expected === 'latest' ? (await this.ensure(entry.document)).version : expected
+        check(version)
         const edits = await this.client.cases.call('transact', {
           uri,
-          version: expected,
+          version,
           attachmentId: entry.attachmentId,
           mutations,
         })
-        check()
+        check(version)
         if (!edits.length) return
         const workspaceEdit = new vscode.WorkspaceEdit()
         workspaceEdit.set(

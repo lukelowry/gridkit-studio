@@ -16,7 +16,7 @@ const source = `{
  "devices":[
   {"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"mon":["P1"]}
  ],
- "monitors":[{"file_name":"first.csv","format":"csv"},{"file_name":"out.csv","format":"CSV"}]
+ "monitors":[{"file_name":"first.csv","format":"csv"},{"file_name":"out.csv","format":"CSV"},{"file_name":"out.bin","format":"binary"}]
 }`
 
 describe("a case's recording", () => {
@@ -24,7 +24,7 @@ describe("a case's recording", () => {
     const recording = recordingOf(await Case.parse(source, catalog))
     expect(recording.listed.Bus).toEqual({ Va: 1 })
     // GridKit takes the case's last CSV monitor.
-    expect(recording.monitor).toEqual({ file: 'out.csv', format: 'csv' })
+    expect(recording.monitor).toEqual({ file: 'out.csv' })
     const bare = await Case.parse(source.replace(/,\s*"monitors":\[.*\]/, ''), catalog)
     expect(recordingOf(bare).monitor).toBeUndefined()
   })

@@ -24,12 +24,6 @@
     opacity var(--motion-mid) var(--motion-hover);
 }
 
-.c-btn svg {
-  flex: 0 0 auto;
-  inline-size: 14px;
-  block-size: 14px;
-}
-
 /* A square button holding one glyph. */
 .c-icon-btn {
   flex-shrink: 0;
@@ -100,10 +94,8 @@ button.c-row:disabled {
   max-width: 280px;
 }
 
-/* Recessed boxes one row tall: c-input is a mono text field; c-field wraps a bare input and answers
-   hover and focus for it. */
-.c-input,
-.c-field {
+/* A recessed mono text field one row tall. */
+.c-input {
   inline-size: 100%;
   min-block-size: var(--spacing-row-h);
   padding-inline: var(--spacing-sm);
@@ -111,15 +103,11 @@ button.c-row:disabled {
   border-radius: var(--radius-md);
   background: var(--color-input);
   color: var(--vscode-input-foreground, var(--color-text-1));
-}
-
-.c-input {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
 }
 
-.c-input::placeholder,
-.c-field > input::placeholder {
+.c-input::placeholder {
   color: var(--color-text-2);
 }
 
@@ -127,63 +115,13 @@ button.c-row:disabled {
   outline-offset: -1px;
 }
 
-.c-field {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-xs);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-  transition: border-color var(--motion-fast) var(--motion-hover);
-}
-
-.c-field:hover {
-  border-color: var(--color-text-2);
-}
-
-.c-field:has(:focus-visible) {
-  outline: var(--focus-ring);
-  outline-offset: -1px;
-}
-
-.c-field > input {
-  flex: 1;
-  align-self: stretch;
-  min-inline-size: 0;
-  outline: none;
-}
-
-/* No spin buttons; arrow keys still step the number. */
-.c-field > input[type='number'] {
-  appearance: textfield;
-}
-
-.c-field > input::-webkit-inner-spin-button,
-.c-field > input::-webkit-outer-spin-button {
-  margin: 0;
-  appearance: none;
-}
-
-/* A required field's asterisk; the markup hides it from assistive technology. */
-.c-required {
-  margin-inline-start: 0.15em;
-  color: var(--color-error-text);
-}
-
-/* Copy under a group of rows, indented to the row label, in a neutral, error, or warning tone. */
+/* Copy under a group of rows, indented to the row label: it says what is so, never what failed. */
 .c-note {
   margin: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
   color: var(--color-text-2);
   font-size: var(--text-xs);
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.c-note--error {
-  color: var(--color-error-text);
-}
-
-.c-note--warn {
-  color: var(--color-warning-text);
 }
 
 /* The instrument row: a label left and a control or readout right. As a button, the whole row is

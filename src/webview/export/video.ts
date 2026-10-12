@@ -17,18 +17,12 @@ import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
 import type { Cameras, Plot, VideoView, ViewState } from '../../shared/messages.js'
+import { holdsPlot, plotName } from '../../shared/plots.js'
 import { reader } from '../../shared/preferences.js'
-import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.js'
+import { diagramOf, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
-import {
-  axisLabel,
-  PLOT_LIMITS,
-  plotBindings,
-  plotOptions,
-  plotRows,
-  streamedValues,
-} from '../monitor/plot.js'
+import { axisLabel, plotConfig, plotOptions, plotRows, streamedValues } from '../monitor/plot.js'
 import { isFlat, isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { leastWants, type Wants } from '../samples.js'
@@ -94,22 +88,26 @@ export function viewsOf(state: ViewState): { value: VideoView; label: string }[]
 }
 
 /** The plots of `state` its results hold, which the Monitor's part of a video draws. */
-function plotsOf({ results, plots = [] }: ViewState): Plot[] {
-  return plots.filter((plot) =>
-    results?.outputs.some(
-      (output) => output.from === plot.from && output.select.includes(plot.field),
-    ),
-  )
-}
+const plotsOf = ({ results, plots = [] }: ViewState): Plot[] =>
+  plots.filter((plot) => holdsPlot(results, plot))
+
+/** The map last read ahead. */
+let prefetched: string | undefined
 
 /** Starts reading the map a network on Earth shows, as soon as the page knows the case, so an
- *  export never waits for it. Only a case on Earth loads the map's code. A map that fails says so
- *  in the Network view. */
+ *  export never waits for it, and again whenever the settings choose another. Only a case on Earth
+ *  loads the map's code. A map that fails says so in the Network view. */
 export function prefetchMap(state: ViewState): void {
-  if (state.summary && networkOf(state.summary.schema).geographic)
-    void import('../network/map.js')
-      .then((maps) => maps.loadMap(reader(state.settings)))
-      .catch(() => {})
+  if (!state.summary || !networkOf(state.summary.schema).geographic) return
+  void import('../network/map.js')
+    .then((maps) => {
+      const settings = reader(state.settings)
+      const key = maps.mapKey(settings)
+      if (key === prefetched) return
+      prefetched = key
+      return maps.loadMap(settings)
+    })
+    .catch(() => {})
 }
 
 /** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
@@ -216,42 +214,34 @@ export async function exportVideo(
         if (plots.length === 0) throw new Error('No recorded signal to export.')
         cells.push(
           plots.map((plot, i) => {
-            const definition = rows.schema.types[plot.from]?.fields[plot.field]
-            // Nothing beside a video names its plots, so each names itself as the Monitor's
-            // header does; the last, over the time axis they share, labels and captions its ticks.
-            const name =
-              typeName(rows.schema, plot.from) +
-              (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
-              ` · ${fieldName(definition, plot.field)}`
             const last = i === plots.length - 1
             // A streamed plot spans its field's measured range, as the Monitor's own does.
             const values = stream && streamedValues(state.results, plot)
             const monitor = keep(
               createMonitor(gpu, {
-                ...plotOptions(preferences, colors, face, {
-                  ticks: last,
-                  caption: name,
-                  ...(last && { time: axisLabel(rows.schema.axis) }),
-                }),
+                ...plotConfig(
+                  // Nothing beside a video names its plots, so each names itself as the Monitor's
+                  // header does; the last, over the time axis they share, labels its ticks.
+                  plotOptions(preferences, colors, face, {
+                    ticks: last,
+                    caption: plotName(rows.schema, plot),
+                    ...(last && { time: axisLabel(rows.schema.axis) }),
+                  }),
+                  plotted,
+                  preferences,
+                  plot,
+                  {
+                    bindings: state.bindings,
+                    results: state.results,
+                    rows: plotRows(plotted, state.results, plot),
+                    streaming: !!stream,
+                  },
+                ),
                 ...still,
                 canvas: null,
-                source: plotted,
-                ...plotBindings(
-                  preferences,
-                  { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
-                  state.bindings,
-                  plotRows(plotted, state.results, {
-                    type: plot.from,
-                    field: plot.field,
-                    id: plot.id,
-                  }),
-                  state.results,
-                ),
                 camera: values
                   ? { x: settings.timeRange, y: values, fit: false }
                   : { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
-                limits: PLOT_LIMITS,
-                ...(stream && { frames: 'stable' as const }),
               }),
             )
             lanes.push(monitor)

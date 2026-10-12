@@ -24,13 +24,7 @@ import { VideoFiles } from './video.js'
 /** The views a clock moves. */
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor'])
 /** The commands a webview may run. */
-const COMMANDS: ReadonlySet<string> = new Set([
-  'elementSource',
-  'plot',
-  'addPlot',
-  'removePlot',
-  'chooseSignals',
-])
+const COMMANDS: ReadonlySet<string> = new Set(['elementSource', 'removePlot', 'chooseSignals'])
 /** How many rows the Case panel's filters leave, by case. */
 const shownRows = new Map<string, number>()
 

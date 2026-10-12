@@ -36,11 +36,16 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
   const speed = item('speed', 'Playback Speed', 'gridkitStudio.timeSpeed')
   const end = item('end', 'Go to End', 'gridkitStudio.followTime')
   const items = [bar, back, play, forward, time, speed, end]
+  /** What each item says now: while the clock plays, only the time changes, so only it is sent. */
+  const said = new Map<vscode.StatusBarItem, string>()
   const say = (target: vscode.StatusBarItem, text: string, label: string) => {
+    if (said.get(target) === text + '\n' + label) return
+    said.set(target, text + '\n' + label)
     target.text = text
     target.tooltip = label
     target.accessibilityInformation = { label, role: 'button' }
   }
+  let shown = false
   let timer: ReturnType<typeof setInterval> | undefined
 
   const show = () => {
@@ -49,7 +54,8 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const results = session?.results
     const state = session?.transport.state
     if (!session || !results?.frames || !state || state.status === 'idle') {
-      for (const each of items) each.hide()
+      if (shown) for (const each of items) each.hide()
+      shown = false
       clearInterval(timer)
       timer = undefined
       return
@@ -75,7 +81,8 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     )
     say(speed, `${formatNumber(state.rate)}×`, `Speed: ${formatNumber(state.rate)}×`)
     say(end, '$(run-all)', transport.live ? 'Go live' : 'Go to end')
-    for (const each of items) each.show()
+    if (!shown) for (const each of items) each.show()
+    shown = true
     if (playing && !timer) timer = setInterval(show, TICK_MS)
     else if (!playing && timer) {
       clearInterval(timer)

@@ -107,6 +107,17 @@ export const VIEWPORT = { width: 1600, height: 1000 }
 /** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
 export const VM = { type: 'Bus', field: 'Vm' } as const
 
+/** The text on the clipboard. */
+export const clipboard = () => vscode.env.clipboard.readText()
+
+/** The custom editor in front: its kind and file. */
+export function custom(): { viewType: string; path: string } | undefined {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  return input instanceof vscode.TabInputCustom
+    ? { viewType: input.viewType, path: input.uri.path.toLowerCase() }
+    : undefined
+}
+
 /** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
  *  once the wait fails, what it found instead. */
 export async function until<T>(
@@ -181,17 +192,21 @@ export const stats = <T extends { frames: number } = { frames: number }>(frame: 
 /** How many frames a canvas view has drawn. */
 export const frames = (frame: Frame) => frame.evaluate<number>('gridkitStats().frames')
 
-/** Wait for a canvas view to stop drawing, and return its counters. */
+/** Wait for a canvas view to stop drawing, and return its counters. One that draws on says so. */
 export async function idle<T extends { frames: number } = { frames: number }>(
   frame: Frame,
 ): Promise<T> {
   let last = await stats<T>(frame)
-  for (;;) {
-    await pause(250)
-    const now = await stats<T>(frame)
-    if (now.frames === last.frames) return now
-    last = now
-  }
+  let now = last
+  await until(
+    async () => {
+      await pause(250)
+      ;[last, now] = [now, await stats<T>(frame)]
+      return now.frames === last.frames
+    },
+    () => `the view still drawing, at ${now.frames} frames`,
+  )
+  return now
 }
 
 /** Whether a canvas view's canvas fills its webview edge to edge, with no padding around it. */
@@ -441,9 +456,8 @@ export class TestHost {
     return pane
   }
 
-  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
-   *  then click its box. */
-  async toggleSignal(type: string, field: string): Promise<void> {
+  /** The row of `type`'s `field` in Monitored Signals, its type opened to show it. */
+  async signalLine(type: string, field: string): Promise<Locator> {
     const signals = await this.signals()
     const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
     if ((await group.getAttribute('aria-expanded')) !== 'true') {
@@ -453,9 +467,13 @@ export class TestHost {
         type + ' open',
       )
     }
-    const box = signals
-      .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
-      .getByRole('checkbox')
+    return signals.getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
+  }
+
+  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
+   *  then click its box. */
+  async toggleSignal(type: string, field: string): Promise<void> {
+    const box = (await this.signalLine(type, field)).getByRole('checkbox')
     // Done once what the case records changes, not once the box looks it: a tree drawn again for
     // another case can change the box when no click took.
     const recorded = () => this.recorded(type, field)
@@ -572,6 +590,32 @@ export class TestHost {
     assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
     const origin = context.gridkitOrigin as string
     this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
+  }
+
+  /** Choose `item` for `type`'s `field` in Monitored Signals: from the actions its row shows at its
+   *  right with `inline`, else from its right-click menu. */
+  signalMenu(type: string, field: string, item: string, inline = false): void {
+    const row = this.studio.signalRow?.(type, field)
+    assert.ok(row?.contextValue, `Monitored Signals lists ${type} ${field}`)
+    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row.contextValue }
+    const { command } = this.menus.find(
+      'view/item/context',
+      item,
+      keys,
+      (group) => (group?.startsWith('inline') ?? false) === inline,
+    )
+    assert.ok(this.menus.enabled(command, keys), item + ' enabled')
+    this.#run(command, row)
+  }
+
+  /** What the right-click menu of `type`'s `field` in Monitored Signals offers. */
+  signalOffered(type: string, field: string): string[] {
+    const row = this.studio.signalRow?.(type, field)
+    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row?.contextValue }
+    return this.menus
+      .offered('view/item/context', keys)
+      .filter(({ group }) => !group?.startsWith('inline'))
+      .map(({ title }) => title)
   }
 
   /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered

@@ -26,7 +26,7 @@ suite('Workflows', function () {
     table
       .locator('tbody tr')
       .filter({ has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${bus.number}$`) }) })
-  const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
+  const kv = () => row().locator(`td[data-field="params.kv"]`)
   /** The bus's recorded voltage at time `t` of `results`. */
   async function voltage(results: string, t: number): Promise<number> {
     const blocks = await bench.studio.client.results.call('query', {
@@ -98,7 +98,7 @@ suite('Workflows', function () {
   test('records its voltage, faults it in the solver file, runs that, and reads the drop in the Monitor', async () => {
     await bench.toggleSignal('Bus', 'Vm')
     await bench.menu(row().locator('th[scope="row"]'), 'Plot Signal')
-    await bench.pick('Bus.Vm')
+    await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm' && plot.id === id),
       'its voltage plotted',

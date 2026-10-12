@@ -7,7 +7,7 @@ import { createData, type Data, type Query, type Schema, staticFields } from '@l
 
 import type { Bindings } from '../shared/bindings.js'
 import { cancelled } from '../shared/format.js'
-import type { Revision, Summary, ViewState } from '../shared/messages.js'
+import type { Plot, Revision, Summary, ViewState } from '../shared/messages.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import type { Asker } from './asker.js'
 
@@ -40,9 +40,20 @@ export function staticNeeds(
     .filter((field) => field.select.length > 0)
 }
 
+/** The static fields plots read of the types `plots` draw: one each, which brings its rows and
+ *  their ids. A trace is known by its row's id, and draws nothing else of the case. */
+export function plotStatics(summary: Summary, plots: readonly Plot[]): Query.Selection[] {
+  const { schema } = summary
+  const types = new Set(plots.map(({ from }) => from))
+  return staticFields(schema).flatMap((field) => {
+    const name = nameFieldOf(schema, field.from) ?? field.select[0]
+    return types.has(field.from) && name ? [{ ...field, select: [name] }] : []
+  })
+}
+
 /** What a view's rows are of: a case's revision, or, with `results`, the case they were read
  *  against, which `summary` then describes. */
-export interface Of {
+interface Of {
   readonly summary: Summary
   readonly results?: string
 }

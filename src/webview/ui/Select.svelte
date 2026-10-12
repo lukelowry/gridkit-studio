@@ -1,59 +1,29 @@
 <!-- @component
-  Bindable combobox; long lists add search and mount only the rows in view. Extra attributes go to
-  the trigger.
+  Bindable combobox over a few options, each mounted, chosen from the keyboard or the pointer, with
+  typeahead. Extra attributes go to the trigger.
 -->
 <script lang="ts" generics="T">
-  import { untrack } from 'svelte'
   import type { HTMLButtonAttributes } from 'svelte/elements'
 
   import { ListCursor } from './cursor.svelte.js'
   import Icon from './Icon.svelte'
-  import {
-    indexOptions,
-    layoutOptions,
-    type OptionRow,
-    type SelectOption,
-    windowRuns,
-  } from './listbox.js'
-  import { Viewport } from './viewport.svelte.js'
 
   let {
     options,
     value = $bindable(null),
-    key = String,
     label,
-    placeholder = 'None',
-    clearable = false,
     disabled = false,
-    compact = false,
-    hideLabel = false,
     ...rest
   }: Omit<HTMLButtonAttributes, 'children' | 'class' | 'value'> & {
-    readonly options: ReadonlyArray<SelectOption<T>>
-    /** Null shows the placeholder. */
+    readonly options: ReadonlyArray<{ readonly value: T; readonly label: string }>
     value?: T | null
-    /** Tells values apart; `String` by default. */
-    readonly key?: (value: T) => string
     /** The row label, and the start of the trigger's accessible name. */
     readonly label: string
-    /** Shown while nothing is selected, and as the clear row's label. */
-    readonly placeholder?: string
-    /** Lead the list with a clear row that sets null. */
-    readonly clearable?: boolean
     readonly disabled?: boolean
-    /** Inline and sized to its content, for toolbars. */
-    readonly compact?: boolean
-    /** Keep the label for assistive technology only. */
-    readonly hideLabel?: boolean
   } = $props()
-
-  /** Past this many options, the list adds search and windowing. */
-  const SEARCH_AT = 50
 
   const id = $props.id()
   const anchorName = `--${id}`
-  // The guesses match --select-row-height and the popup's max height until measured.
-  const viewport = new Viewport(4, { rowHeight: 36, height: 320 })
 
   /** Opening sets it; any change to `disabled` closes the list. */
   let open = $derived.by(() => {
@@ -62,44 +32,23 @@
   })
   /** The last move came from the keyboard, so the active row draws a ring. */
   let keyboard = $state(false)
-  let query = $state('')
 
   let root = $state<HTMLElement>()
   let trigger = $state<HTMLButtonElement>()
   let popup = $state<HTMLElement>()
-  let list = $state<HTMLElement>()
-  let probe = $state<HTMLElement>()
-  let search = $state<HTMLInputElement>()
 
-  const index = $derived(indexOptions(options, key))
-  const searchable = $derived(options.length > SEARCH_AT)
-  const chosen = $derived(value === null ? null : key(value))
-  const current = $derived(chosen === null ? undefined : index.byKey.get(chosen))
-  const layout = $derived(layoutOptions(index, clearable ? placeholder : null, query))
+  const chosen = $derived(options.findIndex((option) => option.value === value))
   const cursor = new ListCursor({
-    count: () => layout.nav.length,
-    text: (nav) => layout.nav[nav]!.text,
+    count: () => options.length,
+    text: (at) => options[at]!.label.toLowerCase(),
   })
-  const activeRow = $derived<OptionRow<T> | undefined>(
-    layout.nav[Math.min(cursor.active, layout.nav.length - 1)],
-  )
-  const activeId = $derived(open && activeRow ? optionId(activeRow) : undefined)
-  // Short lists mount every row, so find in page reaches each option; long ones mount a window.
-  const runs = $derived(
-    searchable
-      ? windowRuns(layout, viewport.first, viewport.count, activeRow)
-      : windowRuns(layout, 0, layout.slots.length),
-  )
-
-  function optionId(row: OptionRow<T>): string {
-    return `${id}-o${row.nav}`
-  }
+  const optionId = (at: number) => `${id}-o${at}`
+  const activeId = $derived(open && cursor.active >= 0 ? optionId(cursor.active) : undefined)
 
   function show(): void {
-    query = ''
     cursor.reset()
     keyboard = false
-    cursor.active = layout.navOf.get(chosen) ?? 0
+    cursor.active = Math.max(chosen, 0)
     open = true
   }
 
@@ -109,39 +58,23 @@
     if (returnFocus) trigger?.focus()
   }
 
-  /** Keep focus put on presses in the open list or trigger, bar the search field: pressing what
-   *  takes no focus, or a button in macOS Safari or Firefox, would blur and close the list. */
+  /** Keep focus on the trigger on presses in the open list or on it: pressing what takes no focus,
+   *  or a button in macOS Safari or Firefox, would blur and close the list. */
   function holdFocus(event: MouseEvent): void {
-    if (open && event.target !== search) event.preventDefault()
+    if (open) event.preventDefault()
   }
 
-  function choose(row: OptionRow<T>): void {
-    value = row.value
+  function choose(at: number): void {
+    value = options[at]!.value
     hide(true)
   }
 
   /** Move the cursor to the hovered row, and title a clipped label with its full text. */
-  function point(row: OptionRow<T>, element: HTMLElement): void {
+  function point(at: number, element: HTMLElement): void {
     const text = element.querySelector('.select__value')
-    element.title = text !== null && text.scrollWidth > text.clientWidth ? row.label : ''
+    element.title = text !== null && text.scrollWidth > text.clientWidth ? options[at]!.label : ''
     keyboard = false
-    cursor.active = row.nav
-  }
-
-  /** Scroll `row` into view, or center it, by arithmetic: it may not be mounted. A named group's
-   *  sticky heading covers the top slot, so the row must clear it. */
-  function reveal(row: OptionRow<T>, center: boolean): void {
-    const height = viewport.rowHeight
-    const heading = row.group.label === '' ? 0 : height
-    if (center) viewport.reveal(row.slot * height, height, true)
-    else viewport.reveal(row.slot * height - heading, height + heading)
-  }
-
-  function filter(text: string): void {
-    query = text
-    keyboard = true
-    cursor.active = 0
-    viewport.rewind()
+    cursor.active = at
   }
 
   function keydown(event: KeyboardEvent): void {
@@ -153,13 +86,11 @@
       }
       return
     }
-    const inField = event.currentTarget === search
     switch (event.key) {
       case 'Enter':
       case ' ':
-        if (event.key === ' ' && inField) return
         event.preventDefault()
-        if (activeRow) choose(activeRow)
+        if (cursor.active >= 0) choose(cursor.active)
         return
       case 'Escape':
         // Consumed, so enclosing handlers do not also act on it.
@@ -168,40 +99,20 @@
         hide(true)
         return
       case 'Tab':
-        // Leaving the search field unmounts it, so tab order resumes from the trigger.
-        hide(inField)
+        hide(false)
         return
-      case 'Home':
-      case 'End':
-        // In the search field these move the caret unless Ctrl is held.
-        if (inField && !event.ctrlKey) return
-        break
-      default:
-        // In the search field, printable keys edit the query.
-        if (inField && event.key.length === 1) return
     }
-    const page = Math.max(1, Math.floor(viewport.height / viewport.rowHeight))
-    if (!cursor.key(event, page)) return
+    if (!cursor.key(event, options.length)) return
     event.preventDefault()
     keyboard = true
-    if (activeRow) reveal(activeRow, false)
   }
 
   function leave(event: FocusEvent): void {
     if (open && !root?.contains(event.relatedTarget as Node | null)) hide(false)
   }
 
-  // While open: show the popover, track its size and scroll, center the selection, and focus the
-  // search field.
   $effect(() => {
-    if (!open || !popup || !list || !probe) return
-    popup.showPopover()
-    const stop = viewport.follow(list, probe)
-    untrack(() => {
-      if (activeRow) reveal(activeRow, true)
-      search?.focus()
-    })
-    return stop
+    if (open && popup) popup.showPopover()
   })
 </script>
 
@@ -210,17 +121,12 @@
     {...rest}
     type="button"
     role="combobox"
-    class={[
-      'c-row',
-      'select__trigger',
-      compact && 'select__trigger--compact',
-      hideLabel && 'select__trigger--unlabeled',
-    ]}
+    class="c-row select__trigger"
     aria-labelledby={`${id}-label ${id}-value`}
-    aria-haspopup={searchable ? 'dialog' : 'listbox'}
+    aria-haspopup="listbox"
     aria-expanded={open}
-    aria-controls={searchable ? `${id}-popup` : `${id}-list`}
-    aria-activedescendant={searchable ? undefined : activeId}
+    aria-controls={`${id}-list`}
+    aria-activedescendant={activeId}
     popovertarget={`${id}-popup`}
     {disabled}
     bind:this={trigger}
@@ -234,16 +140,9 @@
     }}
     onkeydown={keydown}
   >
-    <span id={`${id}-label`} class={hideLabel ? 'c-sr-only' : 'c-row__label'}>
-      {label}
-    </span>
+    <span id={`${id}-label`} class="c-row__label">{label}</span>
     <span class="select__control" style:anchor-name={anchorName}>
-      <span
-        id={`${id}-value`}
-        class={['select__value', current === undefined && 'select__value--empty']}
-      >
-        {current?.label ?? placeholder}
-      </span>
+      <span id={`${id}-value`} class="select__value">{options[chosen]?.label ?? ''}</span>
       <span class="select__chev"><Icon name="chevron" /></span>
     </span>
   </button>
@@ -253,97 +152,46 @@
       id={`${id}-popup`}
       class="select__popup"
       popover="auto"
-      role={searchable ? 'dialog' : undefined}
-      aria-labelledby={searchable ? `${id}-label` : undefined}
       style:position-anchor={anchorName}
       bind:this={popup}
-      onmousedown={holdFocus}
       ontoggle={(event) => {
         if (event.newState === 'closed' && open) hide(false)
       }}
     >
-      {#if searchable}
-        <div class="select__search">
-          <input
-            type="text"
-            role="combobox"
-            class="c-input"
-            placeholder="Search"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label={`Search ${label}`}
-            aria-autocomplete="list"
-            aria-expanded="true"
-            aria-controls={`${id}-list`}
-            aria-activedescendant={activeId}
-            value={query}
-            bind:this={search}
-            oninput={(event) => filter(event.currentTarget.value)}
-            onkeydown={keydown}
-          />
-        </div>
-      {/if}
-      <div class="select__measure" aria-hidden="true" bind:this={probe}></div>
       <div
         id={`${id}-list`}
         class="select__list"
         role="listbox"
+        tabindex="-1"
         aria-labelledby={`${id}-label`}
-        bind:this={list}
+        onmousedown={holdFocus}
       >
-        <div class="select__space" style:--rows={layout.slots.length}>
-          {#each runs as run (run.group.start)}
-            {@const heading = run.group.label}
-            <div
-              class="select__group-wrap"
-              role={heading ? 'group' : undefined}
-              aria-label={heading || undefined}
-              style:--at={run.group.start}
-              style:--rows={run.group.end - run.group.start}
-            >
-              {#if heading}<div class="select__group" aria-hidden="true">{heading}</div>{/if}
-              {#each run.rows as row (row.slot)}{@render option(row)}{/each}
-            </div>
-          {/each}
-        </div>
+        {#each options as option, at (at)}
+          <!-- svelte-ignore a11y_click_events_have_key_events (the combobox's keydown handler chooses the active option) -->
+          <div
+            role="option"
+            class={[
+              'select__opt',
+              at === cursor.active && 'select__opt--active',
+              at === cursor.active && keyboard && 'select__opt--cursor',
+            ]}
+            id={optionId(at)}
+            tabindex={-1}
+            aria-selected={at === chosen}
+            data-value={String(option.value)}
+            onpointerenter={(event) => point(at, event.currentTarget)}
+            onclick={() => choose(at)}
+          >
+            <span class="select__value">{option.label}</span>
+            <span class="select__mark" aria-hidden="true">
+              {#if at === chosen}<Icon name="check" />{/if}
+            </span>
+          </div>
+        {/each}
       </div>
-      <!-- Mounted with the search field, so screen readers announce its changes. -->
-      {#if searchable}
-        <p class="select__empty" role="status">
-          {query !== '' && layout.slots.length === 0 ? 'No matches' : ''}
-        </p>
-      {/if}
     </div>
   {/if}
 </div>
-
-{#snippet option(row: OptionRow<T>)}
-  {@const selected = row.key === chosen}
-  <!-- svelte-ignore a11y_click_events_have_key_events (the combobox's keydown handler chooses the active option) -->
-  <div
-    role="option"
-    class={[
-      'select__opt',
-      row.key === null && 'select__opt--clear',
-      row === activeRow && 'select__opt--active',
-      row === activeRow && keyboard && 'select__opt--cursor',
-    ]}
-    id={optionId(row)}
-    tabindex={-1}
-    aria-selected={selected}
-    aria-posinset={row.posinset}
-    aria-setsize={row.group.setsize}
-    data-value={row.key ?? undefined}
-    style:--at={row.slot - row.group.start}
-    onpointerenter={(event) => point(row, event.currentTarget)}
-    onclick={() => choose(row)}
-  >
-    <span class="select__value">{row.label}</span>
-    <span class="select__mark" aria-hidden="true">
-      {#if selected}<Icon name="check" />{/if}
-    </span>
-  </div>
-{/snippet}
 
 <style>
   .select {
@@ -393,10 +241,6 @@
     overflow-wrap: anywhere;
   }
 
-  .select__value--empty {
-    color: var(--color-text-2);
-  }
-
   .select__chev {
     display: flex;
     flex-shrink: 0;
@@ -412,37 +256,6 @@
   .select__trigger[aria-expanded='true'] .select__chev {
     color: var(--color-primary-text);
     transform: rotate(180deg);
-  }
-
-  .select__trigger.select__trigger--compact {
-    display: inline-flex;
-    flex: 0 0 auto;
-    gap: var(--spacing-sm);
-    inline-size: auto;
-    min-block-size: 2rem;
-    padding: var(--spacing-xs) var(--spacing-sm);
-    background: var(--color-surface-2);
-  }
-
-  .select__trigger--compact .select__control {
-    min-block-size: 0;
-    padding: 0;
-    background: transparent;
-  }
-
-  .select__trigger--compact .select__value {
-    white-space: nowrap;
-  }
-
-  /* Unlabeled: the value takes the whole row. */
-  .select__trigger.select__trigger--unlabeled {
-    grid-template-columns: minmax(0, 1fr);
-    inline-size: 100%;
-    min-inline-size: 0;
-  }
-
-  .select__trigger--unlabeled .select__control {
-    flex: 1;
   }
 
   /* An auto popover under the value and at least as wide. It flips above or leftward where there is
@@ -499,66 +312,10 @@
     }
   }
 
-  .select__search {
-    flex: none;
-    padding: var(--spacing-xs);
-  }
-
   .select__list {
     min-block-size: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-  }
-
-  .select__measure {
-    position: absolute;
-    block-size: var(--select-row-height);
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  .select__empty {
-    padding: var(--spacing-sm);
-    color: var(--color-text-2);
-    font-size: var(--text-sm);
-  }
-
-  .select__empty:empty {
-    padding: 0;
-  }
-
-  /* Custom properties place every row and heading, so layout never waits on measurement, which only
-     picks the rows to mount. */
-  .select__space {
-    position: relative;
-    block-size: calc(var(--rows) * var(--select-row-height));
-  }
-
-  .select__group-wrap,
-  .select__opt {
-    position: absolute;
-    inset-inline: 0;
-    inset-block-start: calc(var(--at) * var(--select-row-height));
-  }
-
-  .select__group-wrap {
-    block-size: calc(var(--rows) * var(--select-row-height));
-  }
-
-  .select__group {
-    position: sticky;
-    inset-block-start: 0;
-    z-index: 1;
-    block-size: var(--select-row-height);
-    padding: var(--spacing-xs) var(--spacing-sm) var(--spacing-2xs);
-    overflow: hidden;
-    background: var(--color-surface-2);
-    color: var(--color-text-2);
-    font-family: var(--font-body);
-    font-size: var(--text-xs);
-    font-weight: 500;
-    white-space: nowrap;
-    text-overflow: ellipsis;
   }
 
   .select__opt {
@@ -582,10 +339,6 @@
     flex: 1;
     white-space: nowrap;
     overflow-wrap: normal;
-  }
-
-  .select__opt--clear {
-    border-block-end: 1px solid color-mix(in oklch, var(--color-border) 45%, transparent);
   }
 
   /* The cursor, from the keyboard or the pointer. */
@@ -622,10 +375,6 @@
   @media (pointer: coarse) {
     .select__popup {
       --select-row-height: var(--spacing-touch-h);
-    }
-
-    .select__trigger.select__trigger--compact {
-      min-block-size: var(--spacing-touch-h);
     }
   }
 

@@ -271,13 +271,23 @@ export function unknownShape(type: string): Shape {
   )
 }
 
-/** `shape` with `found` fields after its own. */
+/** `shape` with `found` fields after its own. An output shares the namespace of the record's keys,
+ *  so one a found key takes the name of is named by where it is listed, `mon.<name>`, as one that
+ *  takes a known key's is. */
 export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
   const { fields: _, ...definition } = shape.definition
+  const taken = new Set(found.map(({ name }) => name))
   return compile(
     shape,
     definition,
-    [...shape.plan.values()].filter(({ source }) => source.kind !== 'identity').concat(found),
+    [...shape.plan.values()]
+      .filter(({ source }) => source.kind !== 'identity')
+      .map((plan) =>
+        plan.source.kind === 'output' && taken.has(plan.name)
+          ? { ...plan, name: `mon.${plan.name}` }
+          : plan,
+      )
+      .concat(found),
   )
 }
 

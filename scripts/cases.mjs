@@ -1,7 +1,6 @@
-/** GridKit's cases, copied into cases/ as GridKit has them at the ref Studio's default image is built
- *  from, so the samples match the GridKit that runs them. Each has a short solver file of its own
- *  beside it, written for Studio's samples: GridKit's example solver files compare against reference
- *  files that are not copied.
+/** GridKit's cases, copied into cases/ byte for byte as GridKit has them at the ref Studio's default
+ *  image is built from, so the samples match the GridKit that runs them. The short solver file
+ *  beside each, and ACTIVSg25k and ACTIVSg70k, are kept in cases/ as they are, apart from this.
  *
  *    node scripts/cases.mjs ../GridKit v0.2.0
  */
@@ -25,6 +24,6 @@ for (const [name, path] of Object.entries(CASES))
     execFileSync(
       'git',
       ['-C', gridkit, 'cat-file', 'blob', `${ref}:cases/PhasorDynamics/${path}.case.json`],
-      { encoding: 'utf8', maxBuffer: 1 << 26 },
+      { encoding: 'buffer', maxBuffer: Infinity },
     ),
   )

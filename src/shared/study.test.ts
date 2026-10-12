@@ -32,14 +32,8 @@ describe('a solver file as Studio reads it', () => {
 
   it("takes the case's monitor over output_file, as GridKit does", () => {
     const solver = { model: 'a.case.json', tmax: 1, output: 'study.csv' }
-    expect(outputOf('a.solver.json', solver, { file: 'case.arrow', format: 'arrow' })).toEqual({
-      file: 'case.arrow',
-      format: 'arrow',
-    })
-    expect(outputOf('a.solver.json', solver, undefined)).toEqual({
-      file: 'study.csv',
-      format: 'csv',
-    })
+    expect(outputOf('a.solver.json', solver, { file: 'case.csv' })).toEqual({ file: 'case.csv' })
+    expect(outputOf('a.solver.json', solver, undefined)).toEqual({ file: 'study.csv' })
     expect(() => outputOf('a.solver.json', { model: 'a.case.json', tmax: 1 }, undefined)).toThrow(
       'write nothing to show',
     )

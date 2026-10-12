@@ -15,22 +15,21 @@ import type { Monitor } from '@latkit/monitor'
 
 import type { Bindings } from '../../shared/bindings.js'
 import { intersectRows, recordedSelection } from '../../shared/coverage.js'
+import type { Plot } from '../../shared/messages.js'
 import { defaults, type SettingsReader } from '../../shared/preferences.js'
 import type { Results } from '../../shared/simulation.js'
 import { UNLIMITED } from '../gpu.js'
-import { color, type Palette, viewStyle } from '../theme.js'
-/** A recorded field a plot draws: every row of its type, or the one `id` names. */
-type Plotted = { type: string; field: string; id?: string }
+import { color, gridLine, type Palette, viewStyle } from '../theme.js'
 
 /** The same physical rows drive drawing, selection, keyboard readings and export. */
 export function plotRows(
   source: Data,
   results: Results | undefined,
-  plot: Plotted,
+  plot: Plot,
 ): Query.Selection['rows'] {
-  const recorded = recordedSelection(source, results?.outputs ?? [], plot.type, plot.field)
+  const recorded = recordedSelection(source, results?.outputs ?? [], plot.from, plot.field)
   if (!plot.id) return recorded
-  const table = source.tables[plot.type]!
+  const table = source.tables[plot.from]!
   return {
     ...intersectRows(
       selectRows(table, recorded),
@@ -91,9 +90,12 @@ export function traceCount(source: Data, type: string, rows: Query.Selection['ro
   return table ? rowCount(selectRows(table, rows)) : 0
 }
 
-/** Whether the samples of `sampled` are those `plotted` draws: its field, for its one row or for
+/** Whether the samples of `sampled` are those `plot` draws: its field, for its one row or for
  *  every row. A plot added to the Monitor waits for the samples it asks for. */
-export function holds(sampled: readonly Query.Selection[], { type, field, id }: Plotted): boolean {
+export function holds(
+  sampled: readonly Query.Selection[],
+  { from: type, field, id }: Plot,
+): boolean {
   return sampled.some(
     ({ from, select, rows }) =>
       from === type &&
@@ -127,13 +129,13 @@ export function streamedValues(
   ]
 }
 
-/** The trace of `plotted`: a line for each row of its type, or for the one row it names. A field the
+/** The trace of `plot`: a line for each row of its type, or for the one row it names. A field the
  *  network colors is colored the same way, by the value each line plots: its colormap, over the same
  *  range. The plot keeps only where lines lie and colors them as it draws, so a new range or
  *  colormap draws no line again. */
 export function plotBindings(
   settings: SettingsReader,
-  { type, field, id }: Plotted,
+  { from: type, field, id }: Plot,
   bindings: Bindings = {},
   rows?: Query.Selection['rows'],
   results?: Results,
@@ -160,6 +162,35 @@ export function plotBindings(
             : {}),
       },
     },
+  }
+}
+
+/** A plot's config besides its canvas, time and camera, as the Monitor and a video draw it: its
+ *  `style`, the rows with their samples, and its trace over `rows`. A streamed window's frames come
+ *  and go and never change, so the plot keeps what it drew of them. */
+export function plotConfig(
+  style: Partial<Monitor.Config>,
+  source: Data,
+  settings: SettingsReader,
+  plot: Plot,
+  {
+    bindings,
+    results,
+    rows,
+    streaming,
+  }: {
+    bindings: Bindings | undefined
+    results: Results | undefined
+    rows: Query.Selection['rows']
+    streaming: boolean
+  },
+) {
+  return {
+    ...style,
+    source,
+    ...plotBindings(settings, plot, bindings, rows, results),
+    limits: PLOT_LIMITS,
+    ...(streaming && { frames: 'stable' as const }),
   }
 }
 
@@ -214,10 +245,7 @@ export function plotOptions(
     unselectedAlpha: s.get('monitor.unselectedAlpha'),
     input: { mode: s.get('monitor.input.mode'), keyboard: s.get('monitor.input.keyboard') },
     axisColor: color(s.get('monitor.axisColor'), palette?.border),
-    gridColor: color(
-      s.get('monitor.gridColor'),
-      palette ? [palette.text2[0], palette.text2[1], palette.text2[2], 0.15] : undefined,
-    ),
+    gridColor: color(s.get('monitor.gridColor'), palette ? gridLine(palette) : undefined),
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),
     // The hovered reading's dot, as the playhead and the selection draw.
     hoverColor: palette?.primaryText,

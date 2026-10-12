@@ -93,11 +93,6 @@ export function bound(
   return next
 }
 
-/** Comma-separated labels: `Vertex Color, Vertex Height`. */
-export function fullNames(channels: readonly Channel[]): string {
-  return channels.map((channel) => CHANNELS[channel].label).join(', ')
-}
-
 /** Comma-separated one-word styles: `color, height`. */
 export function shortNames(channels: readonly Channel[]): string {
   return channels.map((channel) => CHANNELS[channel].style).join(', ')

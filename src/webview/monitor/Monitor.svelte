@@ -11,15 +11,8 @@
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
-  import { ofShown, Rows, type Snapshot, staticNeeds } from '../rows.js'
-  import {
-    leastWants,
-    plotBudget,
-    plotNeeds,
-    Samples,
-    streamSlice,
-    type Wants,
-  } from '../samples.js'
+  import { ofShown, plotStatics, Rows, type Snapshot } from '../rows.js'
+  import { leastWants, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
   import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
@@ -76,14 +69,14 @@
   const shown = $derived(monitorWindow(results, chosen ?? view.window))
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
-  // The rows of the case the results were read against, which the summary then describes, or
-  // of the case on show while there are none.
+  // The rows the plots draw of the case the results were read against, which the summary then
+  // describes, or of the case on show while there are none.
   $effect(() => {
     const { summary, results } = view
     if (!summary || (view.stale && !results?.frames)) return
     cases.want(
       { summary, ...(results?.frames && { results: results.id }) },
-      staticNeeds(summary, view.bindings, false),
+      plotStatics(summary, plots),
     )
   })
   // The plots draw the samples over the times shown; those around them load after, so a pan
@@ -92,19 +85,15 @@
   $effect(() => {
     void held
     const span = shown
-    const needs = plotNeeds(view)
-    const slice = streamSlice(
+    const slice = samples.plot(
       view.results,
-      needs,
+      plotNeeds(view),
       span,
-      samples.budget,
       leastWants(plots.map((plot) => wants.get(keyOf(plot)))),
+      { at: (span[0] + span[1]) / 2, travel: 0 },
     )
     streaming = slice !== undefined
     slicing = slice
-    if (slice === undefined)
-      samples.want(view.results, needs, span, { at: (span[0] + span[1]) / 2, travel: 0 })
-    else samples.want(view.results, needs, slice ?? undefined)
     source = rows && ofShown(rows, view) ? samples.data(rows.data) : undefined
     sampled = samples.sampled()
   })

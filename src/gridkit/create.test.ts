@@ -26,7 +26,7 @@ describe('component creation', () => {
       const next = applyChanges(source, [edits])
       const parsed = await Case.parse(next, catalog)
       expect(parsed.locate('Branch/new')).toBeDefined()
-      expect(diagnose(parsed)).toEqual([])
+      expect(await diagnose(parsed, AbortSignal.any([]))).toEqual([])
       expect(JSON.parse(next).devices[0].ports).toEqual({ bus1: 2, bus2: 3 })
       expect(next).toMatch(/"R":\s*0\.0/)
       if (source.includes('230.000')) expect(next).toContain('230.000')

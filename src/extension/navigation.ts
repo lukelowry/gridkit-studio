@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 
 import type { CaseSymbol } from '../shared/messages.js'
+import { withUnit } from '../shared/schema.js'
 import { cancellable } from './client.js'
 import type { Sessions } from './sessions.js'
 const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
@@ -56,7 +57,7 @@ export function registerNavigation(studio: Sessions) {
           : undefined
         return new vscode.Hover(
           new vscode.MarkdownString().appendText(
-            `${context.element.field}${field?.unit ? ' [' + field.unit + ']' : ''}\n${field?.description ?? context.reference ?? context.element.id}`,
+            `${withUnit(context.element.field, field?.unit)}\n${field?.description ?? context.reference ?? context.element.id}`,
           ),
           new vscode.Range(
             document.positionAt(context.range.offset),
@@ -123,11 +124,13 @@ export function registerNavigation(studio: Sessions) {
       },
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
-      if (!/\.case\.json$/i.test(event.textEditor.document.fileName)) return
-      void inspect(event.textEditor.document, event.selections[0]!.active)
+      const { document } = event.textEditor
+      if (!/\.case\.json$/i.test(document.fileName)) return
+      // Typing moves the cursor: the case is read once the typing pauses, not at every key.
+      if (studio.documents.entries.get(document.uri.toString())?.stale) return
+      void inspect(document, event.selections[0]!.active)
         .then((context) => {
-          if (context?.element)
-            studio.select(event.textEditor.document.uri.toString(), context.element)
+          if (context?.element) studio.select(document.uri.toString(), context.element)
         })
         .catch(() => {})
     }),

@@ -3,7 +3,7 @@ import type { Layout } from '@latkit/gpu'
 
 import type { SettingsReader } from '../../shared/preferences.js'
 import { UNLIMITED } from '../gpu.js'
-import { color, type Palette, viewStyle } from '../theme.js'
+import { color, gridLine, type Palette, viewStyle } from '../theme.js'
 
 type DiagramStyle = Omit<
   Diagram.Config,
@@ -22,7 +22,6 @@ export function layoutOf(s: SettingsReader): Layout {
 
 /** Diagram settings as renderer options, shared by the live view and video export. */
 export function diagramOptions(s: SettingsReader, palette: Palette, font: string): DiagramStyle {
-  const [r, g, b] = palette.text2
   return {
     ...viewStyle(s, 'diagram', font, {
       background: palette.editor,
@@ -32,7 +31,7 @@ export function diagramOptions(s: SettingsReader, palette: Palette, font: string
     vertexColor: color(s.get('diagram.vertexColor'), palette.surface2),
     outlineColor: color(s.get('diagram.outlineColor'), palette.text2),
     edgeColor: color(s.get('diagram.edgeColor'), palette.text1),
-    gridColor: color(s.get('diagram.gridColor'), [r, g, b, 0.15]),
+    gridColor: color(s.get('diagram.gridColor'), gridLine(palette)),
     ...(s.get('diagram.groupColor') !== null && {
       groupColor: color(s.get('diagram.groupColor'))!,
     }),

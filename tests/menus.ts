@@ -145,10 +145,16 @@ export class Menus {
         ...(entry.group && { group: entry.group }),
       }))
   }
-  /** What `place` shows for `keys` whose title starts with `title`; throws naming what it shows
+  /** What `place` shows for `keys` whose title starts with `title`, of the groups `group` takes when
+   *  it is given, as a tree row's inline actions apart from its menu; throws naming what it shows
    *  instead when it shows none, or more than one. */
-  find(place: string, title: string, keys: Keys): Offered {
-    const shown = this.offered(place, keys)
+  find(
+    place: string,
+    title: string,
+    keys: Keys,
+    group?: (group: string | undefined) => boolean,
+  ): Offered {
+    const shown = this.offered(place, keys).filter((each) => !group || group(each.group))
     const found = shown.filter((each) => each.title.startsWith(title))
     if (found.length !== 1)
       throw new Error(

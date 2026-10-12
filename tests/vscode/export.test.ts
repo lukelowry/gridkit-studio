@@ -84,8 +84,9 @@ suite('Export', () => {
 
   test('plots a run holding more than a page keeps by streaming it through the plots first', async () => {
     const shown = await bench.results()
-    // Every bus's voltage over three and a half chunks, and a budget a quarter of that.
-    const results = await bench.waveform('Streamed waveform.csv', 46_000, 4.6, 3)
+    // Every bus's voltage over more than the two chunks a first reply brings, and a budget a quarter
+    // of that. The run is short, so the video records a few frames of it.
+    const results = await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
     assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
     const budget = Math.floor((results.frames * (bench.source.buses.length + 1) * 8) / 4)
     bench.session.plots = [{ from: VM.type, field: VM.field }]

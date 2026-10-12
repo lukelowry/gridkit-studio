@@ -227,6 +227,28 @@ describe('the samples a view holds', () => {
     expect(samples.covers('Bus', 'Vm', [0.16, 0.16])).toBe(false)
   })
 
+  it('keeps the frame that closes a window ending between two chunks, past its budget', async () => {
+    const file = { frames: 12 }
+    const { asked, request } = worker(file)
+    const shown = results(file.frames)
+    const one = await request({
+      results: shown.id,
+      field: need.selection,
+      window: [0, 0],
+      held: {},
+      bytes: Infinity,
+    })
+    asked.length = 0
+    const { samples } = cache(request, blockByteLength(one))
+    // The window ends past the second chunk's last frame, so the third chunk's first closes it, as
+    // a streamed slice's end can by a rounding.
+    const window: Domain = [0.02, 0.0705]
+    samples.want(shown, [need], window)
+    await samples.until(window, AbortSignal.timeout(5000))
+    expect(asked).toHaveLength(1)
+    expect(await voltages(samples, [0.02, 0.08])).toEqual([2, 3, 4, 5, 6, 7, 8])
+  })
+
   it('holds runs of frames with holes between, which a view reads one run at a time', async () => {
     const file = { frames: 40 }
     const { request } = worker(file)

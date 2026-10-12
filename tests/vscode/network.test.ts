@@ -120,6 +120,8 @@ suite('Network', () => {
     const { transport } = bench.session
     await bench.open('diagram')
     const hidden = (await idle(network)).frames
+    // From the start, so the clock has the run before it to play on rather than wrap.
+    transport.seek(0)
     const from = transport.currentT()
     transport.play()
     // Time enough for the visible view to have drawn many frames.

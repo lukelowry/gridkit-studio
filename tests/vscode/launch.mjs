@@ -107,6 +107,9 @@ try {
             '--enable-features=Vulkan',
             '--use-vulkan=swiftshader',
             '--disable-vulkan-surface',
+            // A large plot drawn on the CPU outlasts the watchdog, which would end the GPU process
+            // and, after twice, WebGPU for the rest of the run.
+            '--disable-gpu-watchdog',
           ]
         : []),
       // Chromium's sandbox needs what neither root nor a container gives it.

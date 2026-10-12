@@ -132,7 +132,18 @@ function clip([a, b]: Domain, [start, end]: Domain): Domain | undefined {
   return from <= to ? [from, to] : undefined
 }
 
-const meet = (a: Domain, b: Domain) => a[0] <= b[1] && b[0] <= a[1]
+/** The chunks that cover `window`, as a view's runs of them do: from the last that starts at or
+ *  before its start to the first that ends at or after its end. A window ending between two chunks'
+ *  frames needs the later chunk's first frame to close it. */
+function needed(chunks: ReadonlyMap<number, Chunk>, [a, b]: Domain): [number, number] {
+  let first = -Infinity
+  let last = Infinity
+  for (const [k, { domain }] of chunks) {
+    if (domain[0] <= a) first = Math.max(first, k)
+    if (domain[1] >= b) last = Math.min(last, k)
+  }
+  return [first, last]
+}
 
 /** How far `domain` lies from `at`. */
 const away = ([start, end]: Domain, at: number) =>
@@ -602,9 +613,10 @@ export class Samples {
     const required = this.#required
     const at = this.#near?.at ?? (required ? (required[0] + required[1]) / 2 : 0)
     const far: { key: string; k: number; chunk: Chunk }[] = []
-    for (const [key, chunks] of this.#held)
-      for (const [k, chunk] of chunks)
-        if (!required || !meet(chunk.domain, required)) far.push({ key, k, chunk })
+    for (const [key, chunks] of this.#held) {
+      const [first, last] = required ? needed(chunks, required) : [Infinity, -Infinity]
+      for (const [k, chunk] of chunks) if (k < first || k > last) far.push({ key, k, chunk })
+    }
     far.sort((a, b) => away(b.chunk.domain, at) - away(a.chunk.domain, at))
     let dropped = false
     for (const { key, k, chunk } of far) {

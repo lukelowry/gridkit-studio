@@ -695,9 +695,10 @@ export class TestHost {
 
   // ── VS Code's own prompts, answered from the keyboard ──
 
-  /** The quick input on show: a quick pick, an input box, or a file dialog. */
+  /** The quick input on show: a quick pick, an input box, or a file dialog. One closed stays in the
+   *  page hidden, holding what it last asked. */
   #prompt() {
-    const widget = this.page.locator('.quick-input-widget')
+    const widget = this.page.locator('.quick-input-widget:visible')
     return { widget, input: widget.locator('.quick-input-box input').first() }
   }
 

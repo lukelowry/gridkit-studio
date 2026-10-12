@@ -4,9 +4,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
+import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import { simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
+
+/** Start the export once it can, with Enter on its button: the view, squeezed under others in the
+ *  side bar, scrolls, and a click at the button's place can miss it. */
+async function startExport(exporter: Frame): Promise<void> {
+  const button = exporter.locator('[data-testid="video-start"]')
+  await until(() => button.isEnabled(), 'the export can start')
+  await button.press('Enter')
+}
 
 /** The video at `path`: a WebM file, by the EBML header it starts with, holding more than that;
  *  its size. */
@@ -36,7 +45,7 @@ suite('Export', () => {
     await exporter.locator('[role="option"][data-value="webm"]').click()
     await exporter.locator('[data-testid="video-resolution"]').click()
     await exporter.locator('[role="option"][data-value="720"]').click()
-    await exporter.locator('[data-testid="video-start"]').click()
+    await startExport(exporter)
     await bench.dialog(video.fsPath)
     await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
     bench.report.videoBytes = await webm(video.fsPath)
@@ -62,7 +71,7 @@ suite('Export', () => {
       const end = boundary(2) + 0.05
       await exporter.getByLabel('Start (s)').fill(String(start))
       await exporter.getByLabel('End (s)').fill(String(end))
-      await exporter.locator('[data-testid="video-start"]').click()
+      await startExport(exporter)
       await bench.dialog(video.fsPath)
       await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
       await webm(video.fsPath)
@@ -106,7 +115,7 @@ suite('Export', () => {
         const toggle = exporter.getByRole('switch', { name, exact: true })
         if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
       }
-      await exporter.locator('[data-testid="video-start"]').click()
+      await startExport(exporter)
       await bench.dialog(video.fsPath)
       await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
       await webm(video.fsPath)

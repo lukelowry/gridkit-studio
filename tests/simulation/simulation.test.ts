@@ -1,8 +1,9 @@
-/** GridKit's own programs, run as Studio runs them: on a solver file, in its folder, with the case it
- *  names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default image
- *  or GRIDKIT_IMAGE runs in Docker or Podman. */
+/** GridKit's DynamicSimulation, run as Studio runs it: on a solver file, in its folder, with the case
+ *  it names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default
+ *  image or GRIDKIT_IMAGE runs in Docker or Podman. */
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -25,14 +26,11 @@ import {
 import { recordEdits } from '../../src/gridkit/recording.js'
 import type { Runtime } from '../../src/gridkit/runtime.js'
 import { ResultCache, type ResultsFile } from '../../src/results/index.js'
-import type {
-  GridKit,
-  Program,
-  Run,
-  RunRequest,
-  RuntimeProcess,
-} from '../../src/shared/messages.js'
-import { contingencyFile, outputOf, readSolver } from '../../src/shared/study.js'
+import type { GridKit, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
+import { outputOf, readSolver } from '../../src/shared/study.js'
+
+/** Room for every chunk a run reads. */
+const ROOM = 1 << 20
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',
@@ -72,23 +70,21 @@ describe("GridKit's programs on solver files", () => {
       .buses
   }
 
-  /** Runs `program` on a solver file written into a folder of its own, `name`, beside a copy of
-   *  case `model` whose `mon` lists `record` writes. Reads the output where the solver file and the
-   *  case say, as Studio does, until the run ends or `signal` aborts. `progress` hears of each run
-   *  of frames read, and may stop the run. */
+  /** Runs DynamicSimulation on a solver file written into a folder of its own, `name`, beside a copy
+   *  of case `model` whose `mon` lists `record` writes. Reads the output where the solver file and
+   *  the case say, as Studio does, until the run ends or `signal` aborts. `progress` hears of each
+   *  run of frames read, and may stop the run. */
   async function run(
     name: string,
     model: string,
     solver: Record<string, unknown>,
     signal: AbortSignal,
     {
-      program = 'DynamicSimulation',
       record = (kase: Case, text: string) => apply(text, recordEdits(kase, 'Bus', ['Vm'], [])),
       progress = () => {},
       using = gridkit,
       mount = root,
     }: {
-      program?: Program
       record?: (kase: Case, text: string) => string
       progress?: (stop: (reason: Error) => void) => void
       using?: GridKit
@@ -112,21 +108,19 @@ describe("GridKit's programs on solver files", () => {
       version: 1,
       fingerprint: kase.version,
       text,
-      program,
+      results: randomUUID(),
       solver: solverPath,
       output: join(folder, sink.file),
       tmax: study.tmax,
       root: mount,
       gridkit: using,
-      cacheBytes: 1 << 20,
     }
-    const job: Run = { id: name, uri: request.uri, command: program, state: 'running' }
     let owned: RuntimeProcess | undefined
     let released = false
     /** The results file the run reads, once it begins to. */
     let read: ResultsFile | undefined
     const controller = new AbortController()
-    const done = simulate(kase, request, job, new ResultCache(1 << 20), {
+    const done = simulate(kase, request, new ResultCache(ROOM), {
       signal: AbortSignal.any([signal, controller.signal]),
       reading: (file) => (read = file),
       progress: async () => progress((reason) => controller.abort(reason)),
@@ -139,7 +133,7 @@ describe("GridKit's programs on solver files", () => {
     return {
       kase,
       folder,
-      job,
+      request,
       done,
       owned: () => owned,
       released: () => released,
@@ -251,35 +245,9 @@ describe("GridKit's programs on solver files", () => {
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
   })
 
-  it('studies each fault in turn, one file each beside the solver file, and shows the first', async ({
+  it('never reads what the last run of a solver file wrote, and keeps it when a run cannot start', async ({
     signal,
   }) => {
-    const { kase, folder, done } = await run(
-      'contingencies',
-      'IEEE39',
-      { output_file: 'study.csv', tmax: 0.2, dt_monitor: 0.01, events: FAULT },
-      signal,
-      { program: 'ContingencyAnalysis' },
-    )
-    const results = await done
-    const { info } = results
-    const faults = kase.table('BusFault')
-    const buses = kase.table('Bus')
-    const faulted = Array.from(faults.records, (_, row) => kase.cell(faults, 'ports.bus', row))
-    const study = info.contingency!
-    expect(study.buses).toEqual(faulted.map((row) => kase.native(buses, row as number)))
-    expect(study.written).toEqual(faulted.map((_, n) => n))
-    expect(study.failed).toEqual([])
-    expect(study.shown).toBe(0)
-    for (const n of study.written) await access(contingencyFile(study, n))
-    expect(info.path).toBe(join(folder, 'study_0.csv'))
-    const sagged = (await readBack(results, 'Vm', { kind: 'range', between: [0.05, 0.1] })).filter(
-      (sample) => sample.row === faulted[0],
-    )
-    expect(Math.min(...sagged.map(({ value }) => value!))).toBeLessThan(0.8)
-  })
-
-  it('never reads what the last run of a solver file wrote', async ({ signal }) => {
     const solver = { output_file: 'out.csv', dt_monitor: 0.01, events: [] }
     const first = await run('again', 'IEEE39', { ...solver, tmax: 0.1 }, signal)
     expect((await first.done).info.domain[1]).toBeCloseTo(0.1, 9)
@@ -289,27 +257,28 @@ describe("GridKit's programs on solver files", () => {
       join(folder, 'IEEE39.solver.json'),
       JSON.stringify({ system_model_file: 'IEEE39.case.json', ...solver, tmax: 0.05 }),
     )
-    const kase = first.kase
-    const uri = pathToFileURL(join(folder, 'IEEE39.case.json')).href
-    const again: Run = { id: 'again-2', uri, command: 'DynamicSimulation', state: 'running' }
+    const request = { ...first.request, tmax: 0.05 }
+    const out = join(folder, 'out.csv')
+    const written = await readFile(out, 'utf8')
+    // A GridKit that is not there starts nothing, and the last run's file stays as it was.
+    await expect(
+      simulate(
+        first.kase,
+        {
+          ...request,
+          results: randomUUID(),
+          gridkit: { path: join(folder, 'missing'), image: '', cli: '' },
+        },
+        new ResultCache(ROOM),
+        { signal, reading: () => {}, progress: () => {}, log: () => {} },
+      ),
+    ).rejects.toThrow(/GridKit Path/)
+    expect(await readFile(out, 'utf8')).toBe(written)
     const results = await simulate(
-      kase,
-      {
-        uri,
-        version: 1,
-        fingerprint: kase.version,
-        text: await readFile(join(folder, 'IEEE39.case.json'), 'utf8'),
-        program: 'DynamicSimulation',
-        solver: join(folder, 'IEEE39.solver.json'),
-        output: join(folder, 'out.csv'),
-        tmax: 0.05,
-        root,
-        gridkit,
-        cacheBytes: 1 << 20,
-      },
-      again,
-      new ResultCache(1 << 20),
-      { signal, reading: () => {}, progress: async () => {}, log: () => {} },
+      first.kase,
+      { ...request, results: randomUUID() },
+      new ResultCache(ROOM),
+      { signal, reading: () => {}, progress: () => {}, log: () => {} },
     )
     expect(results.info.domain[1]).toBeCloseTo(0.05, 9)
   })
@@ -374,7 +343,7 @@ describe("GridKit's programs on solver files", () => {
   })
 
   it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
-    const { job, done, owned, released, read } = await run(
+    const { request, done, owned, released, read } = await run(
       'cancel',
       'IEEE39',
       { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
@@ -383,7 +352,7 @@ describe("GridKit's programs on solver files", () => {
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)
-    expect(job.results).toBe(read()!.info.id)
+    expect(read()!.info.id).toBe(request.results)
     expect(read()!.info.frames).toBeGreaterThan(0)
     expect(read()!.info.domain[1]).toBeLessThan(1000)
     // The process is gone, not left to finish its thousand seconds, and so is its container.

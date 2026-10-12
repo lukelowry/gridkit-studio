@@ -1,5 +1,5 @@
 /** Runs against real GridKit from a solver file's menu: what the case records, live samples,
- *  playback, results shown again and run again, a study, a cancelled run, and a native failure. */
+ *  playback, results shown again and run again, a cancelled run, and a native failure. */
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -35,12 +35,6 @@ function colored(png: PNG): number {
   }
   return count
 }
-
-/** The case's first BusFault from `from` to `to`, as GridKit's events name it. */
-const fault = (from: number, to: number) => [
-  { time: from, type: 'fault_on', element_id: 0 },
-  { time: to, type: 'fault_off', element_id: 0 },
-]
 
 suite('Run', function () {
   // A run of the whole case takes as long as GridKit does.
@@ -88,7 +82,7 @@ suite('Run', function () {
     bench.run()
     await bench.notice('Choose Signals').click()
     await bench.signals({ reveal: false })
-    assert.equal(bench.studio.errors.splice(0).length, 1)
+    assert.equal(bench.studio.reporter.errors.splice(0).length, 1)
     await bench.toggleSignal('Bus', 'Vm')
     assert.deepEqual(listed(), ['Bus'])
     await bench.writeSolver({ tmax: 2, dt_monitor: 0.01, events: [] })
@@ -184,7 +178,7 @@ suite('Run', function () {
   })
 
   test('scrubs the finished run from what each view holds', async () => {
-    bench.studio.bind(bench.key, VM, ['vertexColor', 'vertexHeight'])
+    bench.session.bind(VM, ['vertexColor', 'vertexHeight'])
     const rested = await frames(network)
     bench.session.transport.seek(end / 2)
     await until(async () => (await frames(network)) > rested, 'a seek repaints the network')
@@ -242,41 +236,6 @@ suite('Run', function () {
       'second run completes',
     )
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Va' }])
-    monitor = await bench.view('monitor')
-    await visible(monitor, 'canvas[data-rendered=true]')
-  })
-
-  test('studies each fault in turn, and shows each contingency in place', async () => {
-    await bench.writeSolver({ tmax: 0.5, dt_monitor: 0.01, events: fault(0.1, 0.2) })
-    const previous = bench.session.run!.id
-    bench.run('Run Contingency Analysis')
-    await until(
-      () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
-      'the study ends',
-      300_000,
-    )
-    const study = bench.session.results!.contingency!
-    // One contingency for each fault of the case, each faulting its own bus, the first on show.
-    const faults = (bench.source.devices as { class?: string; ports?: { bus?: number } }[]).filter(
-      (device) => device.class === 'BusFault',
-    )
-    assert.deepEqual(
-      study.buses,
-      faults.map((device) => device.ports!.bus),
-    )
-    assert.deepEqual([study.written, study.shown, study.failed], [faults.map((_, n) => n), 0, []])
-    assert.equal(bench.session.results!.path, join(folder().fsPath, 'IEEE39_0.csv'))
-    const shown = bench.session.results!.id
-    // Another contingency, from the Monitor's title bar, takes the first's place.
-    await bench.title('monitor', 'Show Contingency')
-    const bus = study.buses[1]!
-    await bench.pick(new RegExp(`^Bus ${bus}$`), `Bus ${bus}`)
-    await until(
-      () => bench.session.results?.contingency?.shown === 1,
-      'the second contingency shows',
-    )
-    assert.notEqual(bench.session.results!.id, shown)
-    assert.equal(bench.session.results!.path, join(folder().fsPath, 'IEEE39_1.csv'))
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
   })
@@ -359,7 +318,7 @@ suite('Run', function () {
     const shown = await notified('why the run failed')
     assert.equal(shown.length, 1, shown.join(' | '))
     assert.ok(shown[0]!.includes(why), shown[0])
-    assert.equal(bench.studio.errors.splice(0).length, 1)
+    assert.equal(bench.studio.reporter.errors.splice(0).length, 1)
     assert.equal(await bench.panelShown(), 'Monitor')
     assert.ok(!(await (await bench.view('monitor')).locator('body').innerText()).includes(why))
     await bench.writeSolver({ tmax: 0.1, dt_monitor: 0.01, events: [] })

@@ -1,9 +1,9 @@
-/** What Studio reads of a GridKit study's files. GridKit reads everything else in them, so an
- *  option, an event or a fault format it adds needs nothing here. */
+/** What Studio reads of a GridKit solver file. GridKit reads everything else in it, so an option, an
+ *  event or a fault format it adds needs nothing here. */
 
 import { parse, type ParseError, printParseErrorCode } from 'jsonc-parser'
 
-import type { Study } from './simulation.js'
+import { CASE_FILE } from './ids.js'
 
 /** What a .solver.json says that Studio uses: the case it runs, when it ends, and the file it names
  *  for its samples, if any. Paths are as written, relative to the solver file's folder. */
@@ -32,7 +32,7 @@ export function readSolver(name: string, text: string): Solver {
     tmax,
     output_file: output,
   } = (json && typeof json === 'object' ? json : {}) as Record<string, unknown>
-  if (typeof model !== 'string' || !/\.case\.json$/i.test(model))
+  if (typeof model !== 'string' || !CASE_FILE.test(model))
     throw new Error(`${name} names no .case.json in its system_model_file.`)
   if (typeof tmax !== 'number' || !(tmax > 0))
     throw new Error(`${name}: tmax must be a time after 0.`)
@@ -48,7 +48,3 @@ export function outputOf(name: string, solver: Solver, monitor: Sink | undefined
     `${name} names no output_file and its case has no monitor, so a run would write nothing to show.`,
   )
 }
-
-/** The file contingency `n` of a study writes. */
-export const contingencyFile = ({ base, ext }: Pick<Study, 'base' | 'ext'>, n: number): string =>
-  `${base}_${n}${ext}`

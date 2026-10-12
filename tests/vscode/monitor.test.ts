@@ -153,13 +153,9 @@ suite('Monitor', () => {
       // the run come in replies of their own.
       const { chunk, frames, domain } = await bench.waveform('Long waveform.csv', 46_000, 46, 3)
       assert.ok(frames >= 3 * chunk, 'The run must span more than three chunks')
-      bench.session.plots = [{ from: VM.type, field: VM.field }]
-      bench.studio.changed.fire(bench.key)
+      bench.session.setPlots([{ from: VM.type, field: VM.field }])
       lacking = [chunk, 3 * chunk]
-      const show = (window: [number, number] | undefined) => {
-        bench.session.window = window
-        bench.studio.changed.fire(bench.key)
-      }
+      const show = (window: [number, number] | undefined) => bench.session.setWindow(window)
       /** The frames of the readings under the plot at `at`, a voltage of 1. */
       const readings = (at: number) =>
         monitor.evaluate<number[] | null>(`(async () => {
@@ -212,8 +208,7 @@ suite('Monitor', () => {
     try {
       const results = await bench.waveform('Streamed waveform.csv', frames, 4.6, 3)
       assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
-      bench.session.plots = [{ from: VM.type, field: VM.field }]
-      bench.studio.changed.fire(bench.key)
+      bench.session.setPlots([{ from: VM.type, field: VM.field }])
       // A plot drawn anew, so what it draws is counted from now.
       await vscode.commands.executeCommand('gridkitStudio.retryMonitor', bench.uri)
       type Drawn = { rows: number; segments: number; refining: boolean; wants: unknown }

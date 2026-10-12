@@ -103,6 +103,22 @@ describe('the case worker', () => {
     }
   })
 
+  it('holds no document a completion alone brought it', async () => {
+    const rig = await start<CaseApi>(script)
+    try {
+      await rig.call('complete', {
+        uri: 'file:///typed.case.json',
+        version: 1,
+        attachmentId: 'typed',
+        offset: 2,
+        text: '{"',
+      })
+      expect(await rig.call('stats', {})).toMatchObject({ cases: 0 })
+    } finally {
+      await rig.stop()
+    }
+  })
+
   it('says where in the source a case fails to parse', async () => {
     const rig = await start<CaseApi>(script)
     try {

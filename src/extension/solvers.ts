@@ -21,7 +21,8 @@ export async function solverAt(solver: vscode.Uri) {
   return { document, study, model: near(solver, study.model) }
 }
 
-/** The file a run of `study` writes its samples to, by GridKit's rule. */
+/** The file a run of `solver`, which `study` says, writes its samples to for the case `summary`
+ *  reads, by GridKit's rule. */
 export const writtenBy = (solver: vscode.Uri, study: Solver, summary: Summary): vscode.Uri =>
   near(solver, outputOf(nameOf(solver), study, summary.recording.monitor).file)
 
@@ -31,3 +32,17 @@ export const exists = (uri: vscode.Uri) =>
     () => true,
     () => false,
   )
+
+/** The file the solver file at `path` writes now for the case `summary` reads, when it names that
+ *  case and the file is there. */
+export async function writtenNow(path: string, summary: Summary): Promise<string | undefined> {
+  try {
+    const solver = vscode.Uri.file(path)
+    const { study, model } = await solverAt(solver)
+    if (model.toString() !== summary.uri) return undefined
+    const uri = writtenBy(solver, study, summary)
+    return (await exists(uri)) ? uri.fsPath : undefined
+  } catch {
+    return undefined
+  }
+}

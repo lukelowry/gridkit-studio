@@ -7,7 +7,7 @@ import type { Query } from '@latkit/model'
 import type { Network } from '@latkit/network'
 
 import type { Bindings } from '../shared/bindings.js'
-import type { Element, Summary, ViewState } from '../shared/messages.js'
+import type { Element, Summary, ViewAction, ViewState } from '../shared/messages.js'
 import type { Snapshot } from './rows.js'
 
 /** A view on the canvas. */
@@ -75,7 +75,7 @@ export interface Kind {
   /** Brings its own controls up to date with the view. */
   sync(): void
   /** A command of the extension's that only it answers. */
-  act(view: Drawn, command: string, value: unknown): void
+  act(view: Drawn, command: ViewAction, value: unknown): void
   /** Asks again for what failed, as a reload does. */
   retry(): void
   /** What tests, and a report of a failure, read of it. */

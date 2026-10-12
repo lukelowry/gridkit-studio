@@ -77,7 +77,7 @@ suite('WECC240 run', function () {
   const measured: Record<string, string> = {}
   const global = vscode.ConfigurationTarget.Global
   const settings = () => vscode.workspace.getConfiguration('gridkitStudio')
-  const session = () => bench.studio.all.get(uri.toString())!
+  const session = () => bench.studio.get(uri.toString())!
   const camera = () =>
     session().cameras.network as { projection?: string; pitch?: number; fit?: boolean }
   /** Each bus's recorded angle at `t`, as the views read it. */
@@ -174,7 +174,7 @@ suite('WECC240 run', function () {
       'the case records nothing',
     )
     await bench.record('Bus', ['Va'], uri)
-    bench.studio.bind(key, VA, ['vertexColor', 'vertexHeight'])
+    bench.studio.get(key)!.bind(VA, ['vertexColor', 'vertexHeight'])
     await network.getByRole('button', { name: 'Tilt', exact: true }).click()
     await until(() => camera()?.projection === 'tilt' && (camera().pitch ?? 0) > 0, 'tilted')
     // Moving the view by hand stops it refitting, so a bus that rises moves on screen.

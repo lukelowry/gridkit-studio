@@ -258,13 +258,6 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
-        "command": "gridkitStudio.runContingencies",
-        "title": "Run Contingency Analysis",
-        "category": "GridKit Studio",
-        "icon": "$(run-all)",
-        "enablement": "isWorkspaceTrusted"
-      },
-      {
         "command": "gridkitStudio.showResults",
         "title": "Show Results",
         "category": "GridKit Studio",
@@ -290,13 +283,6 @@
         "category": "GridKit Studio",
         "icon": "$(clear-all)",
         "enablement": "gridkitStudio.hasResults"
-      },
-      {
-        "command": "gridkitStudio.chooseContingency",
-        "title": "Show Contingency…",
-        "category": "GridKit Studio",
-        "icon": "$(list-selection)",
-        "enablement": "gridkitStudio.contingency"
       },
       {
         "command": "gridkitStudio.plot",
@@ -735,11 +721,6 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.runContingencies",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.showResults",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@2"
@@ -767,11 +748,6 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.runContingencies",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.showResults",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@2"
@@ -797,11 +773,6 @@
           "command": "gridkitStudio.runSimulation",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@0"
-        },
-        {
-          "command": "gridkitStudio.runContingencies",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
         },
         {
           "command": "gridkitStudio.showResults",
@@ -859,11 +830,6 @@
           "command": "gridkitStudio.runAgain",
           "when": "view == gridkitStudio.monitor && gridkitStudio.fromSolver && !gridkitStudio.running",
           "group": "navigation@0"
-        },
-        {
-          "command": "gridkitStudio.chooseContingency",
-          "when": "view == gridkitStudio.monitor && gridkitStudio.contingency",
-          "group": "navigation@2"
         },
         {
           "command": "gridkitStudio.addPlot",
@@ -1171,10 +1137,6 @@
           "when": "false"
         },
         {
-          "command": "gridkitStudio.runContingencies",
-          "when": "false"
-        },
-        {
           "command": "gridkitStudio.showResults",
           "when": "false"
         },
@@ -1189,10 +1151,6 @@
         {
           "command": "gridkitStudio.clearResults",
           "when": "gridkitStudio.hasResults"
-        },
-        {
-          "command": "gridkitStudio.chooseContingency",
-          "when": "gridkitStudio.contingency"
         },
         {
           "command": "gridkitStudio.plot",

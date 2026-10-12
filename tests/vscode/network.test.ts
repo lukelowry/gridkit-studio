@@ -86,7 +86,7 @@ suite('Network', () => {
 
   test('clearing the canvas selection clears the shared selection', async () => {
     const drawn = await frames(network)
-    bench.studio.select(bench.key, { id: 'Bus/' + bench.source.buses[0]!.number })
+    bench.session.select({ id: 'Bus/' + bench.source.buses[0]!.number })
     await until(async () => (await frames(network)) > drawn, 'the selected bus is drawn')
     await network.locator('canvas').focus()
     await network.locator('canvas').press('Escape')
@@ -105,7 +105,7 @@ suite('Network', () => {
   test('paints a mapped signal at the playhead every view shares', async () => {
     await bench.results()
     const { transport } = bench.session
-    bench.studio.bind(bench.key, VM, ['vertexColor'])
+    bench.session.bind(VM, ['vertexColor'])
     transport.setLoop('wrap')
     transport.seek(0)
     const still = await frames(network)
@@ -167,20 +167,20 @@ suite('Network', () => {
       }
       const plain = await colors()
       const given = { type: 'Bus', field: 'init.Vr' }
-      const mapped = await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      const mapped = await redraw(() => bench.session.bind(given, ['vertexColor']))
       assert.ok(
         mapped.some((color, i) => apart(color, plain[i]!)),
         'a field mapped colors the buses',
       )
-      const unmapped = await redraw(() => bench.studio.bind(bench.key, given, []))
+      const unmapped = await redraw(() => bench.session.bind(given, []))
       assert.ok(
         unmapped.every((color, i) => !apart(color, plain[i]!)),
         'a mapping taken away colors them as before',
       )
       // The same once the case is edited, and so laid out again, while the field is mapped.
-      await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      await redraw(() => bench.session.bind(given, ['vertexColor']))
       await bench.record('Bus', ['Vm'])
-      const after = await redraw(() => bench.studio.bind(bench.key, given, []))
+      const after = await redraw(() => bench.session.bind(given, []))
       assert.ok(
         after.every((color, i) => !apart(color, plain[i]!)),
         'a mapping taken away after a relayout colors them as before',

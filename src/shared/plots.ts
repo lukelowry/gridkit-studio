@@ -18,6 +18,13 @@ export const holdsPlot = (
 ): boolean =>
   !!results?.outputs.some((output) => output.from === from && output.select.includes(field))
 
+/** The plots `results` can draw: those of fields they hold, else their first field. */
+export function plotsFor(results: Pick<Results, 'outputs'>, plots: readonly Plot[]): Plot[] {
+  const kept = plots.filter((plot) => holdsPlot(results, plot))
+  const first = results.outputs.find(({ select }) => select.length > 0)
+  return kept.length || !first ? kept : [{ from: first.from, field: first.select[0]! }]
+}
+
 /** A plot's name: its type, the element when it plots one, and its field, as "Bus 16 · Va [rad]". */
 export function plotName(schema: Schema | undefined, plot: Plot): string {
   if (!schema) return plot.field

@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, open } from 'node:fs/promises'
+import { copyFile, mkdir, open, stat } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { Readable } from 'node:stream'
 
@@ -17,6 +16,7 @@ import {
 } from '@latkit/model'
 
 import type { Case } from '../gridkit/index.js'
+import { message, problem } from '../shared/errors.js'
 import type { Results, Revision, SamplesInput } from '../shared/messages.js'
 import type { Frames, ResultCache } from './cache.js'
 import {
@@ -40,6 +40,8 @@ interface Segment {
 
 /** While a playhead plays, time behind it counts this many times over: views load ahead of it. */
 const BEHIND = 4
+/** Times are kept in an array that doubles as frames come, from this many. */
+const FIRST_TIMES = 1024
 
 /** The first of `count` indices where `holds`, which holds at every index after one it holds at;
  *  `count` when it holds at none. */
@@ -123,60 +125,67 @@ function joined(groups: readonly Frames[]): Frames {
   })
 }
 
-/** The results file at `path`, read for `kase` at `revision`, before anything is read of it. */
-export function described(
-  kase: Case,
-  revision: Revision,
-  path: string,
-  more: Partial<Results> = {},
-): Results {
-  return {
-    id: randomUUID(),
-    revision: { uri: revision.uri, version: revision.version },
-    fingerprint: kase.version,
-    name: basename(path),
-    path,
-    outputs: [],
-    frames: 0,
-    domain: [0, 0],
-    chunk: 0,
-    growing: false,
-    started: Date.now(),
-    ...more,
-  }
-}
+/** Why results that were closed read nothing more: whoever asks of them stops, and says nothing. */
+export const closed = () => problem('results-closed', 'These results are closed.')
 
-/** Why results let go of cannot be read: the views ask nothing more of them, and say nothing. */
-export const unavailable = () =>
-  Object.assign(new Error('These results are no longer read. Open them again.'), {
-    code: 'results-unavailable',
-  })
+/** What a reading of a results file is, besides the file: the id it is held by, the case revision
+ *  it is read against, and the solver file whose run writes it and the times that run covers. */
+export interface Reading {
+  readonly id: string
+  readonly revision: Revision
+  readonly path: string
+  readonly solver?: string
+  readonly span?: Domain
+}
 
 /** A GridKit results file read for a case, in chunks of frames that every process cuts alike: the
  *  header's width sets how many frames each holds. The header says what the file holds, whether a
- *  run writes it or it was opened alone. */
+ *  run writes it or it was opened alone. Only it changes what it says of itself. */
 export class ResultsFile {
+  readonly #info: Results
   /** The file as read, in runs of whole frames. */
   readonly #segments: Segment[] = []
   /** Every frame's time. */
-  #times = new Float64Array(1024)
-  /** The decoded frames of the chunk not yet whole, in order, and those frames as one. */
+  #times = new Float64Array(FIRST_TIMES)
+  /** While the file is read through, the decoded frames of the chunk not yet whole, in order, and
+   *  those frames as one. */
   #tail: Frames[] = []
   #joined?: { count: number; frames: Frames }
+  #ingesting = false
+  /** The file's size and time once read through. Its bytes are found again by where they are, so
+   *  one written again since reads no further. */
+  #stamp?: { size: number; mtimeMs: number }
   /** How every segment of this file reads, from its header. */
   readonly #layout: Layout = {}
   /** Who reads the file now, each done once its promise settles. */
   readonly #leases = new Map<AbortController, Promise<void>>()
   #retired = false
+
   constructor(
-    readonly info: Results,
     readonly kase: Case,
     readonly cache: ResultCache,
+    { id, revision, path, solver, span }: Reading,
   ) {
-    // Each reading measures, and learns what it holds, from its own file.
-    this.info.domains = {}
-    this.info.outputs = []
-    this.info.chunk = 0
+    this.#info = {
+      id,
+      revision: { uri: revision.uri, version: revision.version },
+      fingerprint: kase.version,
+      name: basename(path),
+      path,
+      outputs: [],
+      frames: 0,
+      domain: [0, 0],
+      domains: {},
+      chunk: 0,
+      growing: false,
+      ...(solver && { solver }),
+      ...(span && { span }),
+    }
+  }
+
+  /** What the file holds, as read so far. */
+  get info(): Readonly<Results> {
+    return this.#info
   }
 
   /** What the file holds, once its header is read. */
@@ -184,15 +193,10 @@ export class ResultsFile {
     return this.#layout.read?.fields ?? []
   }
 
-  /** Whether anyone reads the file now. */
-  get busy(): boolean {
-    return this.#leases.size > 0
-  }
-
   /** Reads the file with `read` until it settles. Retiring the file stops it, and waits for it. */
   async use<R>(signal: AbortSignal, read: (signal: AbortSignal) => Promise<R>): Promise<R> {
     signal.throwIfAborted()
-    if (this.#retired) throw unavailable()
+    if (this.#retired) throw closed()
     const lease = new AbortController()
     let done!: () => void
     this.#leases.set(lease, new Promise<void>((resolve) => (done = resolve)))
@@ -208,27 +212,43 @@ export class ResultsFile {
   async retire(): Promise<void> {
     this.#retired = true
     const leases = [...this.#leases]
-    for (const [lease] of leases) lease.abort(unavailable())
+    for (const [lease] of leases) lease.abort(closed())
     await Promise.all(leases.map(([, done]) => done))
-    this.release()
+    this.cache.drop(this)
+    this.#tail = []
+    this.#joined = undefined
   }
 
-  /** Follows the results file as the run writes it, reading each segment as it comes, and tells
-   *  `progress` after each. Returns once `ended` and the file has nothing more. */
+  /** Follows the results file as it is written, reading each segment as it comes, and tells
+   *  `progress` after each. Returns once `ended` and the file has nothing more. Meanwhile it grows;
+   *  why it stops short, if it does, it says. */
   async ingest(signal: AbortSignal, ended: () => boolean, progress: () => Promise<void> | void) {
-    for await (const piece of follow(this.info.path, signal, ended)) {
-      if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
-      else {
-        await this.#append(piece, signal)
-        await progress()
+    this.#ingesting = true
+    this.#info.growing = true
+    try {
+      for await (const piece of follow(this.#info.path, signal, ended)) {
+        if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
+        else {
+          await this.#append(piece, signal)
+          await progress()
+        }
       }
+      const { size, mtimeMs } = await stat(this.#info.path)
+      this.#stamp = { size, mtimeMs }
+    } catch (error) {
+      if (!signal.aborted) this.#info.error = message(error)
+      throw error
+    } finally {
+      this.#ingesting = false
+      this.#info.growing = false
+      this.#settle()
     }
   }
 
   /** The first frame time after `at`, or the last before it when `direction` is -1: the first or
    *  last time when there is none. */
   step(at: number, direction: -1 | 1): number {
-    const { frames, domain } = this.info
+    const { frames, domain } = this.#info
     const times = this.#times
     if (direction > 0) {
       const next = firstWhere(frames, (i) => times[i]! > at)
@@ -241,7 +261,7 @@ export class ResultsFile {
   /** The case's data with the chunks whose frames reach over `window`: of the fields of type
    *  `from`, as a query of its rows reads, else of every field. */
   async data(window: Domain, signal: AbortSignal, from?: string): Promise<Data> {
-    const { chunk } = this.info
+    const { chunk } = this.#info
     const fields = from
       ? this.fields.flatMap((field, f) => (field.index.type === from ? [f] : []))
       : undefined
@@ -258,7 +278,7 @@ export class ResultsFile {
     { field, window, held, near, bytes }: SamplesInput,
     signal: AbortSignal,
   ): Promise<Data.SampleBatch[]> {
-    const { chunk, frames } = this.info
+    const { chunk, frames } = this.#info
     const f = this.#fieldOf(field)
     if (!chunk || f < 0) return []
     const [first, end] = this.#span(window)
@@ -278,6 +298,14 @@ export class ResultsFile {
       size += blockByteLength([batch])
     }
     return reply
+  }
+
+  /** Copies the file to `path`: it is GridKit's CSV already. */
+  async exportCsv(path: string) {
+    if (resolve(path) === resolve(this.#info.path))
+      throw new Error('Choose a different file from the open results.')
+    await mkdir(dirname(path), { recursive: true })
+    await copyFile(this.#info.path, path)
   }
 
   /** Where `from`'s `select`ed field is among those the file holds; -1 where it holds none. */
@@ -340,19 +368,6 @@ export class ResultsFile {
     }
   }
 
-  /** Copies the file to `path`: it is GridKit's CSV already. */
-  async exportCsv(path: string) {
-    if (resolve(path) === resolve(this.info.path))
-      throw new Error('Choose a different file from the open results.')
-    await mkdir(dirname(path), { recursive: true })
-    await copyFile(this.info.path, path)
-  }
-
-  /** Drops the file's cached chunks. */
-  release() {
-    this.cache.drop(this.info.id + ':')
-  }
-
   /** Reads the file's header alone, which gives the layout every segment is read with. */
   async #learn(header: Uint8Array, signal: AbortSignal) {
     await readResults(
@@ -364,17 +379,29 @@ export class ResultsFile {
     this.#learned()
   }
 
-  /** Tells the views, through `info`, what the file holds and how it is cut, once its header says. */
+  /** Says what the file holds and how it is cut, once its header says. */
   #learned() {
-    if (this.info.outputs.length || !this.fields.length) return
-    this.info.outputs = selectionsOf(this.fields)
-    this.info.chunk = chunkFrames(this.fields)
+    if (this.#info.outputs.length || !this.fields.length) return
+    this.#info.outputs = selectionsOf(this.fields)
+    this.#info.chunk = chunkFrames(this.fields)
+  }
+
+  /** Read through, the chunk not yet whole is kept as the whole ones are: in the cache, under its
+   *  budget, and decoded again from the file once the cache lets go of it. */
+  #settle() {
+    const { chunk, frames } = this.#info
+    if (this.#tail.length && !this.#retired)
+      joined(this.#tail).forEach((batch, f) =>
+        this.cache.put(this, this.#keyOf(Math.floor(frames / chunk), f), [batch]),
+      )
+    this.#tail = []
+    this.#joined = undefined
   }
 
   /** The frames whose samples reach over `[a, b]`: from the last at or before `a` up to the first
    *  at or after `b`, as a frame and the frame past the last. */
   #span([a, b]: Domain): [number, number] {
-    const { frames } = this.info
+    const { frames } = this.#info
     if (!frames) return [0, 0]
     const times = this.#times
     const first = Math.max(0, firstWhere(frames, (i) => times[i]! > a) - 1)
@@ -387,7 +414,7 @@ export class ResultsFile {
 
   /** How far chunk `k`'s times lie from `at`; while a playhead plays, time behind it counts more. */
   #distance(k: number, { at, travel }: { at: number; travel: number }): number {
-    const { chunk, frames } = this.info
+    const { chunk, frames } = this.#info
     const start = this.#times[k * chunk]!
     const end = this.#times[Math.min(frames, (k + 1) * chunk) - 1]!
     if (at < start) return (start - at) * (travel < 0 ? BEHIND : 1)
@@ -397,18 +424,19 @@ export class ResultsFile {
 
   /** The cache's key for field `f` of chunk `k`. Each field of a chunk is kept apart, so a view's
    *  field is decoded alone, and the fields views read stay as the rest go. */
-  #keyOf(k: number, f: number): string {
-    return `${this.info.id}:${k}:${f}`
+  #keyOf(k: number, f: number): number {
+    return k * this.fields.length + f
   }
 
   /** Chunk `k`'s frames read so far of `fields`, by their place among the file's, one batch each;
-   *  of every field when none are named. A whole chunk's field comes from the cache, or is decoded
-   *  again into it from the segments that hold it, with only the fields missing read as numbers. */
+   *  of every field when none are named. A chunk that is whole, or the last once the file is read
+   *  through, comes from the cache, or is decoded again into it from the segments that hold it,
+   *  with only the fields missing read as numbers. */
   async #chunk(k: number, signal: AbortSignal, fields?: readonly number[]): Promise<Frames> {
-    const { chunk, frames } = this.info
+    const { chunk, frames } = this.#info
     if (k * chunk >= frames) return []
     const wanted = fields ?? this.fields.map((_, f) => f)
-    if ((k + 1) * chunk > frames) {
+    if ((k + 1) * chunk > frames && this.#ingesting) {
       if (this.#joined?.count !== frames)
         this.#joined = { count: frames, frames: joined(this.#tail) }
       const tail = this.#joined.frames
@@ -416,11 +444,12 @@ export class ResultsFile {
     }
     const found = new Map<number, Data.SampleBatch>()
     for (const f of wanted) {
-      const cached = this.cache.get(this.#keyOf(k, f))?.[0]
+      const cached = this.cache.get(this, this.#keyOf(k, f))?.[0]
       if (cached) found.set(f, cached)
     }
     const missing = wanted.filter((f) => !found.has(f))
     if (missing.length) {
+      await this.#verify()
       // Groups never cross a chunk, so each lands with its own. Every chunk the segments read hold
       // whole is kept, so a segment longer than a chunk decodes once.
       const groups = new Map<number, Frames[]>()
@@ -450,7 +479,7 @@ export class ResultsFile {
           missing.forEach((f, i) => {
             const batch = whole[i]
             if (!batch) return
-            this.cache.put(this.#keyOf(j, f), [batch])
+            this.cache.put(this, this.#keyOf(j, f), [batch])
             if (j === k) found.set(f, batch)
           })
         }
@@ -482,14 +511,28 @@ export class ResultsFile {
     this.#learned()
   }
 
+  /** Refuses a file written again since it was read through: its bytes are found again by where
+   *  they are, so no view mixes two runs' samples. */
+  async #verify(): Promise<void> {
+    const stamp = this.#stamp
+    if (!stamp) return
+    const { size, mtimeMs } = await stat(this.#info.path)
+    if (size !== stamp.size || mtimeMs !== stamp.mtimeMs)
+      throw problem(
+        'results-changed',
+        `${this.#info.name} was written again after it was read. Open it again to read what it holds now.`,
+      )
+  }
+
+  /** Bytes `start` to `end` of the file. */
   async #read(start: number, end: number): Promise<Uint8Array> {
-    const file = await open(this.info.path, 'r')
+    const file = await open(this.#info.path, 'r')
     try {
       const bytes = new Uint8Array(end - start)
       let read = 0
       while (read < bytes.length) {
         const { bytesRead } = await file.read(bytes, read, bytes.length - read, start + read)
-        if (!bytesRead) throw new Error('Result file changed while being read.')
+        if (!bytesRead) throw new Error(`${this.#info.name} changed while it was read.`)
         read += bytesRead
       }
       return bytes
@@ -500,9 +543,9 @@ export class ResultsFile {
 
   /** Reads the segment between `start` and `end`, `bytes`: each group of its frames in turn. */
   async #append({ start, end, bytes }: Extract<Piece, { kind: 'segment' }>, signal: AbortSignal) {
-    const first = this.info.frames
+    const first = this.#info.frames
     await this.#decode(bytes, first, signal, (group) => this.#add(group))
-    const count = this.info.frames - first
+    const count = this.#info.frames - first
     if (count) this.#segments.push({ start, end, first, count })
   }
 
@@ -513,7 +556,7 @@ export class ResultsFile {
     if (!times?.length) return
     // The header was read before any frame.
     this.#learned()
-    const { frames } = this.info
+    const { frames } = this.#info
     if (times[0]! < (frames ? this.#times[frames - 1]! : -Infinity))
       throw new Error('Result times must be nondecreasing.')
     if (frames + times.length > this.#times.length) {
@@ -524,7 +567,7 @@ export class ResultsFile {
     this.#times.set(times, frames)
     // Measured once, as frames are read: every view uses these ranges, and scrubbing never
     // rescans history or normalizes one frame.
-    const domains = (this.info.domains ??= {})
+    const domains = (this.#info.domains ??= {})
     for (const batch of group) {
       const fields = (domains[batch.index.type] ??= {})
       const rows = rowCount(batch.rows)
@@ -541,13 +584,13 @@ export class ResultsFile {
         if (min <= max) fields[name] = [min, max]
       }
     }
-    this.info.frames = frames + times.length
-    this.info.domain = [this.#times[0]!, times.at(-1)!]
+    this.#info.frames = frames + times.length
+    this.#info.domain = [this.#times[0]!, times.at(-1)!]
     this.#tail.push(group)
-    const { chunk } = this.info
-    if (this.info.frames % chunk === 0) {
-      const k = this.info.frames / chunk - 1
-      joined(this.#tail).forEach((batch, f) => this.cache.put(this.#keyOf(k, f), [batch]))
+    const { chunk } = this.#info
+    if (this.#info.frames % chunk === 0) {
+      const k = this.#info.frames / chunk - 1
+      joined(this.#tail).forEach((batch, f) => this.cache.put(this, this.#keyOf(k, f), [batch]))
       this.#tail = []
       this.#joined = undefined
     }

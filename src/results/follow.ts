@@ -5,6 +5,9 @@ import { setTimeout } from 'node:timers/promises'
 
 import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
 
+/** How long a follower waits before it looks again for a file, or for more of it. */
+const POLL_MS = 40
+
 /** A piece of a results file: its header line, or a segment, the bytes between `start` and `end`,
  *  which hold whole frames. */
 export type Piece =
@@ -34,7 +37,7 @@ export async function* follow(
       file = await open(path, 'r')
     } catch (error) {
       if (over) throw error
-      await setTimeout(40, undefined, { signal })
+      await setTimeout(POLL_MS, undefined, { signal })
     }
   }
   try {
@@ -62,9 +65,9 @@ export async function* follow(
       cutAt = performance.now()
       return segment
     }
-    // A wide run's frame is megabytes: reading in pieces that large keeps a frame from being
+    // A wide run's frame is megabytes: reading a segment's worth at a time keeps a frame from being
     // gathered from many small reads.
-    const buffer = Buffer.alloc(4 << 20)
+    const buffer = Buffer.alloc(SEGMENT_BYTES)
     while (true) {
       signal.throwIfAborted()
       // Asked before reading: a writer done by then has written everything this read can see.
@@ -107,7 +110,7 @@ export async function* follow(
         if (!header) throw new Error('Results contain no header.')
         return
       }
-      if (!bytesRead) await setTimeout(40, undefined, { signal })
+      if (!bytesRead) await setTimeout(POLL_MS, undefined, { signal })
     }
   } finally {
     await file.close()

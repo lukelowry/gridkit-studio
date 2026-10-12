@@ -59,7 +59,7 @@ suite('Export', () => {
     const { chunk, frames, domain } = results
     assert.ok(frames > 2 * chunk, `the results span three chunks: ${frames} of ${chunk}`)
     const boundary = (k: number) => domain[0] + ((domain[1] - domain[0]) * k * chunk) / frames
-    bench.studio.bind(bench.key, VM, ['vertexColor'])
+    bench.session.bind(VM, ['vertexColor'])
     const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 chunks.webm')
     try {
       const exporter = await bench.show('export')
@@ -84,10 +84,8 @@ suite('Export', () => {
       )
       assert.ok(moments[0]! < boundary(1) && moments.at(-1)! > boundary(2), moments.join())
     } finally {
-      bench.studio.bind(bench.key, VM, [])
-      bench.studio.show(bench.session, shown)
-      bench.studio.changed.fire(bench.key)
-      await until(() => bench.session.results?.id === shown.id, 'the first results shown again')
+      bench.session.bind(VM, [])
+      await bench.session.load(shown.path)
     }
   }).timeout(180_000)
 
@@ -98,8 +96,7 @@ suite('Export', () => {
     const results = await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
     assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
     const budget = Math.floor((results.frames * (bench.source.buses.length + 1) * 8) / 4)
-    bench.session.plots = [{ from: VM.type, field: VM.field }]
-    bench.studio.changed.fire(bench.key)
+    bench.session.setPlots([{ from: VM.type, field: VM.field }])
     const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 streamed.webm')
     const exporter = await bench.show('export')
     try {
@@ -125,9 +122,7 @@ suite('Export', () => {
       await exporter.evaluate(() => {
         delete (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget
       })
-      bench.studio.show(bench.session, shown)
-      bench.studio.changed.fire(bench.key)
-      await until(() => bench.session.results?.id === shown.id, 'the first results shown again')
+      await bench.session.load(shown.path)
     }
   }).timeout(180_000)
 })

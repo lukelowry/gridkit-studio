@@ -33,14 +33,13 @@ export async function run() {
     )
     await until(() => bench.session.run?.state === 'complete', 'GridKit completes', 180_000)
     // Two whole-case plots plus eight individual traces force a scrollable panel.
-    bench.session.plots = [
+    bench.session.setPlots([
       { from: 'Bus', field: 'Vm' },
       { from: 'Bus', field: 'Va' },
       ...bench.source.buses
         .slice(0, 8)
         .map((bus) => ({ from: 'Bus', field: 'Vm', id: `Bus/${bus.number}` })),
-    ]
-    bench.studio.changed.fire(bench.key)
+    ])
     const monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     await until(
@@ -92,12 +91,12 @@ export async function run() {
       gpu: after[0]?.gpu,
       elapsedMs: performance.now() - started,
       gpuBefore: before[0]?.gpu,
-      errors: bench.studio.errors,
+      errors: bench.studio.reporter.errors,
       samples,
     }
     await writeFile(join(bench.output, 'tests', 'playback.json'), JSON.stringify(report, null, 2))
     console.log(JSON.stringify({ plots: report.plots, gpu: report.gpu, errors: report.errors }))
-    assert.deepEqual(bench.studio.errors, [])
+    assert.deepEqual(bench.studio.reporter.errors, [])
     for (let i = 0; i < after.length; i++) {
       if (!after[i]!.visible) {
         assert.equal(after[i]!.frames, before[i]!.frames, 'Offscreen plots must not render')
@@ -134,7 +133,7 @@ export async function run() {
     for (const t of [1.8, 0.1, 1.2, 0.5]) await seek(t)
     // A color mapping keeps the whole-run normalization during seeks and resizing.
     const unmapped = (await sample())[0]!.segments
-    bench.studio.bind(bench.key, VM, ['vertexColor'])
+    bench.session.bind(VM, ['vertexColor'])
     await until(
       async () =>
         monitor.evaluate(`!!document.querySelector('canvas').gridkitPlot().traces.plotted.color`),
@@ -154,14 +153,13 @@ export async function run() {
     const originalPixels = await monitor.locator('canvas').first().screenshot()
     for (let i = 1; i <= 12; i++) {
       const next = [0.4 - i * 0.01, 1.6 + i * 0.01]
-      bench.session.results = {
+      bench.session.show({
         ...original,
         domains: {
           ...original.domains,
           Bus: { ...original.domains?.Bus, Vm: next as [number, number] },
         },
-      }
-      bench.studio.changed.fire(bench.key)
+      })
       await until(
         async () =>
           JSON.stringify(await domain()) === JSON.stringify(next) &&
@@ -184,8 +182,7 @@ export async function run() {
     }
     const recoloredPixels = await monitor.locator('canvas').first().screenshot()
     assert.notDeepEqual(recoloredPixels, originalPixels, 'Cached history visibly recolors')
-    bench.session.results = original
-    bench.studio.changed.fire(bench.key)
+    bench.session.show(original)
     await until(
       async () => JSON.stringify(await domain()) === JSON.stringify(range),
       'original global range restored',
@@ -214,8 +211,7 @@ export async function run() {
     // fails is said once, and asked again when the Monitor is reloaded.
     const allPlots = bench.session.plots
     const withoutVa = async () => {
-      bench.session.plots = allPlots.filter((p) => p.field !== 'Va')
-      bench.studio.changed.fire(bench.key)
+      bench.session.setPlots(allPlots.filter((p) => p.field !== 'Va'))
       await until(
         () => monitor.evaluate<boolean>(`document.querySelectorAll('canvas').length === 9`),
         'the Va plot removed',
@@ -234,13 +230,12 @@ export async function run() {
       return originalCall.apply(results, args)
     }) as typeof originalCall
     try {
-      bench.session.plots = allPlots
-      bench.studio.changed.fire(bench.key)
-      await until(() => bench.studio.errors.length > 0, 'the failed ask said')
+      bench.session.setPlots(allPlots)
+      await until(() => bench.studio.reporter.errors.length > 0, 'the failed ask said')
     } finally {
       results.call = originalCall
     }
-    const said = bench.studio.errors.splice(0)
+    const said = bench.studio.reporter.errors.splice(0)
     assert.ok(
       said.every((error) => /Injected read failure/.test(error)),
       said.join('\n'),
@@ -251,7 +246,7 @@ export async function run() {
         (await sample()).filter((p) => p.visible).every((p) => p.historyBytes > 0 && !p.refining),
       async () => 'the Va plot drawn again: ' + JSON.stringify(await sample()),
     )
-    assert.deepEqual(bench.studio.errors, [], 'A reloaded Monitor reads its samples')
+    assert.deepEqual(bench.studio.reporter.errors, [], 'A reloaded Monitor reads its samples')
     bench.report.normalization = { changes: 12, segments: 0, modelQueries: 0 }
     await seek(1.5)
     await bench.page.setViewportSize({ width: 1200, height: 800 })
@@ -315,7 +310,7 @@ export async function run() {
       )
     }
     await pause(300)
-    const expected = bench.studio.errors.splice(0)
+    const expected = bench.studio.reporter.errors.splice(0)
     // Explicit GPUDevice.destroy() may be classified as cancellation rather than a defect.
     assert.ok(
       expected.every((error) => /device|destroy|lost/i.test(error)),
@@ -338,9 +333,9 @@ export async function run() {
       'render failure replaces the lane and resumes presentation',
     )
     await pause(300)
-    await until(() => bench.studio.errors.length > 0, 'render failure reported')
+    await until(() => bench.studio.reporter.errors.length > 0, 'render failure reported')
     assert.ok(
-      bench.studio.errors
+      bench.studio.reporter.errors
         .splice(0)
         .every((error) => /Injected playback render failure/.test(error)),
     )
@@ -364,8 +359,8 @@ export async function run() {
       'stalled GPU queue is replaced and playback resumes',
     )
     await monitor.evaluate(`window.stalledFrames.forEach(resolve => resolve())`)
-    await until(() => bench.studio.errors.length > 0, 'stalled presentation is reported')
-    const stalled = bench.studio.errors.splice(0)
+    await until(() => bench.studio.reporter.errors.length > 0, 'stalled presentation is reported')
+    const stalled = bench.studio.reporter.errors.splice(0)
     assert.ok(stalled.some((error) => /stopped presenting/.test(error)))
     assert.ok(
       stalled.every((error) => /stopped presenting|device|destroy|closed/i.test(error)),

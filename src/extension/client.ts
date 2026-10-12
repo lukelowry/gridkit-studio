@@ -8,6 +8,7 @@ import type {
   CaseApi,
   FromWorker,
   ResultsApi,
+  ResultsOptions,
   RuntimeProcess,
   WorkerEvent,
 } from '../shared/messages.js'
@@ -58,6 +59,11 @@ interface Owner {
   release(): Promise<void>
 }
 
+/** A worker that stops this many times within `CRASH_MS` is unsteady: what it held is read again
+ *  only once the user asks, so what may stop it does not stop it over and over. */
+export const CRASHES = 3
+const CRASH_MS = 60_000
+
 /** A worker of the extension's, started when first asked and again after it stops. */
 class Thread<A extends Api<A>> {
   /** Hears why the worker stopped, each time it does. */
@@ -67,16 +73,26 @@ class Thread<A extends Api<A>> {
   /** The teardown of one that stopped: calls wait for it before another starts. */
   #teardown?: Promise<void>
   #closed = false
+  /** When the worker last stopped. */
+  #crashes: number[] = []
 
   constructor(
     private readonly name: string,
     private readonly script: string,
     private readonly owner: Owner,
+    /** What each worker started is started with. */
+    private readonly data?: () => unknown,
   ) {}
 
   /** Whether the worker runs now. */
   get running(): boolean {
     return this.#worker !== undefined
+  }
+
+  /** Whether it stopped fewer than CRASHES times in the last CRASH_MS, so what it held may be read
+   *  again at once. */
+  get steady(): boolean {
+    return this.#crashes.length < CRASHES
   }
 
   /** Calls `method` of the worker, starting it if it is not running. */
@@ -93,13 +109,15 @@ class Thread<A extends Api<A>> {
 
   #start(): Caller<A> {
     if (this.#caller) return this.#caller
-    const worker = new Worker(this.script)
+    const worker = new Worker(this.script, { workerData: this.data?.() })
     const caller = new Caller<A>((message) => worker.postMessage(message))
     this.#worker = worker
     this.#caller = caller
     const stopped = (error: Error) => {
       if (this.#worker !== worker) return
       this.#worker = this.#caller = undefined
+      const now = Date.now()
+      this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
       // Set before anyone hears, so a call the failure prompts waits for the teardown.
       this.#teardown = this.owner
         .release()
@@ -143,7 +161,8 @@ class Thread<A extends Api<A>> {
 }
 
 /** The extension's two workers: the case worker, which reads open cases as they are edited, and the
- *  results worker, which runs GridKit and reads results files. Their bundles are in `folder`. */
+ *  results worker, which runs GridKit and reads results files, started with `results`. Their
+ *  bundles are in `folder`. */
 export class Client {
   readonly event = new Emitter<Exclude<WorkerEvent, { kind: 'process' }>>()
   /** The GridKit process the results worker runs for each case, terminated here if it dies. */
@@ -151,7 +170,7 @@ export class Client {
   readonly cases: Thread<CaseApi>
   readonly results: Thread<ResultsApi>
 
-  constructor(folder: string) {
+  constructor(folder: string, results: () => ResultsOptions) {
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
         if (event.kind !== 'process') return this.event.fire(event)
@@ -169,6 +188,7 @@ export class Client {
       'results',
       join(folder, 'results.cjs'),
       owner(() => this.#terminate()),
+      results,
     )
   }
 
@@ -188,9 +208,8 @@ export class Client {
     await Promise.all(owned.map(terminateRuntime))
   }
 
+  /** Stops both workers, and every GridKit process the results worker started. */
   async dispose() {
-    // A run under way ends as interrupted; nothing is started to be told to.
-    if (this.results.running) await this.results.call('shutdown', {}).catch(() => {})
     await Promise.all([this.cases.dispose(), this.results.dispose()])
     await this.#terminate()
     this.event.dispose()

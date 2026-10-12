@@ -8,8 +8,11 @@ import { Worker } from 'node:worker_threads'
 
 import { build } from 'esbuild'
 
-import type { FromWorker, WorkerEvent } from '../shared/messages.js'
+import type { FromWorker, ResultsOptions, WorkerEvent } from '../shared/messages.js'
 import { type Api, Caller } from '../shared/rpc.js'
+
+/** What the tests start the results worker with: room for every chunk they read. */
+export const OPTIONS: ResultsOptions = { cacheBytes: 64 << 20 }
 
 /** Bundles the worker `name` into `output/tests/<folder>`, as the extension ships it; its path. */
 export async function bundle(name: 'cases' | 'results', folder: string): Promise<string> {
@@ -27,10 +30,14 @@ export async function bundle(name: 'cases' | 'results', folder: string): Promise
   return outfile
 }
 
-/** The worker at `script`, with a folder of files of its own, every event it sends kept. */
-export async function start<A extends Api<A>>(script: string, folder?: string) {
+/** The worker at `script`, started with `options`, with a folder of files of its own, every event
+ *  it sends kept. */
+export async function start<A extends Api<A>>(
+  script: string,
+  { folder, options = OPTIONS }: { folder?: string; options?: ResultsOptions } = {},
+) {
   const scratch = folder ?? (await mkdtemp(join(tmpdir(), 'gridkit-worker-test-')))
-  const worker = new Worker(script)
+  const worker = new Worker(script, { workerData: options })
   const caller = new Caller<A>((message) => worker.postMessage(message))
   const events: WorkerEvent[] = []
   worker.on('message', (message: FromWorker) => {

@@ -5,10 +5,16 @@ import { parentPort } from 'node:worker_threads'
 
 import { blockBuffers } from '@latkit/model'
 
-import type { FromWorker } from '../shared/messages.js'
+import type { FromWorker, Memory } from '../shared/messages.js'
 import { answerer, type Api, type Handlers } from '../shared/rpc.js'
 
 const port = parentPort!
+
+/** How much memory this worker holds. */
+export function memory(): Memory {
+  const { heapUsed, arrayBuffers } = process.memoryUsage()
+  return { heapUsed, arrayBuffers }
+}
 
 /** Send the extension `message`, moving `buffers` rather than copying them. */
 export function send(message: FromWorker, buffers: readonly ArrayBufferLike[] = []) {

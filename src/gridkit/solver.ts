@@ -20,25 +20,16 @@ export function readSolverLine(raw: string): SolverLine {
 }
 
 /** A line of a run for Studio's log at its level, with the line as printed when that differs, or
- *  nothing for a blank line. A ContingencyAnalysis's errors are its contingencies' own, so they are
- *  warnings; a simulation's errors after the first restate it as GridKit unwinds, so once it has
+ *  nothing for a blank line. Errors after the first restate it as GridKit unwinds, so once it has
  *  `said` why, they are details. */
 export function solverLine(
   raw: string,
-  program: unknown,
   said: boolean,
 ): { level: SolverLine['level']; message: string; raw?: string } | undefined {
   const { level, text } = readSolverLine(raw)
   if (!text) return undefined
   return {
-    level:
-      level !== 'error'
-        ? level
-        : program === 'ContingencyAnalysis'
-          ? 'warn'
-          : said
-            ? 'debug'
-            : 'error',
+    level: level === 'error' && said ? 'debug' : level,
     message: text,
     ...(text !== raw.trim() && { raw }),
   }

@@ -14,10 +14,11 @@ import {
   transaction,
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
+import { problem, superseded } from '../shared/errors.js'
 import type { CaseApi, Revision, SourceDelta, Summary } from '../shared/messages.js'
 import { nameOf, summarize, TextCases } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
-import { serve } from './serve.js'
+import { memory, serve } from './serve.js'
 
 /** An open case: its source as last sent, the parse under way, and the case that parse read. */
 interface Document {
@@ -43,9 +44,7 @@ function latest({ uri, version, attachmentId }: Revision) {
     read.summary.version !== version ||
     (attachmentId !== undefined && document.attachmentId !== attachmentId)
   )
-    throw Object.assign(new Error('The document changed. Wait for the current revision.'), {
-      code: 'stale',
-    })
+    throw superseded()
   return read
 }
 
@@ -55,7 +54,7 @@ function sourceOf(input: Revision & SourceDelta): string {
   if ('text' in input) return input.text
   const known = documents.get(input.uri)
   if (known?.source.version !== input.baseVersion || known.attachmentId !== input.attachmentId)
-    throw Object.assign(new Error('Source mirror is stale.'), { code: 'stale-source' })
+    throw problem('stale-source', 'Source mirror is stale.')
   return applyChanges(known.source.text, input.changes)
 }
 
@@ -81,7 +80,7 @@ serve<CaseApi>(
       if (key) opened.keep(kase, () => key)
       signal.throwIfAborted()
       const document = documents.get(uri)
-      if (document?.parsing !== parsing) throw new Error('Superseded document revision.')
+      if (document?.parsing !== parsing) throw superseded()
       const summary = summarize(kase, { uri, version, attachmentId }, performance.now() - started)
       document.read = { kase, summary, text }
       return summary
@@ -89,18 +88,19 @@ serve<CaseApi>(
     async validate(revision, signal) {
       const read = latest(revision)
       const issues = await diagnose(read.kase, signal)
-      if (latest(revision) !== read) throw new Error('Superseded document revision.')
+      if (latest(revision) !== read) throw superseded()
       read.summary = { ...read.summary, issues, validation: 'complete' }
       return issues
     },
     anchors: async (input, signal) => anchors(latest(input).kase, input, signal),
-    // Completion brings the source up to the revision typed, and reads it up to the cursor alone.
+    // Completion brings the source of a document the worker holds up to the revision typed, and
+    // reads it up to the cursor alone. Only a parse makes a document the worker holds, and only a
+    // release lets go of one.
     async complete(input) {
       const text = sourceOf(input)
       const known = documents.get(input.uri)
-      const source = { version: input.version, text }
-      if (known && known.attachmentId === input.attachmentId) known.source = source
-      else documents.set(input.uri, { attachmentId: input.attachmentId, source, parsing: {} })
+      if (known && known.attachmentId === input.attachmentId)
+        known.source = { version: input.version, text }
       return completionsAt(catalog, text, input.offset)
     },
     context: async (input) => sourceContext(latest(input).kase, input.offset),
@@ -120,13 +120,7 @@ serve<CaseApi>(
       documents.delete(uri)
       return null
     },
-    stats: async () => ({
-      memory: {
-        heapUsed: process.memoryUsage().heapUsed,
-        arrayBuffers: process.memoryUsage().arrayBuffers,
-      },
-      cases: documents.size,
-    }),
+    stats: async () => ({ memory: memory(), cases: documents.size }),
   },
   ['query', 'rows'],
 )

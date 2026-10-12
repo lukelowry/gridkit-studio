@@ -1,265 +1,257 @@
 /** The results worker: GridKit's runs, and the results files Studio reads, each against the case
- *  source it was read for. The views ask it for the frames they lack. Apart from the case worker,
- *  neither a long run nor a large file slows editing, nor editing a seek. */
+ *  source it was read for. It holds exactly what the extension holds: each results file by the id
+ *  the extension chose for it, until the extension closes it, and a case only while a file it holds
+ *  or a run under way reads it. Apart from the case worker, neither a long run nor a large file
+ *  slows editing, nor editing a seek. */
 
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
+import { workerData } from 'node:worker_threads'
 
-import { failure } from '@latkit/model'
-
-import { catalog, presentation, simulate } from '../gridkit/index.js'
+import { Case, catalog, presentation, PROGRAM, simulate } from '../gridkit/index.js'
 import { solverLine } from '../gridkit/solver.js'
-import { described, PROGRESS_MS, ResultCache, ResultsFile } from '../results/index.js'
-import { defect, detail, message } from '../shared/format.js'
-import type { CaseSource, ResultsApi, Run } from '../shared/messages.js'
-import { CaseCache, nameOf, summarize } from './parsed.js'
+import { closed, PROGRESS_MS, ResultCache, ResultsFile } from '../results/index.js'
+import { defect, detail, failedWith, message, problem, quiet } from '../shared/errors.js'
+import type { CaseSource, ResultsApi, ResultsOptions, Run } from '../shared/messages.js'
+import { nameOf, summarize } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
-import { send, serve } from './serve.js'
-import { Shelf } from './shelf.js'
+import { memory, send, serve } from './serve.js'
 
-/** The cases results are read against, by their source. */
-const sources = new CaseCache()
-/** Each case's run under way. */
-const running = new Map<string, { controller: AbortController; done: Promise<Run> }>()
-const shelf = new Shelf()
-const cache = new ResultCache()
-/** The case `source` names: one read before, by its fingerprint, else its text, which the extension
- *  sends again when asked. */
+/** How many lines of a run the log hears each LOG_MS, besides the error that says why it stops: the
+ *  rest are counted, and the count said. */
+const LOG_LINES = 100
+const LOG_MS = 1000
+
+/** The results files the extension holds, by the id it chose for each. */
+const files = new Map<string, ResultsFile>()
+/** The runs under way, each with the case it runs. */
+const running = new Set<{ readonly uri: string; readonly kase: Case }>()
+const cache = new ResultCache((workerData as ResultsOptions).cacheBytes)
+
+/** The cases read now: those of the files held and of the runs under way. */
+function reading(): { readonly uri: string; readonly kase: Case }[] {
+  return [
+    ...running,
+    ...[...files.values()].map((file) => ({ uri: file.info.revision.uri, kase: file.kase })),
+  ]
+}
+
+/** The case `source` names, as a file held or a run under way reads it; else read from its text,
+ *  which the extension sends again when asked. Nothing else keeps a case: it goes with the last
+ *  that reads it. */
 async function caseOf({ uri, fingerprint, text }: CaseSource, signal: AbortSignal) {
-  const known = sources.find(uri, fingerprint)
-  if (known) return known
+  const known = reading().find((user) => user.uri === uri && user.kase.version === fingerprint)
+  if (known) return known.kase
   if (text === undefined)
-    throw Object.assign(new Error('The results worker has yet to read this case.'), {
-      code: 'needs-source',
-    })
-  return sources.parse(uri, text, catalog, nameOf(uri), signal)
+    throw problem('needs-source', 'The results worker has yet to read this case.')
+  return Case.parse(text, catalog, nameOf(uri), signal)
 }
 
-/** What tells the extension how far `file` has been read: at most every PROGRESS_MS, unless `now`. */
-function teller(uri: string, file: ResultsFile) {
-  let told = -Infinity
-  return (now = false) => {
-    if (!now && performance.now() - told < PROGRESS_MS) return
-    told = performance.now()
-    send({ kind: 'results', uri, results: file.info })
-  }
+/** The results `id` names, while the extension holds them. */
+function held(id: string): ResultsFile {
+  const file = files.get(id)
+  if (!file) throw closed()
+  return file
 }
 
-/** `read` of the results `id` names, which letting go of them stops. */
-function withResults<R>(
+/** `read` of the results `id` names, which closing them stops. */
+function using<R>(
   id: string,
   signal: AbortSignal,
   read: (file: ResultsFile, signal: AbortSignal) => Promise<R>,
 ): Promise<R> {
-  const file = shelf.find(id)
+  const file = held(id)
   return file.use(signal, (s) => read(file, s))
 }
 
-/** Runs GridKit as `input` says and reads what it writes. The request is the run, so cancelling
- *  it stops the run. Why it could not start is thrown; how it ended is in what it returns. */
-async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): Promise<Run> {
-  if (running.has(input.uri)) throw failure('conflict', `${nameOf(input.uri)} is already running.`)
-  const kase = await caseOf(input, signal)
-  cache.limit = input.cacheBytes
-  const run: Run = {
-    id: randomUUID(),
-    uri: input.uri,
-    command: `${input.program} ${basename(input.solver)}`,
-    state: 'running',
-  }
-  const controller = new AbortController()
-  const cancel = () => controller.abort(new Error('Simulation cancelled.'))
-  signal.addEventListener('abort', cancel, { once: true })
-  if (signal.aborted) cancel()
-  const done = (async () => {
-    let logWindow = 0
-    let logCount = 0
-    let dropped = 0
-    /** Whether GridKit has said why the run stops; the errors after restate it as it unwinds. */
-    let said = false
-    /** The results file the run writes, once it begins to, and what tells of it. */
-    let writing: { file: ResultsFile; tell: (now?: boolean) => void } | undefined
-    try {
-      send({ kind: 'run', run })
-      await simulate(kase, input, run, cache, {
-        signal: controller.signal,
-        reading: (file) => {
-          shelf.keep(file)
-          writing = { file, tell: teller(input.uri, file) }
-          send({ kind: 'run', run })
-          writing.tell(true)
-        },
-        progress: async () => writing?.tell(),
-        // Each line at its level, at most 100 a second; the rest are counted, and the count sent.
-        log: (text) => {
-          const line = solverLine(text, input.program, said)
-          if (!line) return
-          said ||= line.level === 'error'
-          if (Date.now() - logWindow > 1000) {
-            if (dropped)
-              send({
-                kind: 'log',
-                uri: input.uri,
-                level: 'info',
-                message: `${dropped} solver lines omitted.`,
-              })
-            dropped = 0
-            logWindow = Date.now()
-            logCount = 0
-          }
-          if (++logCount <= 100) send({ kind: 'log', uri: input.uri, ...line })
-          else dropped++
-        },
-        lifecycle: (process) => send({ kind: 'process', uri: input.uri, process }),
-      })
-      run.state = 'complete'
-    } catch (error) {
-      run.state = controller.signal.aborted
-        ? controller.signal.reason?.interrupted
-          ? 'interrupted'
-          : 'cancelled'
-        : 'failed'
-      run.message = message(error)
-      if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
-    } finally {
-      if (writing) {
-        writing.file.info.growing = false
-        writing.tell(true)
-      }
-      // The run's last state goes out whatever its cleanup meets, so it never stays running.
-      send({ kind: 'run', run })
-    }
-    return run
-  })()
-  running.set(input.uri, { controller, done })
-  try {
-    return await done
-  } finally {
-    running.delete(input.uri)
-    signal.removeEventListener('abort', cancel)
+/** What tells the extension how far `file` has been read: at most every PROGRESS_MS, unless `now`. */
+function teller(file: ResultsFile) {
+  let told = -Infinity
+  return (now = false) => {
+    if (!now && performance.now() - told < PROGRESS_MS) return
+    told = performance.now()
+    send({ kind: 'results', uri: file.info.revision.uri, results: file.info })
   }
 }
 
-/** A GridKit results file read for the case: Open Results…, a session restored after a reload,
- *  or another contingency of a study. Its header says what it holds. It answers once the first
- *  frames are read; the rest are read on, the views hearing as they come, until clearing the case's
- *  results lets go of them. */
-async function openResults(input: ResultsApi['open']['input'], signal: AbortSignal) {
-  const kase = await caseOf(input, signal)
-  cache.limit = input.cacheBytes
-  const started = (await stat(input.path)).mtimeMs
-  // A file read whole and unchanged since, as when a study shows a contingency again, is read.
-  const kept = shelf.reopen(input.uri, input.path, kase.version, started)
-  if (kept) {
-    kept.info.revision = { uri: input.uri, version: input.version }
-    if (input.contingency) kept.info.contingency = input.contingency
-    return kept.info
+/** What tells the extension each line a run of `uri` prints, at its level, and `flush`, which says
+ *  how many went unsaid. */
+function logger(uri: string) {
+  /** Whether GridKit has said why the run stops; the errors after restate it as it unwinds. */
+  let said = false
+  let window = -Infinity
+  let count = 0
+  let dropped = 0
+  const flush = () => {
+    if (dropped)
+      send({ kind: 'log', uri, level: 'info', message: `${dropped} solver lines omitted.` })
+    dropped = 0
   }
-  const file = new ResultsFile(
-    described(kase, input, input.path, {
-      growing: true,
-      started,
-      ...(input.contingency && { contingency: input.contingency }),
-      ...(input.solver && { solver: input.solver }),
-    }),
-    kase,
-    cache,
-  )
-  const { info } = file
-  const tell = teller(input.uri, file)
+  return {
+    line(text: string) {
+      const line = solverLine(text, said)
+      if (!line) return
+      said ||= line.level === 'error'
+      const now = performance.now()
+      if (now - window > LOG_MS) {
+        flush()
+        window = now
+        count = 0
+      }
+      if (line.level === 'error' || ++count <= LOG_LINES) send({ kind: 'log', uri, ...line })
+      else dropped++
+    },
+    flush,
+  }
+}
+
+/** Runs GridKit as `input` says and reads what it writes into the results it names. The request is
+ *  the run, so cancelling it stops the run. Why it could not start is thrown; how it ended is in
+ *  what it returns. */
+async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): Promise<Run> {
+  const kase = await caseOf(input, signal)
+  const run: Run = {
+    id: randomUUID(),
+    uri: input.uri,
+    command: `${PROGRAM} ${basename(input.solver)}`,
+    state: 'running',
+  }
+  const reader = { uri: input.uri, kase }
+  running.add(reader)
+  const log = logger(input.uri)
+  /** What tells of the results the run writes, once it begins to. */
+  let tell: ((now?: boolean) => void) | undefined
+  try {
+    send({ kind: 'run', run })
+    await simulate(kase, input, cache, {
+      signal,
+      reading: (file) => {
+        files.set(file.info.id, file)
+        tell = teller(file)
+        tell(true)
+      },
+      progress: () => tell?.(),
+      log: log.line,
+      lifecycle: (process) => send({ kind: 'process', uri: input.uri, process }),
+    })
+    run.state = 'complete'
+  } catch (error) {
+    // Results closed while the run writes them stop it, as cancelling it does.
+    run.state = signal.aborted
+      ? failedWith(signal.reason, 'interrupted')
+        ? 'interrupted'
+        : 'cancelled'
+      : quiet(error)
+        ? 'cancelled'
+        : 'failed'
+    if (run.state === 'failed') run.message = message(error)
+    if (defect(error)) send({ kind: 'log', level: 'error', message: detail(error) })
+  } finally {
+    running.delete(reader)
+    log.flush()
+    tell?.(true)
+    // The run's last state goes out whatever its cleanup meets, so it never stays running.
+    send({ kind: 'run', run })
+  }
+  return run
+}
+
+/** Reads the GridKit results file `input` names into the results it names: Open Results…, a session
+ *  read again, or a worker started again. Its header says what it holds. It answers once the first
+ *  frames are read; the rest are read on, the views hearing as they come, until the extension
+ *  closes the results. */
+async function openResults(
+  { results, path, solver, ...source }: ResultsApi['open']['input'],
+  signal: AbortSignal,
+) {
+  const kase = await caseOf(source, signal)
+  const file = new ResultsFile(kase, cache, {
+    id: results,
+    revision: source,
+    path,
+    ...(solver && { solver }),
+  })
+  const tell = teller(file)
+  // Until it answers, letting go of the request stops the reading; after, closing the results does.
   const stop = new AbortController()
   const abandon = () => stop.abort(signal.reason)
   signal.addEventListener('abort', abandon, { once: true })
   if (signal.aborted) abandon()
   let begin!: () => void
   const begun = new Promise<void>((resolve) => (begin = resolve))
-  const reading = file.use(stop.signal, async (s) => {
-    try {
-      await file.ingest(
-        s,
-        () => true,
-        () => {
-          begin()
-          tell()
-        },
-      )
-    } catch (error) {
-      if (!s.aborted) info.error = message(error)
-      throw error
-    } finally {
-      info.growing = false
-    }
-  })
+  const read = file.use(stop.signal, (s) =>
+    file.ingest(
+      s,
+      () => true,
+      () => {
+        begin()
+        tell()
+      },
+    ),
+  )
   try {
     // A file whose first frames do not read does not open.
-    await Promise.race([begun, reading])
+    await Promise.race([begun, read])
   } catch (error) {
     await file.retire()
     throw error
   } finally {
     signal.removeEventListener('abort', abandon)
   }
-  shelf.keep(file)
-  void reading.then(
+  // From here to the answer nothing waits: a request let go of by now holds nothing.
+  if (signal.aborted) {
+    await file.retire()
+    signal.throwIfAborted()
+  }
+  files.set(results, file)
+  void read.then(
     () => tell(true),
     () => tell(true),
   )
-  return info
+  return file.info
 }
 
 serve<ResultsApi>(
   {
     run: runCase,
     open: openResults,
+    // The extension lets go of results it no longer shows. Their files are the user's, and stay.
+    async close({ results }) {
+      const file = files.get(results)
+      files.delete(results)
+      await file?.retire()
+      return null
+    },
+    async configure({ cacheBytes }) {
+      cache.limit = cacheBytes
+      return null
+    },
     // The views read the case's schema and counts; its issues are the case worker's to say.
     async describe({ results }) {
-      const file = shelf.find(results)
+      const file = held(results)
       return summarize(file.kase, file.info.revision)
     },
     query: ({ results, query }, signal) =>
-      withResults(results, signal, async (file, s) => {
+      using(results, signal, async (file, s) => {
         // Rows at a time read the samples of their own type alone.
         if (query.kind !== 'rows' || query.at === undefined)
           return queried(file.kase.data, query, s)
         return queried(await file.data([query.at, query.at], s, query.from), query, s)
       }),
-    rows: ({ results, fields }, signal) => rowsOf(shelf.find(results).kase, fields, signal),
-    presentation: async ({ results }) => presentation(shelf.find(results).kase),
-    samples: (input, signal) =>
-      withResults(input.results, signal, (file, s) => file.samples(input, s)),
-    step: async ({ results, at, direction }) => shelf.find(results).step(at, direction),
+    rows: ({ results, fields }, signal) => rowsOf(held(results).kase, fields, signal),
+    presentation: async ({ results }) => presentation(held(results).kase),
+    samples: (input, signal) => using(input.results, signal, (file, s) => file.samples(input, s)),
+    step: async ({ results, at, direction }) => held(results).step(at, direction),
     export: ({ results, path }, signal) =>
-      withResults(results, signal, async (file) => {
+      using(results, signal, async (file) => {
         await file.exportCsv(path)
         return null
       }),
-    // Studio lets go of the case's results, stopping a run under way. Their files are the user's,
-    // and stay.
-    async clear({ uri }) {
-      const active = running.get(uri)
-      active?.controller.abort(new Error('Simulation cancelled.'))
-      await active?.done
-      await shelf.clear(uri)
-      sources.forget(uri)
-      return null
-    },
-    async shutdown() {
-      for (const { controller } of running.values())
-        controller.abort(
-          Object.assign(new Error('The extension stopped before this simulation completed.'), {
-            interrupted: true,
-          }),
-        )
-      await Promise.allSettled([...running.values()].map(({ done }) => done))
-      return null
-    },
     stats: async () => ({
-      memory: {
-        heapUsed: process.memoryUsage().heapUsed,
-        arrayBuffers: process.memoryUsage().arrayBuffers,
-      },
-      files: shelf.size,
+      memory: memory(),
+      files: files.size,
+      cases: new Set(reading().map(({ kase }) => kase)).size,
+      runs: running.size,
       cacheBytes: cache.bytes,
     }),
   },

@@ -7,6 +7,7 @@ import * as vscode from 'vscode'
 
 import { channelsOf, NUMERIC } from '../shared/bindings.js'
 import { signalContext, type Target } from '../shared/contexts.js'
+import { viewId } from '../shared/ids.js'
 import type { Mutation, Summary } from '../shared/messages.js'
 import { fieldName, networkOf, placementOf, typeName } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
@@ -48,9 +49,7 @@ export function registerSignals(studio: Sessions) {
   const shown = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
-    return uri && summary
-      ? { uri, summary, bindings: studio.all.get(uri)?.bindings ?? {} }
-      : undefined
+    return uri && summary ? { uri, summary, bindings: studio.get(uri)?.bindings ?? {} } : undefined
   }
 
   const provider: vscode.TreeDataProvider<Signal> = {
@@ -103,7 +102,7 @@ export function registerSignals(studio: Sessions) {
     },
   }
 
-  const view = vscode.window.createTreeView('gridkitStudio.signals', {
+  const view = vscode.window.createTreeView(viewId('signals'), {
     treeDataProvider: provider,
     manageCheckboxStateManually: true,
     showCollapseAll: true,
@@ -122,7 +121,7 @@ export function registerSignals(studio: Sessions) {
     if (now && changes.length)
       void studio.documents
         .transact(now.uri, 'latest', changes, label)
-        .catch((error) => studio.report(error))
+        .catch((error) => studio.reporter.report(error))
   }
   view.onDidChangeCheckboxState(({ items }) => {
     const changes = new Map<
@@ -170,7 +169,7 @@ export function registerSignals(studio: Sessions) {
     changed,
     view,
     studio.changed.event(refresh),
-    studio.command('gridkitStudio.selectAllSignals', every(true)),
-    studio.command('gridkitStudio.clearSignals', every(false)),
+    studio.command('selectAllSignals', every(true)),
+    studio.command('clearSignals', every(false)),
   ]
 }

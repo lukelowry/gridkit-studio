@@ -6,7 +6,7 @@ import type { Layout } from '@latkit/gpu'
 import { createData, type Data, type Query, type Schema, staticFields } from '@latkit/model'
 
 import type { Bindings } from '../shared/bindings.js'
-import { cancelled } from '../shared/format.js'
+import { quiet } from '../shared/errors.js'
 import type { Plot, Revision, Summary, ViewState } from '../shared/messages.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import type { Asker } from './asker.js'
@@ -58,10 +58,12 @@ interface Of {
   readonly results?: string
 }
 
-/** The rows held, as data, and what they are of. */
+/** The rows held, as data, and what they are of: a revision, and its content, which a version of a
+ *  document VS Code opened again can name anew. */
 export interface Snapshot {
   readonly data: Data
   readonly revision: Revision
+  readonly fingerprint: string
   /** The static fields held, each as `type.field`. */
   readonly fields: ReadonlySet<string>
   /** Where the diagram's blocks are arranged, when it was asked for. */
@@ -133,6 +135,7 @@ export async function rowsOnce(
   return {
     data: createData(schemaOf(summary.schema), joined([], batches)),
     revision,
+    fingerprint: summary.fingerprint,
     fields: new Set(fields.flatMap(({ from, select }) => select.map((name) => nameOf(from, name)))),
     ...(positions && { presentation: positions }),
   }
@@ -177,6 +180,8 @@ export class Rows {
       this.#batches = []
       this.#held = new Set()
       this.#positions = undefined
+      // What failed of another revision is never asked of again.
+      this.#spent.clear()
     }
     if (this.#flight) return
     const lacking = fields
@@ -201,8 +206,7 @@ export class Rows {
   /** Whether the rows held are of the revision last asked for. */
   #current(): boolean {
     const summary = this.#wanted?.of.summary
-    const revision = this.#snapshot?.revision
-    return !!summary && revision?.uri === summary.uri && revision.version === summary.version
+    return !!summary && same(this.#snapshot, summary)
   }
 
   async #ask(
@@ -230,6 +234,7 @@ export class Rows {
       this.#snapshot = {
         data: createData(schemaOf(of.summary.schema), this.#batches),
         revision,
+        fingerprint: of.summary.fingerprint,
         fields: new Set(this.#held),
         ...(positions && { presentation: positions }),
       }
@@ -238,8 +243,7 @@ export class Rows {
       if (controller.signal.aborted) return
       this.#spent.add(spent)
       // A revision read again since it was asked for is no failure: the newer one is asked for.
-      if (!cancelled(error) && (error as { code?: string })?.code !== 'stale')
-        this.asker.report(error)
+      if (!quiet(error)) this.asker.report(error)
     } finally {
       if (this.#flight === controller) this.#flight = undefined
       // What the view came to want meanwhile.
@@ -249,16 +253,22 @@ export class Rows {
   }
 }
 
-/** Whether `snapshot` holds the rows of the revision `state` shows. */
-export function ofShown(snapshot: Snapshot | undefined, state: ViewState): boolean {
-  const summary = state.summary
+/** Whether `snapshot` holds rows of the revision `summary` describes, and of its content. */
+function same(snapshot: Snapshot | undefined, summary: Summary): boolean {
   const revision = snapshot?.revision
   return (
     !!revision &&
-    !!summary &&
     revision.uri === summary.uri &&
     revision.version === summary.version &&
-    revision.attachmentId === summary.attachmentId
+    snapshot.fingerprint === summary.fingerprint
+  )
+}
+
+/** Whether `snapshot` holds the rows of the revision `state` shows. */
+export function ofShown(snapshot: Snapshot | undefined, state: ViewState): boolean {
+  const { summary } = state
+  return (
+    !!summary && same(snapshot, summary) && snapshot!.revision.attachmentId === summary.attachmentId
   )
 }
 

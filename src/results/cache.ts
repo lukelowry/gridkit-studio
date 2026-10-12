@@ -15,55 +15,85 @@ const ownBytes = (frames: Frames) =>
     0,
   )
 
-/** Decoded chunks by key; past `limit` bytes, the least recently used are dropped. */
+/** A decoded chunk kept, the file it is of, and its key there. */
+interface Entry {
+  readonly owner: object
+  readonly key: number
+  readonly frames: Frames
+  readonly bytes: number
+}
+
+/** Decoded chunks of every results file a worker reads, each by its file and a key of the file's
+ *  own; past `limit` bytes in all, the least recently used are let go. */
 export class ResultCache {
-  readonly #entries = new Map<string, { frames: Frames; bytes: number }>()
-  bytes = 0
+  /** Every entry, least recently used first. */
+  readonly #order = new Set<Entry>()
+  readonly #owners = new Map<object, Map<number, Entry>>()
+  #bytes = 0
   #limit: number
-  constructor(limit = 256 << 20) {
+
+  constructor(limit: number) {
     this.#limit = limit
   }
+
+  /** The bytes kept. */
+  get bytes(): number {
+    return this.#bytes
+  }
+
   get limit(): number {
     return this.#limit
   }
+
   /** A lower limit lets go at once of the least recently used past it. */
   set limit(bytes: number) {
     this.#limit = bytes
     this.#trim()
   }
-  get(key: string) {
-    const found = this.#entries.get(key)
-    if (found) {
-      this.#entries.delete(key)
-      this.#entries.set(key, found)
-    }
-    return found?.frames
+
+  /** `owner`'s frames by `key`, now the most recently used. */
+  get(owner: object, key: number): Frames | undefined {
+    const entry = this.#owners.get(owner)?.get(key)
+    if (!entry) return undefined
+    this.#order.delete(entry)
+    this.#order.add(entry)
+    return entry.frames
   }
-  /** Keeps `frames` themselves, whose arrays nothing writes again, unless they alone exceed the
-   *  limit; returns them either way. */
-  put(key: string, frames: Frames) {
+
+  /** Keeps `owner`'s `frames`, whose arrays nothing writes again, by `key`: unless they alone
+   *  exceed the limit. */
+  put(owner: object, key: number, frames: Frames): void {
     const bytes = ownBytes(frames)
-    if (bytes > this.limit) return frames
-    const old = this.#entries.get(key)
-    if (old) this.bytes -= old.bytes
-    this.#entries.delete(key)
-    this.#entries.set(key, { frames, bytes })
-    this.bytes += bytes
+    if (bytes > this.#limit) return
+    // What it replaces goes first, and with it the owner's entries when it was their last.
+    const old = this.#owners.get(owner)?.get(key)
+    if (old) this.#forget(old)
+    let entries = this.#owners.get(owner)
+    if (!entries) this.#owners.set(owner, (entries = new Map()))
+    const entry = { owner, key, frames, bytes }
+    entries.set(key, entry)
+    this.#order.add(entry)
+    this.#bytes += bytes
     this.#trim()
-    return frames
   }
+
+  /** Lets go of everything kept of `owner`. */
+  drop(owner: object): void {
+    for (const entry of this.#owners.get(owner)?.values() ?? []) this.#forget(entry)
+  }
+
   #trim() {
-    for (const [key, entry] of this.#entries) {
-      if (this.bytes <= this.#limit) return
-      this.#entries.delete(key)
-      this.bytes -= entry.bytes
+    for (const entry of this.#order) {
+      if (this.#bytes <= this.#limit) return
+      this.#forget(entry)
     }
   }
-  drop(prefix: string) {
-    for (const [key, entry] of this.#entries)
-      if (key.startsWith(prefix)) {
-        this.#entries.delete(key)
-        this.bytes -= entry.bytes
-      }
+
+  #forget(entry: Entry) {
+    this.#order.delete(entry)
+    this.#bytes -= entry.bytes
+    const entries = this.#owners.get(entry.owner)!
+    entries.delete(entry.key)
+    if (!entries.size) this.#owners.delete(entry.owner)
   }
 }

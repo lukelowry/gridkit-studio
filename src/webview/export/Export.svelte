@@ -226,172 +226,177 @@
   })
 </script>
 
-<form
-  class="export c-settings"
-  data-testid="video-export"
-  onsubmit={(event) => {
-    event.preventDefault()
-    void start()
-  }}
->
-  <fieldset disabled={busy} class="export__fields">
-    <Section label="Views">
-      {#each views as shown (shown.value)}
-        <Switch
-          label={shown.label}
-          bind:checked={() => settings.views.includes(shown.value), (on) => toggle(shown.value, on)}
-        />
-      {/each}
-      <Select
-        label="Arrangement"
-        disabled={settings.views.length < 2}
-        options={[
-          { value: 'column', label: 'Stacked' },
-          { value: 'row', label: 'Side by side' },
-        ]}
-        bind:value={
-          () => settings.layout,
-          (layout) => {
-            if (layout) change({ layout })
-          }
-        }
-      />
-    </Section>
-    <Section label="Time">
-      {#each ENDS as end (end)}
-        <div class="c-row c-setting-row">
-          <label class="c-row__label" for="{id}-{end}">{end ? 'End' : 'Start'} (s)</label>
-          <input
-            id="{id}-{end}"
-            class="c-input"
-            type="number"
-            step="any"
-            min={range?.[0]}
-            max={range?.[1]}
-            value={settings.timeRange[end]}
-            oninput={(event) => bound(end, event.currentTarget.valueAsNumber)}
+<!-- With no case open there is nothing to export. -->
+{#if view.uri}
+  <form
+    class="export c-settings"
+    data-testid="video-export"
+    onsubmit={(event) => {
+      event.preventDefault()
+      void start()
+    }}
+  >
+    <fieldset disabled={busy} class="export__fields">
+      <Section label="Views">
+        {#each views as shown (shown.value)}
+          <Switch
+            label={shown.label}
+            bind:checked={
+              () => settings.views.includes(shown.value), (on) => toggle(shown.value, on)
+            }
           />
-        </div>
-      {/each}
-      <button
-        type="button"
-        class="c-btn c-btn--sm export__range"
-        disabled={!range}
-        onclick={useRecordedRange}
-      >
-        Use recorded range
-      </button>
-      <Select
-        label="Playback speed"
-        options={[0.25, 0.5, 1, 2, 4].map((value) => ({ value, label: value + 'x' }))}
-        bind:value={
-          () => settings.rate,
-          (rate) => {
-            if (rate) change({ rate })
+        {/each}
+        <Select
+          label="Arrangement"
+          disabled={settings.views.length < 2}
+          options={[
+            { value: 'column', label: 'Stacked' },
+            { value: 'row', label: 'Side by side' },
+          ]}
+          bind:value={
+            () => settings.layout,
+            (layout) => {
+              if (layout) change({ layout })
+            }
           }
-        }
-      />
-      {#if Number.isFinite(duration) && duration > 0}
-        <p class="c-note">Output duration: {duration.toFixed(2)} s.</p>
-      {/if}
-    </Section>
-    <Section label="Output">
-      <Select
-        label="Format"
-        options={[
-          { value: 'mp4', label: 'MP4' },
-          { value: 'webm', label: 'WebM' },
-        ]}
-        data-testid="video-format"
-        bind:value={
-          () => settings.format,
-          (format) => {
-            if (format) change({ format })
-          }
-        }
-      />
-      <Select
-        label="Resolution"
-        options={[
-          { value: 720, label: '720p' },
-          { value: 1080, label: '1080p' },
-          { value: 2160, label: '4K' },
-        ]}
-        data-testid="video-resolution"
-        bind:value={
-          () => settings.height,
-          (height) => {
-            if (height) change({ height, width: (height * 16) / 9 })
-          }
-        }
-      />
-      <Select
-        label="Frame rate"
-        options={[24, 30, 60].map((value) => ({ value, label: value + ' fps' }))}
-        bind:value={
-          () => settings.frameRate,
-          (frameRate) => {
-            if (frameRate) change({ frameRate })
-          }
-        }
-      />
-      <Select
-        label="Quality"
-        options={[
-          { value: 'medium', label: 'Medium' },
-          { value: 'high', label: 'High' },
-          { value: 'very-high', label: 'Very high' },
-        ]}
-        bind:value={
-          () => settings.quality,
-          (quality) => {
-            if (quality) change({ quality })
-          }
-        }
-      />
-    </Section>
-  </fieldset>
-  <div class="export__footer">
-    <div class="export__actions">
-      <button
-        class="c-btn c-btn--primary"
-        type="submit"
-        disabled={busy || !ready}
-        data-testid="video-start"
-      >
-        Export video
-      </button>
-      {#if busy}
+        />
+      </Section>
+      <Section label="Time">
+        {#each ENDS as end (end)}
+          <div class="c-row c-setting-row">
+            <label class="c-row__label" for="{id}-{end}">{end ? 'End' : 'Start'} (s)</label>
+            <input
+              id="{id}-{end}"
+              class="c-input"
+              type="number"
+              step="any"
+              min={range?.[0]}
+              max={range?.[1]}
+              value={settings.timeRange[end]}
+              oninput={(event) => bound(end, event.currentTarget.valueAsNumber)}
+            />
+          </div>
+        {/each}
         <button
-          class="c-btn"
           type="button"
-          onclick={() => {
-            cancelled = true
-            stop?.abort()
-          }}
+          class="c-btn c-btn--sm export__range"
+          disabled={!range}
+          onclick={useRecordedRange}
         >
-          Cancel
+          Use recorded range
         </button>
-      {/if}
+        <Select
+          label="Playback speed"
+          options={[0.25, 0.5, 1, 2, 4].map((value) => ({ value, label: value + 'x' }))}
+          bind:value={
+            () => settings.rate,
+            (rate) => {
+              if (rate) change({ rate })
+            }
+          }
+        />
+        {#if Number.isFinite(duration) && duration > 0}
+          <p class="c-note">Output duration: {duration.toFixed(2)} s.</p>
+        {/if}
+      </Section>
+      <Section label="Output">
+        <Select
+          label="Format"
+          options={[
+            { value: 'mp4', label: 'MP4' },
+            { value: 'webm', label: 'WebM' },
+          ]}
+          data-testid="video-format"
+          bind:value={
+            () => settings.format,
+            (format) => {
+              if (format) change({ format })
+            }
+          }
+        />
+        <Select
+          label="Resolution"
+          options={[
+            { value: 720, label: '720p' },
+            { value: 1080, label: '1080p' },
+            { value: 2160, label: '4K' },
+          ]}
+          data-testid="video-resolution"
+          bind:value={
+            () => settings.height,
+            (height) => {
+              if (height) change({ height, width: (height * 16) / 9 })
+            }
+          }
+        />
+        <Select
+          label="Frame rate"
+          options={[24, 30, 60].map((value) => ({ value, label: value + ' fps' }))}
+          bind:value={
+            () => settings.frameRate,
+            (frameRate) => {
+              if (frameRate) change({ frameRate })
+            }
+          }
+        />
+        <Select
+          label="Quality"
+          options={[
+            { value: 'medium', label: 'Medium' },
+            { value: 'high', label: 'High' },
+            { value: 'very-high', label: 'Very high' },
+          ]}
+          bind:value={
+            () => settings.quality,
+            (quality) => {
+              if (quality) change({ quality })
+            }
+          }
+        />
+      </Section>
+    </fieldset>
+    <div class="export__footer">
+      <div class="export__actions">
+        <button
+          class="c-btn c-btn--primary"
+          type="submit"
+          disabled={busy || !ready}
+          data-testid="video-start"
+        >
+          Export video
+        </button>
+        {#if busy}
+          <button
+            class="c-btn"
+            type="button"
+            onclick={() => {
+              cancelled = true
+              stop?.abort()
+            }}
+          >
+            Cancel
+          </button>
+        {/if}
+      </div>
+      <div class="export__status">
+        {#if busy}
+          <progress max="100" value={percent} aria-label="Video export progress"></progress>
+          <p class="c-note" role="status">
+            {progress?.phase === 'finalizing'
+              ? 'Finalizing video...'
+              : progress
+                ? 'Exporting video: ' + percent + '%'
+                : 'Preparing video...'}
+          </p>
+        {:else if status === 'done'}
+          <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
+        {:else if status === 'cancelled'}
+          <p class="c-note" role="status">Export cancelled.</p>
+        {/if}
+      </div>
     </div>
-    <div class="export__status">
-      {#if busy}
-        <progress max="100" value={percent} aria-label="Video export progress"></progress>
-        <p class="c-note" role="status">
-          {progress?.phase === 'finalizing'
-            ? 'Finalizing video...'
-            : progress
-              ? 'Exporting video: ' + percent + '%'
-              : 'Preparing video...'}
-        </p>
-      {:else if status === 'done'}
-        <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
-      {:else if status === 'cancelled'}
-        <p class="c-note" role="status">Export cancelled.</p>
-      {/if}
-    </div>
-  </div>
-</form>
+  </form>
+{/if}
 
 <style>
   .export {

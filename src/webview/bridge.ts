@@ -1,7 +1,8 @@
 /** A view's side of its channel to the extension: what it sends, the requests it makes, and the
  *  messages it hears. */
 
-import { cancelled, defect, detail, message } from '../shared/format.js'
+import { problemOf, quiet } from '../shared/errors.js'
+import type { ViewCommandName } from '../shared/ids.js'
 import type { FromView, Results, ToView, ViewApi, ViewState } from '../shared/messages.js'
 import { Caller } from '../shared/rpc.js'
 declare function acquireVsCodeApi(): {
@@ -17,8 +18,8 @@ export const bridge = {
   send(message: FromView) {
     api.postMessage(message)
   },
-  command(command: string, value?: unknown) {
-    api.postMessage({ kind: 'command', command, value })
+  command(command: ViewCommandName, value?: unknown) {
+    api.postMessage({ kind: 'command', command, value } satisfies FromView)
   },
   on(listener: (message: ToView) => void) {
     listeners.add(listener)
@@ -31,17 +32,10 @@ export const bridge = {
     api.setState(value)
   },
   /** Tell the user why something failed, in the one place Studio does: a notification from the
-   *  extension. A cancellation is no failure. */
+   *  extension. A failure that is none says nothing. */
   report(reason: unknown, context?: unknown) {
-    if (cancelled(reason)) return
-    api.postMessage({
-      kind: 'error',
-      message: message(reason),
-      code: String((reason as { code?: unknown } | null)?.code ?? 'operation-failed'),
-      context,
-      detail: detail(reason),
-      ...(defect(reason) && { defect: true }),
-    })
+    if (quiet(reason)) return
+    api.postMessage({ kind: 'error', problem: problemOf(reason), context } satisfies FromView)
   },
   /** Calls `method` in the extension, as long as it takes unless `signal` lets go of it. */
   request<K extends keyof ViewApi>(
@@ -68,10 +62,13 @@ const sameResults = (a: Results | undefined, b: Results | undefined) =>
     a.outputs.length === b.outputs.length)
 
 /** Applies a state message. Each carries the whole state except `summary` and `settings`, which
- *  are large and sent only when they change. A part that did not change stays the object it was,
- *  so what a view made of it is not made again. */
+ *  are large and sent only when they change, as they do with the case a view shows. A part that
+ *  did not change stays the object it was, so what a view made of it is not made again. */
 export function merged(state: ViewState, incoming: ViewState): ViewState {
-  const next: ViewState = { summary: state.summary, settings: state.settings, ...incoming }
+  const next: ViewState = {
+    ...(incoming.uri === state.uri && { summary: state.summary, settings: state.settings }),
+    ...incoming,
+  }
   const kept = next as Record<(typeof SMALL)[number], unknown>
   for (const key of SMALL)
     if (JSON.stringify(incoming[key]) === JSON.stringify(state[key])) kept[key] = state[key]

@@ -2,6 +2,7 @@ import type { Layout } from '@latkit/gpu'
 import { type Column, type Data, read, textColumn } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
 
+import { superseded } from '../shared/errors.js'
 import type { CaseApi, Summary } from '../shared/messages.js'
 import type { Asker } from './asker.js'
 import { Rows } from './rows.js'
@@ -148,7 +149,7 @@ describe('the rows a view holds', () => {
     expect(report).toHaveBeenCalledOnce()
     // A revision read again since it was asked for is no failure: the newer one is asked for.
     const stale = worker(async () => {
-      throw Object.assign(new Error('The document changed.'), { code: 'stale' })
+      throw superseded()
     })
     const quiet = rowsOf(stale.request)
     quiet.rows.want({ summary: summary(1) }, [kV])

@@ -2,7 +2,7 @@
  *  and each of its workers. A request is answered once, with its value or the problem it met,
  *  unless whoever asked lets go of it first, which tells the other side to stop. */
 
-import { errorOf, type Problem, problemOf } from './errors.js'
+import { type Code, errorOf, failedWith, type Problem, problemOf } from './errors.js'
 
 /** Methods by name: what each takes, and what it answers. */
 export type Api<A> = { [K in keyof A]: { input: unknown; output: unknown } }
@@ -84,6 +84,23 @@ export class Caller<A extends Api<A>> {
     const pending = [...this.#pending.values()]
     this.#pending.clear()
     for (const each of pending) each.fail(error)
+  }
+}
+
+/** `call`ed with `lean`, the least the other side needs when it holds what it read before; when it
+ *  answers `code`, that it lacks it, `call`ed again with `whole`, unless `signal` let go meanwhile. */
+export async function resent<I, T>(
+  call: (input: I) => Promise<T>,
+  code: Code,
+  lean: I,
+  whole: () => I,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await call(lean)
+  } catch (error) {
+    if (!failedWith(error, code) || signal?.aborted) throw error
+    return call(whole())
   }
 }
 

@@ -40,14 +40,9 @@ describe('where GridKit runs', () => {
     })
   })
 
-  it('finds each program beside the one GridKit Path names', async () => {
+  it('runs the program GridKit Path names', async () => {
     const simulation = await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
-    const analysis = await program(join(root, 'opt', 'bin'), 'ContingencyAnalysis')
     const gridkit = { path: simulation, image: '', cli: '' }
-    expect(await runtimeOf(gridkit, 'ContingencyAnalysis')).toEqual({
-      kind: 'installed',
-      program: analysis,
-    })
     expect(await runtimeOf(gridkit)).toEqual({ kind: 'installed', program: simulation })
   })
 
@@ -99,7 +94,7 @@ describe('where GridKit runs', () => {
 describe('a container run', () => {
   const place = { root: '/work', solver: '/work/studies/IEEE39.solver.json' }
   const run = (platform: NodeJS.Platform, podman: boolean) =>
-    containerArgs('DynamicSimulation', 'gridkit:latest', place, 'gridkit-studio-1', {
+    containerArgs('gridkit:latest', place, 'gridkit-studio-1', {
       platform,
       podman,
       uid: 1000,
@@ -127,14 +122,11 @@ describe('a container run', () => {
     expect(args.join(' ')).toContain('--volume /work:/workspace --workdir /workspace/studies')
     expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'IEEE39.solver.json'])
     expect(
-      containerArgs(
-        'ContingencyAnalysis',
-        'gridkit:latest',
-        { root: '/work', solver: '/work/IEEE39.solver.json' },
-        'n',
-        { platform: 'win32', podman: false },
-      ),
-    ).toEqual(expect.arrayContaining(['--workdir', '/workspace', 'ContingencyAnalysis']))
+      containerArgs('gridkit:latest', { root: '/work', solver: '/work/IEEE39.solver.json' }, 'n', {
+        platform: 'win32',
+        podman: false,
+      }),
+    ).toEqual(expect.arrayContaining(['--workdir', '/workspace']))
     expect(args).not.toContain('--user')
   })
 

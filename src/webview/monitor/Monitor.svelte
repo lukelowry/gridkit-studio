@@ -27,7 +27,15 @@
   /** Bumped as samples arrive. */
   let held = $state(0)
   const samples = new Samples(bridge, () => held++, plotBudget)
-  let source = $state.raw<Data | undefined>()
+  /** The case's rows with the samples of them, and the content they are of. */
+  let made = $state.raw<{ data: Data; fingerprint: string } | undefined>()
+  /** What the plots draw: only what was made of the content of the results on show, so a state that
+   *  names other results waits for rows of their own. */
+  const source = $derived(
+    made && made.fingerprint === (view.results?.fingerprint ?? view.summary?.fingerprint)
+      ? made.data
+      : undefined,
+  )
   let sampled = $state.raw<readonly Query.Selection[]>([])
   /** Whether the plots read their window a slice at a time, as it holds more than the budget, and
    *  the slice they read now: null once they have drawn the window. */
@@ -94,7 +102,10 @@
     )
     streaming = slice !== undefined
     slicing = slice
-    source = rows && ofShown(rows, view) ? samples.data(rows.data) : undefined
+    made =
+      rows && ofShown(rows, view)
+        ? { data: samples.data(rows.data), fingerprint: rows.fingerprint }
+        : undefined
     sampled = samples.sampled()
   })
   /** Hears where `plot`'s drawing stands after each frame, and that it draws no more. */
@@ -173,7 +184,9 @@
 <div class="monitor">
   {#if plots.length === 0 || !results}
     <div class="c-empty monitor__empty">
-      {#if !view.summary}
+      {#if !view.uri}
+        <!-- No case is open: nothing to show. -->
+      {:else if !view.summary}
         <p class="c-empty__text">Loading case…</p>
       {:else if !results}
         <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>

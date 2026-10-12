@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { Case } from '../gridkit/case.js'
 import { catalog, catalogOf } from '../gridkit/definition.js'
 import { diagnose } from '../gridkit/edits.js'
-import { CaseCache, summarize, TextCases } from './parsed.js'
+import { summarize, TextCases } from './parsed.js'
 
 const text = '{"buses":[{"class":"Bus","number":1,"name":"one","params":{"kv":230}}]}'
 const signal = () => new AbortController().signal
@@ -27,26 +27,13 @@ describe('indexed case opening', () => {
     expect(data.tables.Bus!.fields.name).toBe(names)
   })
 
-  it("finds each document's latest case while its content is the same, however large", async () => {
-    const cache = new CaseCache()
-    const first = await cache.parse('file:///one', text, catalog, 'one', signal())
-    expect(cache.find('file:///one', first.version)).toBe(first)
-    expect(cache.find('file:///two', first.version)).toBeUndefined()
-    const changed = await cache.parse(
-      'file:///one',
-      text.replace('230', '115'),
-      catalog,
-      'one',
-      signal(),
-    )
-    expect(cache.find('file:///one', first.version)).toBeUndefined()
-    expect(cache.find('file:///one', changed.version)).toBe(changed)
-    // Another catalog reads the same text as other content.
+  it('names content apart: an edit, or another catalog, reads as other content', async () => {
+    const first = await Case.parse(text, catalog, 'one')
+    expect((await Case.parse(text, catalog, 'one')).version).toBe(first.version)
+    const changed = await Case.parse(text.replace('230', '115'), catalog, 'one')
+    expect(changed.version).not.toBe(first.version)
     const revised = catalogOf({ ...JSON.parse(catalog.text), revision: 2 })
-    const again = await cache.parse('file:///one', text, revised, 'one', signal())
-    expect(again.version).not.toBe(first.version)
-    cache.forget('file:///one')
-    expect(cache.find('file:///one', again.version)).toBeUndefined()
+    expect((await Case.parse(text, revised, 'one')).version).not.toBe(first.version)
   })
 
   it('finds a whole text read before by its hash, and keeps no case past its budget', async () => {
@@ -70,13 +57,10 @@ describe('indexed case opening', () => {
   })
 
   it('cancellation applies to parses and validation, without poisoning later reads', async () => {
-    const cache = new CaseCache()
-    const kase = await cache.parse('file:///one', text, catalog, 'one', signal())
+    const kase = await Case.parse(text, catalog, 'one', signal())
     const controller = new AbortController()
     controller.abort(new Error('superseded'))
-    await expect(
-      cache.parse('file:///one', text, catalog, 'one', controller.signal),
-    ).rejects.toThrow('superseded')
+    await expect(Case.parse(text, catalog, 'one', controller.signal)).rejects.toThrow('superseded')
     await expect(diagnose(kase, controller.signal)).rejects.toThrow('superseded')
     expect(await diagnose(kase, signal())).toEqual(
       await diagnose(await Case.parse(text, catalog), signal()),

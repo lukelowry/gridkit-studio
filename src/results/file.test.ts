@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,10 +12,12 @@ import { Case, catalog } from '../gridkit/index.js'
 import type { SamplesInput } from '../shared/messages.js'
 import { ResultCache } from './cache.js'
 import { chunkFrames, type Layout, readResults } from './decode.js'
-import { described, ResultsFile } from './file.js'
+import { ResultsFile } from './file.js'
 import { CHUNK_BYTES, PROGRESS_MS } from './limits.js'
 
 const HEADER = 'time,Bus_A_Vm\n'
+/** Room for every chunk a test reads. */
+const ROOM = 256 << 20
 const signal = new AbortController().signal
 let kase: Case
 let directory: string
@@ -32,8 +35,12 @@ beforeAll(async () => {
 afterAll(() => rm(directory, { recursive: true, force: true }))
 
 /** A reading of the CSV results at `path` for `of`. */
-function file(path: string, cache = new ResultCache(), of = kase): ResultsFile {
-  return new ResultsFile(described(of, { uri: 'file:///case', version: 1 }, path), of, cache)
+function file(path: string, cache = new ResultCache(ROOM), of = kase): ResultsFile {
+  return new ResultsFile(of, cache, {
+    id: randomUUID(),
+    revision: { uri: 'file:///case', version: 1 },
+    path,
+  })
 }
 
 /** Reads `results` while its file grows, until `end` says the writer is done. */
@@ -143,7 +150,7 @@ describe('native results and ownership', () => {
     )
     const path = join(directory, 'header.csv')
     await writeFile(path, 'time,Bus_B_Vm,Bus_A_Va,"Other_x_y",bus_a_vm\n0,1.2,0.5,9,1.1\n')
-    const results = file(path, new ResultCache(), two)
+    const results = file(path, new ResultCache(ROOM), two)
     await results.ingest(
       signal,
       () => true,
@@ -159,7 +166,7 @@ describe('native results and ownership', () => {
     const unknown = join(directory, 'unknown.csv')
     await writeFile(unknown, 'time,Other_x_y\n0,1\n')
     await expect(
-      file(unknown, new ResultCache(), two).ingest(
+      file(unknown, new ResultCache(ROOM), two).ingest(
         signal,
         () => true,
         () => {},
@@ -176,7 +183,7 @@ describe('native results and ownership', () => {
     )
     const path = join(directory, 'rows.csv')
     await writeFile(path, 'time,Bus_A_Vm,Bus_C_Vm\n0,1.1,1.3\n0.01,1.2,1.4\n')
-    const results = file(path, new ResultCache(), three)
+    const results = file(path, new ResultCache(ROOM), three)
     await results.ingest(
       signal,
       () => true,
@@ -242,19 +249,21 @@ describe('native results and ownership', () => {
   })
 
   it('counts the bytes each chunk keeps of its own against the cache', async () => {
-    const cache = new ResultCache()
+    const cache = new ResultCache(ROOM)
     const results = file(large.path, cache)
     await results.ingest(
       signal,
       () => true,
       () => {},
     )
-    // One value and one time per frame of each whole chunk kept: nothing the chunks share.
+    // One value and one time per frame, of every chunk once the file is read through: nothing the
+    // chunks share.
     const { chunk, frames } = results.info
-    expect(cache.bytes).toBe(Math.floor(frames / chunk) * chunk * 16)
-    // A lower limit lets go of what is past it at once, the least recently used first.
+    expect(cache.bytes).toBe(frames * 16)
+    // A lower limit lets go of what is past it at once, the least recently used first: the last
+    // chunk, read last, stays.
     cache.limit = chunk * 16
-    expect(cache.bytes).toBe(chunk * 16)
+    expect(cache.bytes).toBe((frames % chunk) * 16)
     cache.limit = 0
     expect(cache.bytes).toBe(0)
   })
@@ -398,7 +407,7 @@ describe('native results and ownership', () => {
       )
     }
     // Every chunk kept as the file was read, against each field decoded again alone with none kept.
-    const [kept, again] = await Promise.all([read(new ResultCache()), read(new ResultCache(0))])
+    const [kept, again] = await Promise.all([read(new ResultCache(ROOM)), read(new ResultCache(0))])
     expect(exact(again)).toEqual(exact(kept))
     expect(kept[1]![0]!.columns.Va).toBeDefined()
   })

@@ -6,8 +6,38 @@ import { describe, expect, it } from 'vitest'
 import { holds, type Manifest, Menus, named } from '../../tests/menus.js'
 import { catalog } from '../gridkit/index.js'
 import { menuContext } from '../shared/contexts.js'
+import {
+  commandId,
+  COMMANDS,
+  CONTEXT_KEYS,
+  contextKey,
+  PREFIX,
+  viewId,
+  VIEWS,
+} from '../shared/ids.js'
 import { defaults, definitions, validateSettings } from '../shared/preferences.js'
 describe('native VS Code contract', () => {
+  it('names in code exactly the commands, views and context keys the manifest contributes', async () => {
+    const manifest = JSON.parse(await readFile('package.json', 'utf8'))
+    expect(
+      new Set(manifest.contributes.commands.map(({ command }: { command: string }) => command)),
+    ).toEqual(new Set(COMMANDS.map(commandId)))
+    const views = [
+      ...manifest.contributes.customEditors.map(({ viewType }: { viewType: string }) => viewType),
+      ...Object.values(manifest.contributes.views)
+        .flat()
+        .map((view) => (view as { id: string }).id),
+    ]
+    expect(new Set(views)).toEqual(new Set(VIEWS.map(viewId)))
+    // Every key of Studio's own a clause reads is one Studio sets.
+    const read = new Set(
+      new Menus(manifest as Manifest)
+        .clauses()
+        .flatMap(({ when }) => named(when))
+        .filter((key) => key.startsWith(PREFIX + '.')),
+    )
+    for (const key of read) expect(CONTEXT_KEYS.map(contextKey)).toContain(key)
+  })
   it('places each command by a clause VS Code reads, and webview menus by keys every view gives', async () => {
     const menus = new Menus(JSON.parse(await readFile('package.json', 'utf8')) as Manifest)
     // Every menu any view opens carries the same keys, whatever it was opened on.
@@ -84,13 +114,12 @@ describe('native VS Code contract', () => {
       ),
     ).toEqual(['Network', 'Diagram'])
     // GridKit runs only on the solver file a menu was opened on, as a shell runs it.
-    for (const command of ['gridkitStudio.runSimulation', 'gridkitStudio.runContingencies']) {
-      for (const menu of ['explorer/context', 'editor/context', 'editor/title/context'])
-        expect(manifest.contributes.menus[menu]).toContainEqual(
-          expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
-        )
-      expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
-    }
+    const command = commandId('runSimulation')
+    for (const menu of ['explorer/context', 'editor/context', 'editor/title/context'])
+      expect(manifest.contributes.menus[menu]).toContainEqual(
+        expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
+      )
+    expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
     expect(manifest.contributes.taskDefinitions).toBeUndefined()
     // Playback lives in the status bar and the Network's projections in the Network, not the title
     // bars; Fit is the canvas editors' own title action.
@@ -120,8 +149,8 @@ describe('native VS Code contract', () => {
       if (/show(Error|Warning|Information)Message|kind: 'notify'/.test(text)) notifying.push(path)
       if (/commands\.registerCommand/.test(text)) registering.push(path)
     }
-    // Sessions.report tells the user why what they asked for failed; the rest shows in the views.
-    expect(notifying).toEqual([join('src', 'extension', 'sessions.ts')])
+    // The Reporter tells the user why what they asked for failed; the rest shows in the views.
+    expect(notifying).toEqual([join('src', 'extension', 'report.ts')])
     expect(registering).toEqual([join('src', 'extension', 'sessions.ts')])
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {

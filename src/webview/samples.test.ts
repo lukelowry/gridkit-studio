@@ -11,6 +11,7 @@ import {
 } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
 
+import { problem } from '../shared/errors.js'
 import type { Results, SamplesInput } from '../shared/messages.js'
 import type { Asker } from './asker.js'
 import { leastWants, Samples, streamSlice, type Wants } from './samples.js'
@@ -53,7 +54,6 @@ const results = (frames: number, id = 'results'): Results => ({
   domain: [0, (frames - 1) * STEP],
   chunk: CHUNK,
   growing: false,
-  started: 0,
 })
 
 /** A worker that answers as the real one does, from results of `frames` frames, keeping what it
@@ -321,7 +321,7 @@ describe('the samples a view holds', () => {
     await new Promise((resolve) => setTimeout(resolve))
     expect(report).toHaveBeenCalledOnce()
     const gone = vi.fn(async () => {
-      throw Object.assign(new Error('Gone'), { code: 'results-unavailable' })
+      throw problem('results-closed', 'Gone')
     })
     const quiet = cache(gone)
     quiet.samples.want(results(8), [need], [0, 0])

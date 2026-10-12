@@ -22,7 +22,7 @@ export async function run(): Promise<void> {
       }
       // An error the user would see only in the log fails the test, as does a notification; a
       // test that expects one takes it first.
-      const logged = extension().exports.studio.errors.splice(0)
+      const logged = extension().exports.studio.reporter.errors.splice(0)
       const shown = await notifications()
       if (logged.length) throw new Error('GridKit Studio logged errors:\n' + logged.join('\n'))
       if (shown.length) throw new Error('VS Code showed notifications:\n' + shown.join('\n'))

@@ -36,7 +36,7 @@ suite('Links', () => {
   })
 
   test('shows a device the Network does not draw by the bus it joins', async () => {
-    bench.studio.select(bench.key, { id: 'Genrou/30_1_genrou' })
+    bench.session.select({ id: 'Genrou/30_1_genrou' })
     await until(async () => (await shown())?.ids.join() === 'Bus/30', 'its bus selected')
     // The table follows to the generators, with the generator's row selected.
     await until(

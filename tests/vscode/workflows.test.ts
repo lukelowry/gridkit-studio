@@ -125,8 +125,10 @@ suite('Workflows', function () {
     )
     const run = bench.session.run!
     assert.equal(run.state, 'complete', run.message)
-    const steady = await voltage(run.results!, 0.95)
-    const faulted = await voltage(run.results!, 1.05)
+    // The results a run writes are those on show once it ends.
+    const written = bench.session.results!.id
+    const steady = await voltage(written, 0.95)
+    const faulted = await voltage(written, 1.05)
     assert.ok(faulted < steady - 0.1, `the faulted bus's voltage drops: ${steady} → ${faulted}`)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

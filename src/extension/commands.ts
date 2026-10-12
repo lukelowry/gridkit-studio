@@ -11,10 +11,10 @@ import {
 } from '../shared/bindings.js'
 import { COLUMNS, display, leaf, rowsOf, tableFields } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
-import { detail } from '../shared/format.js'
-import type { Element, Plot, Results, Summary, Value } from '../shared/messages.js'
+import { detail } from '../shared/errors.js'
+import { type Command, settingsOf, viewId, viewOf } from '../shared/ids.js'
+import type { Element, Plot, Summary, Value, ViewAction } from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
-import { definitions } from '../shared/preferences.js'
 import {
   elementType,
   fieldName,
@@ -24,15 +24,24 @@ import {
   typeName,
   unitOf,
 } from '../shared/schema.js'
-import { contingencyFile } from '../shared/study.js'
 import type { LoopMode } from '../shared/transport.js'
-import { showPlot } from './actions.js'
 import { reviewChanges } from './git.js'
-import { cacheBytesOf, type Session, type Sessions } from './sessions.js'
+import { noCase, SHOW_PROBLEMS } from './report.js'
+import type { Session } from './session.js'
+import type { Sessions } from './sessions.js'
+import { choicesOf, choose } from './settings.js'
+import { showView } from './views.js'
 
-/** What a command acts on: its case, and the element and field it was invoked on. */
+/** How long typing in a search rests before it searches. */
+const TYPING_MS = 90
+/** Simulated seconds per second a playhead can play at. */
+const RATES = ['0.5', '1', '2', '4']
+
+/** What a command acts on: its case, as it reads now, and the element and field it was invoked
+ *  on. */
 interface Context {
   session: Session
+  document: vscode.TextDocument
   summary: Summary
   target?: Target
   element?: Element
@@ -41,7 +50,7 @@ interface Context {
 }
 /** The case a webview's command is about. */
 type Supplied = { uri?: string }
-/** The file `uri` names on this machine; the data worker reads and writes files only there. */
+/** The file `uri` names on this machine; the results worker reads and writes files only there. */
 function localPath(uri: vscode.Uri): string {
   if (uri.scheme !== 'file') throw new Error('Choose a file on this machine.')
   return uri.fsPath
@@ -86,13 +95,13 @@ export function registerCommands(studio: Sessions) {
       value instanceof vscode.Uri
         ? value.toString()
         : (target?.uri ?? supplied?.uri ?? studio.active)
-    if (!uri) throw new Error('Open a GridKit case first.')
+    if (!uri) throw noCase()
     return { uri, target }
   }
   const resolve = async (value?: unknown, supplied?: Supplied): Promise<Context> => {
     const { uri, target } = targetOf(value, supplied)
     const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    const session = studio.all.get(uri) ?? (await studio.open(document))
+    const session = studio.get(uri) ?? (await studio.open(document))
     const summary = await studio.documents.ensure(document)
     // A plot names a type's field, which an edit leaves as it was: the Monitor reads the results
     // against the revision they were opened at, so its menus are of that one.
@@ -102,6 +111,7 @@ export function registerCommands(studio: Sessions) {
     const element = target ? target.element : session.selection
     return {
       session,
+      document,
       summary,
       target,
       element,
@@ -109,25 +119,26 @@ export function registerCommands(studio: Sessions) {
       field: target?.field ?? element?.field,
     }
   }
-  const register = (id: string, run: (value?: unknown, supplied?: Supplied) => unknown) =>
-    registrations.push(
-      studio.command('gridkitStudio.' + id, (value, supplied) => run(value, supplied as Supplied)),
-    )
-  const command = (id: string, run: (context: Context, value?: unknown) => unknown) =>
+  const register = (id: Command, run: (value?: unknown, supplied?: Supplied) => unknown) =>
+    registrations.push(studio.command(id, (value, supplied) => run(value, supplied as Supplied)))
+  const command = (id: Command, run: (context: Context, value?: unknown) => unknown) =>
     register(id, async (value, supplied) => run(await resolve(value, supplied), value))
   /** A command on the case's clock or results alone, which neither reads the case nor needs it to
    *  read: a key held down plays on while the case is edited, or broken. */
-  const onSession = (id: string, run: (session: Session, value?: unknown) => unknown) =>
+  const onSession = (id: Command, run: (session: Session, value?: unknown) => unknown) =>
     register(id, (value, supplied) => {
-      const session = studio.all.get(targetOf(value, supplied).uri)
-      if (!session) throw new Error('Open a GridKit case first.')
+      const session = studio.get(targetOf(value, supplied).uri)
+      if (!session) throw noCase()
       return run(session, value)
     })
-  const changed = (session: Session) => {
-    studio.persist(session)
-    studio.changed.fire(session.uri)
-  }
-  const action = (context: Context, command: string, value?: unknown, view?: string) =>
+  /** Asks the views of the case in context to do `command`: those of one kind, or of the kind the
+   *  menu was opened on. */
+  const action = (
+    context: Context,
+    command: ViewAction,
+    value?: unknown,
+    view?: Target['origin'],
+  ) =>
     studio.action.fire({
       uri: context.session.uri,
       command,
@@ -138,16 +149,26 @@ export function registerCommands(studio: Sessions) {
     await vscode.commands.executeCommand(
       'vscode.openWith',
       vscode.Uri.parse(context.session.uri),
-      'gridkitStudio.' + kind,
+      viewId(kind),
       vscode.ViewColumn.Active,
     )
-    if (context.element) studio.select(context.session.uri, context.element)
+    if (context.element) context.session.select(context.element)
   }
-  /** Activate the case and focus its `view` panel, selecting `element` there. */
-  const focus = async (session: Session, view: string, element?: Element) => {
+  /** Follows the case, and shows its `view`, selecting `element` there. */
+  const focus = async (
+    session: Session,
+    view: Parameters<typeof showView>[0],
+    element?: Element,
+  ) => {
     studio.activate(session.uri)
-    if (element) studio.select(session.uri, element)
-    await vscode.commands.executeCommand('gridkitStudio.' + view + '.focus')
+    if (element) session.select(element)
+    await showView(view)
+  }
+  /** Shows `plot` in the Monitor of the session's case, with `element` selected. Recording is a
+   *  separate choice, made in Monitored Signals. */
+  const showPlot = (session: Session, plot: Plot, element?: Element) => {
+    session.addPlot(plot)
+    return focus(session, 'monitor', element)
   }
   const queryRows = async (context: Context, query: Query.Rows, signal?: AbortSignal) =>
     rowsOf(
@@ -259,7 +280,7 @@ export function registerCommands(studio: Sessions) {
             id: row.id!,
           }))
       } catch (error) {
-        if (!controller.signal.aborted) studio.output.warn(detail(error))
+        if (!controller.signal.aborted) studio.reporter.output.warn(detail(error))
       } finally {
         if (current === generation) picker.busy = false
       }
@@ -268,7 +289,7 @@ export function registerCommands(studio: Sessions) {
       const subscriptions = [
         picker.onDidChangeValue(() => {
           clearTimeout(timer)
-          timer = setTimeout(() => void update(), 90)
+          timer = setTimeout(() => void update(), TYPING_MS)
         }),
         picker.onDidAccept(() => {
           const selected = picker.selectedItems[0]
@@ -295,7 +316,7 @@ export function registerCommands(studio: Sessions) {
       canSelectMany: false,
     })
     if (selected?.[0])
-      await vscode.commands.executeCommand('vscode.openWith', selected[0], 'gridkitStudio.network')
+      await vscode.commands.executeCommand('vscode.openWith', selected[0], viewId('network'))
   })
   command('openNetwork', (context) => open(context, 'network'))
   command('reveal', (context) => open(context, 'network'))
@@ -312,8 +333,8 @@ export function registerCommands(studio: Sessions) {
     studio.documents.reveal(context.session.uri, context.element),
   )
   command('validateCase', async (context) => {
-    await studio.documents.validate(studio.documents.entries.get(context.session.uri)!.document)
-    await vscode.commands.executeCommand('workbench.actions.view.problems')
+    await studio.documents.validate(context.document)
+    await vscode.commands.executeCommand(SHOW_PROBLEMS.command)
   })
   command('followReference', async (context) => {
     if (!context.element || !context.field || !context.type) return
@@ -322,7 +343,7 @@ export function registerCommands(studio: Sessions) {
       await valueOf(context, context.type, context.field, context.element.id),
       'This reference is disconnected.',
     )
-    if (id) studio.select(context.session.uri, { id })
+    if (id) context.session.select({ id })
   })
   command('editField', async (context) => {
     const { session, summary, element } = context
@@ -374,42 +395,7 @@ export function registerCommands(studio: Sessions) {
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  /** Show results the worker read for the case, and reads on. */
-  const show = (session: Session, results: Results) => {
-    studio.show(session, results, false)
-    changed(session)
-  }
-  // A study shows one contingency at a time, chosen from the Monitor's title bar.
-  command('chooseContingency', async ({ session }) => {
-    const study = session.results?.contingency
-    if (!study) return
-    const choice = await vscode.window.showQuickPick(
-      study.written.map((n) => ({ label: `Bus ${study.buses[n]}`, n })),
-      { title: 'Show contingency', placeHolder: `Showing bus ${study.buses[study.shown]}` },
-    )
-    if (!choice || choice.n === study.shown) return
-    const { solver } = session.results ?? {}
-    show(
-      session,
-      await studio.withCase(session.uri, (source) =>
-        studio.client.results.call('open', {
-          ...source,
-          path: contingencyFile(study, choice.n),
-          contingency: { ...study, shown: choice.n },
-          ...(solver && { solver }),
-          cacheBytes: cacheBytesOf(vscode.Uri.parse(session.uri)),
-        }),
-      ),
-    )
-  })
-  onSession('clearResults', async (session) => {
-    // The views let go of the results before they go, and of those a running run's end reports.
-    studio.show(session, undefined)
-    changed(session)
-    await studio.client.results.call('clear', { uri: session.uri })
-    studio.show(session, undefined)
-    changed(session)
-  })
+  onSession('clearResults', (session) => session.clear())
   const plot = async (context: Context) => {
     const selected = await chooseSignal(context)
     if (!selected) return
@@ -417,7 +403,7 @@ export function registerCommands(studio: Sessions) {
     const element = context.target?.origin === 'monitor' ? undefined : context.element
     const id = element?.id.startsWith(selected.type + '/') ? element.id : undefined
     const plot: Plot = { from: selected.type, field: selected.field, ...(id ? { id } : {}) }
-    await showPlot(studio, context.session, plot, context.element)
+    await showPlot(context.session, plot, context.element)
   }
   command('plot', plot)
   // From the Monitor's title: a signal the results on show hold, of every element.
@@ -428,14 +414,11 @@ export function registerCommands(studio: Sessions) {
       ),
       { title: 'Add plot', placeHolder: 'A recorded signal, of every element' },
     )
-    if (choice) await showPlot(studio, session, choice.plot)
+    if (choice) await showPlot(session, choice.plot)
   })
   command('removePlot', async (context) => {
-    const { session } = context
     const selected = context.target?.plot ?? (await pickPlot(context, 'Remove plot'))
-    if (!selected) return
-    session.plots = session.plots.filter((plot) => !samePlot(plot, selected))
-    changed(session)
+    if (selected) context.session.removePlot(selected)
   })
   command('signalElements', async (context) => {
     // The session's own plot: a menu's target carries a copy of it.
@@ -445,10 +428,7 @@ export function registerCommands(studio: Sessions) {
       : context.session.plots.at(-1)
     if (!plot) return
     const id = await pickReference(context, plot.from)
-    if (id) {
-      plot.id = id
-      changed(context.session)
-    }
+    if (id) context.session.plotElement(plot, id)
   })
   // Any GridKit results file, read for the case as a run's own is.
   command('openResults', async (context) => {
@@ -457,16 +437,7 @@ export function registerCommands(studio: Sessions) {
       canSelectMany: false,
     })
     if (!selected?.[0]) return
-    show(
-      context.session,
-      await studio.withCase(context.session.uri, (source) =>
-        studio.client.results.call('open', {
-          ...source,
-          path: localPath(selected[0]!),
-          cacheBytes: cacheBytesOf(selected[0]!),
-        }),
-      ),
-    )
+    await context.session.load(localPath(selected[0]))
     await plot(context)
   })
   onSession('exportCsv', async ({ results }) => {
@@ -475,15 +446,15 @@ export function registerCommands(studio: Sessions) {
     if (path)
       await studio.client.results.call('export', { results: results.id, path: localPath(path) })
   })
-  register('showOutput', () => studio.output.show())
+  register('showOutput', () => studio.reporter.output.show())
   command('performance', async (context) => {
-    studio.output.appendLine(
+    studio.reporter.output.appendLine(
       JSON.stringify({
         ...(await studio.client.stats()),
         parseMs: context.summary.parseMs,
       }),
     )
-    studio.output.show()
+    studio.reporter.output.show()
   })
   onSession('toggleTimeline', ({ transport }) => transport.playPause())
   // To the head while frames arrive, else to the run's last sample.
@@ -510,7 +481,7 @@ export function registerCommands(studio: Sessions) {
     ['previousSample', -1],
     ['nextSample', 1],
   ] as const)
-    onSession(id, (session) => studio.step(session, direction))
+    onSession(id, (session) => session.step(direction))
   onSession('loopTime', async ({ transport }) => {
     const loop = await vscode.window.showQuickPick<{ label: string; value: LoopMode }>(
       [
@@ -523,7 +494,7 @@ export function registerCommands(studio: Sessions) {
     if (loop) transport.setLoop(loop.value)
   })
   onSession('timeSpeed', async ({ transport }) => {
-    const rate = await vscode.window.showQuickPick(['0.5', '1', '2', '4'], {
+    const rate = await vscode.window.showQuickPick(RATES, {
       title: 'Simulated seconds per second',
     })
     if (rate) transport.setRate(Number(rate))
@@ -532,19 +503,18 @@ export function registerCommands(studio: Sessions) {
   command('retryMonitor', (context) => action(context, 'retryMonitor', undefined, 'monitor'))
   /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
    *  bar, the one in front. */
-  const canvasOf = (context: Context) => {
+  const canvasOf = (context: Context): Target['origin'] | undefined => {
     if (context.target) return context.target.origin
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-    return input instanceof vscode.TabInputCustom
-      ? input.viewType.slice('gridkitStudio.'.length)
-      : undefined
+    const view = input instanceof vscode.TabInputCustom ? viewOf(input.viewType) : undefined
+    return view === 'network' || view === 'diagram' ? view : undefined
   }
   command('fit', (context) => action(context, 'fit', undefined, canvasOf(context)))
   command('reloadView', (context) => action(context, 'reloadView', undefined, canvasOf(context)))
   // A neighborhood shows in a canvas, so from the Case panel the Network frames it.
   command('neighborhood', (context) => {
     if (!context.element) return
-    studio.select(context.session.uri, context.element)
+    context.session.select(context.element)
     action(
       context,
       'neighborhood',
@@ -553,18 +523,15 @@ export function registerCommands(studio: Sessions) {
     )
   })
   onSession('resetMonitorWindow', (session) => {
-    session.window = undefined
+    session.setWindow(undefined)
     studio.action.fire({ uri: session.uri, command: 'resetMonitorWindow', view: 'monitor' })
-    changed(session)
   })
   onSession('monitorWindow', async (session) => {
     const range = await askRange(
       'Time window [s]',
       (session.window ?? session.results?.domain)?.join(', '),
     )
-    if (!range) return
-    session.window = range
-    changed(session)
+    if (range) session.setWindow(range)
   })
   command('chooseOverlapping', async (context) => {
     const selected = await vscode.window.showQuickPick(
@@ -575,7 +542,7 @@ export function registerCommands(studio: Sessions) {
       })),
       { title: 'Elements under the pointer' },
     )
-    if (selected) studio.select(context.session.uri, selected.element)
+    if (selected) context.session.select(selected.element)
   })
   command('chooseColumns', async (context) => {
     const { schema } = context.summary
@@ -600,19 +567,20 @@ export function registerCommands(studio: Sessions) {
     )
     if (selected) {
       const columns = selected.map((item) => item.field)
-      table.columns = { ...table.columns, [type]: columns }
+      context.session.setTable({ ...table, columns: { ...table.columns, [type]: columns } })
       action(context, 'columns', columns, 'case')
-      changed(context.session)
     }
   })
   command('resetColumns', (context) => {
     const { table } = context.session
     if (table.columns)
-      table.columns = Object.fromEntries(
-        Object.entries(table.columns).filter(([type]) => type !== table.type),
-      )
+      context.session.setTable({
+        ...table,
+        columns: Object.fromEntries(
+          Object.entries(table.columns).filter(([type]) => type !== table.type),
+        ),
+      })
     action(context, 'resetColumns', undefined, 'case')
-    changed(context.session)
   })
   // The Case panel's own view of its rows: its order, a value it is filtered to, its columns.
   for (const [id, direction] of [
@@ -695,7 +663,7 @@ export function registerCommands(studio: Sessions) {
         await valueOf(context, context.type, field, context.element.id),
         'The endpoint is disconnected.',
       )
-      if (target) studio.select(context.session.uri, { id: target })
+      if (target) context.session.select({ id: target })
     })
   // The title bar offers whichever is not the case now, so its icon shows whether the Diagram edits.
   for (const [id, editing] of [
@@ -704,8 +672,7 @@ export function registerCommands(studio: Sessions) {
   ] as const)
     command(id, (context) => {
       if (context.session.diagramEditing === editing) return
-      context.session.diagramEditing = editing
-      changed(context.session)
+      context.session.setEditing(editing)
       action(context, 'diagramEditing', editing, 'diagram')
     })
   command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
@@ -734,8 +701,7 @@ export function registerCommands(studio: Sessions) {
       { title: 'Map ' + leaf(field.field), canPickMany: true },
     )
     if (picked)
-      studio.bind(
-        context.session.uri,
+      context.session.bind(
         field,
         picked.map(({ channel }) => channel),
         domainOf(bindings, field),
@@ -750,9 +716,9 @@ export function registerCommands(studio: Sessions) {
       'measures the values shown',
     )
     if (range !== undefined)
-      studio.bind(context.session.uri, field, channelsOf(bindings, field), range ?? undefined)
+      context.session.bind(field, channelsOf(bindings, field), range ?? undefined)
   })
-  command('unbind', (context) => studio.bind(context.session.uri, mappable(context), []))
+  command('unbind', (context) => context.session.bind(mappable(context), []))
   command('signalRange', async (context) => {
     const { plots } = context.session
     const plot =
@@ -769,23 +735,11 @@ export function registerCommands(studio: Sessions) {
     )
   })
   command('colormap', async (context) => {
-    const setting = definitions.find((setting) => setting.id === 'network.colormap')!
     const name = await vscode.window.showQuickPick(
-      'options' in setting
-        ? setting.options.map((option) => ({ label: option.label, value: option.value }))
-        : [],
+      choicesOf('network.colormap').map(({ label, value }) => ({ label, value })),
       { title: 'Network colormap' },
     )
-    if (name)
-      await vscode.workspace
-        .getConfiguration('gridkitStudio', vscode.Uri.parse(context.session.uri))
-        .update(
-          'network.colormap',
-          name.value,
-          vscode.workspace.workspaceFolders?.length
-            ? vscode.ConfigurationTarget.Workspace
-            : vscode.ConfigurationTarget.Global,
-        )
+    if (name) await choose('network.colormap', name.value, vscode.Uri.parse(context.session.uri))
   })
   for (const [id, category] of [
     ['networkSettings', 'network'],
@@ -793,7 +747,7 @@ export function registerCommands(studio: Sessions) {
     ['monitorSettings', 'monitor'],
   ] as const)
     command(id, () =>
-      vscode.commands.executeCommand('workbench.action.openSettings', 'gridkitStudio.' + category),
+      vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
     )
   command('disconnectPort', async (context) => {
     if (!context.element || !context.field) return

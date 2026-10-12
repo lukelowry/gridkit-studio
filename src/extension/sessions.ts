@@ -1,298 +1,85 @@
+/** Every case Studio works on, each a Session kept while something holds it, and what they share:
+ *  the workers, the open documents, the log, and the events the views and native UI follow. */
+
 import * as vscode from 'vscode'
 
+import type { Target } from '../shared/contexts.js'
 import {
-  type Bindings,
-  bound,
-  type Channel,
-  channelsFor,
-  type FieldRef,
-} from '../shared/bindings.js'
-import { cancelled, defect, detail, formatNumber, message } from '../shared/format.js'
-import type {
-  Cameras,
-  CaseSource,
-  Element,
-  Plot,
-  Results,
-  Run,
-  Study,
-  Summary,
-  TableState,
-  ViewState,
-} from '../shared/messages.js'
-import { holdsPlot } from '../shared/plots.js'
-import {
-  defaults,
-  definitions,
-  type SettingsValues,
-  validateSettings,
-} from '../shared/preferences.js'
-import { elementType, networkOf, placementOf } from '../shared/schema.js'
-import { Transport } from '../shared/transport.js'
-import { Client } from './client.js'
+  CASE_FILE,
+  type Command,
+  commandId,
+  type ContextKey,
+  contextKey,
+  savedKey,
+  savedUri,
+} from '../shared/ids.js'
+import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
+import { resent } from '../shared/rpc.js'
+import { Client, CRASHES } from './client.js'
 import { Documents, isWritable } from './documents.js'
-import { exists, solverAt, writtenBy } from './solvers.js'
+import { noCase, Reporter } from './report.js'
+import { type Hold, Session } from './session.js'
+import { affects, cacheBytes } from './settings.js'
 
-export interface Session {
-  uri: string
-  diagramEditing: boolean
-  bindings: Bindings
-  selection?: Element
-  /** The network elements that stand for a selection the network does not draw. */
-  anchors?: string[]
-  /** The case's latest run of GridKit. */
-  run?: Run
-  /** The results file the views draw: a run's, or one opened. */
-  results?: Results
-  plots: Plot[]
-  /** The case's playhead; views extrapolate it between changes. */
-  transport: Transport
-  settings: SettingsValues
-  /** The Monitor's chosen time window; absent, plots show the whole run. */
-  window?: readonly [number, number]
-  cameras: Cameras
-  table: TableState
-}
-/** Per-case workspace state. */
-type Saved = Partial<Pick<Session, 'bindings' | 'plots' | 'table'>> & {
-  /** The results file the Monitor showed, read again when the case first opens, and the solver
-   *  file whose run wrote it. */
-  results?: { path: string; solver?: string; contingency?: Study }
+/** A command's ask of the views of a case: of every one, or of those of the kind its menu was
+ *  opened on. */
+export interface Action {
+  readonly uri: string
+  readonly command: ViewAction
+  readonly value?: unknown
+  readonly view?: Target['origin']
 }
 
-/** The `resultCacheMiB` setting for `uri`, in bytes. It only paces what stays decoded, so any value
- *  works: one that is not a number keeps the default, and a negative one keeps nothing. */
-export function cacheBytesOf(uri: vscode.Uri) {
-  const mib = Number(
-    vscode.workspace.getConfiguration('gridkitStudio', uri).get<number>('resultCacheMiB', 256),
-  )
-  return (Number.isFinite(mib) ? Math.max(0, mib) : 256) * (1 << 20)
-}
-
-/** The display settings for `uri`; an invalid value keeps its default. */
-function settingsFor(uri: vscode.Uri): SettingsValues {
-  const configuration = vscode.workspace.getConfiguration('gridkitStudio', uri)
-  const result = { ...defaults }
-  for (const { id } of definitions) {
-    const value = configuration.get(id)
-    if (value === undefined) continue
-    try {
-      Object.assign(result, validateSettings({ [id]: value }))
-    } catch {
-      // The user may be mid-edit.
-    }
-  }
-  return result
-}
-
-/** A choice a notification offers: its label, and the command it runs. */
-interface Offer {
-  title: string
-  command: string
-}
-/** The log, where every failed run and every defect points. */
-const SHOW_OUTPUT: Offer = { title: 'Show Output', command: 'gridkitStudio.showOutput' }
-
-/** An error to report as `text`, offering `offers`. */
-export const notice = (text: string, ...offers: Offer[]) =>
-  Object.assign(new Error(text), { offers })
-
-/** The plots `results` can draw: those of fields they hold, else their first field. */
-export function plotsFor(results: Results, plots: readonly Plot[]): Plot[] {
-  const kept = plots.filter((plot) => holdsPlot(results, plot))
-  const first = results.outputs.find(({ select }) => select.length > 0)
-  return kept.length || !first ? kept : [{ from: first.from, field: first.select[0]! }]
-}
-
-export class Sessions {
+export class Sessions implements vscode.Disposable {
+  readonly reporter = new Reporter()
   readonly client: Client
   readonly documents: Documents
-  readonly all = new Map<string, Session>()
+  /** Fires when what a case's views show changes. */
   readonly changed = new vscode.EventEmitter<string>()
   /** Fires when a case's clock changes or its following playhead moves with the head. */
   readonly clock = new vscode.EventEmitter<string>()
-  readonly action = new vscode.EventEmitter<{
-    uri: string
-    command: string
-    value?: unknown
-    view?: string
-  }>()
-  readonly output = vscode.window.createOutputChannel('GridKit Studio', { log: true })
-  /** The errors logged since the last look, so a test fails on one a user would see only in the
-   *  log. */
-  readonly errors: string[] = []
-  readonly disposables: vscode.Disposable[] = []
-  readonly contexts = new Map<string, unknown>()
+  readonly action = new vscode.EventEmitter<Action>()
+  /** The context keys Studio last set, as VS Code holds them. */
+  readonly contexts = new Map<ContextKey, unknown>()
   /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
    *  menu offers, and what it carries to the commands there. */
   signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
-  active?: string
-  /** The errors already logged, so one reported twice, as a stopped worker's is, shows once. */
-  readonly #logged = new WeakSet<object>()
-  /** Log `reason` as an error, unless a case's diagnostic already shows it. */
-  error(reason: unknown) {
-    if ((reason as { diagnosed?: boolean } | undefined)?.diagnosed) return
-    if (reason instanceof Object) {
-      if (this.#logged.has(reason)) return
-      this.#logged.add(reason)
-    }
-    // A defect's stack is for whoever fixes it; anything else is said as it was told.
-    const text =
-      defect(reason) || !(reason instanceof Error) || (reason as { code?: string }).code
-        ? detail(reason)
-        : reason.message
-    this.output.error(text)
-    if (this.errors.push(text) > 100) this.errors.shift()
-  }
-  /** The errors already reported, and the notifications on show, by their text. */
-  readonly #reported = new WeakSet<object>()
-  readonly #showing = new Set<string>()
-  /** Tell the user why something failed. This, and the log behind it, is the one place Studio
-   *  says so: views show state, never failures. A defect points to the log, a notice offers its
-   *  own choices, a cancellation says nothing, a case's diagnostic in Problems says it already,
-   *  and an error already on show is not shown again. */
-  report(reason: unknown) {
-    if (cancelled(reason) || (reason as { diagnosed?: boolean } | null)?.diagnosed) return
-    if (reason instanceof Object) {
-      if (this.#reported.has(reason)) return
-      this.#reported.add(reason)
-    }
-    this.error(reason)
-    const text = message(reason)
-    if (this.#showing.has(text)) return
-    this.#showing.add(text)
-    const offers =
-      (reason as { offers?: Offer[] } | null)?.offers ?? (defect(reason) ? [SHOW_OUTPUT] : [])
-    void vscode.window.showErrorMessage(text, ...offers.map(({ title }) => title)).then(
-      (choice) => {
-        this.#showing.delete(text)
-        const offer = offers.find(({ title }) => title === choice)
-        if (offer) void vscode.commands.executeCommand(offer.command)
-      },
-      () => this.#showing.delete(text),
-    )
-  }
-  /** The runs whose start the log has told, so it tells how each ends. */
-  readonly #told = new Set<string>()
-  /** The failed runs already said, so each is said once. */
-  readonly #failures = new Set<string>()
-  /** The opened files already said to stop short. */
-  readonly #unread = new Set<string>()
-  /** Tell the log how a run starts and ends, and the user, once, why one failed. `results` are
-   *  what it wrote, as read. */
-  #narrate(run: Run, results?: Results) {
-    if (run.state === 'running') {
-      if (!this.#told.has(run.id)) {
-        this.#told.add(run.id)
-        this.output.info(`▶ ${run.command}`)
-      }
-      return
-    }
-    const told = this.#told.delete(run.id)
-    if (run.state === 'failed') {
-      if (this.#failures.has(run.id)) return
-      this.#failures.add(run.id)
-      const why = run.message ?? 'GridKit stopped'
-      this.report(
-        notice(`${run.command} failed: ${why}${/[.!?]$/.test(why) ? '' : '.'}`, SHOW_OUTPUT),
-      )
-      return
-    }
-    if (!told) return
-    const samples = `${(results?.frames ?? 0).toLocaleString()} samples`
-    const study = results?.contingency
-    if (run.state === 'complete' && study?.failed.length)
-      this.report(
-        notice(
-          `${run.command}: ${study.failed.length} of ${study.buses.length} contingencies failed, ` +
-            `at ${study.failed.join(', ')}.`,
-          SHOW_OUTPUT,
-        ),
-      )
-    else if (run.state === 'complete') this.output.info(`■ ${run.command} finished · ${samples}`)
-    else
-      this.output.info(
-        `■ ${run.command} stopped at t = ${formatNumber(results?.domain[1] ?? 0)} s · ${samples}`,
-      )
-  }
-  /** Register command `id`, reporting why it fails. */
-  command(id: string, run: (...args: unknown[]) => unknown): vscode.Disposable {
-    return vscode.commands.registerCommand(id, async (...args: unknown[]) => {
-      try {
-        return await run(...args)
-      } catch (error) {
-        this.report(error)
-      }
-    })
-  }
+  readonly #all = new Map<string, Session>()
+  #active?: Session
+  readonly #disposables: vscode.Disposable[]
+
   constructor(readonly context: vscode.ExtensionContext) {
-    this.client = new Client(vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath)
+    this.client = new Client(vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath, () => ({
+      cacheBytes: cacheBytes(),
+    }))
     this.documents = new Documents(this.client)
-    this.disposables.push(
+    this.#disposables = [
       this.changed.event(() => this.updateContexts()),
-      // Either worker stopping is said. A run under way when the results worker stops is
-      // interrupted; its file stays.
-      this.client.cases.failure.event((error) => this.report(this.documents.restart(error))),
+      // Either worker stopping is said. A new results worker holds none of the old one's results,
+      // so each session reads its own again.
+      this.client.cases.failure.event((error) =>
+        this.reporter.report(this.documents.restart(error)),
+      ),
       this.client.results.failure.event((error) => {
-        this.report(error)
-        for (const session of this.all.values()) {
-          if (session.run?.state === 'running')
-            session.run = { ...session.run, state: 'interrupted', message: error.message }
-          if (session.results?.growing) {
-            session.results = { ...session.results, growing: false }
-            session.transport.setLive(false)
-          }
-          this.changed.fire(session.uri)
-        }
+        const { steady } = this.client.results
+        this.reporter.report(
+          steady
+            ? error
+            : new Error(
+                `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads ` +
+                  'results again once you show them.',
+              ),
+        )
+        for (const session of this.#all.values()) session.lost(error, steady)
       }),
+      // An open case document holds its session.
+      this.documents.opened.event((uri) => this.hold(uri, 'document')),
+      this.documents.closed.event((uri) => this.release(uri, 'document')),
       this.documents.changed.event((uri) => {
         this.changed.fire(uri)
-        void this.#forget(uri)
+        void this.#all.get(uri)?.forget()
       }),
-      this.client.event.event((event) => {
-        if (event.kind === 'log') {
-          // A line of a case's run at its own level, and as GridKit printed it only at Trace.
-          if (event.uri) {
-            this.output[event.level ?? 'info'](event.message)
-            if (event.raw) this.output.trace(event.raw)
-          } else if (event.level === 'error') this.error(event.message)
-          else if (event.level === 'warn') this.output.warn(event.message)
-          else this.output.appendLine(event.message)
-          return
-        }
-        if (event.kind === 'results') {
-          // A file read on: the one on show, or the one a running run writes, which takes its
-          // place and is followed live.
-          const session = this.all.get(event.uri)
-          const { results } = event
-          const writing = session?.run?.state === 'running' && session.run.results === results.id
-          if (!session || (!writing && session.results?.id !== results.id)) return
-          this.show(session, results, writing)
-          this.changed.fire(session.uri)
-          if (results.error && !results.growing && !this.#unread.has(results.id)) {
-            this.#unread.add(results.id)
-            this.report(
-              notice(
-                `${results.name} could not be read past ${results.frames.toLocaleString()} ` +
-                  `samples: ${results.error}`,
-                SHOW_OUTPUT,
-              ),
-            )
-          }
-          return
-        }
-        const { run } = event
-        const session = this.all.get(run.uri)
-        if (!session) return
-        session.run = run
-        const shown = run.results !== undefined && session.results?.id === run.results
-        // A run's results replace those on show as it starts, and follow its head until it ends.
-        // A study has none until it ends.
-        if (run.state === 'running' && !run.results) this.show(session, undefined)
-        else if (run.state !== 'running' && shown) session.transport.setLive(false)
-        this.changed.fire(session.uri)
-        this.#narrate(run, shown ? session.results : undefined)
-      }),
+      this.client.event.event((event) => this.#hear(event)),
       // A case's saved state follows it when it is renamed or moved, and goes when it is deleted.
       vscode.workspace.onDidRenameFiles(({ files }) => {
         for (const { oldUri, newUri } of files) this.#move(oldUri.toString(), newUri.toString())
@@ -301,186 +88,117 @@ export class Sessions {
         for (const uri of files) this.#move(uri.toString())
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        for (const session of this.all.values())
-          if (event.affectsConfiguration('gridkitStudio', vscode.Uri.parse(session.uri))) {
-            session.settings = settingsFor(vscode.Uri.parse(session.uri))
-            this.changed.fire(session.uri)
-          }
+        for (const session of this.#all.values())
+          if (affects(event, vscode.Uri.parse(session.uri))) session.reconfigure()
+        if (affects(event, undefined, 'resultCacheMiB') && this.client.results.running)
+          void this.client.results
+            .call('configure', { cacheBytes: cacheBytes() })
+            .catch((error) => this.reporter.error(error))
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (editor && /\.case\.json$/i.test(editor.document.fileName))
-          void this.open(editor.document).catch((error) => this.error(error))
+        if (editor && CASE_FILE.test(editor.document.fileName))
+          void this.open(editor.document).catch((error) => this.reporter.error(error))
       }),
       vscode.window.tabGroups.onDidChangeTabs(() => {
         const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-        if (input instanceof vscode.TabInputCustom && /\.case\.json$/i.test(input.uri.path))
+        if (input instanceof vscode.TabInputCustom && CASE_FILE.test(input.uri.path))
           this.activate(input.uri.toString())
       }),
-    )
+    ]
     void this.prune()
   }
-  updateContexts() {
-    const session = this.active ? this.all.get(this.active) : undefined
-    const entry = this.active ? this.documents.entries.get(this.active) : undefined
-    const values = {
-      hasCase: !!session,
-      diagramEditing: !!session?.diagramEditing,
-      editable: !!entry && !entry.stale && isWritable(entry.document),
-      running: session?.run?.state === 'running',
-      contingency: !!session?.results?.contingency,
-      fromSolver: !!session?.results?.solver,
-      hasResults: !!session?.results,
-      hasSamples: (session?.results?.frames ?? 0) > 0,
-      hasSelection: !!session?.selection,
-      caseReady: !!entry?.summary,
-      caseFiltered: !!(session?.table.filter || session?.table.equal),
-    }
-    for (const [key, value] of Object.entries(values))
-      if (this.contexts.get(key) !== value) {
-        this.contexts.set(key, value)
-        void vscode.commands.executeCommand('setContext', 'gridkitStudio.' + key, value)
+
+  /** Registers the command `id`, reporting why it fails. */
+  command(id: Command, run: (...args: unknown[]) => unknown): vscode.Disposable {
+    return vscode.commands.registerCommand(commandId(id), async (...args: unknown[]) => {
+      try {
+        return await run(...args)
+      } catch (error) {
+        this.reporter.report(error)
       }
+    })
   }
-  activate(uri: string) {
-    // Tabs change often, as a case's editor turns dirty: only another case is news.
-    if (this.active === uri && this.all.has(uri)) return this.all.get(uri)!
-    this.active = uri
-    if (!this.all.has(uri)) {
-      const saved = this.context.workspaceState.get<Saved>('case:' + uri, {})
-      this.all.set(uri, {
-        uri,
-        bindings: saved.bindings ?? {},
-        plots: saved.plots ?? [],
-        transport: new Transport(() => this.clock.fire(uri)),
-        diagramEditing: false,
-        settings: settingsFor(vscode.Uri.parse(uri)),
-        cameras: {},
-        table: saved.table ?? {},
-      })
-    }
-    this.changed.fire(uri)
-    return this.all.get(uri)!
+
+  /** The case the views follow. */
+  get active(): string | undefined {
+    return this.#active?.uri
   }
-  /** The sessions whose saved results file has been read again, or found gone. */
-  readonly #restored = new WeakSet<Session>()
-  async open(document: vscode.TextDocument) {
-    const session = this.activate(document.uri.toString())
-    const summary = await this.documents.ensure(document)
-    // Once per session, the file the Monitor last showed is read again: a simulation's from where
-    // its solver file writes now, when that file is there. A run started meanwhile shows instead,
-    // and a file that no longer reads is forgotten.
-    if (!this.#restored.has(session)) {
-      this.#restored.add(session)
-      const saved = this.context.workspaceState.get<Saved>('case:' + session.uri)?.results
-      if (saved)
-        void (async () => {
-          const path =
-            (saved.solver && !saved.contingency && (await this.#writes(saved.solver, summary))) ||
-            saved.path
-          return this.withCase(session.uri, (source) =>
-            this.client.results.call('open', {
-              ...source,
-              ...saved,
-              path,
-              cacheBytes: cacheBytesOf(document.uri),
-            }),
-          )
-        })().then(
-          (results) => {
-            // A run started meanwhile shows its own, though a study has none until it ends.
-            if (
-              session.results ||
-              session.run?.state === 'running' ||
-              this.all.get(session.uri) !== session
-            )
-              return
-            this.show(session, results, false)
-            this.changed.fire(session.uri)
-          },
-          (error) => {
-            this.output.warn(`Could not read ${saved.path} again: ${message(error)}`)
-            if (!session.results) void this.persist(session)
-          },
-        )
-    }
+
+  /** The session of the case at `uri`, while something holds it. */
+  get(uri: string): Session | undefined {
+    return this.#all.get(uri)
+  }
+
+  /** The session the views follow. */
+  current(): Session {
+    if (!this.#active) throw noCase()
+    return this.#active
+  }
+
+  /** The session of `uri`, held for `why`: made, and what it saved read again, as it is first held. */
+  hold(uri: string, why: Hold): Session {
+    let session = this.#all.get(uri)
+    if (!session) this.#all.set(uri, (session = new Session(uri, this)))
+    session.hold(why)
     return session
   }
-  /** The file the solver file at `path` writes for the case `summary` reads, when it names that
-   *  case and the file is there. */
-  async #writes(path: string, summary: Summary): Promise<string | undefined> {
-    try {
-      const solver = vscode.Uri.file(path)
-      const { study, model } = await solverAt(solver)
-      if (model.toString() !== summary.uri) return undefined
-      const uri = writtenBy(solver, study, summary)
-      return (await exists(uri)) ? uri.fsPath : undefined
-    } catch {
-      return undefined
-    }
+
+  /** Lets go of `uri`'s session for `why`; once nothing holds it, it closes. */
+  release(uri: string, why: Hold): void {
+    this.#all.get(uri)?.release(why)
   }
+
+  /** Hears from a session that closes. */
+  closed(session: Session): void {
+    if (this.#all.get(session.uri) !== session) return
+    this.#all.delete(session.uri)
+    if (this.#active === session) this.#active = undefined
+    this.changed.fire(session.uri)
+  }
+
+  /** Makes `uri`'s case the one the views follow, letting go of the one they followed. */
+  activate(uri: string): Session {
+    // Tabs change often, as a case's editor turns dirty: only another case is news.
+    if (this.#active?.uri === uri) return this.#active
+    const previous = this.#active
+    this.#active = this.hold(uri, 'active')
+    this.changed.fire(uri)
+    previous?.release('active')
+    return this.#active
+  }
+
+  /** Follows the case `document` holds, and reads it. */
+  async open(document: vscode.TextDocument): Promise<Session> {
+    const session = this.activate(document.uri.toString())
+    await this.documents.ensure(document)
+    return session
+  }
+
+  /** The case at `uri` as it reads now, opening its document if VS Code has let go of it. */
+  async caseOf(uri: string): Promise<{ document: vscode.TextDocument; summary: Summary }> {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
+    return { document, summary: await this.documents.ensure(document) }
+  }
+
   /** Asks the results worker `call` of the case at `uri` as it reads now: by its fingerprint, and
    *  with its source too only when the worker has yet to read it. A large case crosses once. */
   async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
-    const entry = this.documents.entries.get(uri)
-    if (!entry) throw new Error('Open the case first.')
-    const { version, fingerprint } = await this.documents.ensure(entry.document)
-    const source = { uri, version, fingerprint }
-    try {
-      return await call(source)
-    } catch (error) {
-      if ((error as { code?: unknown } | null)?.code !== 'needs-source') throw error
-      return call({ ...source, text: entry.document.getText() })
-    }
+    const { document, summary } = await this.caseOf(uri)
+    const source = { uri, version: summary.version, fingerprint: summary.fingerprint }
+    return resent(call, 'needs-source', source, () => ({ ...source, text: document.getText() }))
   }
-  current() {
-    const session = this.active ? this.all.get(this.active) : undefined
-    if (!session) throw new Error('Open a GridKit case first.')
-    return session
+
+  /** Lets go of the results `id` names in the results worker, which a worker that stopped holds no
+   *  more. */
+  closeResults(id: string): void {
+    if (this.client.results.running)
+      void this.client.results.call('close', { results: id }).catch(() => {})
   }
-  persist(session: Session) {
-    const { results } = session
-    const saved: Saved = {
-      bindings: session.bindings,
-      plots: session.plots,
-      table: session.table,
-      ...(results && {
-        results: {
-          path: results.path,
-          ...(results.solver && { solver: results.solver }),
-          ...(results.contingency && { contingency: results.contingency }),
-        },
-      }),
-    }
-    return this.context.workspaceState.update('case:' + session.uri, saved)
-  }
-  /** Drop the saved state of cases that no longer exist, as one deleted while VS Code was closed.
-   *  A case that cannot be reached now, on a remote or network drive, keeps its state. */
-  async prune() {
-    const { workspaceState } = this.context
-    for (const key of workspaceState.keys()) {
-      if (!key.startsWith('case:')) continue
-      try {
-        await vscode.workspace.fs.stat(vscode.Uri.parse(key.slice('case:'.length)))
-      } catch (error) {
-        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound')
-          await workspaceState.update(key, undefined)
-      }
-    }
-  }
-  /** Move the saved state of the cases at or under `from` to `to`, or drop it with no `to`. */
-  #move(from: string, to?: string) {
-    const { workspaceState } = this.context
-    for (const key of workspaceState.keys()) {
-      const uri = key.slice('case:'.length)
-      if (!key.startsWith('case:') || (uri !== from && !uri.startsWith(from + '/'))) continue
-      const saved = workspaceState.get<Saved>(key)
-      void workspaceState.update(key, undefined)
-      if (to !== undefined) void workspaceState.update('case:' + to + uri.slice(from.length), saved)
-    }
-  }
+
+  /** What the views of the case at `uri` show. */
   state(uri: string): ViewState {
-    const entry = this.documents.entries.get(uri)
-    const session = this.all.get(uri)
+    const entry = this.documents.get(uri)
+    const session = this.#all.get(uri)
     return {
       uri,
       version: entry?.document.version,
@@ -499,133 +217,81 @@ export class Sessions {
       table: session?.table,
     }
   }
-  select(uri: string, element?: Element) {
-    const session = this.all.get(uri) ?? this.activate(uri)
-    if (session.selection?.id === element?.id && session.selection?.field === element?.field) return
-    const moved = session.selection?.id !== element?.id
-    session.selection = element
-    if (moved) {
-      session.anchors = undefined
-      if (element) void this.#anchor(session, element.id)
+
+  /** Sets the context keys the manifest's `when` clauses read, each only when it changes. */
+  updateContexts(): void {
+    const session = this.#active
+    const entry = session && this.documents.get(session.uri)
+    const values: Record<ContextKey, boolean> = {
+      hasCase: !!session,
+      diagramEditing: !!session?.diagramEditing,
+      editable: !!entry && !entry.stale && isWritable(entry.document),
+      running: !!session?.running,
+      fromSolver: !!session?.results?.solver,
+      hasResults: !!session?.results,
+      hasSamples: (session?.results?.frames ?? 0) > 0,
+      hasSelection: !!session?.selection,
+      caseReady: !!entry?.summary,
+      caseFiltered: !!(session?.table.filter || session?.table.equal),
     }
-    this.changed.fire(uri)
+    for (const [key, value] of Object.entries(values) as [ContextKey, boolean][])
+      if (this.contexts.get(key) !== value) {
+        this.contexts.set(key, value)
+        void vscode.commands.executeCommand('setContext', contextKey(key), value)
+      }
   }
-  /** Let go of the selection once the case, read again, no longer holds its element. */
-  async #forget(uri: string) {
-    const session = this.all.get(uri)
-    const entry = this.documents.entries.get(uri)
-    const id = session?.selection?.id
-    if (!id || !entry?.summary || entry.stale) return
-    const { version } = entry.summary
-    try {
-      await this.client.cases.call('query', {
-        uri,
-        version,
-        query: {
-          kind: 'rows',
-          from: elementType(id),
-          select: [],
-          ids: true,
-          rows: { kind: 'ids', ids: [id] },
-          limit: 1,
-        },
-      })
-    } catch {
-      if (session.selection?.id === id && entry.summary?.version === version) this.select(uri)
-    }
-  }
-  /** Find what the network draws for the selected element `id`, once the selection holds it. */
-  async #anchor(session: Session, id: string) {
-    const entry = this.documents.entries.get(session.uri)
-    if (!entry?.summary || entry.stale) return
-    const network = networkOf(entry.summary.schema)
-    const drawn = [...network.vertices, ...network.edges.map((edge) => edge.type)]
-    if (drawn.includes(elementType(id))) return
-    try {
-      const anchors = await this.client.cases.call('anchors', {
-        uri: session.uri,
-        version: entry.summary.version,
-        id,
-        drawn,
-      })
-      if (session.selection?.id !== id) return
-      session.anchors = anchors
-      this.changed.fire(session.uri)
-    } catch (error) {
-      this.report(error)
+
+  /** Drops the saved state of cases that no longer exist, as one deleted while VS Code was closed.
+   *  A case that cannot be reached now, on a remote or network drive, keeps its state. */
+  async prune(): Promise<void> {
+    const { workspaceState } = this.context
+    for (const key of workspaceState.keys()) {
+      const uri = savedUri(key)
+      if (uri === undefined) continue
+      try {
+        await vscode.workspace.fs.stat(vscode.Uri.parse(uri))
+      } catch (error) {
+        if (error instanceof vscode.FileSystemError && error.code === 'FileNotFound')
+          await workspaceState.update(key, undefined)
+      }
     }
   }
-  /** Put `results` on the session's clock: new results reset the span, more frames of the same
-   *  extend it, and none clears it. Another contingency of the shown study keeps the time. While
-   *  they are `live`, as a run writes them, the playhead follows their frames as they come; a file
-   *  opened and still read through keeps it where it is. */
-  show(session: Session, results: Results | undefined, live = false) {
-    const { transport } = session
-    const shown = session.results
-    if (!results && !shown) return
-    const study = !!results?.contingency && shown?.contingency?.base === results.contingency.base
-    session.results = results
-    if (!results) {
-      session.window = undefined
-      transport.clear()
-      void this.persist(session)
-      return
+
+  /** Moves the saved state of the cases at or under `from` to `to`, or drops it with no `to`. */
+  #move(from: string, to?: string): void {
+    const { workspaceState } = this.context
+    for (const key of workspaceState.keys()) {
+      const uri = savedUri(key)
+      if (uri === undefined || (uri !== from && !uri.startsWith(from + '/'))) continue
+      const saved = workspaceState.get(key)
+      void workspaceState.update(key, undefined)
+      if (to !== undefined) void workspaceState.update(savedKey(to + uri.slice(from.length)), saved)
     }
-    // The fields are the file's header, which GridKit writes after the run starts.
-    if (results.outputs.length && (shown?.id !== results.id || !shown.outputs.length)) {
-      session.plots = plotsFor(results, session.plots)
-      this.persist(session)
-    }
-    // The span starts with the first frames, and a live head is already where they reach: a run
-    // that finishes fast sends no frames after these.
-    if (shown?.id !== results.id || (shown.frames === 0 && results.frames > 0)) {
-      const at = transport.currentT()
-      session.window = undefined
-      transport.setSpan(results.domain, { live })
-      if (study) transport.seek(at)
-      else if (live) transport.grow(results.domain[1])
-      return
-    }
-    transport.grow(results.domain[1])
-    transport.setLive(live)
   }
-  /** Step one frame through the shown results, then pause. */
-  async step(session: Session, direction: 1 | -1) {
-    if (!session.results) return
-    const t = await this.client.results.call('step', {
-      results: session.results.id,
-      at: session.transport.currentT(),
-      direction,
-    })
-    session.transport.pause()
-    session.transport.seek(t)
+
+  /** What a worker tells besides its replies: a line for the log, how far results are read, or how
+   *  a run stands. */
+  #hear(event: Exclude<WorkerEvent, { kind: 'process' }>): void {
+    if (event.kind === 'results') return this.#all.get(event.uri)?.reading(event.results)
+    if (event.kind === 'run') return this.#all.get(event.run.uri)?.ran(event.run)
+    const { output } = this.reporter
+    // A line of a case's run at its own level, and as GridKit printed it only at Trace.
+    if (event.uri) {
+      output[event.level ?? 'info'](event.message)
+      if (event.raw) output.trace(event.raw)
+    } else if (event.level === 'error') this.reporter.error(event.message)
+    else if (event.level === 'warn') output.warn(event.message)
+    else output.appendLine(event.message)
   }
-  /** Make `field` drive exactly `channels`. */
-  bind(
-    uri: string,
-    field: FieldRef,
-    channels: readonly Channel[],
-    domain?: readonly [number, number],
-  ) {
-    const session = this.all.get(uri)
-    const schema = this.documents.entries.get(uri)?.summary?.schema
-    if (!session || !schema) throw new Error('Open a GridKit case first.')
-    const allowed = channelsFor(placementOf(networkOf(schema), field.type))
-    session.bindings = bound(session.bindings, allowed, field, channels, domain)
-    this.persist(session)
-    this.changed.fire(uri)
-  }
-  async dispose() {
-    for (const session of this.all.values()) {
-      await this.persist(session)
-      session.transport.dispose()
-    }
+
+  async dispose(): Promise<void> {
+    for (const session of this.#all.values()) session.dispose()
     this.documents.dispose()
-    await Promise.allSettled(this.disposables.map((disposable) => disposable.dispose()))
+    for (const disposable of this.#disposables) disposable.dispose()
     this.changed.dispose()
     this.clock.dispose()
     this.action.dispose()
-    this.output.dispose()
-    return this.client.dispose()
+    this.reporter.dispose()
+    await this.client.dispose()
   }
 }

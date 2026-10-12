@@ -1,21 +1,28 @@
+/** A case's source as VS Code's editor reads it: completion, hover, go to definition, the outline,
+ *  and the element under the cursor, selected in every view. */
+
 import * as vscode from 'vscode'
 
+import { CASE_FILE, CASE_GLOB } from '../shared/ids.js'
 import type { CaseSymbol } from '../shared/messages.js'
 import { withUnit } from '../shared/schema.js'
 import { cancellable } from './client.js'
+import { rangeOf } from './documents.js'
 import type { Sessions } from './sessions.js'
-const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
+
+const selector: vscode.DocumentSelector = { language: 'json', pattern: CASE_GLOB }
+/** How many records the outline lists when VS Code's JSON features say nothing: their default. */
+const OUTLINE_ITEMS = 5000
+
 export function registerNavigation(studio: Sessions) {
-  // A case that does not parse answers nothing: its diagnostic already says why.
-  const parsed = (document: vscode.TextDocument) =>
-    studio.documents.ensure(document).catch(() => undefined)
-  /** The case at `position`, with the summary it was read from. */
+  /** The case at `position`, with the summary it was read from. A case that does not parse answers
+   *  nothing: its diagnostic already says why. */
   const inspect = async (
     document: vscode.TextDocument,
     position: vscode.Position,
     token?: vscode.CancellationToken,
   ) => {
-    const summary = await parsed(document)
+    const summary = await studio.documents.parsed(document)
     if (!summary) return undefined
     const context = await cancellable(token, (signal) =>
       studio.client.cases.call(
@@ -59,10 +66,7 @@ export function registerNavigation(studio: Sessions) {
           new vscode.MarkdownString().appendText(
             `${withUnit(context.element.field, field?.unit)}\n${field?.description ?? context.reference ?? context.element.id}`,
           ),
-          new vscode.Range(
-            document.positionAt(context.range.offset),
-            document.positionAt(context.range.offset + context.range.length),
-          ),
+          rangeOf(document, context.range),
         )
       },
     }),
@@ -78,23 +82,17 @@ export function registerNavigation(studio: Sessions) {
             signal,
           ),
         )
-        return new vscode.Location(
-          document.uri,
-          new vscode.Range(
-            document.positionAt(range.offset),
-            document.positionAt(range.offset + range.length),
-          ),
-        )
+        return new vscode.Location(document.uri, rangeOf(document, range))
       },
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(document, token) {
-        const summary = await parsed(document)
+        const summary = await studio.documents.parsed(document)
         if (!summary) return undefined
         // As many records as VS Code outlines of any JSON file, by its own setting.
-        const limit = vscode.workspace
-          .getConfiguration('json', document)
-          .get<number>('maxItemsComputed', 5000)
+        const limit =
+          vscode.workspace.getConfiguration('json', document).get<number>('maxItemsComputed') ??
+          OUTLINE_ITEMS
         const symbols = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'symbols',
@@ -108,14 +106,8 @@ export function registerNavigation(studio: Sessions) {
             symbol.name,
             symbol.detail,
             symbol.children ? vscode.SymbolKind.Array : vscode.SymbolKind.Object,
-            new vscode.Range(
-              document.positionAt(symbol.offset),
-              document.positionAt(symbol.offset + symbol.length),
-            ),
-            new vscode.Range(
-              document.positionAt(symbol.offset),
-              document.positionAt(symbol.offset + 1),
-            ),
+            rangeOf(document, symbol),
+            rangeOf(document, { offset: symbol.offset, length: 1 }),
           )
           made.children = symbol.children?.map(symbolOf) ?? []
           return made
@@ -125,12 +117,13 @@ export function registerNavigation(studio: Sessions) {
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
       const { document } = event.textEditor
-      if (!/\.case\.json$/i.test(document.fileName)) return
+      if (!CASE_FILE.test(document.fileName)) return
+      const uri = document.uri.toString()
       // Typing moves the cursor: the case is read once the typing pauses, not at every key.
-      if (studio.documents.entries.get(document.uri.toString())?.stale) return
+      if (studio.documents.get(uri)?.stale) return
       void inspect(document, event.selections[0]!.active)
         .then((context) => {
-          if (context?.element) studio.select(document.uri.toString(), context.element)
+          if (context?.element) studio.get(uri)?.select(context.element)
         })
         .catch(() => {})
     }),

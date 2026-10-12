@@ -204,7 +204,7 @@ export async function run() {
         )
       }
       const key = uri.toString()
-      const session = bench.studio.all.get(key)!
+      const session = bench.studio.get(key)!
       const summary = () => bench.studio.state(key).summary!
       // Until the view settles, and until the page's own first frame: what the user sees first.
       timings[`network ${size} > first frame`] = firsts
@@ -233,7 +233,9 @@ export async function run() {
         ])
       }
       const field = { type: 'Bus', field: 'init.Vr' }
-      await measure('restyle', (i) => bench.studio.bind(key, field, i % 2 ? [] : ['vertexColor']))
+      await measure('restyle', (i) =>
+        bench.studio.get(key)!.bind(field, i % 2 ? [] : ['vertexColor']),
+      )
       await measure('camera move', async (i) => {
         await network.locator('canvas').hover()
         await bench.page.mouse.wheel(0, i % 2 ? 240 : -240)
@@ -254,8 +256,8 @@ export async function run() {
       }
       const bus = 'Bus/' + JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       // A selection draws again over the rest, glowing. Clearing it draws as before.
-      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus }))
-      bench.studio.select(key)
+      await measure('select', (i) => bench.studio.get(key)!.select(i % 2 ? undefined : { id: bus }))
+      bench.studio.get(key)!.select()
 
       // ── Diagram ──
       await vscode.commands.executeCommand(
@@ -336,8 +338,8 @@ export async function run() {
       // ── A second of simulation, followed live ──
       await bench.record('Bus', ['Vm'], uri)
       const solver = await bench.writeSolver(RUN, uri)
-      session.plots = [{ from: 'Bus', field: 'Vm' }]
-      bench.studio.bind(key, VM, ['vertexColor'])
+      session.setPlots([{ from: 'Bus', field: 'Vm' }])
+      session.bind(VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
       // This case has no run yet, unlike the one before it.
       const monitor = await shows('monitor', '.monitor .c-empty')
@@ -349,11 +351,9 @@ export async function run() {
         (await network.evaluate<{ received?: number }>('gridkitStats()')).received ?? 0
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
-      /** What the run started here wrote, as read so far. */
-      const wrote = () => {
-        const id = ran()?.results
-        return id && session.results?.id === id ? session.results : undefined
-      }
+      /** What the run started here wrote, as read so far: a run's start lets go of the results on
+       *  show, so any shown since are its own. */
+      const wrote = () => (ran() ? session.results : undefined)
       const started = performance.now()
       const since = () => performance.now() - started
       bench.run('Run Dynamic Simulation', solver)
@@ -415,10 +415,10 @@ export async function run() {
       await playback('frame')
       // A selected bus draws again over the rest in the Network, and fades the other traces in
       // the Monitor.
-      bench.studio.select(key, { id: bus })
+      bench.studio.get(key)!.select({ id: bus })
       await steady(monitor)
       await playback('frame, selected')
-      bench.studio.select(key)
+      bench.studio.get(key)!.select()
       const at = (i: number) => span[0] + SEEKS[i]! * (span[1] - span[0])
       await time(`playback ${size} > seek`, SEEKS.length, {
         act: (i) => transport.seek(at(i)),
@@ -443,7 +443,7 @@ export async function run() {
 
       // ── Plots ──
       const first = bus
-      const alone = session.plots
+      const alone = [...session.plots]
       const lanesBefore = (await plots(monitor)).length
       /** Until the Monitor draws `count` plots. */
       const lanes = (count: number) =>
@@ -455,15 +455,11 @@ export async function run() {
       // Each sample adds the plot afresh: the one the sample before added goes first, untimed.
       await time(`monitor ${size} > add plot`, RUNS, {
         ready: async () => {
-          if (session.plots === alone) return
-          session.plots = alone
-          bench.studio.changed.fire(key)
+          if (session.plots.length === alone.length) return
+          session.setPlots(alone)
           await lanes(lanesBefore)
         },
-        act: () => {
-          session.plots = [...alone, { from: 'Bus', field: 'Vm', id: first }]
-          bench.studio.changed.fire(key)
-        },
+        act: () => session.setPlots([...alone, { from: 'Bus', field: 'Vm', id: first }]),
         done: () => lanes(lanesBefore + 1),
       })
       // A new range colors the drawn lines again, and draws none of them.
@@ -472,7 +468,7 @@ export async function run() {
       await time(`monitor ${size} > recolor`, RUNS, {
         ready: () => plots(monitor),
         act: (i) =>
-          bench.studio.bind(key, VM, ['vertexColor'], [range[0] - i - 1, range[1] + i + 1]),
+          bench.studio.get(key)!.bind(VM, ['vertexColor'], [range[0] - i - 1, range[1] + i + 1]),
         done: (_, lanes) => plotted(monitor, lanes),
       })
       assert.deepEqual(
@@ -514,7 +510,7 @@ export async function run() {
       // Each sample selects the trace afresh, from nothing selected.
       await time(`monitor ${size} > select`, RUNS, {
         ready: async () => {
-          bench.studio.select(key)
+          bench.studio.get(key)!.select()
           await settle(() => session.selection === undefined, 'nothing selected')
         },
         act: () =>
@@ -563,7 +559,7 @@ export async function run() {
       work[`export ${size} > network 1 s at 720p`] = {
         bytes: (await stat(video(EXPORTS - 1).fsPath)).size,
       }
-      bench.studio.select(key)
+      bench.studio.get(key)!.select()
     }
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')
     await mkdir(output, { recursive: true })
@@ -572,7 +568,7 @@ export async function run() {
       JSON.stringify({ gridkit: build, timings, work, stages }, null, 2),
     )
     console.log(`Benchmarks: ${Object.keys(timings).length} timed, written to ${output}`)
-    assert.deepEqual(bench.studio.errors, [], 'Studio reported no error')
+    assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
   } finally {
     await simpleDialog(undefined)
     for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.map.source'])

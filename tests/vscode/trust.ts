@@ -16,12 +16,12 @@ export async function run(): Promise<void> {
   const session = await studio.open(document)
   assert.ok(studio.state(session.uri).summary, 'Inspection remains available without trust')
   // A command whose enablement fails runs anyway when called; the run itself refuses.
-  const errors = studio.errors.length
+  const errors = studio.reporter.errors.length
   await vscode.commands.executeCommand(
     'gridkitStudio.runSimulation',
     vscode.Uri.joinPath(folder(), 'IEEE39.solver.json'),
   )
-  assert.match(studio.errors.slice(errors).join('\n'), /Trust this workspace/)
+  assert.match(studio.reporter.errors.slice(errors).join('\n'), /Trust this workspace/)
   assert.equal(session.run, undefined)
   console.log('Workspace Trust: inspection allowed; execution blocked.')
 }

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { RunRequest } from '../shared/messages.js'
-import { bundle } from '../workers/rig.js'
+import { bundle, OPTIONS } from '../workers/rig.js'
 import { Client } from './client.js'
 
 /** The workers as the extension ships them, side by side. */
@@ -41,7 +41,7 @@ const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
 
 describe('the workers the extension asks', () => {
   it('asks each worker its own methods, and only those running what they hold', async () => {
-    const client = new Client(shipped)
+    const client = new Client(shipped, () => OPTIONS)
     try {
       expect(await client.stats()).toEqual({})
       const summary = await client.cases.call('parse', {
@@ -53,9 +53,12 @@ describe('the workers the extension asks', () => {
       // Only the case worker has been asked anything, so only it is running.
       expect(await client.stats()).toEqual({ cases: expect.objectContaining({ cases: 1 }) })
       await expect(client.results.call('describe', { results: 'none' })).rejects.toMatchObject({
-        code: 'results-unavailable',
+        code: 'results-closed',
       })
-      expect(await client.stats()).toMatchObject({ cases: { cases: 1 }, results: { files: 0 } })
+      expect(await client.stats()).toMatchObject({
+        cases: { cases: 1 },
+        results: { files: 0, cases: 0, runs: 0 },
+      })
     } finally {
       await client.dispose()
     }
@@ -67,7 +70,7 @@ describe('the workers the extension asks', () => {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-    const client = new Client(crashing)
+    const client = new Client(crashing, () => OPTIONS)
     const stopped = vi.fn()
     const casesStopped = vi.fn()
     client.results.failure.event(stopped)
@@ -84,8 +87,8 @@ describe('the workers the extension asks', () => {
         version: 1,
         fingerprint: '',
         text: ONE,
+        results: 'any',
         path: 'any.csv',
-        cacheBytes: 16 << 20,
       })
       await expect(open).rejects.toThrow(/results worker stopped/)
       await expect(run).rejects.toThrow(/results worker stopped/)

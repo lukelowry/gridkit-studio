@@ -258,7 +258,7 @@ suite('Network menus', () => {
 
   test('edits the selected element from F2, which undo takes back', async () => {
     const [bus] = bench.source.buses
-    bench.studio.select(bench.key, { id: 'Bus/' + bus!.number })
+    bench.session.select({ id: 'Bus/' + bus!.number })
     await until(() => bench.keys()['gridkitStudio.hasSelection'] === true, 'a bus selected')
     await network.locator('canvas').press('F2')
     await bench.pick('name')

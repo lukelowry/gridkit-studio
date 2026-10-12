@@ -5,7 +5,7 @@
 import { appendData, blockByteLength, type Data, type Domain, type Query } from '@latkit/model'
 
 import { recordedWhole } from '../shared/bindings.js'
-import { cancelled } from '../shared/format.js'
+import { quiet } from '../shared/errors.js'
 import type { Results, ViewState } from '../shared/messages.js'
 import { holdsPlot } from '../shared/plots.js'
 import type { Asker } from './asker.js'
@@ -233,8 +233,10 @@ export class Samples {
     near?: Near,
   ): void {
     if (results?.id !== this.#results?.id) this.#reset()
-    // More frames read, or other needs, may have more to ask for.
+    // More frames read, or other needs, may have more to ask for. What brought nothing of fewer
+    // frames is never asked again, so it is let go of.
     if (results !== this.#results) this.#idle = false
+    if (results?.frames !== this.#results?.frames) this.#spent.clear()
     this.#results = results
     const named = needs.map(({ selection }) => selectionKey(selection)).join('\t')
     if (named !== this.#named) {
@@ -550,9 +552,8 @@ export class Samples {
       } catch (error) {
         if (controller.signal.aborted) continue
         this.#spent.add(ask.spent)
-        // Results let go of, as when they are cleared or replaced, are no failure.
-        if (!cancelled(error) && (error as { code?: string })?.code !== 'results-unavailable')
-          this.asker.report(error)
+        // Results closed, as when they are cleared or replaced, are no failure.
+        if (!quiet(error)) this.asker.report(error)
         tell = true
       } finally {
         if (this.#flight?.controller === controller) this.#flight = undefined

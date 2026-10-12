@@ -70,6 +70,8 @@
   let revealing: string | undefined
   /** The last element selected here, which is in sight already. */
   let own: string | undefined
+  /** The case the panel opened on, as it first read: another starts over from its saved state. */
+  let opened: string | undefined
   const definitions = $derived<Readonly<Record<string, Schema.Field>>>(
     summary?.schema.types[type]?.fields ?? {},
   )
@@ -368,11 +370,19 @@
   onMount(() => {
     const stop = bridge.on((message) => {
       if (message.kind === 'state') {
-        const first = !view.summary
-        const before = view.selection?.id
+        const other = message.state.uri !== view.uri
+        const before = other ? undefined : view.selection?.id
         view = merged(view, message.state)
         appearance(view.settings)
-        if (first && view.summary) {
+        // Another case's rows go with it; its own load once it reads.
+        if (other) {
+          controller?.abort()
+          page = { offset: 0, rows: [] }
+          total = 0
+          opened = undefined
+        }
+        if (view.summary && opened !== view.uri) {
+          opened = view.uri
           // Open on the selection's type, else where the panel was left.
           const saved = view.table
           const wanted = view.selection ? elementType(view.selection.id) : saved?.type
@@ -552,7 +562,7 @@
           </tr>{/if}
       </tbody>
     </table>
-    {#if (!summary && !view.error) || (summary && !total && !loading)}
+    {#if view.uri && ((!summary && !view.error) || (summary && !total && !loading))}
       <div class="c-empty">
         <p class="c-empty__text">{summary ? 'No matching elements.' : 'Loading case…'}</p>
       </div>

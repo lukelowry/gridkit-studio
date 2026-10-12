@@ -1,4 +1,10 @@
-import { cancelled } from '../shared/format.js'
+import { passing, quiet } from '../shared/errors.js'
+
+/** The longest a restart waits, and the first wait, which doubles with each failure in a row. */
+const LONGEST_MS = 10_000
+const FIRST_MS = 250
+/** How long a view must work before a failure counts as the first again. */
+const HEALTHY_MS = 10_000
 
 /** Coalesce failures and back off repeated restarts, without abandoning a recoverable view. */
 export class Recovery {
@@ -20,12 +26,13 @@ export class Recovery {
   }
 
   fail(error: unknown): void {
-    if (this.#closed || this.#timer !== undefined) return
-    const code = String((error as { code?: unknown } | null)?.code ?? '')
-    if (cancelled(error) || ['aborted', 'cancelled', 'closed'].includes(code)) return
-    if (!['device-lost', 'timeout', 'unavailable'].includes(code)) {
+    if (this.#closed || this.#timer !== undefined || quiet(error)) return
+    if (!passing(error)) {
       this.blocked = true
-      const key = code + ':' + String((error as Error)?.message ?? error)
+      const key =
+        String((error as { code?: unknown } | null)?.code ?? '') +
+        ':' +
+        String((error as Error)?.message ?? error)
       if (key !== this.#reported) {
         this.#reported = key
         this.report(error)
@@ -35,7 +42,7 @@ export class Recovery {
     this.blocked = false
     this.#healthy = undefined
     if (!this.#attempt) this.report(error)
-    const delay = Math.min(10_000, 250 * 2 ** Math.min(this.#attempt++, 6))
+    const delay = Math.min(LONGEST_MS, FIRST_MS * 2 ** this.#attempt++)
     this.#timer = setTimeout(() => {
       this.#timer = undefined
       if (!this.#closed) this.restart()
@@ -47,7 +54,7 @@ export class Recovery {
     this.blocked = false
     const now = performance.now()
     this.#healthy ??= now
-    if (now - this.#healthy >= 10_000) this.#attempt = 0
+    if (now - this.#healthy >= HEALTHY_MS) this.#attempt = 0
   }
 
   dispose(): void {

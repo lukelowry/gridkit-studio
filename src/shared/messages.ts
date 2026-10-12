@@ -3,22 +3,15 @@
 import type { Layout } from '@latkit/gpu'
 import type { Block, Data, Domain, Query, Schema } from '@latkit/model'
 
-import type { Cancel, Reply, Request } from './rpc.js'
-import type { Results, Run, RunRequest, RuntimeProcess, Study } from './simulation.js'
-import type { Sink } from './study.js'
-export type {
-  GridKit,
-  Program,
-  Results,
-  Run,
-  RunRequest,
-  RuntimeProcess,
-  Study,
-} from './simulation.js'
-
 import type { Bindings } from './bindings.js'
+import type { Problem } from './errors.js'
+import type { ViewCommandName } from './ids.js'
 import type { SettingsValues } from './preferences.js'
+import type { Cancel, Reply, Request } from './rpc.js'
+import type { Results, Run, RunRequest, RuntimeProcess } from './simulation.js'
+import type { Sink } from './study.js'
 import type { ClockState, LoopMode } from './transport.js'
+export type { GridKit, Results, Run, RunRequest, RuntimeProcess } from './simulation.js'
 
 /** A JSON value of a case record: what a cell shows and an edit writes. */
 export type Value = number | string | boolean | null | readonly Value[]
@@ -112,7 +105,7 @@ export interface SamplesInput {
 }
 
 /** How much memory a worker holds. */
-interface Memory {
+export interface Memory {
   heapUsed: number
   arrayBuffers: number
 }
@@ -124,18 +117,18 @@ export interface CaseSource extends Revision {
   text?: string
 }
 
-/** The results a request reads, by their id. */
-interface OfResults {
+/** Results the extension holds open, by the id it chose for them. */
+export interface OfResults {
   results: string
 }
 
-/** What the case worker answers: each open case's source, parsed as the user edits it, and what
- *  the editor and the views read of it. */
 /** What brings the case worker's copy of a document to a revision: its whole text, or the changes
  *  since the version the worker holds. */
 export type SourceDelta =
   { text: string } | { baseVersion: number; changes: readonly (readonly SourceEdit[])[] }
 
+/** What the case worker answers: each open case's source, parsed as the user edits it, and what
+ *  the editor and the views read of it. */
 export interface CaseApi {
   parse: {
     input: Revision & SourceDelta
@@ -164,18 +157,30 @@ export interface CaseApi {
   stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
 }
 
+/** What the extension starts the results worker with. */
+export interface ResultsOptions {
+  /** How many bytes of decoded frames stay read past what views read now. */
+  readonly cacheBytes: number
+}
+
 /** What the results worker answers: GridKit's runs, and the results files Studio reads, each with
- *  the case it was read against. */
+ *  the case it was read against. It holds exactly the results the extension holds open, each by
+ *  the id the extension chose, until the extension closes them; a case it read goes with the last
+ *  results or run that read it. */
 export interface ResultsApi {
-  /** Runs GridKit and reads what it writes. The request is the run: it settles when the run ends,
-   *  and cancelling it stops the run. */
+  /** Runs GridKit and reads what it writes into `results`. The request is the run: it settles when
+   *  the run ends, and cancelling it stops the run. */
   run: { input: RunRequest; output: Run }
-  /** A GridKit results file read for the case, which `solver`'s run wrote when it names one. It
-   *  answers once the first frames are read, and the rest are read on. */
+  /** Reads the GridKit results file at `path` into `results`, for the case, which `solver`'s run
+   *  wrote when it names one. It answers once the first frames are read, and the rest are read on. */
   open: {
-    input: CaseSource & { path: string; solver?: string; cacheBytes: number; contingency?: Study }
+    input: CaseSource & OfResults & { path: string; solver?: string }
     output: Results
   }
+  /** Lets go of `results`; asked of again, they answer `results-closed`. Their file stays. */
+  close: { input: OfResults; output: null }
+  /** How many bytes of decoded frames stay read past what views read now. */
+  configure: { input: { cacheBytes: number }; output: null }
   /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
   /** Rows of the case the results were read against, at a time of theirs when the query has an
@@ -189,13 +194,10 @@ export interface ResultsApi {
   /** The next sample time from `at` in `direction`; the first or last time when none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
-  /** Lets go of the case's results, stopping a run under way. Their files stay. */
-  clear: { input: { uri: string }; output: null }
-  /** Stops every run under way, each interrupted. */
-  shutdown: { input: Record<string, never>; output: null }
+  /** What it holds: results files, the cases they and the runs under way read, and decoded bytes. */
   stats: {
     input: Record<string, never>
-    output: { memory: Memory; files: number; cacheBytes: number }
+    output: { memory: Memory; files: number; cases: number; runs: number; cacheBytes: number }
   }
 }
 
@@ -203,7 +205,7 @@ export interface ResultsApi {
 export type WorkerEvent =
   /** The GridKit process a case's run started, or none once it ends. */
   | { kind: 'process'; uri: string; process?: RuntimeProcess }
-  /** A run started, began to write its results, or ended. */
+  /** A run started, or ended. */
   | { kind: 'run'; run: Run }
   /** How far a results file has been read: a run's as it writes it, or one opened. */
   | { kind: 'results'; uri: string; results: Results }
@@ -254,9 +256,9 @@ export interface ViewState {
   error?: string
   selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
-  anchors?: string[]
+  anchors?: readonly string[]
   results?: Results
-  plots?: Plot[]
+  plots?: readonly Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
   window?: Domain
 }
@@ -267,12 +269,34 @@ export interface Cameras {
   diagram?: unknown
 }
 
+/** What a command asks of a view, or the extension tells it: `shown` whether VS Code shows it. */
+export type ViewAction =
+  | 'shown'
+  | 'fit'
+  | 'reloadView'
+  | 'neighborhood'
+  | 'orbit'
+  | 'projection'
+  | 'diagramEditing'
+  | 'arrangeDiagram'
+  | 'retryMonitor'
+  | 'resetMonitorWindow'
+  | 'signalRange'
+  | 'type'
+  | 'columns'
+  | 'resetColumns'
+  | 'hideColumn'
+  | 'sort'
+  | 'filter'
+  | 'filterText'
+  | 'clearFilters'
+
 export type ToView =
   | { kind: 'state'; state: ViewState }
   /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
   | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
   | Reply
-  | { kind: 'action'; command: string; value?: unknown }
+  | { kind: 'action'; command: ViewAction; value?: unknown }
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
 export type TransportAction =
@@ -312,7 +336,7 @@ export type FromView =
   | { kind: 'ready' }
   | Request
   | Cancel
-  | { kind: 'command'; command: string; value?: unknown }
+  | { kind: 'command'; command: ViewCommandName; value?: unknown }
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: Domain }
@@ -320,13 +344,8 @@ export type FromView =
   | ({ kind: 'transport'; seq: number } & TransportAction)
   /** What the Case panel shows, and how many rows its filters leave. */
   | { kind: 'tableState'; table: TableState; shown: number }
+  /** Whether the view is mid-task, as an export is, and keeps the case it works on. */
   | { kind: 'busy'; busy: boolean }
-  /** Why something in the view failed, which the extension tells the user. */
-  | {
-      kind: 'error'
-      message: string
-      code?: string
-      context?: unknown
-      detail?: string
-      defect?: boolean
-    }
+  /** Why something in the view failed, which the extension tells the user, and what the view was
+   *  doing, for the log. */
+  | { kind: 'error'; problem: Problem; context?: unknown }

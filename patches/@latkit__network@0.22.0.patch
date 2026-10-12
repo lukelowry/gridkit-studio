@@ -14,10 +14,19 @@ index 83be0e0b9edd1b7f7d693867912c4aa8ec42cf23..280d63adb7dcafad63d21eb45070c640
      /** A drawn row: a vertex or an edge. */
      interface Item extends ModelItem {
 diff --git a/dist/index.js b/dist/index.js
-index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c825bde2770 100644
+index 70d5179e88f4d45bff970b679c0130905ef62296..624640ad5124bc089ed8da17d7700c930c15faff 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -2451,35 +2451,21 @@ async function pipelines(gpu, format, msaa, shade) {
+@@ -2407,6 +2407,8 @@ var CURVES = { ...LINES, curved: true };
+ var POLES = { vertex: "pole_main", fragment: "fragment_main" };
+ async function pipelines(gpu, format, msaa, shade) {
+   const d = gpu.device, C = GPUShaderStage.COMPUTE, V = GPUShaderStage.VERTEX, F = GPUShaderStage.FRAGMENT;
++  const gridding = compileGrid(gpu, format, msaa);
++  void gridding.catch(() => void 0);
+   const uniform = (binding, visibility) => ({
+     binding,
+     visibility,
+@@ -2451,35 +2453,21 @@ async function pipelines(gpu, format, msaa, shade) {
    });
    const label = d.createBindGroupLayout({ entries: [uniform(0, V | F), storage(1, V)] });
    const occlusion = d.createBindGroupLayout({ entries: [uniform(0, V | F)] });
@@ -52,11 +61,11 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
 -  });
    const scene = (draws) => geometryPipeline({ gpu, draw: drawLayout, format, msaa }, geometry, draws, "scene");
 -  const [vertex, edge, marked, vertices, edges, poles, occluder, textPipeline, curves] = await Promise.all([
-+  const [vertex, edge, marked, vertices, edges, poles, curves] = await Promise.all([
++  const [vertex, edge, marked, vertices, edges, poles, curves, grid] = await Promise.all([
      gpu.computePipeline({
        layout: computeLayout,
        compute: { module: prep, entryPoint: "vertices" }
-@@ -2495,24 +2481,6 @@ async function pipelines(gpu, format, msaa, shade) {
+@@ -2495,25 +2483,8 @@ async function pipelines(gpu, format, msaa, shade) {
      scene(MARKERS),
      scene(LINES),
      scene(POLES),
@@ -78,17 +87,19 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
 -      multisample: { count: msaa }
 -    }),
 -    render(text, "label_vertex", "label_fragment", [label, gpu.textLayout], false),
-     scene(CURVES)
+-    scene(CURVES)
++    scene(CURVES),
++    gridding
    ]);
    const [tessPipeline, finish] = await Promise.all([
-@@ -2546,15 +2514,66 @@ async function pipelines(gpu, format, msaa, shade) {
-     vertices,
+     gpu.computePipeline({
+@@ -2547,14 +2518,66 @@ async function pipelines(gpu, format, msaa, shade) {
      edges,
      curves,
--    poles,
+     poles,
 -    occlude: occluder,
 -    text: textPipeline
-+    poles
++    grid
    };
 -  void markerPipeline(built, DISC, "focus");
 -  void linePipeline(built, false, "focus");
@@ -154,7 +165,57 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
  var variants = /* @__PURE__ */ new WeakMap();
  function variant(pipelines2, key, build) {
    let byKey = variants.get(pipelines2);
-@@ -3301,8 +3320,14 @@ var Painter = class {
+@@ -2586,26 +2609,29 @@ function markerPipeline(pipelines2, marker, layer = "scene") {
+   });
+ }
+ function gridPipeline(pipelines2) {
+-  return variant(pipelines2, "grid", async () => {
+-    const { gpu, format, msaa } = pipelines2, d = gpu.device, module = await gpu.shaderModule(common + kit9.gridShader() + grid_default, "network grid"), layout = d.createBindGroupLayout({
+-      entries: [0, 1].map((binding) => ({
+-        binding,
+-        visibility: GPUShaderStage.FRAGMENT,
+-        buffer: { type: "uniform" }
+-      }))
+-    });
+-    return gpu.renderPipeline({
+-      layout: d.createPipelineLayout({ bindGroupLayouts: [layout] }),
+-      vertex: { module, entryPoint: "grid_vertex" },
+-      fragment: {
+-        module,
+-        entryPoint: "grid_fragment",
+-        targets: [{ format, blend: kit9.premultipliedBlend }]
+-      },
+-      primitive: { topology: "triangle-list" },
+-      depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less-equal" },
+-      multisample: { count: msaa }
+-    });
++  return Promise.resolve(pipelines2.grid);
++}
++/** The grid, which draws in the first frame of every view without a ground: it compiles beside the
++ *  scene's pipelines, never after them inside that frame. */
++async function compileGrid(gpu, format, msaa) {
++  const d = gpu.device, module = await gpu.shaderModule(common + kit9.gridShader() + grid_default, "network grid"), layout = d.createBindGroupLayout({
++    entries: [0, 1].map((binding) => ({
++      binding,
++      visibility: GPUShaderStage.FRAGMENT,
++      buffer: { type: "uniform" }
++    }))
++  });
++  return gpu.renderPipeline({
++    layout: d.createPipelineLayout({ bindGroupLayouts: [layout] }),
++    vertex: { module, entryPoint: "grid_vertex" },
++    fragment: {
++      module,
++      entryPoint: "grid_fragment",
++      targets: [{ format, blend: kit9.premultipliedBlend }]
++    },
++    primitive: { topology: "triangle-list" },
++    depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less-equal" },
++    multisample: { count: msaa }
+   });
+ }
+ function linePipeline(pipelines2, curved, layer) {
+@@ -3301,8 +3327,14 @@ var Painter = class {
        layout: pipeline.occlusion,
        entries: [{ binding: 0, resource: uniform }]
      }) : void 0;
@@ -169,7 +230,7 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
        easing,
        curves: curves && {
          tessellations,
-@@ -3479,7 +3504,7 @@ var Painter = class {
+@@ -3479,7 +3511,7 @@ var Painter = class {
        pass.setBindGroup(0, paint.grid.group);
        pass.draw(3);
      } else if (paint.occlusion) {
@@ -178,7 +239,7 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
        pass.setBindGroup(0, paint.occlusion);
        pass.draw(3);
      }
-@@ -3515,7 +3540,7 @@ var Painter = class {
+@@ -3515,7 +3547,7 @@ var Painter = class {
      }
      if (paint.options.lines) for (const item of paint.edges) over(item);
      if (paint.options.markers) for (const item of paint.vertices) over(item);
@@ -187,7 +248,7 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
      for (const item of paint.labels) {
        pass.setBindGroup(0, item.group);
        for (const page of item.pages) {
-@@ -3695,10 +3720,12 @@ var NetworkView = class extends kit11.ProjectedView {
+@@ -3695,10 +3727,12 @@ var NetworkView = class extends kit11.ProjectedView {
      return this.shown?.geometry.adjacency.neighborhood(item, this.shown.data) ?? [];
    }
    stats() {
@@ -201,7 +262,7 @@ index 70d5179e88f4d45bff970b679c0130905ef62296..1718d7e24fb8c0371a046f11f41c6c82
      };
    }
    /** Geographic positions start on the mercator plane, as a geography does; others on the plane. */
-@@ -4033,6 +4060,7 @@ var NetworkView = class extends kit11.ProjectedView {
+@@ -4033,6 +4067,7 @@ var NetworkView = class extends kit11.ProjectedView {
      this.geometry = pending.geometry;
      if (pending.begins && this.transition) this.transition.begun = true;
      if (!frame.presented) return;

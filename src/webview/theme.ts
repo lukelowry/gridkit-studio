@@ -7,6 +7,9 @@ import type { SettingsReader, SettingsValues } from '../shared/preferences.js'
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
   background: ['--color-bg', '#1e1e1e'],
+  /** The editor's background, which the Network and Diagram sit on wherever they draw, a video's
+   *  too, though the page drawing them sits elsewhere. */
+  editor: ['--vscode-editor-background', '#1e1e1e'],
   surface1: ['--color-surface-1', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
   text1: ['--color-text-1', '#cccccc'],

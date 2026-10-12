@@ -106,6 +106,27 @@ export function holds(sampled: readonly Query.Selection[], { type, field, id }: 
 export const sameWindow = (a: Domain | undefined, b: Domain | undefined): boolean =>
   a?.[0] === b?.[0] && a?.[1] === b?.[1]
 
+/**
+ * The values a streamed plot of `from`'s `field` spans, as it never holds its whole window to fit:
+ * the field's range over the run, as the results measured it while reading, with room around it.
+ * The `current` span stands while it holds that range; past it, the span grows by half again, so a
+ * live run's new extremes draw the plot again a few times rather than at each.
+ */
+export function streamedValues(
+  results: Pick<Results, 'domains'> | undefined,
+  { from, field }: { from: string; field: string },
+  current?: Domain,
+): Domain | undefined {
+  const range = results?.domains?.[from]?.[field]
+  if (!range) return current
+  if (current && current[0] <= range[0] && range[1] <= current[1]) return current
+  const room = (range[1] - range[0]) / 2 || Math.abs(range[0]) / 2 || 1
+  return [
+    current ? Math.min(current[0], range[0] - room) : range[0] - room / 10,
+    current ? Math.max(current[1], range[1] + room) : range[1] + room / 10,
+  ]
+}
+
 /** The trace of `plotted`: a line for each row of its type, or for the one row it names. A field the
  *  network colors is colored the same way, by the value each line plots: its colormap, over the same
  *  range. The plot keeps only where lines lie and colors them as it draws, so a new range or

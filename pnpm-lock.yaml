@@ -5,8 +5,11 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
+  '@latkit/monitor@0.18.0':
+    hash: b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f
+    path: patches/@latkit__monitor@0.18.0.patch
   '@latkit/network@0.22.0':
-    hash: c04b450880f60c44b9da989fe8467f6bf5f13faca9cc2ab62695008244843cc2
+    hash: aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd
     path: patches/@latkit__network@0.22.0.patch
 
 importers:
@@ -27,10 +30,10 @@ importers:
         version: 4.2.0
       '@latkit/monitor':
         specifier: 0.18.0
-        version: 0.18.0
+        version: 0.18.0(patch_hash=b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f)
       '@latkit/network':
         specifier: 0.22.0
-        version: 0.22.0(patch_hash=c04b450880f60c44b9da989fe8467f6bf5f13faca9cc2ab62695008244843cc2)
+        version: 0.22.0(patch_hash=aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd)
       '@latkit/video':
         specifier: 0.7.0
         version: 0.7.0
@@ -2134,13 +2137,13 @@ snapshots:
 
   '@latkit/model@4.2.0': {}
 
-  '@latkit/monitor@0.18.0':
+  '@latkit/monitor@0.18.0(patch_hash=b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f)':
     dependencies:
       '@latkit/gpu': 0.19.0
       '@latkit/model': 4.2.0
       '@webgpu/types': 0.1.74
 
-  '@latkit/network@0.22.0(patch_hash=c04b450880f60c44b9da989fe8467f6bf5f13faca9cc2ab62695008244843cc2)':
+  '@latkit/network@0.22.0(patch_hash=aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd)':
     dependencies:
       '@latkit/gpu': 0.19.0
       '@latkit/model': 4.2.0

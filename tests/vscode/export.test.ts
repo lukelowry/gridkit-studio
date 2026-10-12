@@ -74,4 +74,43 @@ suite('Export', () => {
       await until(() => bench.session.results?.id === shown.id, 'the first results shown again')
     }
   }).timeout(180_000)
+
+  test('plots a run holding more than a page keeps by streaming it through the plots first', async () => {
+    const shown = await bench.results()
+    // Every bus's voltage over three and a half chunks, and a budget a quarter of that.
+    const results = await bench.waveform('Streamed waveform.csv', 46_000, 4.6, 3)
+    assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
+    const budget = Math.floor((results.frames * (bench.source.buses.length + 1) * 8) / 4)
+    bench.session.plots = [{ from: VM.type, field: VM.field }]
+    bench.studio.changed.fire(bench.key)
+    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 streamed.webm')
+    const exporter = await bench.show('export')
+    try {
+      await visible(exporter, '[data-testid="video-export"]')
+      await exporter.evaluate((bytes) => {
+        ;(globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget = bytes
+      }, budget)
+      // The Monitor's part alone, over the whole run.
+      for (const [name, on] of [
+        ['Network', false],
+        ['Monitor', true],
+      ] as const) {
+        const toggle = exporter.getByRole('switch', { name, exact: true })
+        if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
+      }
+      await exporter.locator('[data-testid="video-start"]').click()
+      await bench.dialog(video.fsPath)
+      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
+      assert.ok((await stat(video.fsPath)).size > 1000, 'The exported video has frames')
+      const { slices } = await exporter.evaluate<{ slices: number }>('gridkitExport()')
+      assert.ok(slices > 1, `${slices} slices streamed through the plots`)
+    } finally {
+      await exporter.evaluate(() => {
+        delete (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget
+      })
+      bench.studio.show(bench.session, shown)
+      bench.studio.changed.fire(bench.key)
+      await until(() => bench.session.results?.id === shown.id, 'the first results shown again')
+    }
+  }).timeout(180_000)
 })

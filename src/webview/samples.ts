@@ -11,6 +11,11 @@ import type { Asker } from './asker.js'
 
 /** The samples a view holds besides those it needs now, in bytes. */
 export const SAMPLE_BUDGET = 96 << 20
+
+/** What plots hold besides what they draw now, in the Monitor and in a video: the budget, or less,
+ *  as a test sets on the page to stream a short run. */
+export const plotBudget = (): number =>
+  (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget ?? SAMPLE_BUDGET
 /** About the most bytes one reply brings. */
 const REPLY_BYTES = 8 << 20
 /** Results decode to float64. */
@@ -68,6 +73,46 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
     rows: ids?.length ?? summary.counts[from] ?? 0,
   }))
 })
+
+/** Where a plot's drawing stands, as its monitor says: the time of the last frame it drew, `start`
+ *  while it has drawn nothing, null once it has drawn its window to the end. */
+export type Wants = number | 'start' | null
+
+/** Where the drawing of `all` the plots stands: the least of them, `start` for one that has not said. */
+export function leastWants(all: readonly (Wants | undefined)[]): Wants {
+  let least: number | null = null
+  for (const wants of all) {
+    if (wants === undefined || wants === 'start') return 'start'
+    if (wants !== null) least = least === null ? wants : Math.min(least, wants)
+  }
+  return least
+}
+
+/**
+ * What plots of `needs` read of `results` over `window` when every sample there would hold more than
+ * `budget` bytes: the next slice, from where their drawing stands (`wants`) on, half a budget's
+ * worth, a chunk at least; or null once they have drawn the window. Undefined when the window fits,
+ * so the plots read it whole. A results file's frames never change, so a plot keeps what it drew of
+ * a slice, and the slices before it go as later ones come.
+ */
+export function streamSlice(
+  results: Results | undefined,
+  needs: readonly Need[],
+  window: Domain,
+  budget: number,
+  wants: Wants,
+): Domain | null | undefined {
+  const frameBytes = needs.reduce((n, need) => n + (need.rows + 1) * SAMPLE_BYTES, 0)
+  if (!results || results.frames < 2 || !frameBytes) return undefined
+  const step = (results.domain[1] - results.domain[0]) / (results.frames - 1)
+  const end = Math.min(window[1], results.domain[1])
+  const frames = (end - Math.max(window[0], results.domain[0])) / step + 1
+  if (!(step > 0) || frames * frameBytes <= budget) return undefined
+  const from = wants === 'start' ? window[0] : wants
+  if (from === null || from >= end) return null
+  const span = Math.max(results.chunk, Math.floor(budget / 2 / frameBytes)) * step
+  return [from, Math.min(end, from + span)]
+}
 
 /** What names a selection of fields and rows, so equal selections compare equal. */
 export function selectionKey({ from, select, rows }: Query.Selection): string {
@@ -147,12 +192,18 @@ export class Samples {
   readonly #waiters = new Set<() => void>()
 
   /** Asks the worker, through `asker`, for what each need lacks, and tells `changed` of each
-   *  change in what the view holds, which keeps `budget` bytes besides those needed now. */
+   *  change in what the view holds, which keeps `budget` bytes besides those needed now: a number,
+   *  or what it reads each time it is asked. */
   constructor(
     private readonly asker: Asker,
     private readonly changed: () => void,
-    private readonly budget = SAMPLE_BUDGET,
+    private readonly limit: number | (() => number) = SAMPLE_BUDGET,
   ) {}
+
+  /** The bytes it keeps besides those needed now. */
+  get budget(): number {
+    return typeof this.limit === 'number' ? this.limit : this.limit()
+  }
 
   /** The results the view holds samples of. */
   get results(): string | undefined {

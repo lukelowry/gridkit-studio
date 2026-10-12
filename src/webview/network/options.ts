@@ -15,7 +15,7 @@ type NetworkStyle = Omit<Network.Config, 'source' | 'vertices' | 'edges' | 'canv
 export function networkOptions(s: SettingsReader, palette: Palette, font: string): NetworkStyle {
   return {
     ...viewStyle(s, 'network', font, {
-      background: palette.background,
+      background: palette.editor,
       textColor: palette.text1,
       selectedColor: faded(palette.focus, SELECTED_ALPHA),
     }),

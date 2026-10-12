@@ -6,7 +6,14 @@
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { rowsOnce, staticNeeds } from '../rows.js'
-  import { networkNeeds, plotNeeds, Samples } from '../samples.js'
+  import {
+    networkNeeds,
+    plotBudget,
+    plotNeeds,
+    Samples,
+    streamSlice,
+    type Wants,
+  } from '../samples.js'
   import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
@@ -38,14 +45,16 @@
   let touched = false
   /** The samples the Monitor's part plots, all of the time range; and those the Network's part
    *  maps, a moment at a time, read a few chunks ahead of the frame drawn. */
-  const plotting = new Samples(bridge, () => {})
+  const plotting = new Samples(bridge, () => {}, plotBudget)
   const mapping = new Samples(bridge, () => {})
   let stop: AbortController | undefined
   /** Whether the user cancelled the running export. */
   let cancelled = false
-  /** The moments the Network's part of the last export was given the samples of, for tests. */
+  /** The moments the Network's part of the last export was given the samples of, and the slices
+   *  its Monitor's part streamed, for tests. */
   let moments: number[] = []
-  ;(window as { gridkitExport?: () => unknown }).gridkitExport = () => ({ moments })
+  let slices = 0
+  ;(window as { gridkitExport?: () => unknown }).gridkitExport = () => ({ moments, slices })
   const owner = new CanvasGpu()
   const id = $props.id()
 
@@ -91,6 +100,7 @@
     cancelled = false
     progress = null
     moments = []
+    slices = 0
     bridge.send({ kind: 'busy', busy: true })
     let file: number | null = null
     try {
@@ -115,13 +125,27 @@
         signal,
       )
       const rows = held.data
-      // The Monitor's part plots the whole time range, so every sample of it comes first.
-      plotting.want(
-        results,
-        chosen.views.includes('monitor') ? plotNeeds(state) : [],
-        chosen.timeRange,
-      )
-      await plotting.until(chosen.timeRange, signal)
+      // The Monitor's part plots the whole time range, so every sample of it comes first; a range
+      // holding more than a page keeps streams through the plots a slice at a time instead.
+      const plotted = chosen.views.includes('monitor') ? plotNeeds(state) : []
+      const slice = (wants: Wants) =>
+        streamSlice(results, plotted, chosen.timeRange, plotting.budget, wants)
+      const stream =
+        slice('start') === undefined
+          ? undefined
+          : async (wants: Wants) => {
+              const next = slice(wants)
+              if (!next) return undefined
+              slices++
+              plotting.want(results, plotted, next)
+              await plotting.until(next, signal)
+              return plotting.data(rows)
+            }
+      if (stream) await stream('start')
+      else {
+        plotting.want(results, plotted, chosen.timeRange)
+        await plotting.until(chosen.timeRange, signal)
+      }
       const mapped = chosen.views.includes('network') ? networkNeeds(state) : []
       const gpu = await owner.get()
       signal.throwIfAborted()
@@ -141,6 +165,7 @@
           state,
           rows,
           plotted: plotting.data(rows),
+          ...(stream && { stream }),
           mapped: async (at, s) => {
             mapping.want(results, mapped, [at, at], { at, travel: 1 })
             await mapping.until([at, at], s)

@@ -6,12 +6,13 @@ import { createDiagram } from '@latkit/diagram'
 import {
   createComposition,
   type Gpu,
+  kit,
   type Layout,
   type ProjectedCamera,
   type View,
 } from '@latkit/gpu'
 import type { Data, Domain } from '@latkit/model'
-import { createMonitor } from '@latkit/monitor'
+import { createMonitor, type Monitor } from '@latkit/monitor'
 import { createNetwork } from '@latkit/network'
 import type { VideoProgress, VideoWrite } from '@latkit/video'
 
@@ -20,9 +21,17 @@ import { reader } from '../../shared/preferences.js'
 import { diagramOf, fieldName, networkOf, typeName } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
-import { axisLabel, PLOT_LIMITS, plotBindings, plotOptions, plotRows } from '../monitor/plot.js'
+import {
+  axisLabel,
+  PLOT_LIMITS,
+  plotBindings,
+  plotOptions,
+  plotRows,
+  streamedValues,
+} from '../monitor/plot.js'
 import { isFlat, isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
+import { leastWants, type Wants } from '../samples.js'
 import { theme } from '../theme.js'
 
 export interface VideoSettings {
@@ -50,13 +59,18 @@ export const DEFAULTS: VideoSettings = {
   quality: 'high',
 }
 
-/** What the export draws: the view state, the case's rows, those rows with every sample the
+/** What the export draws: the view state, the case's rows, those rows with the samples the
  *  Monitor's part plots, the samples the Network's part maps at each moment, where the case saves
  *  its diagram blocks, and each view's camera. */
 interface VideoInputs {
   readonly state: ViewState
   readonly rows: Data
+  /** The rows with every sample the Monitor's part plots over the time range; with `stream`, those
+   *  of its first slice. */
   readonly plotted: Data
+  /** For a time range holding more samples than a page keeps: the rows with the next slice of them,
+   *  from where the plots' drawing stands, the slices before let go; undefined once drawn. */
+  readonly stream?: (wants: Wants) => Promise<Data | undefined>
   /** The rows with the samples the Network maps at `at`, once they are held. */
   readonly mapped: (at: number, signal: AbortSignal) => Promise<Data>
   readonly presentation: Readonly<Record<string, Layout.Positions>>
@@ -125,7 +139,7 @@ export function exportable(settings: VideoSettings, state: ViewState): boolean {
 export async function exportVideo(
   gpu: Gpu,
   settings: VideoSettings,
-  { state, rows, plotted, mapped, presentation, cameras }: VideoInputs,
+  { state, rows, plotted, stream, mapped, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
   cancel: AbortSignal,
   onProgress: (progress: VideoProgress) => void,
@@ -146,6 +160,8 @@ export async function exportVideo(
   }
   /** Gives the Network the samples of the moment `at`, once they are held. */
   let ready = async (_at: number) => {}
+  /** The Monitor's part's plots, which a streamed time range draws before the video records. */
+  const lanes: Monitor[] = []
   try {
     for (const view of settings.views) {
       if (view === 'network') {
@@ -208,7 +224,9 @@ export async function exportVideo(
               (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
               ` · ${fieldName(definition, plot.field)}`
             const last = i === plots.length - 1
-            return keep(
+            // A streamed plot spans its field's measured range, as the Monitor's own does.
+            const values = stream && streamedValues(state.results, plot)
+            const monitor = keep(
               createMonitor(gpu, {
                 ...plotOptions(preferences, colors, face, {
                   ticks: last,
@@ -229,10 +247,15 @@ export async function exportVideo(
                   }),
                   state.results,
                 ),
-                camera: { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
+                camera: values
+                  ? { x: settings.timeRange, y: values, fit: false }
+                  : { x: settings.timeRange, fit: preferences.get('monitor.camera.fit') },
                 limits: PLOT_LIMITS,
+                ...(stream && { frames: 'stable' as const }),
               }),
             )
+            lanes.push(monitor)
+            return monitor
           }),
         )
       }
@@ -253,6 +276,7 @@ export async function exportVideo(
         : keep(createComposition(gpu, { views: regions, background: colors.background }))
     const { exportVideo: record } = await import('@latkit/video')
     signal.throwIfAborted()
+    if (stream && lanes.length) await prime(gpu, renderer, lanes, stream, settings, signal)
     const [start, end] = settings.timeRange
     await record(renderer, {
       output,
@@ -274,5 +298,49 @@ export async function exportVideo(
     })
   } finally {
     for (const view of made.reverse()) view.destroy()
+  }
+}
+
+/**
+ * Draws the plots' history of the whole time range before the video records, its samples streamed
+ * through them a slice at a time, so every frame of the video shows the plots whole. The plots draw
+ * at the video's size, into the history its frames then show.
+ */
+async function prime(
+  gpu: Gpu,
+  view: View,
+  plots: readonly Monitor[],
+  stream: (wants: Wants) => Promise<Data | undefined>,
+  settings: VideoSettings,
+  signal: AbortSignal,
+): Promise<void> {
+  const target = kit.createPresentation(gpu, {
+    canvas: new OffscreenCanvas(settings.width, settings.height),
+    alphaMode: 'opaque',
+  })
+  const viewport = { width: settings.width, height: settings.height, pixelRatio: 1 }
+  try {
+    for (;;) {
+      await gpu.render({
+        completion: 'complete',
+        signal,
+        timeMs: 0,
+        views: [
+          {
+            renderer: kit.rendererOf(view),
+            target,
+            at: settings.timeRange[0],
+            viewport,
+            presented: false,
+          },
+        ],
+      })
+      const data = await stream(leastWants(plots.map((plot) => plot.stats().wants)))
+      signal.throwIfAborted()
+      if (!data) return
+      for (const plot of plots) plot.set({ source: data })
+    }
+  } finally {
+    target.destroy()
   }
 }

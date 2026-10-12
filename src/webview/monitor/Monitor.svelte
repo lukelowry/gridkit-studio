@@ -12,7 +12,14 @@
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
   import { ofShown, Rows, type Snapshot, staticNeeds } from '../rows.js'
-  import { plotNeeds, Samples } from '../samples.js'
+  import {
+    leastWants,
+    plotBudget,
+    plotNeeds,
+    Samples,
+    streamSlice,
+    type Wants,
+  } from '../samples.js'
   import { appearance, theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
@@ -26,9 +33,15 @@
   const cases = new Rows(bridge, () => (rows = cases.snapshot))
   /** Bumped as samples arrive. */
   let held = $state(0)
-  const samples = new Samples(bridge, () => held++)
+  const samples = new Samples(bridge, () => held++, plotBudget)
   let source = $state.raw<Data | undefined>()
   let sampled = $state.raw<readonly Query.Selection[]>([])
+  /** Whether the plots read their window a slice at a time, as it holds more than the budget, and
+   *  the slice they read now: null once they have drawn the window. */
+  let streaming = $state(false)
+  let slicing: Domain | null | undefined
+  /** Where each plot's drawing stands, by plot. */
+  let wants = $state.raw<ReadonlyMap<string, Wants>>(new Map())
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */
@@ -74,14 +87,36 @@
     )
   })
   // The plots draw the samples over the times shown; those around them load after, so a pan
-  // finds them held.
+  // finds them held. A window holding more than the budget streams instead: a slice at a time from
+  // where the plots' drawing stands, the slices drawn letting go as later ones come.
   $effect(() => {
     void held
     const span = shown
-    samples.want(view.results, plotNeeds(view), span, { at: (span[0] + span[1]) / 2, travel: 0 })
+    const needs = plotNeeds(view)
+    const slice = streamSlice(
+      view.results,
+      needs,
+      span,
+      samples.budget,
+      leastWants(plots.map((plot) => wants.get(keyOf(plot)))),
+    )
+    streaming = slice !== undefined
+    slicing = slice
+    if (slice === undefined)
+      samples.want(view.results, needs, span, { at: (span[0] + span[1]) / 2, travel: 0 })
+    else samples.want(view.results, needs, slice ?? undefined)
     source = rows && ofShown(rows, view) ? samples.data(rows.data) : undefined
     sampled = samples.sampled()
   })
+  /** Hears where `plot`'s drawing stands after each frame, and that it draws no more. */
+  function drew(plot: Plotted, stands: Wants | undefined) {
+    const key = keyOf(plot)
+    if (wants.get(key) === stands) return
+    const next = new Map(wants)
+    if (stands === undefined) next.delete(key)
+    else next.set(key, stands)
+    wants = next
+  }
   /** Whether the samples held cover `window` of `from`'s `field`. */
   const covers = (from: string, field: string, window: Domain) =>
     samples.covers(from, field, window)
@@ -103,10 +138,12 @@
           const before = view
           view = merged(view, incoming.state)
           appearance(view.settings)
-          // Other results reset the window; one the extension set replaces the user's.
+          // Other results reset the window, and the plots draw them from the start; a window the
+          // extension set replaces the user's.
           if (view.results?.id !== before.results?.id) {
             clearTimeout(telling)
             chosen = told = undefined
+            wants = new Map()
           } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
             chosen = undefined
         } else if (incoming.kind === 'action') {
@@ -123,6 +160,14 @@
     ]
     const visibility = () => (hidden = document.hidden)
     document.addEventListener('visibilitychange', visibility)
+    // What the plots hold, for the tests.
+    ;(window as { gridkitMonitor?: () => unknown }).gridkitMonitor = () => ({
+      streaming,
+      slice: slicing,
+      wants: Object.fromEntries(wants),
+      budget: samples.budget,
+      ...samples.stats(),
+    })
     bridge.send({ kind: 'ready' })
     return () => {
       document.removeEventListener('visibilitychange', visibility)
@@ -165,7 +210,9 @@
           {paused}
           generation={epoch}
           ticks={i === plots.length - 1}
+          {streaming}
           onframe={() => recovery.presented()}
+          onwants={(stands) => drew(plot, stands)}
           onwindow={turn}
         />
       {/each}

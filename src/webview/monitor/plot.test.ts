@@ -3,7 +3,36 @@ import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
 import type { Results } from '../../shared/simulation.js'
-import { axisLabel, axisName, holds, monitorWindow, plotBindings, plotOptions } from './plot.js'
+import {
+  axisLabel,
+  axisName,
+  holds,
+  monitorWindow,
+  plotBindings,
+  plotOptions,
+  streamedValues,
+} from './plot.js'
+
+describe('the values a streamed plot spans', () => {
+  const voltage = { from: 'Bus', field: 'Vm' }
+  const measured = (min: number, max: number) => ({ domains: { Bus: { Vm: [min, max] as const } } })
+
+  it("spans the field's measured range, and grows by half again only past it", () => {
+    const first = streamedValues(measured(0.9, 1.1), voltage)!
+    expect(first[0]).toBeLessThan(0.9)
+    expect(first[1]).toBeGreaterThan(1.1)
+    // Extremes within it keep it, so nothing draws again.
+    expect(streamedValues(measured(0.95, 1.05), voltage, first)).toBe(first)
+    // Past it, half the measured range again on each side.
+    const grown = streamedValues(measured(0.5, 1.1), voltage, first)!
+    expect(grown[0]).toBeCloseTo(0.2)
+    expect(grown[1]).toBeCloseTo(1.4)
+    // Unmeasured, it keeps what it spans; a flat field still spans values.
+    expect(streamedValues(undefined, voltage, first)).toBe(first)
+    const flat = streamedValues(measured(1, 1), voltage)!
+    expect(flat[1]).toBeGreaterThan(flat[0])
+  })
+})
 
 describe('the window a plot shows', () => {
   it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {

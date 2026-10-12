@@ -139,8 +139,8 @@ function boot() {
   }
   const kind = (name === 'network' ? network : diagram)(host)
   // The renderer loads while the worker prepares the case.
-  void kind.loaded.catch(error)
-  void owner.get(lost).catch(error)
+  void kind.loaded.then(() => mark('canvas:loaded'), error)
+  void owner.get(lost).then(() => mark('canvas:device'), error)
 
   /** The item the view draws for `element`; undefined when it draws none, or not yet. */
   const drawnItem = (element: Element) => {

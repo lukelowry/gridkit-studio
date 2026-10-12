@@ -15,6 +15,7 @@
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
   import { Recovery } from '../recovery.js'
+  import type { Wants } from '../samples.js'
   import type { Theme } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
@@ -26,6 +27,7 @@
     plotRows,
     sameSelection,
     sameWindow,
+    streamedValues,
     traceCount,
     traceSelection,
   } from './plot.js'
@@ -49,7 +51,9 @@
     paused,
     generation,
     ticks,
+    streaming,
     onframe,
+    onwants,
     onwindow,
   }: {
     plot: Plot
@@ -73,7 +77,12 @@
     generation: number
     /** Whether its time ticks are labelled: the last of the plots, which share one time axis. */
     ticks: boolean
+    /** Whether `source` brings the window a slice at a time, letting go of the slices drawn. */
+    streaming: boolean
     onframe: () => void
+    /** Where its drawing stands after each frame, so the slice it needs next is read; undefined
+     *  once it draws no more. */
+    onwants: (stands: Wants | undefined) => void
     /** The user panned or zoomed this plot to `bounds`. */
     onwindow: (bounds: Domain) => void
   } = $props()
@@ -146,14 +155,29 @@
   )
   let windowUpdate = 0
   let previousFit: boolean | undefined
-  /** The plot's whole config, besides its canvas, time, and camera. */
-  const config = $derived(source && { ...style, source, ...bindings, limits: PLOT_LIMITS })
+  /** The plot's whole config, besides its canvas, time, and camera. A streamed window's frames come
+   *  and go, and never change, so the plot keeps what it drew of them. */
+  const config = $derived(
+    source && {
+      ...style,
+      source,
+      ...bindings,
+      limits: PLOT_LIMITS,
+      ...(streaming && { frames: 'stable' as const }),
+    },
+  )
+  /** The values the streamed plot was last given to span. */
+  let streamedFor: Domain | undefined
+  /** A streamed plot never holds its whole window, so its values span the field's range as the
+   *  results measured it while reading, rather than fit what it holds. */
+  const values = () => (streaming ? streamedValues(view.results, plot, streamedFor) : undefined)
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
     if (!config) throw new Error('Nothing to plot.')
     const device = await gpu()
     signal.throwIfAborted()
+    const spanned = values()
     const made = createMonitor(device, {
       ...config,
       canvas,
@@ -162,9 +186,12 @@
       camera: {
         ...camera,
         x: [shown[0], shown[1]],
-        fit: camera?.fit ?? settings.get('monitor.camera.fit'),
+        ...(spanned
+          ? { y: spanned, fit: false }
+          : { fit: camera?.fit ?? settings.get('monitor.camera.fit') }),
       },
     })
+    streamedFor = spanned
     let lastFrame = performance.now()
     let presentedAt: number | undefined
     const failed = (error: unknown) => {
@@ -179,6 +206,7 @@
         canvas.dataset.rendered = 'true'
         recovery.presented()
         onframe()
+        onwants(made.stats().wants)
       }),
       made.on('select', (items) => {
         bridge.send({
@@ -280,6 +308,8 @@
     }, 1000)
     return () => {
       unmounted = true
+      // A plot drawn again starts its window over; one gone needs nothing.
+      onwants(undefined)
       camera = made.camera
       clearInterval(health)
       delete inspected.gridkitPlot
@@ -302,10 +332,18 @@
   })
   $effect(() => {
     const fit = settings.get('monitor.camera.fit')
+    const spanned = values()
+    // A streamed plot's values span its field's range; setting them turns fitting off.
+    if (spanned) {
+      if (monitor && !sameWindow(spanned, streamedFor)) monitor.set({ camera: { y: spanned } })
+      streamedFor = monitor ? spanned : undefined
+      return
+    }
     // A recovered plot restores its camera, including a manually chosen value range.
-    // Only a settings change should replace that choice after mounting.
-    if (fit !== previousFit) monitor?.set({ camera: { fit } })
+    // Only a settings change, or the end of streaming, should replace that choice after mounting.
+    if (fit !== previousFit || streamedFor) monitor?.set({ camera: { fit } })
     previousFit = fit
+    streamedFor = undefined
   })
   $effect(() => {
     if (monitor && !sameWindow(monitor.camera.x, shown)) {
@@ -343,30 +381,30 @@
     const at = t
     const snapshot = source
     const selection = rows
-    if (!snapshot || !covers(plot.from, plot.field, [at, at])) {
+    if (!snapshot) {
       sample = null
       return
     }
+    // Samples the plot does not hold, as while a long window streams, are read from the results.
+    const held = covers(plot.from, plot.field, [at, at])
     const { from, field, id } = plot
     const offset = id ? 0 : trace
     const reading = new AbortController()
     const timer = setTimeout(() => {
       void (async () => {
+        const query = {
+          kind: 'rows' as const,
+          from,
+          select: [field],
+          ids: true,
+          offset,
+          limit: 1,
+          at,
+          rows: selection,
+        }
+        if (!held) return bridge.request('query', query, reading.signal)
         const blocks: Block.Rows[] = []
-        for await (const block of read(
-          snapshot,
-          {
-            kind: 'rows',
-            from,
-            select: [field],
-            ids: true,
-            offset,
-            limit: 1,
-            at,
-            rows: selection,
-          },
-          { signal: reading.signal },
-        ))
+        for await (const block of read(snapshot, query, { signal: reading.signal }))
           if (block.kind === 'rows') blocks.push(block)
         return blocks
       })().then(

@@ -108,7 +108,7 @@ export function mapConfig(
   // background, as before the map joins; tilted or round, the Earth stands apart from beyond it.
   const ground = color(
     s.get('network.map.groundColor'),
-    flat ? color(s.get('network.background'), palette.background) : palette.surface2,
+    flat ? color(s.get('network.background'), palette.editor) : palette.surface2,
   )
   const line = color(s.get('network.map.lineColor'), faded(palette.text2, LINE_ALPHA))
   const widthPx = s.get('network.map.lineWidthPx')

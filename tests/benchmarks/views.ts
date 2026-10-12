@@ -60,6 +60,15 @@ const timings: Record<string, number[]> = {}
 const work: Record<string, Record<string, number>> = {}
 const stages: Record<string, unknown> = {}
 
+/** A fixed piece of work, timed: how fast the machine runs now, whatever Studio does. compare.mjs
+ *  leaves out a case whose canary ran slow, as a busy machine slows everything it times. */
+function canary(): number {
+  const start = performance.now()
+  let sink = 0
+  for (let i = 0; i < 2e7; i++) sink += Math.sqrt(i)
+  return performance.now() - start + (sink < 0 ? 1 : 0)
+}
+
 /** Wait for `check` to hold, looking every few milliseconds so the time it takes is its own. */
 async function settle(check: () => unknown, label: string, timeout = 60_000): Promise<void> {
   const start = performance.now()
@@ -177,6 +186,8 @@ export async function run() {
       const size = `${buses} buses`
       let network!: Frame
       let uri!: vscode.Uri
+      // How fast the machine runs, timed again as the case goes on.
+      const paced = (timings[`machine ${size} > canary`] = [canary()])
 
       // ── Network ──
       const firsts: number[] = []
@@ -375,6 +386,8 @@ export async function run() {
       ] as const)
         work[`simulation ${size} > ${view} messages`] = await heard(frame)
 
+      paced.push(canary())
+
       // ── Playback ──
       const { transport } = session
       const span = session.results!.domain
@@ -511,6 +524,8 @@ export async function run() {
             .click({ position: { x: point[0], y: point[1] } }),
         done: () => settle(() => session.selection?.id === first, 'the trace selected'),
       })
+
+      paced.push(canary())
 
       // ── Video export ──
       await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)

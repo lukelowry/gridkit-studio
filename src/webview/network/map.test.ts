@@ -41,7 +41,7 @@ describe('the map under a network on Earth', () => {
   })
   it('lays a flat map on the network background, and sets the Earth apart tilted or round', () => {
     const tones: Record<string, number[]> = {
-      background: [0, 0, 0, 1],
+      editor: [0, 0, 0, 1],
       surface2: [0.5, 0.5, 0.5, 1],
     }
     const toned = new Proxy(tones, {

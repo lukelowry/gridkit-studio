@@ -186,4 +186,58 @@ suite('Monitor', () => {
       await bench.reset()
     }
   })
+
+  test('streams a window holding more than its budget a slice at a time, drawing every frame of it', async () => {
+    monitor = await bench.show('monitor')
+    // Every bus's voltage over three and a half chunks, and a budget a third of that.
+    const frames = 46_000
+    const frameBytes = (bench.source.buses.length + 1) * 8
+    const budget = Math.floor((frames * frameBytes) / 3)
+    await monitor.evaluate((bytes) => {
+      ;(globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget = bytes
+    }, budget)
+    try {
+      const results = await bench.waveform('Streamed waveform.csv', frames, 4.6, 3)
+      assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
+      bench.session.plots = [{ from: VM.type, field: VM.field }]
+      bench.studio.changed.fire(bench.key)
+      // A plot drawn anew, so what it draws is counted from now.
+      await vscode.commands.executeCommand('gridkitStudio.retryMonitor', bench.uri)
+      type Drawn = { rows: number; segments: number; refining: boolean; wants: unknown }
+      const drawn = () =>
+        monitor.evaluate<Drawn | null>(`document.querySelector('canvas')?.gridkitPlot?.() ?? null`)
+      type Held = { streaming: boolean; slice: unknown; bytes: number }
+      let most = 0
+      let seen: { held: Held; plot: Drawn | null } | undefined
+      await until(
+        async () => {
+          const held = await monitor.evaluate<Held>('gridkitMonitor()')
+          most = Math.max(most, held.bytes)
+          const plot = await drawn()
+          seen = { held, plot }
+          // Streamed to the window's end, with nothing more to read, and drawn.
+          return held.streaming && held.slice === null && plot !== null && !plot.refining
+        },
+        'the plot drawn to the end of its window',
+        150_000,
+      ).catch((error: Error) => {
+        throw new Error(`${error.message}; last seen ${JSON.stringify(seen)}`)
+      })
+      const plot = (await drawn())!
+      bench.report.streamed = { ...plot, frames: results.frames, most, budget }
+      // Every trace joined frame to frame across the whole window.
+      assert.ok(
+        plot.segments >= plot.rows * (results.frames - 1),
+        `${plot.segments} segments drawn for ${plot.rows} traces of ${results.frames} frames`,
+      )
+      // About a budget held, a slice past it at most, and far less than the window.
+      assert.ok(most <= budget + 2 * results.chunk * frameBytes, `${most} bytes held of ${budget}`)
+      assert.ok(most < results.frames * frameBytes, `${most} bytes held, the window's every one`)
+    } finally {
+      await monitor.evaluate(() => {
+        delete (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget
+      })
+      await bench.reset()
+    }
+  }).timeout(180_000)
 })

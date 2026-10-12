@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { Results, SamplesInput } from '../shared/messages.js'
 import type { Asker } from './asker.js'
-import { Samples } from './samples.js'
+import { leastWants, Samples, streamSlice, type Wants } from './samples.js'
 
 const index = { source: 'case', type: 'Bus', version: '1' }
 const rows = createData(
@@ -340,5 +340,58 @@ describe('the samples a view holds', () => {
     expect(samples.results).toBe('second')
     expect(samples.stats()).toEqual({ held: 0, bytes: 0 })
     expect(samples.sampled()).toEqual([])
+  })
+})
+
+describe('a window past the budget, streamed', () => {
+  // A frame of `need` takes its time and two rows' values: 24 bytes, so 400 frames take 9,600.
+  const run = results(400)
+  const budget = 2400
+
+  it('reads a window that fits whole, and one past the budget a slice at a time from where drawing stands', () => {
+    expect(streamSlice(run, [need], run.domain, 10_000, 'start')).toBeUndefined()
+    // Half a budget's worth: 50 frames.
+    const [from, to] = streamSlice(run, [need], run.domain, budget, 'start')!
+    expect(from).toBe(0)
+    expect(to).toBeCloseTo(0.5)
+    const later = streamSlice(run, [need], run.domain, budget, 1.2)!
+    expect(later[0]).toBe(1.2)
+    expect(later[1]).toBeCloseTo(1.7)
+    // The slice ends with the window, and a window drawn to its end needs none.
+    expect(streamSlice(run, [need], [0, 1], budget, 0.8)).toEqual([0.8, 1])
+    expect(streamSlice(run, [need], run.domain, budget, run.domain[1])).toBeNull()
+    expect(streamSlice(run, [need], run.domain, budget, null)).toBeNull()
+    // A slice is a chunk at least, whatever the budget.
+    const least = streamSlice(run, [need], run.domain, 1, 'start')!
+    expect(least[1]).toBeCloseTo(CHUNK * STEP)
+  })
+
+  it("stands where the plots' drawing least stands, at the start while one has not said", () => {
+    expect(leastWants([1, 'start', 2])).toBe('start')
+    expect(leastWants([undefined, 3])).toBe('start')
+    expect(leastWants([2, null, 1.5])).toBe(1.5)
+    expect(leastWants([null, null])).toBeNull()
+  })
+
+  it('brings every frame of the window in order while holding about its budget', async () => {
+    const { request } = worker({ frames: 400 })
+    const { samples } = cache(request, budget)
+    let wants: Wants = 'start'
+    let most = 0
+    const drawn: number[] = []
+    for (let slice = streamSlice(run, [need], run.domain, budget, wants); slice;) {
+      const window = slice
+      samples.want(run, [need], window)
+      await vi.waitFor(() => expect(samples.covers('Bus', 'Vm', window)).toBe(true))
+      most = Math.max(most, samples.stats().bytes)
+      // A plot draws what it holds of the slice, and stands at its last frame.
+      drawn.push(...(await frames(samples.data(rows), { kind: 'range', between: window })))
+      wants = window[1]
+      slice = streamSlice(run, [need], run.domain, budget, wants)
+    }
+    expect([...new Set(drawn)]).toEqual(Array.from({ length: 400 }, (_, i) => i))
+    // What it holds besides the slice it needs is its budget, the slice a fraction more.
+    expect(most).toBeLessThan(2 * budget)
+    expect(most).toBeLessThan(9600)
   })
 })

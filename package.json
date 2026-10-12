@@ -102,7 +102,8 @@
       "esbuild"
     ],
     "patchedDependencies": {
-      "@latkit/network@0.22.0": "patches/@latkit__network@0.22.0.patch"
+      "@latkit/network@0.22.0": "patches/@latkit__network@0.22.0.patch",
+      "@latkit/monitor@0.18.0": "patches/@latkit__monitor@0.18.0.patch"
     }
   },
   "capabilities": {

@@ -6,10 +6,10 @@
  *   node tests/benchmarks/compare.mjs base-1.json base-2.json -- head-1.json head-2.json
  *   node tests/benchmarks/compare.mjs head.json
  *
- * Each side may be several rounds, best alternated with the other's. A case's round whose own
- * GridKit simulation took half again as long as its usual ran on a busy machine, and is left out.
- * Each scenario is then the median of the rounds' medians. Runs on different GridKit builds are not
- * compared.
+ * Each side may be several rounds, best alternated with the other's. A case's round in which a
+ * canary took half again as long as its usual ran on a busy machine, and is left out: GridKit's own
+ * simulation, and a fixed piece of work timed through the case. Each scenario is then the median of
+ * the rounds' medians. Runs on different GridKit builds are not compared.
  *
  * It reports scenarios slower than the base, work that changed, and time per bus that grows faster
  * than linearly across the cases.
@@ -18,7 +18,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 const SLOWER = 1.25
 const SLACK_MS = 5
-/** How much longer than its usual a case's simulation may take before its round is left out. */
+/** How much longer than its usual a case's canary may take before its round is left out. */
 const BUSY = 1.5
 // Fixed costs make the smallest case dear per bus; quadratic work would still grow 250 times from
 // 39 buses to 10,000.
@@ -30,24 +30,41 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
 const sizeOf = (name) => /(\d+) buses/.exec(name)?.[1]
-const simulation = (run, size) => run.timings[`simulation ${size} buses > simulate 1 s`]?.[0]
+/** The scenarios that time the machine, not Studio, in a case of `size` buses. */
+const canaries = (size) => [
+  `simulation ${size} buses > simulate 1 s`,
+  `machine ${size} buses > canary`,
+]
+/** A canary's time in `run`: its slowest sample, as one slow stretch spoils the case. */
+const canary = (run, name) => {
+  const samples = run.timings[name]
+  return samples?.length ? Math.max(...samples) : undefined
+}
 
-/** How long each case's simulation usually took, over every round of both sides: the machine's
- *  usual pace, which no one side's busy rounds set. */
+/** How long each canary usually took, over every round of both sides: the machine's usual pace,
+ *  which no one side's busy rounds set. */
 function usualOf(runs) {
   const usual = new Map()
   for (const run of runs)
     for (const name of Object.keys(run.timings)) {
       const size = sizeOf(name)
-      if (!size || usual.has(size)) continue
-      const times = runs.map((each) => simulation(each, size)).filter(Number.isFinite)
-      if (times.length) usual.set(size, median(times))
+      if (!size) continue
+      for (const each of canaries(size)) {
+        if (usual.has(each)) continue
+        const times = runs.map((round) => canary(round, each)).filter(Number.isFinite)
+        if (times.length) usual.set(each, median(times))
+      }
     }
   return usual
 }
 
+/** Whether the case of `size` buses ran on a busy machine in `run`: one of its canaries took half
+ *  again as long as its usual. */
+const busy = (run, size, usual) =>
+  canaries(size).some((name) => canary(run, name) > BUSY * usual.get(name))
+
 /** The rounds' timings as one run: each scenario the median of its rounds' medians, over the rounds
- *  in which its case's simulation took its `usual` time. The lowest sample of every round is kept
+ *  in which its case's canaries took their `usual` time. The lowest sample of every round is kept
  *  too, so a run is slower only when both its best and its typical times are. */
 function pooled(runs, usual) {
   const medians = {}
@@ -56,8 +73,7 @@ function pooled(runs, usual) {
   for (const run of runs)
     for (const [name, samples] of Object.entries(run.timings)) {
       const size = sizeOf(name)
-      const time = size && simulation(run, size)
-      if (Number.isFinite(time) && time > BUSY * usual.get(size)) {
+      if (size && busy(run, size, usual)) {
         left++
         continue
       }
@@ -94,7 +110,8 @@ for (const [side, run] of [
   ['base', base],
   ['head', head],
 ])
-  if (run?.left) lines.push(`${side}: ${run.left} timings left out, taken while GridKit ran slow`)
+  if (run?.left)
+    lines.push(`${side}: ${run.left} timings left out, taken while the machine ran slow`)
 
 const builds = new Set([...(base?.gridkit ?? []), ...head.gridkit].filter(Boolean))
 if (builds.size > 1)

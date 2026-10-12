@@ -25,7 +25,7 @@ export function diagramOptions(s: SettingsReader, palette: Palette, font: string
   const [r, g, b] = palette.text2
   return {
     ...viewStyle(s, 'diagram', font, {
-      background: palette.background,
+      background: palette.editor,
       textColor: palette.text1,
       selectedColor: palette.focus,
     }),

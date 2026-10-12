@@ -18,8 +18,6 @@ const common = {
   sourcemap: true,
   logLevel: 'warning',
   minify: !watch,
-  // Minified, a defect's stack in the log still names the functions it passed through.
-  keepNames: true,
 }
 const builds = [
   {

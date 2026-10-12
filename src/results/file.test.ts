@@ -12,7 +12,7 @@ import type { SamplesInput } from '../shared/messages.js'
 import { ResultCache } from './cache.js'
 import { chunkFrames, type Layout, readResults } from './decode.js'
 import { described, ResultsFile } from './file.js'
-import { PROGRESS_MS } from './limits.js'
+import { CHUNK_BYTES, PROGRESS_MS } from './limits.js'
 
 const HEADER = 'time,Bus_A_Vm\n'
 const signal = new AbortController().signal
@@ -66,6 +66,17 @@ function asked(
     bytes,
   }
   return results.samples(input, signal)
+}
+
+/** `value` with each typed array as its bytes, which compare exactly and at once: equality walks a
+ *  typed array one index at a time. */
+function exact(value: unknown): unknown {
+  if (ArrayBuffer.isView(value))
+    return `${value.constructor.name} ${Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64')}`
+  if (Array.isArray(value)) return value.map(exact)
+  if (value && Object.getPrototypeOf(value) === Object.prototype)
+    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, exact(inner)]))
+  return value
 }
 
 /** Each batch's frames, as `[first frame, count]`, and the values of the first row. */
@@ -356,7 +367,8 @@ describe('native results and ownership', () => {
       catalog,
     )
     const path = join(directory, 'wide.csv')
-    const frames = 250_000
+    // A chunk and a half of frames, each the time and four values.
+    const frames = Math.ceil((1.5 * CHUNK_BYTES) / (8 * 5))
     const rows = Array.from(
       { length: frames },
       (_, i) => `${i / 1000},${1 + i / 1e6},${i / 1e5},${0.9 + i / 1e6},${-i / 1e5}`,
@@ -387,7 +399,7 @@ describe('native results and ownership', () => {
     }
     // Every chunk kept as the file was read, against each field decoded again alone with none kept.
     const [kept, again] = await Promise.all([read(new ResultCache()), read(new ResultCache(0))])
-    expect(again).toEqual(kept)
+    expect(exact(again)).toEqual(exact(kept))
     expect(kept[1]![0]!.columns.Va).toBeDefined()
   })
 

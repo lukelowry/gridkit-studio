@@ -18,7 +18,7 @@ export const SHOW_PROBLEMS: Offer = {
   title: 'Show Problems',
   command: 'workbench.actions.view.problems',
 }
-/** Recorded Signals, where a case chooses what its runs record. */
+/** Monitored Signals, where a case chooses what its runs record. */
 export const CHOOSE_SIGNALS: Offer = {
   title: 'Choose Signals',
   command: viewId('signals') + '.focus',

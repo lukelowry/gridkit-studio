@@ -425,7 +425,7 @@ export class TestHost {
   }
 
   /** Make every element of `type` in the case `uri` list `fields` among its outputs and no other,
-   *  as Recorded Signals does, and wait for the case to read so. */
+   *  as Monitored Signals does, and wait for the case to read so. */
   async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
     const key = uri.toString()
     const summary = await this.studio.documents.ensure(this.studio.documents.get(key)!.document)
@@ -459,18 +459,18 @@ export class TestHost {
     return file
   }
 
-  /** Recorded Signals, the native tree of what the case records, once it shows. Unless `reveal`
+  /** Monitored Signals, the native tree of what the case records, once it shows. Unless `reveal`
    *  is false, its own command shows it first. */
   async signals({ reveal = true } = {}): Promise<Locator> {
     if (reveal) await vscode.commands.executeCommand('gridkitStudio.signals.focus')
     const pane = this.page.locator('.pane', {
-      has: this.page.locator('.pane-header', { hasText: /recorded signals/i }),
+      has: this.page.locator('.pane-header', { hasText: /monitored signals/i }),
     })
     await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: TIMEOUT })
     return pane
   }
 
-  /** The row of `type`'s `field` in Recorded Signals, its type opened to show it. */
+  /** The row of `type`'s `field` in Monitored Signals, its type opened to show it. */
   async signalLine(type: string, field: string): Promise<Locator> {
     const signals = await this.signals()
     const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
@@ -484,7 +484,7 @@ export class TestHost {
     return signals.getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
   }
 
-  /** Check or uncheck `field` of `type` in Recorded Signals as the user does: open its type,
+  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
    *  then click its box. */
   async toggleSignal(type: string, field: string): Promise<void> {
     const box = (await this.signalLine(type, field)).getByRole('checkbox')
@@ -606,11 +606,11 @@ export class TestHost {
     this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
   }
 
-  /** Choose `item` for `type`'s `field` in Recorded Signals: from the actions its row shows at its
+  /** Choose `item` for `type`'s `field` in Monitored Signals: from the actions its row shows at its
    *  right with `inline`, else from its right-click menu. */
   signalMenu(type: string, field: string, item: string, inline = false): void {
     const row = this.studio.signalRow?.(type, field)
-    assert.ok(row?.contextValue, `Recorded Signals lists ${type} ${field}`)
+    assert.ok(row?.contextValue, `Monitored Signals lists ${type} ${field}`)
     const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row.contextValue }
     const { command } = this.menus.find(
       'view/item/context',
@@ -622,7 +622,7 @@ export class TestHost {
     this.#run(command, row)
   }
 
-  /** What the right-click menu of `type`'s `field` in Recorded Signals offers. */
+  /** What the right-click menu of `type`'s `field` in Monitored Signals offers. */
   signalOffered(type: string, field: string): string[] {
     const row = this.studio.signalRow?.(type, field)
     const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row?.contextValue }

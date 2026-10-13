@@ -47,7 +47,7 @@ export class Sessions implements vscode.Disposable {
   readonly action = new vscode.EventEmitter<Action>()
   /** The context keys Studio last set, as VS Code holds them. */
   readonly contexts = new Map<ContextKey, unknown>()
-  /** The Recorded Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
+  /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
    *  menu offers, and what it carries to the commands there. */
   signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
   /** The panel views VS Code has shown, by kind, which `showView` brings up. */
@@ -159,7 +159,7 @@ export class Sessions implements vscode.Disposable {
   }
 
   /** Shows the panel `kind` without taking focus from where the user is. A panel never shown yet,
-   *  and Recorded Signals, can only be shown by focusing them. */
+   *  and Monitored Signals, can only be shown by focusing them. */
   async showView(kind: Extract<View, 'case' | 'monitor' | 'export' | 'signals'>): Promise<void> {
     const view = kind === 'signals' ? undefined : this.panels.get(kind)
     if (view) view.show(true)

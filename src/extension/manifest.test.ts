@@ -98,7 +98,7 @@ describe('native VS Code contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    // The side bar holds what the case records and its video; Recorded Signals is a native tree,
+    // The side bar holds what the case records and its video; Monitored Signals is a native tree,
     // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
       ['gridkitStudio.signals', 'gridkitStudio.export'],

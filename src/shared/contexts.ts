@@ -31,11 +31,11 @@ interface Rows {
   filtered?: boolean
 }
 
-/** The words a Recorded Signals row's `contextValue` holds, which its menu items match: it is a
+/** The words a Monitored Signals row's `contextValue` holds, which its menu items match: it is a
  *  field, the case records it, a network channel can show it, and one does. */
 export const SIGNAL_WORDS = ['field', 'recorded', 'mappable', 'mapped'] as const
 
-/** A Recorded Signals field row's `contextValue`. */
+/** A Monitored Signals field row's `contextValue`. */
 export function signalContext(
   has: Record<Exclude<(typeof SIGNAL_WORDS)[number], 'field'>, boolean>,
 ) {

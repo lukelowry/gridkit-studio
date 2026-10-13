@@ -497,7 +497,7 @@ suite('Monitor menus', () => {
   })
 })
 
-suite('Recorded Signals menus', () => {
+suite('Monitored Signals menus', () => {
   let bench: TestHost
   const vertexColor = () => bench.session.bindings.vertexColor
 

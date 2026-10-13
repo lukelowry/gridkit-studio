@@ -284,12 +284,13 @@ describe("GridKit's programs on solver files", () => {
     ).rejects.toThrow(/GridKit Path/)
     expect(await readFile(out, 'utf8')).toBe(written)
     // Nor does one that is there but does not start, as a broken install's: Studio leaves the file
-    // to GridKit, which never wrote over it.
+    // to GridKit, which never wrote over it. Elsewhere than Windows an executable that is not a
+    // program runs as a shell script, so the broken one there names an interpreter that is gone.
     const broken = join(folder, 'broken')
     await mkdir(broken)
     await writeFile(
       join(broken, process.platform === 'win32' ? 'DynamicSimulation.exe' : 'DynamicSimulation'),
-      'not a program',
+      process.platform === 'win32' ? 'not a program' : '#!/nonexistent/interpreter\n',
       { mode: 0o755 },
     )
     await expect(

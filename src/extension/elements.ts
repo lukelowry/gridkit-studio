@@ -131,7 +131,7 @@ export function registerElements({
         display(await valueOf(context, context.type, context.field, context.element.id)),
       )
   })
-  // A Case panel column's, or a Recorded Signals field's.
+  // A Case panel column's, or a Monitored Signals field's.
   command('copyFieldPath', (context) => vscode.env.clipboard.writeText(context.field ?? ''))
   command('selectOverlapping', async (context) => {
     const selected = await vscode.window.showQuickPick(

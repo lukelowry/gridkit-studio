@@ -37,7 +37,7 @@ export function registerPlots({
   pickElement,
 }: Commands) {
   /** Shows `plot` in the Monitor of the session's case, with `element` selected. Recording is a
-   *  separate choice, made in Recorded Signals. */
+   *  separate choice, made in Monitored Signals. */
   const showPlot = (session: Session, plot: Plot, element?: Element) => {
     session.addPlot(plot)
     return focus(session, 'monitor', element)

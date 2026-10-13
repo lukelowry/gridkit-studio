@@ -51,7 +51,7 @@ suite('Run', function () {
     network = await bench.open('network')
   })
 
-  test('records what Recorded Signals checks, and runs from the solver file in place', async () => {
+  test('records what Monitored Signals checks, and runs from the solver file in place', async () => {
     assert.deepEqual(bench.session.plots, [])
     monitor = await bench.show('monitor')
     // Without results, the Monitor says how to get them.

@@ -38,7 +38,7 @@ docker pull ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8c
 
 Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
 
-- **Recorded Signals** chooses what the case records. Right-click a signal there to plot it, or to map it onto the network.
+- **Monitored Signals** chooses what the case records. Right-click a signal there to plot it, or to map it onto the network.
 - **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
 - **Open Results…** in the Monitor shows any other CSV GridKit wrote.
 

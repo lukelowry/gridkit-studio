@@ -1242,7 +1242,7 @@
       "gridkitStudio": [
         {
           "id": "gridkitStudio.signals",
-          "name": "Recorded Signals"
+          "name": "Monitored Signals"
         },
         {
           "id": "gridkitStudio.export",
@@ -1269,7 +1269,7 @@
     "viewsWelcome": [
       {
         "view": "gridkitStudio.signals",
-        "contents": "Open a GridKit case to choose the signals it records.\n[Open Case](command:gridkitStudio.openCase)",
+        "contents": "Open a GridKit case to choose its monitored signals.\n[Open Case](command:gridkitStudio.openCase)",
         "when": "!gridkitStudio.hasCase"
       }
     ],
@@ -2743,7 +2743,7 @@
           {
             "id": "simulate",
             "title": "Simulate and plot",
-            "description": "Recorded Signals chooses what the case records. Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, and the Monitor plots what it writes.\n[Choose Recorded Signals](command:gridkitStudio.signals.focus)",
+            "description": "Monitored Signals chooses what the case records. Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, and the Monitor plots what it writes.\n[Choose Monitored Signals](command:gridkitStudio.signals.focus)",
             "media": {
               "markdown": "assets/walkthrough.md"
             },

@@ -97,7 +97,7 @@ suite('Native menus', () => {
     showed(shown, offered, true)
   })
 
-  test("a field in Recorded Signals shows its menu's items, and runs the one chosen", async () => {
+  test("a field in Monitored Signals shows its menu's items, and runs the one chosen", async () => {
     const line = await bench.signalLine('Bus', 'Vm')
     const offered = bench.signalOffered('Bus', 'Vm')
     await vscode.env.clipboard.writeText('')

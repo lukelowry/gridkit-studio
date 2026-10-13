@@ -1,4 +1,4 @@
-/** Recorded Signals: what the case's runs record, which is its elements' `mon` lists. A field is
+/** Monitored Signals: what the case's runs record, which is its elements' `mon` lists. A field is
  *  checked when every element of its type lists it. Checking it makes every one list it, and
  *  clearing it makes none, as one edit of the case that undo reverses. A field's menu acts on it as
  *  a Case panel column's does: it plots and maps it. */

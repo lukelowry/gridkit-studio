@@ -63,7 +63,6 @@ export const COMMANDS = [
   'networkSettings',
   'diagramSettings',
   'monitorSettings',
-  'openChanges',
   'editDiagram',
   'finishDiagramEditing',
   'arrangeDiagram',

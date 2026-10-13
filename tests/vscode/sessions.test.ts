@@ -41,11 +41,14 @@ suite('Sessions', () => {
   }
 
   /** The case's session let go of, as a reload does, and its case opened again: a session of its
-   *  own, read anew from what the last one saved. */
+   *  own, read anew from what the last one saved. Its document is still open, which holds it as it
+   *  does after a reload, so a tab change that has the views follow the case in front meanwhile
+   *  leaves it be. */
   async function reopen(session: Session) {
     session.release('active')
     session.release('document')
     assert.equal(studio.get(session.uri), undefined, 'Nothing holds the session, so it closes')
+    studio.hold(session.uri, 'document')
     return studio.open(document)
   }
 

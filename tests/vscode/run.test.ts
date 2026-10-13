@@ -133,8 +133,18 @@ suite('Run', function () {
       const wrote = rowsOf(blocks as Block.Rows[])[0]?.values.Vm
       return typeof wrote === 'number' && Math.abs(Number(said[2]) - wrote) < 1e-3
     }
+    // Focus given from the workbench can reach the canvas while its frame lacks it, so the plot
+    // never hears it: a click on the plot's name, which neither seeks nor selects, focuses the
+    // frame first.
     await again(
-      () => monitor.locator('canvas').focus(),
+      async () => {
+        await monitor
+          .locator('.lane__name')
+          .first()
+          .click({ timeout: 2000 })
+          .catch(() => {})
+        await monitor.locator('canvas').first().focus()
+      },
       read,
       async () => {
         const { status, follow } = bench.session.transport.state

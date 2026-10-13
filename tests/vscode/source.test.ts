@@ -82,18 +82,6 @@ suite('Case source', () => {
     assert.match(diff.stdout, /\+.*kv/)
     assert.ok(diff.stdout.length < 3000, 'A field edit should not reserialize the case')
     bench.report.gitDiffBytes = diff.stdout.length
-  })
-
-  test('reviews its changes in the native diff editor', async () => {
-    await vscode.commands.executeCommand('gridkitStudio.openChanges', bench.uri)
-    await until(
-      () =>
-        vscode.window.tabGroups.all.some((group) =>
-          group.tabs.some((tab) => tab.input instanceof vscode.TabInputTextDiff),
-        ),
-      'the native Git text diff',
-    )
-    await bench.capture('git-diff')
     await bench.undo('the edit undone')
     await bench.document.save()
   })

@@ -523,13 +523,6 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.openChanges",
-        "title": "Open Changes",
-        "category": "GridKit Studio",
-        "icon": "$(git-compare)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
         "command": "gridkitStudio.editDiagram",
         "title": "Edit Diagram",
         "category": "GridKit Studio",
@@ -616,11 +609,6 @@
           "command": "gridkitStudio.reloadView",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
           "group": "2_layout@2"
-        },
-        {
-          "command": "gridkitStudio.openChanges",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "3_source@1"
         },
         {
           "command": "gridkitStudio.networkSettings",
@@ -1179,10 +1167,6 @@
         },
         {
           "command": "gridkitStudio.monitorSettings",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.openChanges",
           "when": "gridkitStudio.hasCase"
         },
         {

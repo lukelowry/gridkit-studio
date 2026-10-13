@@ -16,7 +16,6 @@ import type { Target } from '../shared/contexts.js'
 import { settingsOf, viewOf } from '../shared/ids.js'
 import { fieldOf, networkOf, placementOf } from '../shared/schema.js'
 import { askRange, type Commands, type Context } from './context.js'
-import { openChanges } from './git.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
   /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
@@ -102,6 +101,5 @@ export function registerCanvases({ command, action, focus }: Commands) {
     command(id, () =>
       vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
     )
-  command('openChanges', (context) => openChanges(vscode.Uri.parse(context.session.uri)))
   command('exportVideo', ({ session }) => focus(session, 'export'))
 }

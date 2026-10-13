@@ -1,4 +1,13 @@
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -14,7 +23,7 @@ import { chunkFrames, type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
 import type { Writer } from './follow.js'
 import { CHUNK_BYTES, PROGRESS_MS } from './limits.js'
-import { Stores } from './store.js'
+import { type Store, Stores } from './store.js'
 
 const HEADER = 'time,Bus_A_Vm\n'
 /** Room for every chunk a test reads. */
@@ -35,14 +44,21 @@ beforeAll(async () => {
   rows[1000] = '\n' + rows[1000]
   await writeFile(large.path, HEADER + rows.join('\n'))
 })
-afterAll(() => rm(directory, { recursive: true, force: true }))
+/** Every store a test made, each closed once the tests are done. */
+const made: Store[] = []
+afterAll(async () => {
+  await Promise.all(made.map((store) => store.close()))
+  await rm(directory, { recursive: true, force: true })
+})
 
 /** What a reading of results is of: the case revision. */
 const READING = { revision: { uri: 'file:///case', version: 1 } }
 
 /** A reading of the CSV results at `path` for `of`, kept in a store of its own. */
 async function file(path: string, cache = new ResultCache(ROOM), of = kase): Promise<ResultsFile> {
-  return new ResultsFile(of, cache, await stores.create(path), { ...READING, path })
+  const store = await stores.create(path)
+  made.push(store)
+  return new ResultsFile(of, cache, store, { ...READING, path })
 }
 
 /** `results` read to the end of their file, as one opened alone is. */
@@ -303,6 +319,31 @@ describe('native results and ownership', () => {
     await reader.reach(2)
     await reader.end()
     expect(results.store.manifest).toMatchObject({ frames: 2 })
+  })
+
+  it('exports what it read, byte for byte, and never a file written again since', async () => {
+    const path = join(directory, 'exported.csv')
+    // A writer stopped partway through its last row: the export holds the whole rows read.
+    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,')
+    const results = await readThrough(await file(path), 'stopped')
+    const out = join(directory, 'exports')
+    await results.exportCsv(join(out, 'copy.csv'))
+    expect(await readFile(join(out, 'copy.csv'), 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
+    // Read again from its store alone, as a window opened again reads it, it exports the same.
+    const again = await ResultsFile.stored(kase, new ResultCache(0), results.store, {
+      ...READING,
+      path,
+    })
+    await again.exportCsv(join(out, 'again.csv'))
+    expect(await readFile(join(out, 'again.csv'), 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
+    // Written again as long, its time set back: what it holds now was never read.
+    await setTimeout(20)
+    const { mtime } = await stat(path)
+    await writeFile(path, HEADER + '0,9\n0.01,9.5\n0.02,')
+    await utimes(path, mtime, mtime)
+    await expect(results.exportCsv(join(out, 'refused.csv'))).rejects.toThrow('written again')
+    // A copy refused leaves nothing behind.
+    expect((await readdir(out)).sort()).toEqual(['again.csv', 'copy.csv'])
   })
 
   it('sends a growing chunk only the frames the view lacks of it', async () => {

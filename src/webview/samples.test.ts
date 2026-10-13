@@ -329,6 +329,28 @@ describe('the samples a view holds', () => {
     expect(quiet.report).not.toHaveBeenCalled()
   })
 
+  it('asks again for what a showing it gave way to was refused, once it is wanted again', async () => {
+    const file = { frames: 8 }
+    const { request } = worker(file)
+    let showing = 1
+    const answering = vi.fn(async (input: SamplesInput) => {
+      if (showing === 1) throw problem('superseded', 'Another showing')
+      return request(input)
+    })
+    const { samples, report } = cache(answering)
+    samples.want(results(8), [need], [0, 0])
+    await vi.waitFor(() => expect(answering).toHaveBeenCalledOnce())
+    await new Promise((resolve) => setTimeout(resolve))
+    // Refused, it is neither said nor taken for what cannot be had, nor asked again on its own.
+    expect(report).not.toHaveBeenCalled()
+    expect(samples.stuck).toBe(false)
+    expect(answering).toHaveBeenCalledOnce()
+    // The same results wanted again, as a view shown again over the same case wants them.
+    showing = 2
+    samples.want(results(8), [need], [0, 0])
+    await vi.waitFor(() => expect(samples.holds([0, 0])).toBe(true))
+  })
+
   it('settles a wait once it holds the window, and fails one it cannot have', async () => {
     const file = { frames: 12 }
     const { request } = worker(file)

@@ -13,7 +13,7 @@ import { workerData } from 'node:worker_threads'
 
 import { Case, catalog, presentation, PROGRAM, simulate, sweepOrphans } from '../gridkit/index.js'
 import { solverLine } from '../gridkit/solver.js'
-import { closed, PROGRESS_MS, ResultCache, ResultsFile, Stores } from '../results/index.js'
+import { closed, PROGRESS_MS, ResultCache, ResultsFile, stampOf, Stores } from '../results/index.js'
 import { defect, detail, failedWith, message, problem, quiet } from '../shared/errors.js'
 import type {
   CaseSource,
@@ -251,7 +251,7 @@ async function openResults(
   signal: AbortSignal,
 ): Promise<Results> {
   const kase = await caseOf(source, signal)
-  const now = await stat(path)
+  const now = stampOf(await stat(path, { bigint: true }))
   signal.throwIfAborted()
   const known = [...files].find(
     (file) =>
@@ -264,13 +264,19 @@ async function openResults(
   const reading = { revision: source, path, ...(solver && { solver }) }
   const stored = await stores.find(path, now, kase.version)
   if (stored) {
+    let file: ResultsFile | undefined
     try {
-      const file = await ResultsFile.stored(kase, cache, stored, reading)
-      signal.throwIfAborted()
+      file = await ResultsFile.stored(kase, cache, stored, reading)
+    } catch {
+      // A store that does not read goes, and the file is read again from its CSV.
+      await stores.discard(stored)
+    }
+    if (file) {
+      if (signal.aborted) {
+        await stores.release(stored)
+        signal.throwIfAborted()
+      }
       return hold(results, file)
-    } catch (error) {
-      await stores.release(stored)
-      throw error
     }
   }
   const file = new ResultsFile(kase, cache, await stores.create(path), reading)

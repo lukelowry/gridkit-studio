@@ -5,15 +5,15 @@ import { message } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
-import { isInt32, STEP_RECORDS } from './columns.js'
+import { type Column, isInt32, isValid } from './columns.js'
 import { CASE, type FieldPlan } from './definition.js'
-import { Turns } from './turns.js'
+import { charsAt, charsWalk } from './offsets.js'
+import { STEP_RECORDS, Turns } from './turns.js'
 
 const decoder = new TextDecoder()
 const OPEN_OBJECT = 0x7b
 const SPACE = 0x20
 const TAB = 0x09
-const checkpoints = new WeakMap<Case, { bytes: number[]; chars: number[] }>()
 
 /** A real as GridKit reads one: always with a fraction or an exponent, so 0 is 0.0. */
 export function realText(value: number): string {
@@ -21,64 +21,12 @@ export function realText(value: number): string {
   return /[.eE]/.test(text) ? text : `${text}.0`
 }
 
-/** How many bytes the UTF-8 character whose first byte is `first` takes; one of four takes two
- *  UTF-16 units, the others one. */
-export const utf8Width = (first: number) =>
-  first < 128 ? 1 : first < 224 ? 2 : first < 240 ? 3 : 4
+/** The UTF-16 offset of `byte` in the case's file, as VS Code counts. */
+export const textOffset = (kase: Case, byte: number): number => charsAt(kase.file, byte)
 
-/** The UTF-16 offset of `byte` in the case's file, as VS Code counts. Checkpoints every 4 KiB fall on
- *  code-point boundaries, so only the bytes past one are decoded. */
-export function textOffset(kase: Case, byte: number): number {
-  let map = checkpoints.get(kase)
-  if (!map) {
-    map = { bytes: [0], chars: [0] }
-    let chars = 0
-    let next = 4096
-    for (let at = 0; at < kase.file.length;) {
-      const width = utf8Width(kase.file[at]!)
-      at += width
-      chars += width === 4 ? 2 : 1
-      if (at >= next) {
-        map.bytes.push(at)
-        map.chars.push(chars)
-        next = at + 4096
-      }
-    }
-    checkpoints.set(kase, map)
-  }
-  let low = 0
-  let high = map.bytes.length
-  while (low + 1 < high) {
-    const mid = (low + high) >>> 1
-    if (map.bytes[mid]! <= byte) low = mid
-    else high = mid
-  }
-  return map.chars[low]! + decoder.decode(kase.file.subarray(map.bytes[low]!, byte)).length
-}
-
-/** How far a walk through the file counts on, character by character, before it jumps instead from
- *  the nearest checkpoint. */
-const WALK_BYTES = 4096
-
-/** The UTF-16 offsets, as VS Code counts, of ascending byte offsets of the case's file: each counted
- *  on from the last, near, or found from a checkpoint, far; so a walk through the file is linear
- *  however many offsets it asks for. */
-export function textOffsets(kase: Case): (byte: number) => number {
-  let byte = -1
-  let chars = 0
-  return (to) => {
-    if (byte < 0 || to < byte || to - byte > WALK_BYTES) {
-      byte = to
-      return (chars = textOffset(kase, to))
-    }
-    for (; byte < to; chars++) {
-      const width = utf8Width(kase.file[byte]!)
-      byte += width
-      if (width === 4) chars++
-    }
-    return chars
-  }
-}
+/** The UTF-16 offsets, as VS Code counts, of ascending byte offsets of the case's file, walked
+ *  through linearly. */
+export const textOffsets = (kase: Case): ((byte: number) => number) => charsWalk(kase.file)
 
 /** `text` with `edits` applied; each edit's offset is into `text` as given. One pass joins what lies
  *  between the edits with their texts, so a batch of any size copies the text once. Insertions at
@@ -190,11 +138,15 @@ export function recordAt(kase: Case, table: Table, row: number) {
     const header = objectOf(kase, 'header')
     return { table, row, text: header?.text ?? '', offset: header?.offset ?? 0 }
   }
-  const array = kase.arrays[table.shape.array]!
+  const start = kase.arrays[table.shape.array]!.starts[table.records[row]!]!
+  return { table, row, text: recordText(kase, table, row), offset: textOffset(kase, start) }
+}
+
+/** The JSON text of the record of `row` of `table`, a table whose rows are records. */
+export function recordText(kase: Case, table: Table, row: number): string {
+  const array = kase.arrays[table.shape.array!]!
   const record = table.records[row]!
-  const start = array.starts[record]!
-  const text = decoder.decode(kase.file.subarray(start, array.ends[record]!))
-  return { table, row, text, offset: textOffset(kase, start) }
+  return decoder.decode(kase.file.subarray(array.starts[record]!, array.ends[record]!))
 }
 
 /** A part of the file a field is written in: its JSON text, the text's offset in the file, and the
@@ -414,62 +366,41 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     })
   }
   for (const table of kase.tables.values()) {
-    for (let row = 0; row < table.records.length; row++) {
+    // Each field's own wrong rows, which each column found as it decoded: a range a revision kept
+    // is never checked again. A required field's are those that hold no value at all.
+    const wrong: { row: number; place: number; plan: FieldPlan }[] = []
+    let place = 0
+    for (const plan of table.shape.plan.values()) {
       yield
-      let record: ReturnType<typeof recordOf> | undefined
-      let tree: ReturnType<typeof treeOf> | undefined
-      for (const plan of table.shape.plan.values()) {
-        if (row === 0) yield
-        // A field the catalog does not know is never required, and holds what it is written as.
-        if (
-          plan.definition.sampled ||
-          plan.source.kind === 'identity' ||
-          plan.source.kind === 'found' ||
-          kase.cell(table, plan.name, row) !== null
-        )
-          continue
-        const supplied = table.fields.get(plan.name)?.supplied
-        let invalid: boolean
-        if (supplied) invalid = plan.required === true || supplied(row)
-        else {
-          // Ordinary records use presence bits instead of reparsing absent optional values.
-          if (!record) {
-            record = recordAt(kase, table, row)
-            try {
-              tree = treeOf(record.text)
-            } catch (error) {
-              // A record too deep to read is the one problem it has.
-              issues.push({
-                offset: record.offset,
-                length: record.text.length,
-                id: kase.id(table, row),
-                severity: 'error',
-                message: message(error),
-              })
-              break
-            }
-          }
-          const node = tree && findNodeAtLocation(tree, nativePath(plan))
-          invalid = !!(
-            (node && node.value !== null) ||
-            (plan.required && (!node || node.value === null))
-          )
-        }
-        if (invalid) {
-          const id = kase.id(table, row)
-          const type = plan.definition.type
-          issues.push({
-            ...sourceRange(kase, id, plan.name),
-            id,
-            field: plan.name,
-            severity: 'error',
-            message:
-              typeof type === 'object' && type.kind === 'reference'
-                ? 'Missing or invalid ' + type.to + ' reference.'
-                : 'Invalid ' + plan.name + ' value.',
-          })
-        }
-      }
+      const at = place++
+      // A field the catalog does not know is never required, and holds what it is written as.
+      if (
+        plan.definition.sampled ||
+        plan.source.kind === 'identity' ||
+        plan.source.kind === 'found'
+      )
+        continue
+      const column = table.fields.get(plan.name)
+      if (!column) continue
+      for (const row of plan.required ? empty(column) : (column.wrong?.() ?? []))
+        wrong.push({ row, place: at, plan })
+    }
+    // Said row by row, a row's fields in their order.
+    wrong.sort((a, b) => a.row - b.row || a.place - b.place)
+    for (const [n, { row, plan }] of wrong.entries()) {
+      if ((n & STEP_RECORDS) === 0) yield
+      const id = kase.id(table, row)
+      const type = plan.definition.type
+      issues.push({
+        ...sourceRange(kase, id, plan.name),
+        id,
+        field: plan.name,
+        severity: 'error',
+        message:
+          typeof type === 'object' && type.kind === 'reference'
+            ? 'Missing or invalid ' + type.to + ' reference.'
+            : 'Invalid ' + plan.name + ' value.',
+      })
     }
   }
   try {
@@ -485,6 +416,17 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     })
   }
   return issues
+}
+
+/** The rows of `column` that hold no value: none written, null, or what does not read. */
+function empty(column: Column): number[] {
+  const rows: number[] = []
+  column.chunks.forEach((chunk, c) => {
+    if (chunk.validity === undefined) return
+    for (let at = 0; at < chunk.length; at++)
+      if (!isValid(chunk, at)) rows.push(column.starts[c]! + at)
+  })
+  return rows
 }
 
 /** Shared validation for existing fields and newly created records. */

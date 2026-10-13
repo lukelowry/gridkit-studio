@@ -30,9 +30,10 @@ export async function cancellable<T>(
 }
 
 /** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
- *  One listener's failure leaves the others theirs. */
+ *  One listener's failure leaves the others theirs, and is said as every failure is, by `failed`. */
 class Emitter<T> {
   readonly #listeners = new Set<(value: T) => void>()
+  constructor(private readonly failed: (error: unknown) => void) {}
   readonly event = (listener: (value: T) => void) => {
     this.#listeners.add(listener)
     return { dispose: () => void this.#listeners.delete(listener) }
@@ -42,9 +43,7 @@ class Emitter<T> {
       try {
         listener(value)
       } catch (error) {
-        queueMicrotask(() => {
-          throw error
-        })
+        this.failed(error)
       }
   }
   dispose(): void {
@@ -67,7 +66,7 @@ const CRASH_MS = 60_000
 /** A worker of the extension's, started when first asked and again after it stops. */
 class Thread<A extends Api<A>> {
   /** Hears why the worker stopped, each time it does. */
-  readonly failure = new Emitter<Error>()
+  readonly failure: Emitter<Error>
   #worker?: Worker
   #caller?: Caller<A>
   /** The teardown of one that stopped: calls wait for it before another starts. */
@@ -80,9 +79,13 @@ class Thread<A extends Api<A>> {
     private readonly name: string,
     private readonly script: string,
     private readonly owner: Owner,
+    /** Says a failure of what hears of the worker. */
+    failed: (error: unknown) => void,
     /** What each worker started is started with. */
     private readonly data?: () => unknown,
-  ) {}
+  ) {
+    this.failure = new Emitter(failed)
+  }
 
   /** Whether the worker runs now. */
   get running(): boolean {
@@ -162,16 +165,17 @@ class Thread<A extends Api<A>> {
 
 /** The extension's two workers: the case worker, which reads open cases as they are edited, and the
  *  results worker, which runs GridKit and reads results files, started with `results`. Their
- *  bundles are in `folder`. */
+ *  bundles are in `folder`. What fails as it hears of them is said by `failed`. */
 export class Client {
-  readonly event = new Emitter<Exclude<WorkerEvent, { kind: 'process' }>>()
+  readonly event: Emitter<Exclude<WorkerEvent, { kind: 'process' }>>
   /** The GridKit process of each run the results worker has under way, by the run's id, ended here
    *  should the worker stop before it ends them. */
   readonly #owned = new Map<string, RuntimeProcess>()
   readonly cases: Thread<CaseApi>
   readonly results: Thread<ResultsApi>
 
-  constructor(folder: string, results: () => ResultsOptions) {
+  constructor(folder: string, results: () => ResultsOptions, failed: (error: unknown) => void) {
+    this.event = new Emitter(failed)
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
         if (event.kind !== 'process') return this.event.fire(event)
@@ -184,11 +188,13 @@ export class Client {
       'case',
       join(folder, 'cases.cjs'),
       owner(async () => {}),
+      failed,
     )
     this.results = new Thread(
       'results',
       join(folder, 'results.cjs'),
       owner(() => this.#terminate()),
+      failed,
       results,
     )
   }

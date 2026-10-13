@@ -3,7 +3,7 @@ import { type Column, type Data, read, textColumn } from '@latkit/model'
 import { describe, expect, it, vi } from 'vitest'
 
 import { superseded } from '../shared/errors.js'
-import type { CaseApi, Summary } from '../shared/messages.js'
+import type { Summary, ViewApi } from '../shared/messages.js'
 import type { Asker } from './asker.js'
 import { Rows } from './rows.js'
 
@@ -17,13 +17,15 @@ const schema = {
 const summary = (version: number) =>
   ({ uri: 'file:///case', version, fingerprint: String(version), schema }) as unknown as Summary
 const kV = { from: 'Bus', select: ['kV'] }
+/** What a view asks of a revision's rows. */
+type Asked = Extract<ViewApi['rows']['input'], { revision: unknown }>
 const both = { from: 'Bus', select: ['kV', 'area'] }
 
 /** A case worker that answers with two buses' fields, keeping what it was asked. At version `v`,
  *  a bus's field holds `v` and `v + 0.5`. With `gate`, it waits for it before answering. */
 function worker(gate?: () => Promise<void>) {
-  const asked: CaseApi['rows']['input'][] = []
-  const request = vi.fn(async (input: CaseApi['rows']['input']) => {
+  const asked: Asked[] = []
+  const request = vi.fn(async (input: Asked) => {
     asked.push(input)
     await gate?.()
     return input.fields.map(({ select }): Data.RowBatch => ({
@@ -36,7 +38,7 @@ function worker(gate?: () => Promise<void>) {
           name,
           {
             kind: 'numeric',
-            values: Float64Array.of(input.version, input.version + 0.5),
+            values: Float64Array.of(input.revision.version, input.revision.version + 0.5),
             offset: 0,
             length: 2,
           },
@@ -53,7 +55,7 @@ function rowsOf(request: ReturnType<typeof worker>['request']) {
   const report = vi.fn()
   const presentation = vi.fn(async () => placed)
   const asker = {
-    request: (method: string, input: CaseApi['rows']['input']) =>
+    request: (method: string, input: Asked) =>
       method === 'rows' ? request(input) : presentation(),
     report,
   } as unknown as Asker
@@ -105,7 +107,9 @@ describe('the rows a view holds', () => {
   it('starts over for another revision, showing the last rows until its own come', async () => {
     let open!: () => void
     const { asked, request } = worker(() =>
-      asked.at(-1)!.version === 2 ? new Promise((resolve) => (open = resolve)) : Promise.resolve(),
+      asked.at(-1)!.revision.version === 2
+        ? new Promise((resolve) => (open = resolve))
+        : Promise.resolve(),
     )
     const { rows } = rowsOf(request)
     rows.want({ summary: summary(1) }, [both])
@@ -156,5 +160,10 @@ describe('the rows a view holds', () => {
     await vi.waitFor(() => expect(stale.asked).toHaveLength(1))
     await new Promise((resolve) => setTimeout(resolve))
     expect(quiet.report).not.toHaveBeenCalled()
+    expect(stale.asked).toHaveLength(1)
+    // Nor is it spent: wanted again, as a view shown again over the same case wants it, it is asked
+    // for again.
+    quiet.rows.want({ summary: summary(1) }, [kV])
+    await vi.waitFor(() => expect(stale.asked).toHaveLength(2))
   })
 })

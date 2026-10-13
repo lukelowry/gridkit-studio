@@ -5,7 +5,7 @@ import { findNodeAtLocation } from 'jsonc-parser'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf } from '../shared/schema.js'
 import type { Case } from './case.js'
-import { apply, recordAt, treeOf } from './edits.js'
+import { apply, recordText, treeOf } from './edits.js'
 import { planTransaction } from './plan.js'
 import { Turns } from './turns.js'
 
@@ -46,7 +46,7 @@ export async function presentation(
       while (next < found.length && found[next]! < array.starts[record]!) next++
       if (!(next < found.length && found[next]! < array.ends[record]!)) continue
       await work.step()
-      const { text } = recordAt(kase, table, row)
+      const text = recordText(kase, table, row)
       const position = findNodeAtLocation(treeOf(text), ['extension', 'diagram', 'position'])
       if (
         position?.type === 'array' &&

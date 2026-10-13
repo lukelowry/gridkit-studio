@@ -59,6 +59,26 @@ export interface Results extends ResultsLayout, ResultsProgress {
   readonly id: string
 }
 
+/** What of results a view draws: which they are, how far they are read, whether more come, how
+ *  they are cut, what they hold, and the times and values they span. Two readings alike in it draw
+ *  alike. A file's outputs are fixed once its header is read: whether they are is all that changes,
+ *  so their row indexes are never compared or written out again. */
+export const drawnOf = (results: Results | undefined) =>
+  results && [
+    results.id,
+    results.frames,
+    results.growing,
+    results.chunk,
+    results.outputs.length,
+    results.domain,
+    results.span,
+    results.domains,
+  ]
+
+/** Whether `a` and `b` draw alike. */
+export const sameDrawn = (a: Results | undefined, b: Results | undefined): boolean =>
+  a === b || (!!a && !!b && JSON.stringify(drawnOf(a)) === JSON.stringify(drawnOf(b)))
+
 /** A run of GridKit's DynamicSimulation on a solver file. */
 export interface Run {
   /** The id the extension chose for it, which everything said of the run carries. */

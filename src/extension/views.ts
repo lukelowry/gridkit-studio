@@ -4,21 +4,26 @@ import { basename } from 'node:path'
 import type { Block } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import { errorOf } from '../shared/errors.js'
+import { shownType } from '../shared/cells.js'
+import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
 import type {
   FromView,
+  Of,
   Results,
   SentState,
   Summary,
+  TableState,
   ToView,
   ViewApi,
   ViewKind,
+  ViewMessage,
   ViewState,
 } from '../shared/messages.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
 import { typeName } from '../shared/schema.js'
+import { drawnOf } from '../shared/simulation.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
 import { VideoFiles } from './video.js'
@@ -27,7 +32,6 @@ import { VideoFiles } from './video.js'
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor'])
 /** The views in VS Code's panels, which follow the case the views follow. */
 const PANELS = ['case', 'monitor', 'export'] as const
-type Panel = (typeof PANELS)[number]
 
 /** What a panel's title says after its name: the case, and what the panel shows of it. The Case
  *  panel's type and filtered count, and the Monitor's results, live here rather than in the
@@ -35,11 +39,12 @@ type Panel = (typeof PANELS)[number]
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   const { summary, table, results } = studio.state(uri)
   const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
-  if (kind === 'case' && summary && table?.type) {
-    parts.push(typeName(summary.schema, table.type))
-    const count = summary.counts[table.type]
+  const type = summary && shownType(summary, table)
+  if (kind === 'case' && summary && type) {
+    parts.push(typeName(summary.schema, type))
+    const count = summary.counts[type]
     const shown = studio.get(uri)?.rows
-    if ((table.filter || table.equal) && count !== undefined && shown !== undefined)
+    if ((table?.filter || table?.equal) && count !== undefined && shown !== undefined)
       parts.push(`${shown.toLocaleString()} of ${count.toLocaleString()}`)
   }
   // What a run left, never how it ended, which only a notification says. How far one has come is
@@ -51,19 +56,30 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   return parts.join(' · ')
 }
 
-/** What of the results a view draws: which, how far they are read, what they hold, and the times
- *  and values they span. */
-const drawn = (results?: Results) =>
-  results && [
-    results.id,
-    results.frames,
-    // A file's outputs are fixed once its header is read: whether they are is all that changes, so
-    // their row indexes are never written out again.
-    results.outputs.length,
-    results.domain,
-    results.span,
-    results.domains,
-  ]
+/** What the Case panel says it changed of what it shows, each part of its own kind; a part said to
+ *  be nothing goes. */
+function tableChange(change: unknown): Partial<TableState> {
+  const given = (change && typeof change === 'object' ? change : {}) as Record<string, unknown>
+  const kept: Partial<TableState> = {}
+  const text = (value: unknown): value is string => typeof value === 'string'
+  if (text(given.type)) kept.type = given.type
+  if ('filter' in given) kept.filter = text(given.filter) ? given.filter : undefined
+  if ('equal' in given) {
+    const equal = given.equal as TableState['equal']
+    kept.equal =
+      text(equal?.field) && ['string', 'number', 'boolean'].includes(typeof equal.value)
+        ? { field: equal.field, value: equal.value }
+        : undefined
+  }
+  if ('order' in given) {
+    const order = given.order as TableState['order']
+    kept.order =
+      text(order?.field) && (order.direction === 'ascending' || order.direction === 'descending')
+        ? { field: order.field, direction: order.direction }
+        : undefined
+  }
+  return kept
+}
 
 /** What each view reads of the state, besides the summary and settings, which are compared on
  *  their own; a view is sent state only when this changes. While a run writes, the frames read so
@@ -98,7 +114,7 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     selection,
     anchors,
     bindings,
-    drawn(results),
+    drawnOf(results),
   ],
   // Results the plots show have a fixed span while a run writes them, else the times they hold.
   monitor: ({ uri, stale, selection, bindings, plots, window, results }) => [
@@ -108,8 +124,7 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     bindings,
     plots,
     window,
-    drawn(results),
-    results?.growing,
+    drawnOf(results),
   ],
   // An export's times follow the results' until the user chooses their own.
   export: ({ uri, stale, error, bindings, plots, results }) => [
@@ -118,7 +133,7 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     error,
     bindings,
     plots,
-    drawn(results),
+    drawnOf(results),
   ],
 }
 
@@ -142,14 +157,15 @@ function html(
 }
 
 /** One webview of Studio's and the case it shows: a canvas editor's own, or the case a panel
- *  follows. Its page loads once, and follows another case by the state it is sent. What the page
- *  says names the case it is of, and what it says of a case the view no longer shows is dropped. */
+ *  follows. Its page loads once, and follows another case by the state it is sent. Each case it
+ *  follows, and each page that loads, is a showing of its own: what the page says and asks names
+ *  its showing, and what it says of one past is dropped, as the page drops what is said to it of
+ *  one past. */
 class View {
   #answering!: Answerer
-  /** The page loaded now: what a page before it asked is answered nothing more. */
-  #page = 0
   readonly #videos = new VideoFiles()
-  #uri?: string
+  /** The showing of the case the view shows. */
+  #of: Of
   #summary?: Summary
   #settings?: SettingsValues
   /** The results' outputs last sent, which a state of the same results leaves out. */
@@ -162,22 +178,25 @@ class View {
   /** Whether another update is due, and the update in progress. */
   #again = false
   #running?: Promise<void>
-  /** The sequence number of the latest transport change this view made. */
+  /** The latest change this showing made to the clock, counted from naught as the page counts it. */
   #seq = 0
   /** The case the view works on while it is mid-task, as an export is, which it keeps till done. */
   #working?: string
   /** Hears once the view is done with its task. */
-  onIdle?: () => void
+  readonly #idle: () => void
   readonly #report: (error: unknown) => void
   readonly disposables: vscode.Disposable[] = []
+  /** A view of `kind` in `panel`, showing the case at `uri`, which hears once it is done with a
+   *  task by `idle`. */
   constructor(
     readonly studio: Sessions,
     readonly panel: vscode.WebviewPanel | vscode.WebviewView,
     readonly kind: ViewKind,
     readonly hidden: Hidden,
-    uri?: string,
+    { uri, idle = () => {} }: { readonly uri?: string; readonly idle?: () => void } = {},
   ) {
-    this.#uri = uri
+    this.#of = { uri, showing: 0 }
+    this.#idle = idle
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(studio.context.extensionUri, 'dist', 'webview')],
@@ -198,16 +217,16 @@ class View {
         void this.receive(message).catch(report)
       }),
       studio.changed.event((changed) => {
-        if (changed === this.#uri) void this.update().catch(report)
+        if (changed === this.#of.uri) void this.update().catch(report)
       }),
       studio.clock.event((changed) => {
-        if (changed === this.#uri) this.tick()
+        if (changed === this.#of.uri) this.tick()
       }),
       studio.action.event((action) => {
-        if (action.uri !== this.#uri || (action.view && action.view !== kind)) return
+        if (action.uri !== this.#of.uri || (action.view && action.view !== kind)) return
         void this.send({
           kind: 'action',
-          uri: action.uri,
+          of: this.#of,
           command: action.command,
           value: action.value,
         })
@@ -217,13 +236,13 @@ class View {
           if (hidden === 'idle') void this.send({ kind: 'shown', shown: panel.visible })
           if (panel.visible) {
             // The canvas the user brings to the front is the case the views follow.
-            if ('active' in panel && panel.active && this.#uri && followed(this.#uri))
-              studio.activate(this.#uri)
+            const { uri } = this.#of
+            if ('active' in panel && panel.active && uri && followed(uri)) studio.activate(uri)
             void this.update().then(() => this.tick(), report)
           } else if (hidden === 'destroyed') {
             // The webview is destroyed, and what it asked with it; its replacement sends 'ready'.
             this.#ready = false
-            this.#answer()
+            this.#show(this.#of.uri)
           }
         },
       ),
@@ -233,7 +252,7 @@ class View {
 
   /** The case the view shows. */
   get uri(): string | undefined {
-    return this.#uri
+    return this.#of.uri
   }
 
   /** Whether the view is mid-task, and must keep the case it works on. */
@@ -241,14 +260,21 @@ class View {
     return this.#working !== undefined
   }
 
-  /** Shows the case at `uri`, or none: its state, then its clock. What the page asked of the case
-   *  before is the page's own to let go of, and is answered as asked. */
+  /** Shows the case at `uri`, or none: its state, then its clock. */
   follow(uri: string | undefined) {
-    if (uri === this.#uri) return
-    this.#uri = uri
+    if (uri === this.#of.uri) return
+    this.#show(uri)
+    void this.update().catch(this.#report)
+  }
+
+  /** Shows the case at `uri` anew: what the page asked and held before is let go of, its changes to
+   *  the clock count from naught, and it is sent all it shows again. */
+  #show(uri: string | undefined) {
+    this.#of = { uri, showing: this.#of.showing + 1 }
+    this.#seq = 0
     this.#shown = ''
     this.#summary = this.#settings = this.#outputs = undefined
-    void this.update().catch(this.#report)
+    this.#answer()
   }
 
   send(message: ToView): Thenable<boolean> {
@@ -258,66 +284,74 @@ class View {
 
   /** Sends the view a snapshot of the clock of the case it shows. */
   tick() {
-    const session = this.#uri ? this.studio.get(this.#uri) : undefined
+    const { uri } = this.#of
+    const session = uri ? this.studio.get(uri) : undefined
     if (!session || !this.#ready || !this.panel.visible || !CLOCKED.has(this.kind)) return
     void this.send({
       kind: 'clock',
-      uri: session.uri,
+      of: this.#of,
       clock: session.transport.snapshot(),
-      live: session.transport.live,
+      live: session.live,
       seq: this.#seq,
     })
   }
 
-  /** Answers the page loaded now. A page before it is gone: what it asked is let go of, and its
-   *  answers, which would reach the page that took its place, are never sent. */
+  /** Answers the showing now. What a showing before asked is let go of, and its answers, which
+   *  would reach a page that shows another, are never sent. */
   #answer() {
     this.#answering?.cancel()
     this.#unshare()
-    const page = ++this.#page
+    const of = this.#of
     this.#answering = answerer(this.#handlers(), (reply) => {
-      if (page === this.#page) void this.send(reply)
+      if (of === this.#of) void this.send({ ...reply, of })
     })
   }
 
   async receive(message: FromView) {
     if (!message || typeof message !== 'object' || this.#disposed) return
-    switch (message.kind) {
-      case 'request':
-      case 'cancel':
-        return this.#answering.receive(message)
-      case 'ready':
-        // A page loading while one was loaded, as after a reload, replaces it: what that one
-        // asked, worked on and wrote goes with it.
-        if (this.#ready) {
-          this.#answer()
-          this.#work(undefined)
-          this.#videos.dispose()
-        }
-        this.#ready = true
-        this.#shown = ''
-        this.#summary = this.#settings = this.#outputs = undefined
-        // A page kept while hidden starts as though shown.
-        if (this.hidden === 'idle') void this.send({ kind: 'shown', shown: this.panel.visible })
-        return this.update()
-      case 'error': {
-        const { problem, context } = message
-        this.studio.reporter.report(
-          Object.assign(errorOf(problem), {
-            detail: `[${this.kind}] ${problem.code} ${JSON.stringify(context ?? {})}\n${problem.detail ?? problem.message}`,
-          }),
-        )
-        return
+    if (message.kind === 'ready') {
+      // A page loading while one was loaded, as after a reload, replaces it: what that one asked,
+      // worked on and wrote goes with it. Either way the page loaded is a showing of its own.
+      if (this.#ready) {
+        this.#work(undefined)
+        this.#videos.dispose()
       }
-      default:
-        return this.#hear(message)
+      this.#ready = true
+      this.#show(this.#of.uri)
+      // A page kept while hidden starts as though shown.
+      if (this.hidden === 'idle') void this.send({ kind: 'shown', shown: this.panel.visible })
+      return this.update()
     }
+    // Why something failed is said whatever showing it is of.
+    if (message.kind === 'error') {
+      const { problem, context, of } = message
+      this.studio.reporter.report(
+        Object.assign(errorOf(problem), {
+          detail: `[${this.kind}] ${problem.code} ${of?.uri ?? ''} ${JSON.stringify(context ?? {})}\n${problem.detail ?? problem.message}`,
+        }),
+      )
+      return
+    }
+    if (message.of?.showing !== this.#of.showing) {
+      // A request of a showing past is answered, quietly, so the page that asked lets go of it.
+      if (message.kind === 'request')
+        void this.send({
+          kind: 'reply',
+          id: message.id,
+          problem: problemOf(superseded()),
+          of: message.of,
+        })
+      return
+    }
+    if (message.kind === 'request' || message.kind === 'cancel')
+      return this.#answering.receive(message)
+    return this.#hear(message)
   }
 
-  /** What the page says of the case it shows; of a case the view no longer shows, nothing. */
-  async #hear(message: Extract<FromView, { uri: string | undefined }>) {
-    if (message.uri !== this.#uri) return
-    const session = message.uri ? this.studio.get(message.uri) : undefined
+  /** What the page says of the case it shows now. */
+  async #hear(message: Extract<FromView, ViewMessage>) {
+    const { uri } = this.#of
+    const session = uri ? this.studio.get(uri) : undefined
     switch (message.kind) {
       case 'select':
         if (message.element === null || typeof message.element?.id === 'string')
@@ -335,8 +369,9 @@ class View {
           session?.setCamera(this.kind, message.camera)
         return
       case 'transport': {
+        // Counted whatever comes of it, so the clock's answers say the page's latest change.
+        if (Number.isSafeInteger(message.seq)) this.#seq = Math.max(this.#seq, message.seq)
         if (!session) return
-        this.#seq = message.seq
         const { transport } = session
         if (message.action === 'seek') transport.seek(Number(message.value))
         else if (message.action === 'rate') transport.setRate(Number(message.value))
@@ -346,19 +381,20 @@ class View {
         else if (message.action === 'step') await session.step(message.value === -1 ? -1 : 1)
         return
       }
-      case 'tableState':
-        if (!session) return
-        session.setTable(message.table, message.shown)
-        if ('description' in this.panel)
-          this.panel.description = describe(this.studio, this.kind, session.uri)
+      case 'table':
+        if (this.kind === 'case') session?.setTable(tableChange(message.change))
+        return
+      case 'rows':
+        if (this.kind === 'case' && Number.isSafeInteger(message.shown) && message.shown >= 0)
+          session?.setRows(message.shown)
         return
       case 'busy':
-        return this.#work(message.busy === true ? message.uri : undefined)
+        return this.#work(message.busy === true ? uri : undefined)
       case 'command':
-        if (VIEW_COMMANDS.includes(message.command) && message.uri) {
-          this.studio.activate(message.uri)
+        if (VIEW_COMMANDS.includes(message.command) && uri && followed(uri)) {
+          this.studio.activate(uri)
           await vscode.commands.executeCommand(commandId(message.command), message.value, {
-            uri: message.uri,
+            uri,
             view: this.kind,
           })
         }
@@ -374,7 +410,7 @@ class View {
     if (uri) this.studio.hold(uri, 'export')
     if (done) {
       this.studio.release(done, 'export')
-      if (!this.#disposed) this.onIdle?.()
+      if (!this.#disposed) this.#idle()
     }
   }
 
@@ -396,11 +432,11 @@ class View {
       rows: (input, signal) =>
         'results' in input
           ? client.results.call('rows', input, signal)
-          : client.cases.call('rows', input, signal),
+          : client.cases.call('rows', { ...input.revision, fields: input.fields }, signal),
       presentation: (input, signal) =>
         'results' in input
           ? client.results.call('presentation', input, signal)
-          : client.cases.call('presentation', input, signal),
+          : client.cases.call('presentation', input.revision, signal),
       query: (input, signal) => {
         const read = rows(input, signal)
         // The Case panel's rows load under VS Code's own progress bar on the view.
@@ -423,13 +459,16 @@ class View {
         this.#videos.open(vscode.Uri.parse(uri), name, format, signal),
       videoWrite: ({ file, position, bytes }) => this.#videos.write(file, position, bytes),
       videoClose: ({ file, abort }) => this.#videos.close(file, abort),
-      share: async ({ results }) => {
+      // A share the page let go of as it was made holds nothing past it.
+      share: async ({ results }, signal) => {
         const id = randomUUID()
         this.#shares.add(id)
         try {
-          return await client.results.call('share', { results, as: id })
+          const shared = await client.results.call('share', { results, as: id }, signal)
+          signal.throwIfAborted()
+          return shared
         } catch (error) {
-          this.#shares.delete(id)
+          if (this.#shares.delete(id)) studio.closeResults(id)
           throw error
         }
       },
@@ -466,18 +505,21 @@ class View {
   }
 
   /** Sends the view its state, when what it shows of it changed, and the clock after it: a page
-   *  hears a clock only of the case its last state named, so one sent before that state is lost.
-   *  The Monitor and an export draw the case their results were read against, which waits for the
-   *  session to have it. */
+   *  hears a clock only of the showing its last state named, so one sent before that state is lost.
+   *  The Monitor and an export draw the case their results were read against, once the session
+   *  has it: a page that shows the case keeps what it draws till then, and one that follows it now
+   *  is told at once of the case, and of the results once they are known. */
   async #once() {
     // A hidden view catches up when it shows; one kept working works on while hidden.
     if (!this.#ready || (!this.panel.visible && !(this.hidden === 'working' && this.busy))) return
-    const session = this.#uri ? this.studio.get(this.#uri) : undefined
-    const state: ViewState = this.#uri ? this.studio.state(this.#uri) : {}
+    const { uri } = this.#of
+    const session = uri ? this.studio.get(uri) : undefined
+    const state: ViewState = uri ? this.studio.state(uri) : {}
     if ((this.kind === 'monitor' || this.kind === 'export') && state.results?.frames) {
       const described = session?.described
-      if (!described) return
-      state.summary = described
+      if (described) state.summary = described
+      else if (this.#shown) return
+      else delete state.results
     }
     const signature = JSON.stringify(SHOWN[this.kind](state))
     if (
@@ -499,31 +541,19 @@ class View {
       this.#summary = state.summary
       this.#settings = state.settings
       this.#outputs = results?.outputs
-      await this.send({ kind: 'state', state: sent })
+      await this.send({ kind: 'state', of: this.#of, state: sent })
       this.tick()
     }
   }
 
   dispose() {
     this.#disposed = true
-    this.onIdle = undefined
     this.#videos.dispose()
     this.#unshare()
     this.#answering.cancel()
     this.#work(undefined)
     for (const disposable of this.disposables) disposable.dispose()
   }
-}
-
-/** The panel views VS Code has shown, by kind. */
-const resolved = new Map<Panel, vscode.WebviewView>()
-
-/** Shows `kind` without taking focus from where the user is. A panel never shown yet, and
- *  Monitored Signals, can only be shown by focusing them. */
-export async function showView(kind: Panel | 'signals') {
-  const view = kind === 'signals' ? undefined : resolved.get(kind)
-  if (view) view.show(true)
-  else await vscode.commands.executeCommand(viewId(kind) + '.focus')
 }
 
 export function registerViews(studio: Sessions) {
@@ -535,7 +565,7 @@ export function registerViews(studio: Sessions) {
         {
           resolveCustomTextEditor(document, panel) {
             // A canvas keeps its webview while hidden, so showing it again is free.
-            new View(studio, panel, kind, 'idle', document.uri.toString())
+            new View(studio, panel, kind, 'idle', { uri: document.uri.toString() })
             // Read while the webview loads. The views follow the case once its editor is in front,
             // not as it loads: of editors loading side by side, the last would win.
             void studio.documents.parsed(document)
@@ -556,20 +586,19 @@ export function registerViews(studio: Sessions) {
         viewId(kind),
         {
           resolveWebviewView(panel) {
-            resolved.set(kind, panel)
-            const view = new View(studio, panel, kind, hidden)
+            studio.panels.set(kind, panel)
             /** The panel follows the case the views follow, unless it works on another. */
             const follow = () => {
               if (!view.busy) view.follow(studio.active)
               panel.description = view.uri && describe(studio, kind, view.uri)
             }
-            view.onIdle = follow
+            const view = new View(studio, panel, kind, hidden, { idle: follow })
             // Only the case it shows, or the one it is to show, changes what it shows.
             const changed = studio.changed.event((uri) => {
               if (uri === view.uri || uri === studio.active) follow()
             })
             panel.onDidDispose(() => {
-              if (resolved.get(kind) === panel) resolved.delete(kind)
+              if (studio.panels.get(kind) === panel) studio.panels.delete(kind)
               changed.dispose()
             })
             follow()

@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { follow, type Piece, type Writer } from './follow.js'
 import { SEGMENT_BYTES } from './limits.js'
+import { same, type Stamp, stampAt } from './stamp.js'
 
 let directory: string
 beforeAll(async () => {
@@ -18,9 +19,14 @@ const text = (bytes: Uint8Array) => Buffer.from(bytes).toString('utf8')
 
 /** Every piece of the file at `path`, followed until its `writer` is no longer writing, each as it
  *  came. */
-async function pieces(path: string, writer: () => Writer = () => 'done', each?: () => unknown) {
+async function pieces(
+  path: string,
+  writer: () => Writer = () => 'done',
+  each?: () => unknown,
+  last?: Stamp,
+) {
   const all: Piece[] = []
-  for await (const piece of follow(path, signal, writer)) {
+  for await (const piece of follow(path, signal, writer, last)) {
     // A piece holds the bytes only until the next is read.
     all.push(piece.kind === 'end' ? piece : { ...piece, bytes: Uint8Array.from(piece.bytes) })
     await each?.()
@@ -51,10 +57,13 @@ describe('a results file followed as it is written', () => {
       expect(segment.length).toBeLessThan(SEGMENT_BYTES + 64)
     }
     expect(read.join('')).toBe(rows)
-    // Read to its end with nothing written since, the file says how large it was.
+    // Read to its end with nothing written since, the file says which it was and how large.
     expect(all.at(-1)).toEqual({
       kind: 'end',
-      stamp: { size: Buffer.byteLength(header + rows), mtimeMs: expect.any(Number) },
+      stamp: {
+        ...(first?.kind === 'header' && first.stamp),
+        size: Buffer.byteLength(header + rows),
+      },
     })
   })
 
@@ -118,5 +127,45 @@ describe('a results file followed as it is written', () => {
     const all = await reading
     expect(all.map(({ kind }) => kind)).toEqual(['header', 'segment', 'end'])
     await expect(pieces(join(directory, 'never.csv'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('never reads what the last run left, and reads it once the writer writes over it', async () => {
+    const path = join(directory, 'again.csv')
+    await writeFile(path, 'time,Bus_A_Vm\n0,1\n')
+    const last = await stampAt(path)
+    // A writer done without writing leaves the last run's file, which is no file of its own.
+    await expect(pieces(path, () => 'done', undefined, last)).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    let writer: Writer = 'writing'
+    const reading = pieces(path, () => writer, undefined, last)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Written over in place, as GridKit opens its output, the file is the writer's.
+    await writeFile(path, 'time,Bus_A_Vm\n0,2\n')
+    writer = 'done'
+    expect(segments(await reading)).toEqual(['0,2\n'])
+  })
+})
+
+describe("a results file's stamp", () => {
+  it('tells a file written again from the one read, whatever its size and time say', async () => {
+    const path = join(directory, 'stamped.csv')
+    await writeFile(path, 'time,Bus_A_Vm\n0,1\n')
+    const read = await stampAt(path)
+    expect(same(read, await stampAt(path))).toBe(true)
+    // As long, with its time set back as `cp -p` or a copy in Explorer sets it.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const { mtime } = await stat(path)
+    await writeFile(path, 'time,Bus_A_Vm\n0,2\n')
+    await utimes(path, mtime, mtime)
+    const now = await stampAt(path)
+    expect(now?.size).toBe(read?.size)
+    expect(same(read, now)).toBe(false)
+    // Another file put in its place, as long.
+    const other = join(directory, 'other.csv')
+    await writeFile(other, 'time,Bus_A_Vm\n0,3\n')
+    await rename(other, path)
+    expect(same(now, await stampAt(path))).toBe(false)
+    expect(await stampAt(join(directory, 'missing.csv'))).toBeUndefined()
   })
 })

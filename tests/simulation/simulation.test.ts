@@ -254,7 +254,7 @@ describe("GridKit's programs on solver files", () => {
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
   })
 
-  it('never reads what the last run of a solver file wrote, and keeps it when a run cannot start', async ({
+  it('never reads what the last run of a solver file wrote, and keeps it when a run does not start', async ({
     signal,
   }) => {
     const solver = { output_file: 'out.csv', dt_monitor: 0.01, events: [] }
@@ -282,6 +282,24 @@ describe("GridKit's programs on solver files", () => {
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),
     ).rejects.toThrow(/GridKit Path/)
+    expect(await readFile(out, 'utf8')).toBe(written)
+    // Nor does one that is there but does not start, as a broken install's: Studio leaves the file
+    // to GridKit, which never wrote over it.
+    const broken = join(folder, 'broken')
+    await mkdir(broken)
+    await writeFile(
+      join(broken, process.platform === 'win32' ? 'DynamicSimulation.exe' : 'DynamicSimulation'),
+      'not a program',
+      { mode: 0o755 },
+    )
+    await expect(
+      simulate(
+        first.kase,
+        { ...request, results: randomUUID(), gridkit: { path: broken, image: '', cli: '' } },
+        keeping(),
+        { signal, reading: () => {}, progress: () => {}, log: () => {} },
+      ),
+    ).rejects.toThrow(/did not start.*GridKit Path/)
     expect(await readFile(out, 'utf8')).toBe(written)
     const results = await simulate(first.kase, { ...request, results: randomUUID() }, keeping(), {
       signal,

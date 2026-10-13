@@ -3,7 +3,6 @@ import { findNodeAtLocation, getLocation, visit } from 'jsonc-parser'
 import type { CaseSymbol, SourceContext } from '../shared/messages.js'
 import { withUnit } from '../shared/schema.js'
 import type { Case, Table } from './case.js'
-import { STEP_RECORDS } from './columns.js'
 import { CASE, type Catalog, type FieldPlan, SIGNAL } from './definition.js'
 import {
   nativePath,
@@ -15,7 +14,7 @@ import {
   treeOf,
 } from './edits.js'
 import { ARRAYS } from './parse.js'
-import { Turns } from './turns.js'
+import { STEP_RECORDS, Turns } from './turns.js'
 
 /** The case's outline as its file lays it out: each array, holding its records in file order, each
  *  named by its id, up to `limit` records in all, as VS Code's `json.maxItemsComputed` sets for a

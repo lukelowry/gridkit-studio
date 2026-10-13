@@ -222,7 +222,6 @@ export interface ResultsApi {
   /** The next sample time from `at` in `direction`; the first or last time when none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
-  /** What it holds: results files, the cases they and the runs under way read, and decoded bytes. */
   /** What it holds: the results the extension holds, their files, the files resting that
    *  nothing holds, the cases they and the runs under way read, and the bytes kept. */
   stats: {
@@ -277,10 +276,13 @@ export interface Plot {
   id?: string
 }
 
-/** What the Case panel shows: a type, the columns chosen for each type, and its filters. */
+/** What the Case panel shows: a type, the columns chosen for each type, the order of its rows, and
+ *  its filters. The session alone holds it: commands and the panel change it there. */
 export interface TableState {
   type?: string
   columns?: Record<string, string[]>
+  /** The field the rows are in the order of, and which way; absent, they are in file order. */
+  order?: { field: string; direction: 'ascending' | 'descending' }
   /** Text the shown rows' names contain. */
   filter?: string
   /** A value of one field every shown row holds. */
@@ -326,14 +328,6 @@ export type ViewAction =
   | 'retryMonitor'
   | 'resetMonitorWindow'
   | 'signalRange'
-  | 'type'
-  | 'columns'
-  | 'resetColumns'
-  | 'hideColumn'
-  | 'sort'
-  | 'filter'
-  | 'filterText'
-  | 'clearFilters'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -341,15 +335,27 @@ export type SentState = Omit<ViewState, 'results'> & {
   results?: Omit<Results, 'outputs'> & { outputs?: Results['outputs'] }
 }
 
-/** What the extension sends a view. A clock and an action name the case they are of: a view drops
- *  those of a case it no longer shows. Whether VS Code shows the view is the page's own, of any case. */
+/** Which showing of which case a message between a view and the extension is of. The extension
+ *  counts a showing each time the view follows another case or its page loads, and says which in
+ *  every state it sends. Each side drops what the other says of another showing: what a page asked
+ *  of a case, or did to it, never reaches the case it shows next, nor the other way. Each showing
+ *  counts its changes to the clock from naught. */
+export interface Of {
+  readonly uri: string | undefined
+  readonly showing: number
+}
+
+/** What the extension sends a view, each but whether VS Code shows it of a showing. */
 export type ToView =
-  | { kind: 'state'; state: SentState }
+  /** Whether VS Code shows the view: the page's own, of any case. */
   | { kind: 'shown'; shown: boolean }
-  /** The clock settled at send time; `seq` is the last of this view's changes it reflects. */
-  | { kind: 'clock'; uri: string; clock: ClockState; live: boolean; seq: number }
-  | Reply
-  | { kind: 'action'; uri: string | undefined; command: ViewAction; value?: unknown }
+  | ({ of: Of } & (
+      | { kind: 'state'; state: SentState }
+      /** The clock settled at send time; `seq` is the last of this showing's changes it reflects. */
+      | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
+      | { kind: 'action'; command: ViewAction; value?: unknown }
+      | Reply
+    ))
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
 export type TransportAction =
@@ -358,23 +364,26 @@ export type TransportAction =
   | { action: 'step'; value: 1 | -1 }
   | { action: 'playPause' | 'goLive' }
 
+/** What a view's request reads: a revision of a case, or the case results were read against, by
+ *  the results' id. */
+export type Source = { readonly revision: Revision } | OfResults
+
+/** The revision `summary` describes, as a request names it. */
+export const revisionOf = ({ uri, version, attachmentId }: Revision): Revision => ({
+  uri,
+  version,
+  ...(attachmentId !== undefined && { attachmentId }),
+})
+
 /** What a view asks of the extension. Each request names what it is of: a revision of a case, or
  *  results by their id. */
 export interface ViewApi {
   /** Rows of a revision of the case, or, `at` a time, of results. */
-  query: {
-    input: { revision: Revision; query: Query.Rows } | { results: string; query: Query.Rows }
-    output: Block.Rows[]
-  }
-  /** The static fields a view draws, of a case's revision or of the case results were read
-   *  against. */
-  rows: {
-    input: CaseApi['rows']['input'] | ResultsApi['rows']['input']
-    output: Data.RowBatch[]
-  }
-  /** Where the diagram's blocks are arranged, in a case's revision or in the case results were
-   *  read against. */
-  presentation: { input: Revision | OfResults; output: Record<string, Layout.Positions> }
+  query: { input: Source & { query: Query.Rows }; output: Block.Rows[] }
+  /** The static fields a view draws. */
+  rows: { input: Source & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
+  /** Where the diagram's blocks are arranged. */
+  presentation: { input: Source; output: Record<string, Layout.Positions> }
   samples: { input: SamplesInput; output: Data.SampleBatch[] }
   /** Edits the revision of the case the view made `mutations` against. */
   transact: {
@@ -395,8 +404,8 @@ export interface ViewApi {
   unshare: { input: OfResults; output: null }
 }
 
-/** What a view says of the case it shows. Its bridge names that case on each, and the extension
- *  drops one of a case the view no longer shows. */
+/** What a view says of the case it shows. Its bridge names the showing on each, and the extension
+ *  drops one of a showing past. */
 export type ViewMessage =
   | { kind: 'command'; command: ViewCommandName; value?: unknown }
   | { kind: 'select'; element: Element | null }
@@ -404,16 +413,22 @@ export type ViewMessage =
   | { kind: 'window'; bounds: Domain }
   | { kind: 'camera'; camera: unknown }
   | ({ kind: 'transport'; seq: number } & TransportAction)
-  /** What the Case panel shows, and how many rows its filters leave. */
-  | { kind: 'tableState'; table: TableState; shown: number }
+  /** A change the user made in the Case panel to what it shows, which the session takes. */
+  | { kind: 'table'; change: Partial<TableState> }
+  /** How many rows the Case panel's filters leave, as it last read them. */
+  | { kind: 'rows'; shown: number }
   /** Whether the view is mid-task, as an export is, and keeps the case it works on. */
   | { kind: 'busy'; busy: boolean }
 
+/** What a view sends the extension, each but its loading of a showing. */
 export type FromView =
+  /** The page loaded, and listens. */
   | { kind: 'ready' }
-  | Request
-  | Cancel
-  | (ViewMessage & { uri: string | undefined })
-  /** Why something in the view failed, which the extension tells the user, and what the view was
-   *  doing, for the log. */
-  | { kind: 'error'; problem: Problem; context?: unknown }
+  | ({ of: Of } & (
+      | ViewMessage
+      | Request
+      | Cancel
+      /** Why something in the view failed, which the extension tells the user whatever showing
+       *  it is of, and what the view was doing, for the log. */
+      | { kind: 'error'; problem: Problem; context?: unknown }
+    ))

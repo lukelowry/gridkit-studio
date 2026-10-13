@@ -1,6 +1,9 @@
-import { copyFile, mkdir, stat } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { createWriteStream } from 'node:fs'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 
 import {
   appendData,
@@ -30,6 +33,7 @@ import {
   selectionsOf,
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
+import { same, type Stamp, stampOf } from './stamp.js'
 import { fileKey, type Store } from './store.js'
 
 /** While a playhead plays, time behind it counts this many times over: views load ahead of it. */
@@ -213,8 +217,11 @@ export class ResultsFile {
   readonly #writing = new Map<number, Promise<void>>()
   /** The fields of chunks being read from the store, by their keys, which a read of one shares. */
   readonly #reading = new Map<number, Promise<Data.SampleBatch>>()
-  /** The file's size and time as it was read through. */
-  #stamp?: { readonly size: number; readonly mtimeMs: number }
+  /** The file it reads, as it was opened, and as it stood once read through. */
+  #opened?: Stamp
+  #stamp?: Stamp
+  /** How many of the file's bytes were read: its header and its whole rows. */
+  #read = 0
   /** Who reads the file now, each done once its promise settles. */
   readonly #readers = new Map<AbortController, Promise<void>>()
   #retired = false
@@ -256,7 +263,8 @@ export class ResultsFile {
       domain: manifest.domain,
       domains: manifest.domains,
     })
-    file.#stamp = { size: manifest.size, mtimeMs: manifest.mtimeMs }
+    file.#opened = file.#stamp = manifest.stamp
+    file.#read = manifest.read
     return file
   }
 
@@ -280,13 +288,10 @@ export class ResultsFile {
     return fileKey(path) === this.store.key
   }
 
-  /** Whether the file at its path, of the size and time `now` says, is what it read: being read
-   *  now, or read through and unchanged since. */
-  current(now: { readonly size: number; readonly mtimeMs: number }): boolean {
-    return (
-      this.#progress.growing ||
-      (this.#stamp?.size === now.size && this.#stamp.mtimeMs === now.mtimeMs)
-    )
+  /** Whether the file at its path, as `now` stamps it, is the file read: the one being read now,
+   *  which grows as it is written, or the one read through, as it stood then. */
+  current(now: Stamp | undefined): boolean {
+    return this.#progress.growing ? now?.file === this.#opened?.file : same(now, this.#stamp)
   }
 
   /** What it keeps alive of its own while nothing holds it: its case, and every frame's time. */
@@ -325,18 +330,23 @@ export class ResultsFile {
   /** Follows the results file as it is written, reading each segment as it comes, and tells
    *  `progress` after each. Returns once `writer` is done and the file has nothing more, the store
    *  then saying what it holds. Meanwhile it grows; why it stops short, if it does, it says, and
-   *  keeps what it read. */
+   *  keeps what it read. The file `last` stamps, which a run before left, is never read. */
   async ingest(
     signal: AbortSignal,
     writer: () => Writer,
     progress: () => Promise<void> | void,
+    last?: Stamp,
   ): Promise<void> {
     this.#progress.growing = true
     try {
-      for await (const piece of follow(this.#layout.path, signal, writer)) {
-        if (piece.kind === 'header') await this.#learn(piece.bytes, signal)
-        else if (piece.kind === 'segment') {
+      for await (const piece of follow(this.#layout.path, signal, writer, last)) {
+        if (piece.kind === 'header') {
+          this.#opened = piece.stamp
+          await this.#learn(piece.bytes, signal)
+          this.#read += piece.bytes.length
+        } else if (piece.kind === 'segment') {
           await this.#append(piece.bytes, signal)
+          this.#read += piece.bytes.length
           await progress()
         } else this.#stamp = piece.stamp
       }
@@ -347,7 +357,8 @@ export class ResultsFile {
         await this.store.finish(
           {
             path: this.#layout.path,
-            ...this.#stamp,
+            stamp: this.#stamp,
+            read: this.#read,
             fingerprint: this.kase.version,
             header: this.#decode.header,
             frames,
@@ -429,15 +440,33 @@ export class ResultsFile {
     return reply
   }
 
-  /** Copies the file to `path`: it is GridKit's CSV already, as long as it is still the file read. */
+  /** Copies to `path` what was read of the file: GridKit's CSV, byte for byte, up to the last row
+   *  read, from the file read and no other. A copy cut short never takes the name. */
   async exportCsv(path: string) {
     if (this.of(path)) throw new Error('Choose a different file from the open results.')
-    if (!this.current(await stat(this.#layout.path)))
-      throw new Error(
-        `${this.#layout.name} was written again after it was read. Open it again to export what it holds now.`,
+    if (!this.#read) throw new Error(`Nothing of ${this.#layout.name} has been read yet.`)
+    const source = await open(this.#layout.path, 'r')
+    const draft = `${path}.${randomUUID().slice(0, 8)}.part`
+    const check = async () => {
+      if (!this.current(stampOf(await source.stat({ bigint: true }))))
+        throw new Error(
+          `${this.#layout.name} was written again after it was read. Open it again to export what it holds now.`,
+        )
+    }
+    try {
+      await check()
+      await mkdir(dirname(path), { recursive: true })
+      await pipeline(
+        source.createReadStream({ start: 0, end: this.#read - 1, autoClose: false }),
+        createWriteStream(draft),
       )
-    await mkdir(dirname(path), { recursive: true })
-    await copyFile(this.#layout.path, path)
+      // Written over as it was copied, it is not what was read.
+      await check()
+      await rename(draft, path)
+    } finally {
+      await rm(draft, { force: true })
+      await source.close()
+    }
   }
 
   /** Where `from`'s `select`ed field is among those the file holds; -1 where it holds none. */

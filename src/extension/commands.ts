@@ -11,11 +11,17 @@ import {
   type FieldRef,
   NUMERIC,
 } from '../shared/bindings.js'
-import { COLUMNS, display, leaf, rowsOf, tableFields } from '../shared/cells.js'
+import { display, leaf, rowsOf, shownColumns, shownType, tableFields } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
-import { detail } from '../shared/errors.js'
 import { type Command, settingsOf, viewId, viewOf } from '../shared/ids.js'
-import type { Element, Plot, Summary, Value, ViewAction } from '../shared/messages.js'
+import {
+  type Element,
+  type Plot,
+  revisionOf,
+  type Summary,
+  type Value,
+  type ViewAction,
+} from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
 import {
   elementType,
@@ -32,7 +38,6 @@ import { noCase, SHOW_PROBLEMS } from './report.js'
 import type { Session } from './session.js'
 import type { Sessions } from './sessions.js'
 import { choicesOf, choose } from './settings.js'
-import { showView } from './views.js'
 
 /** How long typing in a search rests before it searches. */
 const TYPING_MS = 90
@@ -58,7 +63,7 @@ function localPath(uri: vscode.Uri): string {
   return uri.fsPath
 }
 /** `low, high` as a range: two finite numbers, low first, apart by a comma, spaces, or both. */
-function rangeOf(text: string): [number, number] | undefined {
+function boundsOf(text: string): [number, number] | undefined {
   const parts = text.trim().split(/\s*,\s*|\s+/)
   if (parts.length !== 2 || parts.includes('')) return undefined
   const [low, high] = parts.map(Number) as [number, number]
@@ -72,9 +77,9 @@ async function askRange(title: string, value?: string, empty?: string) {
     prompt: empty ? `Low and high values; empty ${empty}` : 'Low and high values',
     value,
     validateInput: (input) =>
-      (empty && !input.trim()) || rangeOf(input) ? null : 'Two numbers, low then high',
+      (empty && !input.trim()) || boundsOf(input) ? null : 'Two numbers, low then high',
   })
-  return text === undefined ? undefined : (rangeOf(text) ?? null)
+  return text === undefined ? undefined : (boundsOf(text) ?? null)
 }
 
 export function registerCommands(studio: Sessions) {
@@ -159,12 +164,12 @@ export function registerCommands(studio: Sessions) {
   /** Follows the case, and shows its `view`, selecting `element` there. */
   const focus = async (
     session: Session,
-    view: Parameters<typeof showView>[0],
+    view: Parameters<Sessions['showView']>[0],
     element?: Element,
   ) => {
     studio.activate(session.uri)
     if (element) session.select(element)
-    await showView(view)
+    await studio.showView(view)
   }
   /** Shows `plot` in the Monitor of the session's case, with `element` selected. Recording is a
    *  separate choice, made in Monitored Signals. */
@@ -176,7 +181,7 @@ export function registerCommands(studio: Sessions) {
     rowsOf(
       (await studio.client.cases.call(
         'query',
-        { uri: context.session.uri, version: context.summary.version, query },
+        { ...revisionOf(context.summary), query },
         signal,
       )) as Block.Rows[],
     )
@@ -282,7 +287,7 @@ export function registerCommands(studio: Sessions) {
             id: row.id!,
           }))
       } catch (error) {
-        if (!controller.signal.aborted) studio.reporter.output.warn(detail(error))
+        if (!controller.signal.aborted) studio.reporter.report(error)
       } finally {
         if (current === generation) picker.busy = false
       }
@@ -466,8 +471,9 @@ export function registerCommands(studio: Sessions) {
   })
   onSession('toggleTimeline', ({ transport }) => transport.playPause())
   // To the head while frames arrive, else to the run's last sample.
-  onSession('followTime', ({ transport }) => {
-    if (transport.live) transport.goLive()
+  onSession('followTime', (session) => {
+    const { transport } = session
+    if (session.live) transport.goLive()
     else transport.seek(transport.state.span[1])
   })
   onSession('seekTime', async ({ transport }, value) => {
@@ -508,7 +514,10 @@ export function registerCommands(studio: Sessions) {
     if (rate) transport.setRate(Number(rate))
   })
   command('orbit', (context) => action(context, 'orbit', undefined, 'network'))
-  command('retryMonitor', (context) => action(context, 'retryMonitor', undefined, 'monitor'))
+  command('retryMonitor', (context) => {
+    context.session.retry()
+    action(context, 'retryMonitor', undefined, 'monitor')
+  })
   /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
    *  bar, the one in front. */
   const canvasOf = (context: Context): Target['origin'] | undefined => {
@@ -552,15 +561,23 @@ export function registerCommands(studio: Sessions) {
     )
     if (selected) context.session.select(selected.element)
   })
+  /** The type the Case panel shows, which its column commands change. */
+  const shownOf = (context: Context) => {
+    const type = shownType(context.summary, context.session.table)
+    if (!type || !context.summary.schema.types[type])
+      throw new Error('This case has no elements to show.')
+    return type
+  }
+  // What the Case panel shows is the session's, which every command here changes, the panel shown
+  // or not.
   command('chooseColumns', async (context) => {
     const { schema } = context.summary
     const { table } = context.session
-    const type = table.type ?? context.type ?? Object.keys(context.summary.counts)[0]
-    const definitions = type ? schema.types[type]?.fields : undefined
-    if (!type || !definitions) throw new Error('This case has no elements to show.')
-    const fields = tableFields(context.summary, type)
+    const type = shownOf(context)
+    const definitions = schema.types[type]!.fields
+    const shown = shownColumns(context.summary, table, type)
     const selected = await vscode.window.showQuickPick(
-      fields.map((field) => ({
+      tableFields(context.summary, type).map((field) => ({
         label: leaf(field),
         description: [
           field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
@@ -569,44 +586,55 @@ export function registerCommands(studio: Sessions) {
           .filter(Boolean)
           .join(' · '),
         field,
-        picked: (table.columns?.[type] ?? fields.slice(0, COLUMNS)).includes(field),
+        picked: shown.includes(field),
       })),
       { title: typeName(schema, type) + ' columns', canPickMany: true },
     )
-    if (selected) {
-      const columns = selected.map((item) => item.field)
-      context.session.setTable({ ...table, columns: { ...table.columns, [type]: columns } })
-      action(context, 'columns', columns, 'case')
-    }
+    if (selected)
+      context.session.setTable({
+        columns: { ...table.columns, [type]: selected.map((item) => item.field) },
+      })
   })
   command('resetColumns', (context) => {
     const { table } = context.session
-    if (table.columns)
+    const type = shownOf(context)
+    if (table.columns?.[type])
       context.session.setTable({
-        ...table,
         columns: Object.fromEntries(
-          Object.entries(table.columns).filter(([type]) => type !== table.type),
+          Object.entries(table.columns).filter(([each]) => each !== type),
         ),
       })
-    action(context, 'resetColumns', undefined, 'case')
   })
   // The Case panel's own view of its rows: its order, a value it is filtered to, its columns.
   for (const [id, direction] of [
     ['sortAscending', 'ascending'],
     ['sortDescending', 'descending'],
   ] as const)
-    command(id, (context) => action(context, 'sort', { field: context.field, direction }, 'case'))
-  command('clearSort', (context) => action(context, 'sort', undefined, 'case'))
-  command('hideColumn', (context) => action(context, 'hideColumn', context.field, 'case'))
+    command(id, (context) => {
+      if (context.field) context.session.setTable({ order: { field: context.field, direction } })
+    })
+  command('clearSort', (context) => context.session.setTable({ order: undefined }))
+  command('hideColumn', (context) => {
+    const type = shownOf(context)
+    const { table } = context.session
+    context.session.setTable({
+      columns: {
+        ...table.columns,
+        [type]: shownColumns(context.summary, table, type).filter((each) => each !== context.field),
+      },
+    })
+  })
   command('filterValue', async (context) => {
     const { element, type, field } = context
     if (!element || !type || !field) return
     const value = await valueOf(context, type, field, element.id)
     if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean')
       throw new Error(leaf(field) + ' holds no single value to filter by.')
-    action(context, 'filter', { field, value }, 'case')
+    context.session.setTable({ type, equal: { field, value } })
   })
-  command('clearFilter', (context) => action(context, 'clearFilters', undefined, 'case'))
+  command('clearFilter', (context) =>
+    context.session.setTable({ filter: undefined, equal: undefined }),
+  )
   command('copyFieldPath', (context) => vscode.env.clipboard.writeText(context.field ?? ''))
   // The Case panel's type and name filter, from its title bar: VS Code's own pickers in place of
   // controls inside the panel.
@@ -626,10 +654,11 @@ export function registerCommands(studio: Sessions) {
     picker.title = 'Show in Case'
     picker.placeholder = 'Element type'
     picker.items = items
-    picker.activeItems = items.filter((item) => item.type === context.session.table.type)
+    const shown = shownType(context.summary, context.session.table)
+    picker.activeItems = items.filter((item) => item.type === shown)
     picker.onDidAccept(() => {
       const type = picker.selectedItems[0]?.type
-      if (type) action(context, 'type', type, 'case')
+      if (type) context.session.setTable({ type })
       picker.hide()
     })
     picker.onDidHide(() => picker.dispose())
@@ -637,20 +666,20 @@ export function registerCommands(studio: Sessions) {
   })
   // Live, as a filter box is: each keystroke filters, and Escape puts the old text back.
   command('filterRows', (context) => {
-    const { table } = context.session
-    const before = table.filter ?? ''
+    const { session } = context
+    const before = session.table.filter
     let kept = false
     const input = vscode.window.createInputBox()
-    input.title = 'Filter ' + typeName(context.summary.schema, table.type ?? '')
+    input.title = 'Filter ' + typeName(context.summary.schema, shownOf(context))
     input.prompt = 'Rows whose name contains'
-    input.value = before
-    input.onDidChangeValue((text) => action(context, 'filterText', text, 'case'))
+    input.value = before ?? ''
+    input.onDidChangeValue((filter) => session.setTable({ filter }))
     input.onDidAccept(() => {
       kept = true
       input.hide()
     })
     input.onDidHide(() => {
-      if (!kept) action(context, 'filterText', before, 'case')
+      if (!kept) session.setTable({ filter: before })
       input.dispose()
     })
     input.show()

@@ -1,14 +1,15 @@
 import * as vscode from 'vscode'
 
 import { defect, failedWith, superseded } from '../shared/errors.js'
-import type {
-  Element,
-  Mutation,
-  SourceDelta,
-  SourceEdit,
-  SourceRange,
-  Summary,
-  Value,
+import {
+  type Element,
+  type Mutation,
+  revisionOf,
+  type SourceDelta,
+  type SourceEdit,
+  type SourceRange,
+  type Summary,
+  type Value,
 } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
 import { type Client, CRASHES } from './client.js'
@@ -29,9 +30,23 @@ const lengthOf = (document: vscode.TextDocument) =>
 
 /** `document`'s whole text, which must be its text at `version`: one sent under another version
  *  would be read as that version's. */
-function wholeAt(document: vscode.TextDocument, version: number): SourceDelta {
+export function wholeAt(document: vscode.TextDocument, version: number): { text: string } {
   if (document.version !== version) throw superseded()
   return { text: document.getText() }
+}
+
+/** What `read` makes of `document`, read again for as long as a newer version of it takes the
+ *  place of the one read meanwhile. */
+export async function current<T>(
+  document: vscode.TextDocument,
+  read: () => Promise<T>,
+): Promise<T> {
+  for (;;)
+    try {
+      return await read()
+    } catch (error) {
+      if (!failedWith(error, 'superseded') || document.isClosed) throw error
+    }
 }
 
 /** Whether `error` says what is wrong with a case's source, rather than why Studio could not read
@@ -128,13 +143,8 @@ export class Documents implements vscode.Disposable {
 
   /** The case `document` reads as now, through every read a newer one replaces while it is read;
    *  why it does not read, thrown. */
-  async read(document: vscode.TextDocument): Promise<Summary> {
-    for (;;)
-      try {
-        return await this.ensure(document)
-      } catch (error) {
-        if (!failedWith(error, 'superseded') || document.isClosed) throw error
-      }
+  read(document: vscode.TextDocument): Promise<Summary> {
+    return current(document, () => this.ensure(document))
   }
 
   /** The case `document` reads as now, or undefined when it does not: Problems, or the
@@ -301,7 +311,7 @@ export class Documents implements vscode.Disposable {
     if (entry.validation) return entry.validation
     const signal = entry.controller!.signal
     const pending = this.client.cases
-      .call('validate', { uri, version: summary.version, attachmentId: entry.attachmentId }, signal)
+      .call('validate', revisionOf(summary), signal)
       .then((issues) => {
         signal.throwIfAborted()
         if (this.#entries.get(uri) !== entry || document.version !== summary.version)

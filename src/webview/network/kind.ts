@@ -114,13 +114,21 @@ export function network(host: Host): Kind {
     const rows = host.rows()
     if (rows) data = samples.data(rows.data)
     const available = covered(t)
-    const status = unavailable ? 'unavailable' : available ? 'ready' : 'buffering'
+    // Samples that could not be read were said once, in a notification: the view stops saying it
+    // loads them, and says nothing more.
+    const status = unavailable
+      ? 'unavailable'
+      : available
+        ? 'ready'
+        : samples.stuck
+          ? 'stuck'
+          : 'buffering'
     if (element.dataset.availability !== status) {
       element.setAttribute('aria-busy', String(status === 'buffering'))
       element.dataset.availability = status
       clearTimeout(buffering)
       availability.hidden = true
-      if (status !== 'ready')
+      if (status === 'buffering' || status === 'unavailable')
         buffering = setTimeout(() => {
           availability.textContent =
             status === 'buffering' ? 'Loading samples…' : 'No recorded sample at this time.'

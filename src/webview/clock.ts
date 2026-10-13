@@ -25,8 +25,11 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
   /** `performance.now()` when `state` arrived. */
   let since = 0
   let frame = 0
-  /** This view's latest action; the extension's answers carry it back. */
+  /** This view's latest action in the showing it counts them in, which the extension counts alike
+   *  from naught as the view shows anew; its answers carry it back. */
   let seq = 0
+  let counted = bridge.of.showing
+  /** The seek to send at the next frame, of the showing it was made in. */
   let sending = 0
   let failed = false
   const draw = (t: number) => {
@@ -52,8 +55,14 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     if (next.status === 'playing' && !frame) frame = requestAnimationFrame(tick)
   }
   const off = bridge.on((message) => {
-    // Skip answers to actions this view has since superseded.
-    if (message.kind !== 'clock' || message.seq < seq) return
+    if (message.kind === 'shown') return
+    // A showing begins with its state, and counts its changes to the clock from naught.
+    if (message.kind === 'state' && message.of.showing !== counted) {
+      counted = message.of.showing
+      seq = 0
+    }
+    // Skip a clock of another showing, and answers to actions this view has since superseded.
+    if (message.kind !== 'clock' || message.of.showing !== counted || message.seq < seq) return
     live = message.live
     set(message.clock)
     changed()
@@ -70,10 +79,12 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
       if (state.status === 'idle') return
       set({ ...state, t })
       seq++
-      // One message per frame, carrying wherever the playhead has reached.
+      // One message per frame, carrying wherever the playhead has reached, of the showing the seek
+      // was made in: a showing past drops it.
+      const from = bridge.of
       sending ||= requestAnimationFrame(() => {
         sending = 0
-        bridge.send({ kind: 'transport', seq, action: 'seek', value: state.t })
+        bridge.send({ kind: 'transport', seq, action: 'seek', value: state.t }, from)
       })
     },
     act(action) {

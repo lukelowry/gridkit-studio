@@ -4,7 +4,7 @@
 import * as vscode from 'vscode'
 
 import { CASE_FILE, CASE_GLOB } from '../shared/ids.js'
-import type { CaseSymbol } from '../shared/messages.js'
+import { type CaseSymbol, revisionOf } from '../shared/messages.js'
 import { withUnit } from '../shared/schema.js'
 import { cancellable } from './client.js'
 import { rangeOf } from './documents.js'
@@ -28,9 +28,7 @@ export function registerNavigation(studio: Sessions) {
       studio.client.cases.call(
         'context',
         {
-          uri: document.uri.toString(),
-          version: summary.version,
-          attachmentId: summary.attachmentId,
+          ...revisionOf(summary),
           offset: document.offsetAt(position),
         },
         signal,
@@ -80,9 +78,7 @@ export function registerNavigation(studio: Sessions) {
           studio.client.cases.call(
             'locate',
             {
-              uri: document.uri.toString(),
-              version: context.summary.version,
-              attachmentId: context.summary.attachmentId,
+              ...revisionOf(context.summary),
               id,
             },
             signal,
@@ -103,9 +99,7 @@ export function registerNavigation(studio: Sessions) {
           studio.client.cases.call(
             'symbols',
             {
-              uri: document.uri.toString(),
-              version: summary.version,
-              attachmentId: summary.attachmentId,
+              ...revisionOf(summary),
               limit,
             },
             signal,
@@ -136,7 +130,8 @@ export function registerNavigation(studio: Sessions) {
         .then((context) => {
           if (context?.element) studio.get(uri)?.select(context.element)
         })
-        .catch(() => {})
+        // A revision a newer one replaced says nothing; anything else is said once, as any is.
+        .catch((error) => studio.reporter.report(error))
     }),
   ]
 }

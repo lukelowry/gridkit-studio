@@ -1,11 +1,11 @@
 /** One run of GridKit's DynamicSimulation on a solver file, in its folder, as a shell runs it, read
  *  while it writes its output. */
 
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fileKey, type ResultCache, ResultsFile, type Stores } from '../results/index.js'
+import { fileKey, type ResultCache, ResultsFile, stampAt, type Stores } from '../results/index.js'
 import type { RunRequest } from '../shared/simulation.js'
 import type { Case } from './case.js'
 import { type Launch, launch, placed, PROGRAM } from './runtime.js'
@@ -22,8 +22,8 @@ export interface RunContext extends Launch {
 const writers = new Map<string, Promise<void>>()
 
 /** Waits for every run before this one that writes `path` to end, unless `signal` lets go first:
- *  a run removes the file it writes as it starts, which another may still write. Returns what ends
- *  this run's turn, which the next waits for. */
+ *  two runs writing one file at once would each write over the other. Returns what ends this run's
+ *  turn, which the next waits for. */
 export async function turn(path: string, signal: AbortSignal): Promise<() => void> {
   const key = fileKey(path)
   const before = writers.get(key)
@@ -74,11 +74,11 @@ export async function simulate(
   const runtime = await placed(gridkit, place, context.signal)
   const end = await turn(output, context.signal)
   try {
-    // Studio reads what GridKit writes, so the file it is about to write over goes first: GridKit
-    // would write over it anyway, and nothing the last run left can pass for this run's.
-    await rm(output, { force: true })
     // GridKit opens its output without making the folder it names.
     await mkdir(dirname(output), { recursive: true })
+    // The file the last run left stays until GridKit writes over it, as a shell's run leaves it: a
+    // run that never starts leaves it whole, and nothing of it is read as this run's.
+    const last = await stampAt(output)
     const file = new ResultsFile(kase, cache, await stores.create(output), {
       revision: request,
       path: output,
@@ -89,7 +89,7 @@ export async function simulate(
     const process = launch(runtime, place, context)
     try {
       await file.use(context.signal, (signal) =>
-        file.ingest(signal, process.writer, context.progress),
+        file.ingest(signal, process.writer, context.progress, last),
       )
       await process.done
       if (!file.progress.frames)

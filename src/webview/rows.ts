@@ -6,8 +6,15 @@ import type { Layout } from '@latkit/gpu'
 import { createData, type Data, type Query, type Schema, staticFields } from '@latkit/model'
 
 import type { Bindings } from '../shared/bindings.js'
-import { quiet } from '../shared/errors.js'
-import type { Plot, Revision, Summary, ViewState } from '../shared/messages.js'
+import { failedWith, quiet } from '../shared/errors.js'
+import {
+  type Plot,
+  type Revision,
+  revisionOf,
+  type Source,
+  type Summary,
+  type ViewState,
+} from '../shared/messages.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import type { Asker } from './asker.js'
 
@@ -26,17 +33,23 @@ export function staticNeeds(
     : undefined
   return staticFields(schema)
     .filter((field) => !types || types.has(field.from))
-    .map((field) => ({
-      ...field,
-      select: field.select.filter(
-        (name) =>
-          bound.some((binding) => binding.type === field.from && binding.field === name) ||
-          name === nameFieldOf(schema, field.from) ||
-          [positionOf(schema, field.from)?.x, positionOf(schema, field.from)?.y].includes(name) ||
-          drawn.edges.some((edge) => edge.type === field.from && edge.bends === name) ||
-          isReference(schema.types[field.from]!.fields[name]),
-      ),
-    }))
+    .map((field) => {
+      const type = field.from
+      const position = positionOf(schema, type)
+      // What a type is drawn by, worked out once for all its fields.
+      const drawnBy = new Set([
+        nameFieldOf(schema, type),
+        position?.x,
+        position?.y,
+        ...drawn.edges.filter((edge) => edge.type === type).map((edge) => edge.bends),
+        ...bound.filter((binding) => binding.type === type).map((binding) => binding.field),
+      ])
+      const definitions = schema.types[type]!.fields
+      return {
+        ...field,
+        select: field.select.filter((name) => drawnBy.has(name) || isReference(definitions[name])),
+      }
+    })
     .filter((field) => field.select.length > 0)
 }
 
@@ -71,12 +84,6 @@ export interface Snapshot {
 }
 
 const nameOf = (type: string, field: string) => type + '.' + field
-/** The revision a summary describes, as a request names it. */
-export const revisionOf = ({ uri, version, attachmentId }: Revision): Revision => ({
-  uri,
-  version,
-  ...(attachmentId !== undefined && { attachmentId }),
-})
 
 /** Each schema by its text: a revision carries a copy, and the renderers keep their cached work only
  *  for the same schema object. */
@@ -112,13 +119,10 @@ function ask(
   presentation: boolean,
   signal: AbortSignal,
 ) {
-  const revision = revisionOf(summary)
+  const source: Source = results ? { results } : { revision: revisionOf(summary) }
   return Promise.all([
-    fields &&
-      asker.request('rows', results ? { results, fields } : { ...revision, fields }, signal),
-    presentation
-      ? asker.request('presentation', results ? { results } : revision, signal)
-      : undefined,
+    fields && asker.request('rows', { ...source, fields }, signal),
+    presentation ? asker.request('presentation', source, signal) : undefined,
   ])
 }
 
@@ -192,7 +196,9 @@ export class Rows {
       }))
       .filter(({ select }) => select.length > 0)
     const placed = !presentation || this.#positions !== undefined
-    const spent = key + '\n' + JSON.stringify(lacking) + placed
+    // An ask that failed of results let go of says nothing of other results read against the same
+    // case, which are asked of anew.
+    const spent = [key, of.results ?? '', JSON.stringify(lacking), placed].join('\n')
     if ((!lacking.length && placed && this.#snapshot && this.#current()) || this.#spent.has(spent))
       return
     void this.#ask(key, of, lacking, !placed, spent)
@@ -218,6 +224,7 @@ export class Rows {
     spent: string,
   ) {
     const controller = (this.#flight = new AbortController())
+    let superseded = false
     const revision = revisionOf(of.summary)
     try {
       const [batches = [], positions = this.#positions] = await ask(
@@ -242,13 +249,15 @@ export class Rows {
       this.changed()
     } catch (error) {
       if (controller.signal.aborted) return
-      this.#spent.add(spent)
-      // A revision read again since it was asked for is no failure: the newer one is asked for.
+      // A revision read again since it was asked for, or a showing the view gave way to, is no
+      // failure: what the view wants next, as its new state comes, is asked for.
+      superseded = failedWith(error, 'superseded')
+      if (!superseded) this.#spent.add(spent)
       if (!quiet(error)) this.asker.report(error)
     } finally {
       if (this.#flight === controller) this.#flight = undefined
       // What the view came to want meanwhile.
-      if (this.#wanted && !controller.signal.aborted)
+      if (this.#wanted && !controller.signal.aborted && !superseded)
         this.want(this.#wanted.of, this.#wanted.fields, this.#wanted.presentation)
     }
   }

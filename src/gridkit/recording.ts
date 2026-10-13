@@ -3,9 +3,9 @@
 
 import type { SourceEdit, Summary } from '../shared/messages.js'
 import type { Sink } from '../shared/study.js'
-import type { Case, Table } from './case.js'
-import { STEP_RECORDS } from './columns.js'
+import type { Case, Part, Table } from './case.js'
 import { textOffsets } from './edits.js'
+import { NONE, type Parsed } from './parse.js'
 import { Turns } from './turns.js'
 
 const decoder = new TextDecoder()
@@ -26,35 +26,65 @@ function listed(kase: Case, table: Table, row: number): string[] {
   return Array.isArray(list) ? list.filter((name): name is string => typeof name === 'string') : []
 }
 
+/** How many records of each table, by its code, list each output, by the name the file writes it
+ *  under, in each range read: a list that names an output twice counts once. Counted once for each
+ *  range, which a revision keeps where an edit leaves it alone. */
+const counted = new WeakMap<Parsed, Map<number, Map<string, number>>>()
+
+function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, number>> {
+  let counts = counted.get(parsed)
+  if (counts) return counts
+  counts = new Map()
+  const { codes, mons } = parsed
+  for (let record = 0; record < codes.length; record++) {
+    const from = mons[2 * record]!
+    const code = codes[record]!
+    if (from === 0 || code === NONE) continue
+    const list = JSON.parse(
+      decoder.decode(kase.file.subarray(from + shift, mons[2 * record + 1]! + shift)),
+    ) as unknown
+    if (!Array.isArray(list)) continue
+    let named = counts.get(code)
+    if (!named) counts.set(code, (named = new Map()))
+    for (const name of new Set(list))
+      if (typeof name === 'string') named.set(name, (named.get(name) ?? 0) + 1)
+  }
+  counted.set(parsed, counts)
+  return counts
+}
+
 /** What the case records: how many of each type's elements list each output, and the monitor
- *  GridKit writes to, its last CSV one as GridKit takes it. Read a slice at a time, until `signal`
+ *  GridKit writes to, its last CSV one as GridKit takes it. Read a range at a time, until `signal`
  *  lets go. */
 export async function recordingOf(
   kase: Case,
   signal = AbortSignal.any([]),
 ): Promise<Summary['recording']> {
   const work = new Turns(signal)
-  const listedCounts: Record<string, Record<string, number>> = {}
+  /** By table, how many of its records list each name. */
+  const named = new Map<Table, Map<string, number>>()
+  for (const part of kase.parts) {
+    await work.step()
+    for (const [code, counts] of countsOf(kase, part)) {
+      const table = kase.tables.get(kase.coding.shapes[code]!.type)
+      if (!table?.shape.outputOrder.size) continue
+      let into = named.get(table)
+      if (!into) named.set(table, (into = new Map()))
+      for (const [name, count] of counts) into.set(name, (into.get(name) ?? 0) + count)
+    }
+  }
+  // Each type in the case's order, and its outputs in its own.
+  const listed: Record<string, Record<string, number>> = {}
   for (const table of kase.tables.values()) {
-    if (!table.shape.array || !table.shape.outputOrder.size) continue
-    const fields = new Map(
-      [...table.shape.outputOrder.keys()].map((field) => [outputName(table, field), field]),
-    )
-    /** The last row each field was counted for: a list that names an output twice counts once. */
-    const counted = new Map<string, number>()
-    for (let row = 0; row < table.records.length; row++) {
-      if ((row & STEP_RECORDS) === 0) await work.step()
-      for (const name of listed(kase, table, row)) {
-        const field = fields.get(name)
-        if (field === undefined || counted.get(field) === row) continue
-        counted.set(field, row)
-        const counts = (listedCounts[table.shape.type] ??= {})
-        counts[field] = (counts[field] ?? 0) + 1
-      }
+    const counts = named.get(table)
+    if (!counts) continue
+    for (const field of table.shape.outputOrder.keys()) {
+      const count = counts.get(outputName(table, field))
+      if (count) (listed[table.shape.type] ??= {})[field] = count
     }
   }
   const monitor = monitorOf(kase)
-  return { listed: listedCounts, ...(monitor && { monitor }) }
+  return { listed, ...(monitor && { monitor }) }
 }
 
 function monitorOf(kase: Case): Sink | undefined {

@@ -4,10 +4,9 @@ import { arrange, type Diagram } from '@latkit/diagram'
 import type { Gpu, Layout } from '@latkit/gpu'
 import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
-import type { Mutation, ViewState } from '../../shared/messages.js'
+import { type Mutation, revisionOf, type ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
-import { revisionOf } from '../rows.js'
 import { layoutOf } from './options.js'
 
 /** The moves that put each block where `positions` says. */

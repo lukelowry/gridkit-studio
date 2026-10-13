@@ -15,7 +15,6 @@ import {
   isInt32,
   type ListBuilder,
   NumericBuilder,
-  STEP_RECORDS,
   type TextBuilder,
   utf8,
   type VectorBuilder,
@@ -30,7 +29,7 @@ import {
   SIGNAL_CODE,
   unknownShape,
 } from './definition.js'
-import { Turns } from './turns.js'
+import { STEP_RECORDS, Turns } from './turns.js'
 
 const QUOTE = 0x22
 const BACKSLASH = 0x5c
@@ -95,7 +94,7 @@ export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Pro
     const value = skipSpace(bytes, i + 1)
     let end: number
     if ((ARRAYS as readonly string[]).includes(name) && bytes[value] === OPEN_ARRAY) {
-      const records = await recordsOf(bytes, value, work)
+      const records = { open: value, ...(await recordsFrom(bytes, value + 1, work)) }
       arrays[name as ArrayName] = records
       end = records.close + 1
     } else end = checkValue(bytes, value)
@@ -108,13 +107,11 @@ export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Pro
   return { members, close: i, arrays }
 }
 
-async function recordsOf(bytes: Uint8Array, open: number, work: Turns): Promise<Records> {
-  return { open, ...(await recordsFrom(bytes, open + 1, work)) }
-}
-
 /** The records of an array of `bytes` from `from`, a record's start or just past the array's
  *  opening bracket, each checked as JSON whole, and where they end: just past the record that ends
- *  at `to`, when given, else at the array's closing bracket. */
+ *  at `to`, when given, else at the array's closing bracket. Read up to `to`, records that end
+ *  elsewhere, or an array that closes first, say only that a whole read would read them otherwise:
+ *  `bounded` so. */
 async function recordsFrom(
   bytes: Uint8Array,
   from: number,
@@ -142,13 +139,22 @@ async function recordsFrom(
     starts[count] = i
     ends[count++] = end
     if (end === to) return done(-1)
-    if (to !== undefined && end > to) malformed(i, 'a record that ends where one ended')
+    if (to !== undefined && end > to) bounded(i, 'a record that ends where one ended')
     i = skipSpace(bytes, end)
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
     else if (to === undefined && bytes[i] === CLOSE_ARRAY) return done(i)
+    else if (bytes[i] === CLOSE_ARRAY) bounded(i, 'a record where the array ends')
     else malformed(i, 'a comma or the end of the array')
   }
 }
+
+/** Why a read up to a record's end stopped short of it, where a whole read may read on. */
+const bounded = (at: number, what: string): never => malformed(at, what, { bounded: true })
+
+/** Whether `error` is a read up to a record's end stopping short of it, which says nothing of the
+ *  file as a whole read reads it. */
+export const isBounded = (error: unknown): boolean =>
+  (error as { bounded?: unknown } | null)?.bounded === true
 
 /** The records of an array of `bytes` from `from` up to `to`, checked as `scan` checks them, each a
  *  start and an end: `from` is a record's start or just past the array's opening bracket, and `to`
@@ -162,7 +168,7 @@ export async function recordsBetween(
 ): Promise<{ starts: Uint32Array; ends: Uint32Array }> {
   const work = new Turns(signal)
   const read = await recordsFrom(bytes, from, work, closing ? undefined : to)
-  if (closing && read.close !== to) malformed(read.close, 'the end of the array where it was')
+  if (closing && read.close !== to) bounded(read.close, 'the end of the array where it was')
   return read
 }
 
@@ -414,20 +420,25 @@ export class Members {
   }
 }
 
-/** A key's text; escapes, which GridKit's keys never use, decoded the slow way. */
-function keyOf(bytes: Uint8Array, start: number, end: number): string {
-  const raw = Buffer.from(bytes.buffer, bytes.byteOffset + start, end - start).toString('utf8')
-  return raw.includes('\\') ? (JSON.parse(raw) as string) : raw.slice(1, -1)
+/** A key's text, its quotes `start` and `end - 1`; escapes, which GridKit's keys never use, decoded
+ *  the slow way. */
+const keyOf = (bytes: Uint8Array, start: number, end: number): string =>
+  jsonText(bytes, start + 1, end - 1)
+
+/** The text of a JSON string whose text inside its quotes is `[start, end)`, escapes decoded. */
+export function jsonText(bytes: Uint8Array, start: number, end: number): string {
+  const raw = utf8(bytes, start, end)
+  return raw.includes('\\') ? (JSON.parse('"' + raw + '"') as string) : raw
 }
 
 function expect(bytes: Uint8Array, i: number, code: number, what: string): void {
   if (bytes[i] !== code) malformed(i, what)
 }
 
-function malformed(at: number, what: string): never {
+function malformed(at: number, what: string, more: object = {}): never {
   throw Object.assign(
     failure('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`),
-    { byte: at },
+    { byte: at, ...more },
   )
 }
 
@@ -446,7 +457,9 @@ export interface Range {
 
 export interface IndexedChunk {
   read(): Chunk
-  supplied(row: number): boolean
+  /** The rows, ascending, that write a value, not null, the column does not read as its type:
+   *  found as it decodes, so a range a revision keeps is never checked again. */
+  wrong(): Uint32Array
 }
 
 interface ParsedTable {
@@ -481,7 +494,8 @@ export interface Parsed {
 export const NONE = 0xffff
 
 const POW10 = Array.from({ length: 23 }, (_, i) => 10 ** i)
-const PROBLEMS = 50
+/** How many problems a read of a case says, at most: the first in the file. */
+export const PROBLEMS = 100
 
 /** A fixed set of keys, matched against key bytes with no string made. */
 class Keys {
@@ -500,8 +514,18 @@ class Keys {
     })
   }
 
-  /** The key's index, or -1. */
+  /** The index of the key whose text inside its quotes is `[start, end)`, or -1. A key written with
+   *  escapes is the key they spell, as the check for repeated keys reads it. */
   find(bytes: Uint8Array, start: number, end: number): number {
+    for (let i = start; i < end; i++)
+      if (bytes[i] === BACKSLASH) {
+        const spelled = UTF8.encode(jsonText(bytes, start, end))
+        return this.#find(spelled, 0, spelled.length)
+      }
+    return this.#find(bytes, start, end)
+  }
+
+  #find(bytes: Uint8Array, start: number, end: number): number {
     const mask = this.#slots.length - 1
     for (
       let slot = hash(bytes, start, end) & mask;
@@ -542,8 +566,9 @@ export interface Source {
 }
 
 /** A column of the rows whose values `spans` place in `source`, each a start and an end, -1 where
- *  a row has none: decoded on its first read, when it lets go of its spans and its source. A
- *  port's value is the number of the row it names. */
+ *  a row has none: decoded on its first read, when it lets go of its spans and its source, and
+ *  finds the rows that write what it cannot read. A port's value is the number of the row it
+ *  names. */
 function lazyColumn(
   source: Source,
   spans: Int32Array,
@@ -558,25 +583,25 @@ function lazyColumn(
     const { bytes, shift } = source
     const rows = own.length / 2
     const target = builder(type)
-    const supplied = new Uint8Array(Math.ceil(rows / 8))
+    const wrong: number[] = []
     for (let row = 0; row < rows; row++) {
       const at = own[2 * row]!
       const value = at < 0 ? at : at + shift
       const end = own[2 * row + 1]! + shift
-      if (value >= 0 && bytes[value] !== 0x6e) supplied[row >>> 3]! |= 1 << (row & 7)
+      let read: boolean
       if (port) {
         const number = value < 0 ? NaN : parseNumber(bytes, value, end)
-        if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
-          (target as NumericBuilder).pushNumber(number)
-        else target.push(null)
-      } else if (value < 0 || !into(bytes, target, type, value, end)) target.push(null)
+        read = Number.isInteger(number) && number >= 0 && number <= 0xffffffff
+        if (read) (target as NumericBuilder).pushNumber(number)
+      } else read = value >= 0 && into(bytes, target, type, value, end)
+      if (read) continue
+      target.push(null)
+      // A value written, `null` aside, that does not read as the column's type.
+      if (value >= 0 && bytes[value] !== 0x6e) wrong.push(row)
     }
-    return { chunk: target.finish(), supplied }
+    return { chunk: target.finish(), wrong: Uint32Array.from(wrong) }
   })
-  return {
-    read: () => decode().chunk,
-    supplied: (row) => (decode().supplied[row >>> 3]! & (1 << (row & 7))) !== 0,
-  }
+  return { read: () => decode().chunk, wrong: () => decode().wrong }
 }
 
 /** One table's identities and value spans, cut into chunks of at most CHUNK_ROWS rows. */
@@ -788,7 +813,7 @@ export class Parser {
         this.#monEnd = end
       } else if (key !== undefined && bytes[value] === OPEN_OBJECT)
         this.#object(rows, key, value, code, record)
-      else this.#find(code, record, [utf8(bytes, keyStart, keyEnd)], value, end)
+      else this.#find(code, record, [jsonText(bytes, keyStart, keyEnd)], value, end)
     }
     this.#commit(rows, record)
     return code
@@ -805,7 +830,7 @@ export class Parser {
       if (bytes[value] !== QUOTE) break
       const code = this.#classes.find(bytes, value + 1, end - 1)
       if (code >= DEVICE_CODES) return code
-      const name = utf8(bytes, value + 1, end - 1)
+      const name = jsonText(bytes, value + 1, end - 1)
       // A bus, a signal and the case are types of their own, never a device's class.
       if (code >= 0 || name === CASE) {
         this.#problem(record, `${name} is not a device class.`)
@@ -847,7 +872,7 @@ export class Parser {
         }
       }
       if (known >= 0) stage(this.#fields, known, value, end)
-      else this.#find(code, record, [key, utf8(bytes, keyStart, keyEnd)], value, end)
+      else this.#find(code, record, [key, jsonText(bytes, keyStart, keyEnd)], value, end)
     }
   }
 

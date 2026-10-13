@@ -38,9 +38,20 @@ suite('Case source', () => {
     await vscode.commands.executeCommand('gridkitStudio.showSource', bench.uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
-    // Undone from the keyboard, as the user would.
-    await bench.page.locator('.monaco-editor.focused').getByRole('textbox').press('ControlOrMeta+z')
-    await until(() => document.getText() === text, 'the invalid edit undone')
+    // Undone from the keyboard, as the user would, once the editor has the keyboard. Whatever
+    // comes of it, the source is left as found, so no test after this one reads the edit.
+    try {
+      const keys = bench.page.locator('.monaco-editor.focused').getByRole('textbox')
+      await until(async () => {
+        if (await keys.count()) return true
+        await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
+        return false
+      }, 'the source has the keyboard')
+      await keys.press('ControlOrMeta+z')
+      await until(() => document.getText() === text, 'the invalid edit undone')
+    } finally {
+      if (document.getText() !== text) await bench.replace(text)
+    }
     await bench.settled()
   })
 

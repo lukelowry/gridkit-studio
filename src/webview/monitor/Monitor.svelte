@@ -41,6 +41,8 @@
    *  the slice they read now: null once they have drawn the window. */
   let streaming = $state(false)
   let slicing: Domain | null | undefined
+  /** Whether what the plots lack could not be read, which a notification said. */
+  let stuck = $state(false)
   /** Where each plot's drawing stands, by plot. */
   let wants = $state.raw<ReadonlyMap<string, Wants>>(new Map())
   /** The clock as of its last change. */
@@ -109,6 +111,7 @@
         ? { data: samples.data(rows.data), fingerprint: rows.fingerprint }
         : undefined
     sampled = samples.sampled()
+    stuck = samples.stuck
   })
   /** Hears where `plot`'s drawing stands after each frame, and that it draws no more. */
   function drew(plot: Plotted, stands: Wants | undefined) {
@@ -218,6 +221,7 @@
           {retries}
           ticks={i === plots.length - 1}
           {streaming}
+          {stuck}
           onframe={() => recovery.presented()}
           onwants={(stands) => drew(plot, stands)}
           onwindow={turn}

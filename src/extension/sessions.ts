@@ -7,7 +7,6 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import type { Target } from '../shared/contexts.js'
-import { failedWith, superseded } from '../shared/errors.js'
 import {
   type Command,
   commandId,
@@ -16,11 +15,13 @@ import {
   followed,
   savedKey,
   savedUri,
+  type View,
+  viewId,
 } from '../shared/ids.js'
 import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
 import { Client, CRASHES } from './client.js'
-import { Documents, isWritable } from './documents.js'
+import { current, Documents, isWritable, wholeAt } from './documents.js'
 import { noCase, Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
@@ -49,6 +50,8 @@ export class Sessions implements vscode.Disposable {
   /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
    *  menu offers, and what it carries to the commands there. */
   signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
+  /** The panel views VS Code has shown, by kind, which `showView` brings up. */
+  readonly panels = new Map<Extract<View, 'case' | 'monitor' | 'export'>, vscode.WebviewView>()
   readonly #all = new Map<string, Session>()
   #active?: Session
   readonly #disposables: vscode.Disposable[]
@@ -65,12 +68,16 @@ export class Sessions implements vscode.Disposable {
     const store = kept
       ? vscode.Uri.joinPath(kept, 'results').fsPath
       : join(tmpdir(), `gridkit-studio-results-${process.pid}`)
-    this.client = new Client(vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath, () => ({
-      cacheBytes: cacheBytes(),
-      store,
-      saved: savedResults(workspaceState),
-      ...(runs && { runs }),
-    }))
+    this.client = new Client(
+      vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
+      () => ({
+        cacheBytes: cacheBytes(),
+        store,
+        saved: savedResults(workspaceState),
+        ...(runs && { runs }),
+      }),
+      (error) => this.reporter.report(error),
+    )
     this.documents = new Documents(this.client, (error) => this.reporter.report(error))
     this.#disposables = [
       this.changed.event(() => this.updateContexts()),
@@ -115,19 +122,28 @@ export class Sessions implements vscode.Disposable {
         if (affects(event, undefined, 'resultCacheMiB') && this.client.results.running)
           void this.client.results
             .call('configure', { cacheBytes: cacheBytes() })
-            .catch((error) => this.reporter.error(error))
+            .catch((error) => this.reporter.report(error))
       }),
-      vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (editor && followed(editor.document.uri.toString()))
-          void this.open(editor.document).catch((error) => this.reporter.error(error))
-      }),
-      vscode.window.tabGroups.onDidChangeTabs(() => {
-        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-        if (input instanceof vscode.TabInputCustom && followed(input.uri.toString()))
-          this.activate(input.uri.toString())
-      }),
+      vscode.window.onDidChangeActiveTextEditor((editor) => this.#followText(editor)),
+      vscode.window.tabGroups.onDidChangeTabs(() => this.#followCanvas()),
     ]
     void this.prune()
+    // A case in front as Studio starts, as VS Code restores its editors, is the one the views follow.
+    this.#followText(vscode.window.activeTextEditor)
+    this.#followCanvas()
+  }
+
+  /** Follows the case `editor` holds, when it holds one on disk. */
+  #followText(editor: vscode.TextEditor | undefined): void {
+    if (editor && followed(editor.document.uri.toString()))
+      void this.open(editor.document).catch((error) => this.reporter.report(error))
+  }
+
+  /** Follows the case whose canvas is in front, when one is. */
+  #followCanvas(): void {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+    if (input instanceof vscode.TabInputCustom && followed(input.uri.toString()))
+      this.activate(input.uri.toString())
   }
 
   /** Registers the command `id`, reporting why it fails. */
@@ -139,6 +155,14 @@ export class Sessions implements vscode.Disposable {
         this.reporter.report(error)
       }
     })
+  }
+
+  /** Shows the panel `kind` without taking focus from where the user is. A panel never shown yet,
+   *  and Monitored Signals, can only be shown by focusing them. */
+  async showView(kind: Extract<View, 'case' | 'monitor' | 'export' | 'signals'>): Promise<void> {
+    const view = kind === 'signals' ? undefined : this.panels.get(kind)
+    if (view) view.show(true)
+    else await vscode.commands.executeCommand(viewId(kind) + '.focus')
   }
 
   /** The case the views follow. */
@@ -178,8 +202,11 @@ export class Sessions implements vscode.Disposable {
     this.changed.fire(session.uri)
   }
 
-  /** Makes `uri`'s case the one the views follow, letting go of the one they followed. */
+  /** Makes `uri`'s case the one the views follow, letting go of the one they followed: a case file on
+   *  disk, never a copy another extension shows. */
   activate(uri: string): Session {
+    if (!followed(uri))
+      throw new Error('GridKit Studio works on a .case.json on disk, not on a copy of one.')
     // Tabs change often, as a case's editor turns dirty: only another case is news, but for
     // results due to be read again as the views follow it.
     if (this.#active?.uri === uri) {
@@ -210,18 +237,15 @@ export class Sessions implements vscode.Disposable {
    *  with its source too only when the worker has yet to read it. A large case crosses once. Its
    *  source crosses only as the fingerprint says it reads; edited since, the case is read again. */
   async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
-    for (;;) {
-      const { document, summary } = await this.caseOf(uri)
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
+    return current(document, async () => {
+      const summary = await this.documents.read(document)
       const source = { uri, version: summary.version, fingerprint: summary.fingerprint }
-      try {
-        return await resent(call, 'needs-source', source, () => {
-          if (document.version !== summary.version) throw superseded()
-          return { ...source, text: document.getText() }
-        })
-      } catch (error) {
-        if (!failedWith(error, 'superseded') || document.isClosed) throw error
-      }
-    }
+      return resent(call, 'needs-source', source, () => ({
+        ...source,
+        ...wholeAt(document, summary.version),
+      }))
+    })
   }
 
   /** Lets go of the results `id` names in the results worker, which a worker that stopped holds no
@@ -303,7 +327,12 @@ export class Sessions implements vscode.Disposable {
       if (uri === undefined || !under(uri)) continue
       const saved = workspaceState.get(key)
       void workspaceState.update(key, undefined)
-      if (to !== undefined) void workspaceState.update(savedKey(to + uri.slice(from.length)), saved)
+      if (to === undefined) continue
+      const moved = to + uri.slice(from.length)
+      void workspaceState.update(savedKey(moved), saved)
+      // A session made under the new name as its editor showed, before the move said so, takes up
+      // what the case saved, rather than saving over it.
+      this.#all.get(moved)?.resume(saved)
     }
   }
 

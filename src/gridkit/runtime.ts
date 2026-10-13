@@ -1,7 +1,7 @@
 /** Runs GridKit's DynamicSimulation where GridKit is installed or in a container, and stops all it
  *  started. */
 
-import { type ChildProcess, execFile, spawn } from 'node:child_process'
+import { type ChildProcess, type ChildProcessByStdio, execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -18,6 +18,7 @@ import {
   sep,
 } from 'node:path'
 import { createInterface } from 'node:readline'
+import type { Readable } from 'node:stream'
 import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/errors.js'
@@ -429,13 +430,25 @@ export function launch(
         ]
   if (runtime.kind === 'container')
     log(`Running GridKit from ${runtime.image} with ${runtime.podman ? 'Podman' : 'Docker'}.`)
-  const child = spawn(command, args, {
-    cwd: folder,
-    windowsHide: true,
-    detached: process.platform !== 'win32',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, ...threads(process.env) },
-  })
+  /** Why a program that is there did not start, as a broken install's: which, and where to look,
+   *  the system's code saying why. The system says so at once, or as the process fails. */
+  const unstarted = (error: NodeJS.ErrnoException) =>
+    new Error(
+      `${basename(command)} did not start (${error.code ?? error.message}). Check GridKit Studio: ${runtime.kind === 'installed' ? 'GridKit Path' : 'Container CLI'}.`,
+      { cause: error },
+    )
+  let child: ChildProcessByStdio<null, Readable, Readable>
+  try {
+    child = spawn(command, args, {
+      cwd: folder,
+      windowsHide: true,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, ...threads(process.env) },
+    })
+  } catch (error) {
+    throw unstarted(error as NodeJS.ErrnoException)
+  }
   const owned: RuntimeProcess = {
     pid: child.pid ?? 0,
     executable: command,
@@ -469,7 +482,9 @@ export function launch(
       log(text)
     })
   const done = new Promise<void>((resolve, reject) => {
-    child.once('error', reject)
+    child.once('error', (error: NodeJS.ErrnoException) =>
+      reject(child.pid === undefined ? unstarted(error) : error),
+    )
     child.once('close', (code) => {
       writer = code === 0 && !signal.aborted ? 'done' : 'stopped'
       // A container that never ran says why last: no engine, no image, no access.

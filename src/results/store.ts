@@ -19,13 +19,16 @@ import { join, resolve } from 'node:path'
 
 import type { Domain } from '@latkit/model'
 
+import { same, type Stamp } from './stamp.js'
+
 /** What a store holds: the results file it read, as that file was, and how its frames are cut. */
 export interface Manifest {
   readonly format: typeof FORMAT
-  /** The results file, and its size and time as it was read through. */
+  /** The results file, as it stood once read through, and how many of its bytes were read: its
+   *  whole rows, which an export copies. */
   readonly path: string
-  readonly size: number
-  readonly mtimeMs: number
+  readonly stamp: Stamp
+  readonly read: number
   /** The content of the case its header was matched against. */
   readonly fingerprint: string
   /** The CSV header's names, which say what the file holds of that case. */
@@ -37,7 +40,7 @@ export interface Manifest {
 }
 
 /** The store's own format: a store written in another is read again from its CSV. */
-const FORMAT = 1
+const FORMAT = 2
 const FRAMES = 'frames.bin'
 const TIMES = 'times.bin'
 const MANIFEST = 'manifest.json'
@@ -225,7 +228,8 @@ export class Stores {
         continue
       }
       const latest = this.#latest.get(key)
-      if (latest && latest.manifest!.mtimeMs >= manifest.mtimeMs) removed.push(folder)
+      if (latest && BigInt(latest.manifest!.stamp.modified) >= BigInt(manifest.stamp.modified))
+        removed.push(folder)
       else {
         if (latest) removed.push(latest.folder)
         this.#latest.set(key, new Store(folder, key, manifest, this))
@@ -247,24 +251,22 @@ export class Stores {
     return this.#use(new Store(folder, fileKey(path), undefined, this))
   }
 
-  /** The store read through of the results file at `path` as `stat` says it is now, matched
-   *  against a case of `fingerprint`: the latest, when it read that same file. */
-  async find(
-    path: string,
-    { size, mtimeMs }: { readonly size: number; readonly mtimeMs: number },
-    fingerprint: string,
-  ): Promise<Store | undefined> {
+  /** The store read through of the results file at `path`, which `now` stamps, matched against a
+   *  case of `fingerprint`: the latest, when it read that same file as it stands now. */
+  async find(path: string, now: Stamp, fingerprint: string): Promise<Store | undefined> {
     await this.#swept
     const store = this.#latest.get(fileKey(path))
     const manifest = store?.manifest
-    if (
-      !store ||
-      manifest?.size !== size ||
-      manifest.mtimeMs !== mtimeMs ||
-      manifest.fingerprint !== fingerprint
-    )
+    if (!store || !same(manifest?.stamp, now) || manifest?.fingerprint !== fingerprint)
       return undefined
     return this.#use(store)
+  }
+
+  /** A reader of `store` found it would not read: it is let go of, and goes, so the file it holds
+   *  is read again from its CSV. */
+  async discard(store: Store): Promise<void> {
+    if (this.#latest.get(store.key) === store) this.#latest.delete(store.key)
+    await this.release(store)
   }
 
   /** `store` was read through: the latest of its results file, which the one before gives way to. */

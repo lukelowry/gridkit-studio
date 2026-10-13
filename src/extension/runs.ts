@@ -16,7 +16,6 @@ import { notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
 import type { Sessions } from './sessions.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
-import { showView } from './views.js'
 
 /** The solver file a menu was opened on, which must be on this machine. */
 function solverOf(target: unknown, doing: string): vscode.Uri {
@@ -72,11 +71,11 @@ export function registerRuns(studio: Sessions) {
         command: commandId('chooseSignals'),
       })
     const output = writtenBy(solver, study, summary)
-    // A run removes the file it writes before it starts, so that file must not be one it reads.
+    // GridKit writes over the file it writes to, so that file must not be one the run reads.
     if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
     const session = await studio.open(document)
-    await showView('monitor')
+    await studio.showView('monitor')
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -85,35 +84,30 @@ export function registerRuns(studio: Sessions) {
       },
       async (progress, token) => {
         let shown = 0
-        // The run's results are those on show while it runs.
-        const following = studio.changed.event((uri) => {
-          if (uri !== session.uri || !session.running) return
-          const { percent, message } = progressOf(session.results)
-          progress.report({ increment: percent - shown, message })
-          shown = percent
-        })
-        try {
-          // The call is the run. It settles when the run ends, and cancelling it stops the run.
-          await cancellable(token, (signal) =>
-            session.start(
-              {
-                solver: solver.fsPath,
-                output: output.fsPath,
-                tmax: study.tmax,
-                // What a container mounts: the solver file's workspace folder.
-                root: (
-                  vscode.workspace.getWorkspaceFolder(solver)?.uri ??
-                  vscode.Uri.joinPath(solver, '..')
-                ).fsPath,
-                // As the settings of the folder it mounts say.
-                gridkit: gridkitOf(solver),
-              },
-              signal,
-            ),
-          )
-        } finally {
-          following.dispose()
-        }
+        // The call is the run. It settles when the run ends, and cancelling it stops the run. It
+        // says how far it has come by what it has written, whatever the views show meanwhile.
+        await cancellable(token, (signal) =>
+          session.start(
+            {
+              solver: solver.fsPath,
+              output: output.fsPath,
+              tmax: study.tmax,
+              // What a container mounts: the solver file's workspace folder.
+              root: (
+                vscode.workspace.getWorkspaceFolder(solver)?.uri ??
+                vscode.Uri.joinPath(solver, '..')
+              ).fsPath,
+              // As the settings of the folder it mounts say.
+              gridkit: gridkitOf(solver),
+            },
+            signal,
+            (written) => {
+              const { percent, message } = progressOf(written)
+              progress.report({ increment: Math.max(0, percent - shown), message })
+              shown = Math.max(shown, percent)
+            },
+          ),
+        )
       },
     )
   }
@@ -125,7 +119,7 @@ export function registerRuns(studio: Sessions) {
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
     const session = await studio.open(document)
-    await showView('monitor')
+    await studio.showView('monitor')
     await session.load(output.fsPath, solver.fsPath)
   }
 

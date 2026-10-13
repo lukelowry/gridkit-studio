@@ -314,8 +314,7 @@ export async function run() {
       const [other] = Object.entries(counts)
         .filter(([type]) => type !== 'Bus')
         .sort((a, b) => b[1] - a[1])
-      const choose = (type: string) =>
-        bench.studio.action.fire({ uri: key, view: 'case', command: 'type', value: type })
+      const choose = (type: string) => bench.studio.get(key)!.setTable({ type })
       if (other)
         await time(`case ${size} > change type`, 2 * RUNS, {
           act: (i) => choose(i % 2 ? 'Bus' : other[0]),
@@ -324,12 +323,7 @@ export async function run() {
         })
       await time(`case ${size} > filter`, 2 * RUNS, {
         act: (i) =>
-          bench.studio.action.fire({
-            uri: key,
-            view: 'case',
-            command: 'filterText',
-            value: i % 2 ? '' : 'no name holds this',
-          }),
+          bench.studio.get(key)!.setTable({ filter: i % 2 ? undefined : 'no name holds this' }),
         done: (i) => table.locator(rows(i % 2 ? counts.Bus! : 0)).waitFor({ timeout: 60_000 }),
       })
 
@@ -351,8 +345,8 @@ export async function run() {
         (await network.evaluate<{ received?: number }>('gridkitStats()')).received ?? 0
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
-      /** What the run started here wrote, as read so far: a run's start lets go of the results on
-       *  show, so any shown since are its own. */
+      /** What the run started here wrote, as read so far: the case had no results on show, so any
+       *  shown since the run began are its own. */
       const wrote = () => (ran() ? session.results : undefined)
       const started = performance.now()
       const since = () => performance.now() - started

@@ -5,7 +5,7 @@
 import { appendData, blockByteLength, type Data, type Domain, type Query } from '@latkit/model'
 
 import { recordedWhole } from '../shared/bindings.js'
-import { quiet } from '../shared/errors.js'
+import { failedWith, quiet } from '../shared/errors.js'
 import type { Results, ViewState } from '../shared/messages.js'
 import { holdsPlot } from '../shared/plots.js'
 import type { Asker } from './asker.js'
@@ -175,7 +175,11 @@ interface Ask {
 export class Samples {
   #results?: Results
   #needs: readonly Need[] = []
+  /** What names each need, by its place among them, and all of them. */
+  #keys: readonly string[] = []
   #named = ''
+  /** The needs that last held samples, which stay the same array while they stay the same. */
+  #sampled: Query.Selection[] = []
   /** By need, then chunk. */
   readonly #held = new Map<string, Map<number, Chunk>>()
   /** The times each need's chunks span without a gap, by need. */
@@ -238,13 +242,17 @@ export class Samples {
     if (results !== this.#results) this.#idle = false
     if (results?.frames !== this.#results?.frames) this.#spent.clear()
     this.#results = results
-    const named = needs.map(({ selection }) => selectionKey(selection)).join('\t')
-    if (named !== this.#named) {
-      this.#idle = false
-      this.#named = named
+    // The same needs, as a view asks each frame, are named once.
+    if (needs !== this.#needs) {
+      const keys = needs.map(({ selection }) => selectionKey(selection))
+      const named = keys.join('\t')
       this.#needs = needs
-      const keys = new Set(needs.map(({ selection }) => selectionKey(selection)))
-      for (const key of [...this.#held.keys()]) if (!keys.has(key)) this.#drop(key)
+      this.#keys = keys
+      if (named !== this.#named) {
+        this.#idle = false
+        this.#named = named
+        for (const key of [...this.#held.keys()]) if (!keys.includes(key)) this.#drop(key)
+      }
     }
     this.#required = results && required && clip(required, results.domain)
     this.#near = near
@@ -328,17 +336,20 @@ export class Samples {
 
   /** Whether the samples held of `from`'s `field` cover all of `window`. */
   covers(from: string, field: string, window: Domain): boolean {
-    const need = this.#needs.find(
+    const n = this.#needs.findIndex(
       ({ selection }) => selection.from === from && selection.select[0] === field,
     )
-    return !!need && this.#covers(selectionKey(need.selection), window)
+    return n >= 0 && this.#covers(this.#keys[n]!, window)
+  }
+
+  /** Whether `selection`, its rows the same, is one of the needs it reads. */
+  has(selection: Query.Selection): boolean {
+    return this.#keys.includes(selectionKey(selection))
   }
 
   /** Whether every need's samples cover `window`, or there is no window to cover. */
   holds(window: Domain | undefined): boolean {
-    return (
-      !window || this.#needs.every(({ selection }) => this.#covers(selectionKey(selection), window))
-    )
+    return !window || this.#keys.every((key) => this.#covers(key, window))
   }
 
   /** Settles once every need's samples cover `window`, the one last asked for, or fails once what
@@ -369,18 +380,22 @@ export class Samples {
     return (
       !!required &&
       !this.#flight &&
-      this.#needs.some(({ selection }) => {
-        const key = selectionKey(selection)
-        return !this.#covers(key, required) && this.#spent.has(`${key}|${required}|${frames}`)
-      })
+      this.#keys.some(
+        (key) => !this.#covers(key, required) && this.#spent.has(`${key}|${required}|${frames}`),
+      )
     )
   }
 
-  /** The needs that hold samples: the fields, and their rows, the view can draw. */
+  /** The needs that hold samples: the fields, and their rows, the view can draw. The same array
+   *  while they are the same, so what a view makes of it is not made again. */
   sampled(): Query.Selection[] {
-    return this.#needs
+    const sampled = this.#needs
       .map(({ selection }) => selection)
-      .filter((selection) => !!this.#held.get(selectionKey(selection))?.size)
+      .filter((_, n) => !!this.#held.get(this.#keys[n]!)?.size)
+    const last = this.#sampled
+    if (sampled.length === last.length && sampled.every((selection, n) => selection === last[n]))
+      return last
+    return (this.#sampled = sampled)
   }
 
   /** What the view holds, for the benchmarks. */
@@ -402,6 +417,7 @@ export class Samples {
     this.#reset()
     this.#results = undefined
     this.#needs = []
+    this.#keys = []
     this.#named = ''
   }
 
@@ -422,6 +438,8 @@ export class Samples {
   }
 
   #drop(key: string) {
+    // An ask for what the view no longer draws brings nothing it keeps.
+    if (this.#flight?.ask.key === key) this.#flight.controller.abort()
     for (const chunk of this.#held.get(key)?.values() ?? []) this.#bytes -= chunk.bytes
     this.#held.delete(key)
     this.#runs.delete(key)
@@ -462,21 +480,24 @@ export class Samples {
     if (!results?.chunk || !results.frames) return undefined
     const required = this.#required
     if (required)
-      for (const need of this.#needs) {
-        const key = selectionKey(need.selection)
+      for (const [n, need] of this.#needs.entries()) {
+        const key = this.#keys[n]!
         const spent = `${key}|${required}|${results.frames}`
         if (this.#covers(key, required) || this.#spent.has(spent)) continue
         const near = this.#near ?? { at: required[0], travel: 0 }
         return { need, key, window: required, near, bytes: REPLY_BYTES, required: true, spent }
       }
     const near = this.#near
-    if (!near) return undefined
+    // A page VS Code hides reads ahead no more; what it needs to show, it still reads, as an export
+    // working while hidden does.
+    if (!near || (globalThis as { document?: { hidden?: boolean } }).document?.hidden)
+      return undefined
     // The need holding least goes first, a share of a reply at a time, so the fields a view draws
     // together reach as far around it as each other.
     const room = this.budget - this.#bytes
     const share = Math.min(REPLY_BYTES, room) / this.#needs.length
     const least = this.#needs
-      .map((need) => ({ need, key: selectionKey(need.selection) }))
+      .map((need, n) => ({ need, key: this.#keys[n]! }))
       .map((each) => ({ ...each, held: this.#heldBytes(each.key) }))
       .sort((a, b) => a.held - b.held)
     for (const { need, key } of least) {
@@ -522,9 +543,12 @@ export class Samples {
     })
   }
 
-  /** Ask for what the view lacks, one ask at a time, until it lacks nothing it can have. */
+  /** Ask for what the view lacks, one ask at a time, until it lacks nothing it can have. An ask the
+   *  view's showing gave way to meanwhile is no failure: what it asks next, as its new state comes,
+   *  asks again. */
   async #serve() {
     this.#idle = false
+    let superseded = false
     for (let ask = this.#next(); ask; ask = this.#next()) {
       const results = this.#results!
       const controller = new AbortController()
@@ -551,16 +575,20 @@ export class Samples {
         tell = true
       } catch (error) {
         if (controller.signal.aborted) continue
-        this.#spent.add(ask.spent)
-        // Results closed, as when they are cleared or replaced, are no failure.
-        if (!quiet(error)) this.asker.report(error)
-        tell = true
+        superseded = failedWith(error, 'superseded')
+        if (!superseded) {
+          this.#spent.add(ask.spent)
+          // Results closed, as when they are cleared or replaced, are no failure.
+          if (!quiet(error)) this.asker.report(error)
+          tell = true
+        }
       } finally {
         if (this.#flight?.controller === controller) this.#flight = undefined
       }
+      if (superseded) break
       if (tell) this.#tell()
     }
-    this.#idle = true
+    this.#idle = !superseded
   }
 
   /** The frames of each chunk `key` holds. */
@@ -572,7 +600,7 @@ export class Samples {
 
   /** Hold `batches`, the frames `key` lacked; whether any came. */
   #take(key: string, batches: readonly Data.SampleBatch[]): boolean {
-    if (!this.#needs.some(({ selection }) => selectionKey(selection) === key)) return false
+    if (!this.#keys.includes(key)) return false
     const size = this.#results!.chunk
     let chunks = this.#held.get(key)
     if (!chunks) this.#held.set(key, (chunks = new Map()))
@@ -584,6 +612,9 @@ export class Samples {
       const end = batch.firstFrame + count - k * size
       const bytes = blockByteLength([batch])
       const found = chunks.get(k)
+      // A chunk is held as its first frames, so frames that would leave a gap after them, as an ask
+      // made for frames since let go of brings, are not taken: the view asks for them again.
+      if (batch.firstFrame - k * size !== (found?.count ?? 0)) continue
       if (found) {
         found.pieces.push(batch)
         found.count = Math.max(found.count, end)

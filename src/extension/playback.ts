@@ -64,7 +64,7 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const { transport } = session
     const t = transport.currentT()
     const playing = state.status === 'playing'
-    const finished = !transport.live && !playing && state.loop === 'none' && t >= state.span[1]
+    const finished = !session.live && !playing && state.loop === 'none' && t >= state.span[1]
     // The times a run will cover, which its samples fill as they arrive.
     const [from, to] = results.span ?? results.domain
     const unit = studio.documents.get(session.uri)?.summary?.schema.axis?.unit ?? 's'
@@ -81,7 +81,7 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
       `Time ${formatNumber(t)} ${unit} of ${formatNumber(from)} to ${formatNumber(to)} ${unit}. Go to a time`,
     )
     say(speed, `${formatNumber(state.rate)}×`, `Speed: ${formatNumber(state.rate)}×`)
-    say(end, '$(run-all)', transport.live ? 'Go live' : 'Go to end')
+    say(end, '$(run-all)', session.live ? 'Go live' : 'Go to end')
     if (!shown) for (const each of items) each.show()
     shown = true
     if (playing && !timer) timer = setInterval(show, TICK_MS)

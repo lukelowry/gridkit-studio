@@ -1,14 +1,14 @@
 /** A loaded case: its tables as column chunks, the Data a host reads, and the file as read. */
 
-import { createHash } from 'node:crypto'
+import { createHash, type Hash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { setImmediate } from 'node:timers/promises'
 
 import type { Data, Failure, Index, Schema } from '@latkit/model'
 import { createData, failure } from '@latkit/model'
 import { printParseErrorCode, visit } from 'jsonc-parser'
 
+import { defect } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import {
   builder,
@@ -18,6 +18,7 @@ import {
   type Column,
   deferred,
   hash,
+  isInt32,
   isValid,
   radixOrder,
   rowCount,
@@ -34,22 +35,27 @@ import {
   SIGNAL,
   withFound,
 } from './definition.js'
+import { carryOffsets, charsAt } from './offsets.js'
 import {
   ARRAYS,
   type Coding,
   type Found,
   type IndexedChunk,
+  isBounded,
+  jsonText,
   type Layout,
   type Member,
   Members,
   NONE,
   type Parsed,
   Parser,
+  PROBLEMS,
   type Range,
   type Records,
   recordsBetween,
   scan,
 } from './parse.js'
+import { Turns } from './turns.js'
 
 export interface Table {
   readonly shape: Shape
@@ -112,12 +118,12 @@ export class Case {
       } catch (reason) {
         if (!(reason instanceof RangeError)) throw reason
       }
-      throw Object.assign(error as Error, { offset: charsBefore(file, byte) })
+      throw Object.assign(error as Error, { offset: charsAt(file, byte) })
     }
     try {
       const parser = new Parser(catalog)
       const parts = await partsOf(file, rangesOf(layout), parser, signal)
-      return assembled(file, layout, parts, parser.coding, catalog, name)
+      return assembled(file, layout, parts, parser.coding, catalog, name, hashOf(catalog, file))
     } catch (error) {
       // A record the parse refused, or the second of an id, says so where it is.
       const target = (error as Failure).target
@@ -130,21 +136,38 @@ export class Case {
   /** The case `text` holds, read from `previous`, a case of an earlier text, as `name` names it when
    *  its header gives none. When the text differs only among the records of one array, those records
    *  alone are read again, and the ranges the edit leaves alone are kept, moved as it moved them:
-   *  what they decoded stays decoded. Otherwise, and wherever the text does not read, it is read
-   *  whole, which says why. */
+   *  what they decoded stays decoded. Where those records are not JSON, it says so as a whole read
+   *  would, from them alone. Otherwise, and wherever else the text does not read, it is read whole,
+   *  which says why. A defect in reading the records alone, `defects` hears of; the text is read
+   *  whole all the same. */
   static async revise(
     previous: Case,
     text: string,
     name = 'Case',
     signal?: AbortSignal,
+    defects: (error: unknown) => void = () => {},
   ): Promise<Case> {
     signal?.throwIfAborted()
     const file = UTF8.encode(text)
     const edit = changed(previous.file, file)
-    const revised =
-      edit && (await revisionOf(previous, file, edit, name, signal).catch(() => undefined))
+    if (edit && !stale(previous))
+      try {
+        const revised = await revisionOf(previous, text, file, edit, name, signal)
+        if (revised) {
+          carryOffsets(previous.file, file, {
+            start: edit.start,
+            ended: edit.before,
+            ends: edit.after,
+          })
+          return revised
+        }
+      } catch (error) {
+        signal?.throwIfAborted()
+        if (defect(error)) defects(error)
+        else if (whole(error)) throw error
+      }
     signal?.throwIfAborted()
-    return revised ?? Case.parse(text, previous.catalog, name, signal)
+    return Case.parse(text, previous.catalog, name, signal)
   }
 
   constructor(
@@ -167,6 +190,9 @@ export class Case {
      *  them alone, and how their tables were coded. */
     readonly parts: readonly Part[],
     readonly coding: Coding,
+    /** Its version's hash as it stood every HASH_BYTES of its file, which a revision hashes on from
+     *  where the edit begins. */
+    readonly hashes: readonly Hash[],
   ) {}
 
   /** The case's own member `name`, as `monitors`, where GridKit writes what the case records. */
@@ -306,34 +332,59 @@ function cut(array: ArrayName, first: number, starts: Uint32Array, ends: Uint32A
   return ranges
 }
 
-/** `ranges` of `bytes` read by `parser`, range by range, yielding between ranges so `signal` can
- *  cancel. What a range refuses fails them all, saying where the first refusal is. */
+/** `ranges` of `bytes` read by `parser`, range by range, in turns so `signal` can cancel. What a
+ *  range refuses fails them all, saying where the first refusal is, and the first PROBLEMS in all. */
 async function partsOf(
   bytes: Uint8Array,
   ranges: readonly Cut[],
   parser: Parser,
   signal?: AbortSignal,
 ): Promise<Part[]> {
+  const work = new Turns(signal)
   const parts: Part[] = []
   for (const { end, ...range } of ranges) {
-    signal?.throwIfAborted()
+    await work.step()
     const parsed = parser.parse(bytes, range.array, range.first, range.starts)
     parts.push({ range, end, parsed, shift: 0 })
-    await setImmediate()
   }
   const problems = parts.flatMap(({ parsed }) => parsed.problems)
   const [first] = problems
   if (first)
     throw failure('invalid-input', first.message, {
-      issues: problems.slice(0, 100),
+      issues: problems.slice(0, PROBLEMS),
       ...(first.target && { target: first.target }),
     })
   return parts
 }
 
+/** How many bytes of a file its hash takes in between the states a revision may hash on from. */
+const HASH_BYTES = 1 << 20
+
+/** The version of `file` read with `catalog`, and the hash as it stood every HASH_BYTES: hashed on
+ *  from the last of `kept` at or before byte `same`, past which `file` differs from the file they
+ *  were taken of, else whole. A kept state is copied, never hashed on itself. */
+function hashOf(
+  catalog: Catalog,
+  file: Uint8Array,
+  kept: readonly Hash[] = [],
+  same = 0,
+): { readonly version: string; readonly hashes: readonly Hash[] } {
+  const reused = Math.min(kept.length, Math.floor(same / HASH_BYTES) + 1)
+  const hashes = kept.slice(0, reused)
+  const hash = reused ? hashes[reused - 1]!.copy() : createHash('sha256').update(catalog.text)
+  if (!reused) hashes.push(hash.copy())
+  for (let at = Math.max(0, reused - 1) * HASH_BYTES; at < file.length;) {
+    const next = Math.min(file.length, at + HASH_BYTES)
+    hash.update(file.subarray(at, next))
+    at = next
+    if (at < file.length) hashes.push(hash.copy())
+  }
+  return { version: hash.digest('hex').slice(0, 32), hashes }
+}
+
 /** The case of `file`, as `layout` lays it out and `parts`, coded as `coding` says, read its
- *  records; `name` names it when its header gives none. Its identity indexes are built, so an id
- *  two rows share fails it. */
+ *  records, of the version `hashed` says; `name` names it when its header gives none. Its identity
+ *  indexes are built, so an id two rows share fails it. */
 function assembled(
   file: Uint8Array,
   layout: Layout,
@@ -341,14 +392,15 @@ function assembled(
   coding: Coding,
   catalog: Catalog,
   name: string,
+  hashed: ReturnType<typeof hashOf>,
 ): Case {
   // What each range has yet to decode is read from this file, where its bytes lie now.
   for (const { parsed, shift } of parts) {
     parsed.source.bytes = file
     parsed.source.shift = shift
   }
-  const version = createHash('sha256').update(catalog.text).update(file).digest('hex').slice(0, 32)
-  const kase = joined(parts, coding, file, layout, catalog, version, name)
+  const { version, hashes } = hashed
+  const kase = joined(parts, coding, file, layout, catalog, version, name, hashes)
   for (const table of kase.tables.values())
     if (table.shape.identity.type === 'text') textIds(table)
     else numberIds(table)
@@ -377,6 +429,7 @@ function joined(
   catalog: Catalog,
   version: Index['version'],
   fallback: string,
+  hashes: readonly Hash[],
 ): Case {
   const { shapes } = coding
   const chunks = shapes.map((shape) => ({
@@ -409,8 +462,16 @@ function joined(
   }
   const tables = new Map<string, Table>()
   const index = (type: string): Index => ({ source: version, type, version })
-  shapes.forEach((shape, code) => {
-    if (code >= catalog.codes.length && !records[code]!.length) return
+  // One order of tables for any read, however its ranges were coded: the catalog's in its order,
+  // then each class it does not know in the order its first record has in its array. A class no
+  // record has any more has no table.
+  const known = catalog.codes.length
+  const order = shapes
+    .map((_, code) => code)
+    .filter((code) => code < known || records[code]!.length > 0)
+    .sort((a, b) => (a < known || b < known ? a - b : records[a]![0]! - records[b]![0]!))
+  for (const code of order) {
+    const shape = shapes[code]!
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
     const starts = startsOf(ids)
@@ -433,18 +494,19 @@ function joined(
             get chunks() {
               return decoded[i]!()
             },
-            supplied: (row: number) => {
-              const chunk = chunkAt(starts, row)
-              return fields[i]![chunk]!.supplied(row - starts[chunk]!)
-            },
+            // Each chunk's own, found as it decoded, as rows of the table.
+            wrong: deferred(() =>
+              fields[i]!.flatMap((part, c) => Array.from(part.wrong(), (at) => starts[c]! + at)),
+            ),
           },
         ]),
       ),
       records: Uint32Array.from(records[code]!),
     })
-  })
+  }
   // Ports become references once every table they can name is in place.
-  shapes.forEach((shape, code) => {
+  for (const code of order) {
+    const shape = shapes[code]!
     const table = tables.get(shape.type)!
     shape.ports.forEach((port, i) => {
       const target = tables.get(port.definition.type.to)!
@@ -453,7 +515,7 @@ function joined(
         references(chunks[code]!.ports[i]!, table.starts, target),
       )
     })
-  })
+  }
   const fields = foundColumns(file, found, records, shapes, tables)
   const header = caseTable(file, layout, catalog.shapes.get(CASE)!, version)
   tables.set(CASE, header)
@@ -478,6 +540,7 @@ function joined(
     fields,
     parts,
     coding,
+    hashes,
   )
 }
 
@@ -528,6 +591,7 @@ function changed(
  *  it grew. */
 async function revisionOf(
   previous: Case,
+  text: string,
   file: Uint8Array,
   edit: { start: number; before: number; after: number },
   name: string,
@@ -547,11 +611,17 @@ async function revisionOf(
   // array's start, to the last range's last record, or the array's end.
   const first = own.findLast((p) => parts[p]!.range.starts[0]! < edit.start)
   const last = own.find((p) => parts[p]!.end - 1 >= edit.before)
-  if (first !== undefined && last !== undefined && last < first) return undefined
   const from = first === undefined ? old.open + 1 : parts[first]!.range.starts[0]!
   const closing = last === undefined
   const to = closing ? old.close + grown : parts[last]!.end + grown
-  const read = await recordsBetween(file, from, to, closing, signal)
+  let read: { starts: Uint32Array; ends: Uint32Array }
+  try {
+    read = await recordsBetween(file, from, to, closing, signal)
+  } catch (error) {
+    throw isBounded(error) || (error as { byte?: unknown }).byte === undefined
+      ? error
+      : misread(previous, text, file, from, to, error)
+  }
   // The ranges of the array kept before and after those read again, and how many records the edit
   // took and gave.
   const before = own.filter((p) => first !== undefined && p < first).map((p) => parts[p]!)
@@ -646,13 +716,57 @@ async function revisionOf(
       }),
     ),
   }
-  return assembled(file, layout, ordered, parser.coding, previous.catalog, name)
+  return assembled(
+    file,
+    layout,
+    ordered,
+    parser.coding,
+    previous.catalog,
+    name,
+    hashOf(previous.catalog, file, previous.hashes, edit.start),
+  )
 }
 
-/** How many UTF-16 units, as VS Code counts, the first `byte` bytes of `file` decode to. Only a
- *  failure is placed, so the file is decoded up to it. */
-const charsBefore = (file: Uint8Array, byte: number) =>
-  Buffer.from(file.buffer, file.byteOffset, byte).toString('utf8').length
+/** Whether `kase` was coded with classes the catalog does not know that none of its records has any
+ *  more, as typing a class name leaves each start of it: a whole read codes it anew. */
+function stale(kase: Case): boolean {
+  let present = 0
+  for (const type of kase.tables.keys()) if (!kase.catalog.shapes.has(type)) present++
+  return kase.coding.unknown.size > present
+}
+
+/** Whether `error` says why a file does not read as a whole read of it says so. */
+const whole = (error: unknown): boolean => (error as { whole?: unknown } | null)?.whole === true
+
+/** `error`, which a read of `file`'s records met between byte `from` and `to`, said as a whole read
+ *  of `text` says it, and where. The bytes before `from` are those `previous` read, so a whole read
+ *  reads them alike, meets the same at the same byte, and `previous` places them. The editor's own
+ *  reading says why, of those records alone, as an array of their own; else the read's. */
+function misread(
+  previous: Case,
+  text: string,
+  file: Uint8Array,
+  from: number,
+  to: number,
+  error: unknown,
+): Error {
+  const start = charsAt(previous.file, from)
+  const byte = (error as { byte: number }).byte
+  const records =
+    '[' + text.slice(start, start + utf8(file, from, Math.min(file.length, to + 1)).length)
+  try {
+    syntax(records)
+  } catch (reason) {
+    const at = (reason as { offset?: unknown }).offset
+    // Where the records end the array this reading gives them is unclosed, which says nothing.
+    if (!(reason instanceof RangeError) && typeof at === 'number' && at < records.length)
+      return Object.assign(reason as Error, { offset: start + at - 1, whole: true })
+  }
+  return Object.assign(error as Error, {
+    offset: start + utf8(file, from, byte).length,
+    whole: true,
+  })
+}
 
 /** `error`, placed on record `record` of `records`: where that record lies in `file`. */
 function placed(
@@ -663,12 +777,8 @@ function placed(
 ): unknown {
   if (!records || typeof record !== 'number' || !(record < records.starts.length)) return error
   const start = records.starts[record]!
-  const offset = charsBefore(file, start)
-  const length = Buffer.from(
-    file.buffer,
-    file.byteOffset + start,
-    records.ends[record]! - start,
-  ).toString('utf8').length
+  const offset = charsAt(file, start)
+  const length = utf8(file, start, records.ends[record]!).length
   return Object.assign(error as Error, { offset, length })
 }
 
@@ -830,22 +940,30 @@ function caseTable(
     const count = members.read(file, member.value)
     const spans = members.spans
     for (let m = 0; m < count; m++) {
-      const key = utf8(file, spans[4 * m]!, spans[4 * m + 1]!)
+      const key = jsonText(file, spans[4 * m]!, spans[4 * m + 1]!)
       const field = fields.get(key)
       if (field === undefined) continue
       const value: unknown = JSON.parse(utf8(file, spans[4 * m + 2]!, spans[4 * m + 3]!))
       if (value !== null) supplied.add(field.name)
-      const text = field.definition.type === 'text'
-      if (text ? typeof value === 'string' : typeof value === 'number')
+      // As a record's field reads its value: a number finite, and whole within range for an int32.
+      const type = field.definition.type
+      if (
+        type === 'text'
+          ? typeof value === 'string'
+          : typeof value === 'number' &&
+            Number.isFinite(value) &&
+            (type !== 'int32' || isInt32(value))
+      )
         values.set(field.name, value as Value)
     }
   }
   const starts = Uint32Array.of(0, 1)
+  /** A column of the one row's `value`, wrong when the file writes one that does not read. */
   const column = (type: Schema.FieldType, value: Value, given = value !== null): Column => ({
     type,
     chunks: [chunkOf(type, [value])],
     starts,
-    supplied: () => given,
+    wrong: () => (given && value === null ? [0] : []),
   })
   return {
     shape,
@@ -878,22 +996,30 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
   return out
 }
 
-/** A port's native numbers as rows of `target`; a number no row holds is null. */
+/** A port's native numbers as rows of `target`; a number no row holds is null. Its wrong rows are
+ *  those that write what is no number, and those whose number names no row: found again each
+ *  revision, as the target's ids are read again. */
 function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
   const ids = native.length === 0 ? undefined : numberIds(target)
-  const decode = deferred(() =>
-    native.map((source): Chunk.Reference => {
+  const decode = deferred(() => {
+    const wrong: number[] = []
+    const chunks = native.map((source, c): Chunk.Reference => {
       const port = source.read() as Chunk.Numeric
       const values = new Uint32Array(port.length)
       let validity: Uint8Array | undefined
+      const dangling: number[] = []
       for (let at = 0; at < port.length; at++) {
-        const row = isValid(port, at) ? ids!.row(port.values[port.offset + at]!) : -1
+        const written = isValid(port, at)
+        const row = written ? ids!.row(port.values[port.offset + at]!) : -1
         if (row >= 0) values[at] = row
         else {
           validity ??= new Uint8Array(Math.ceil(port.length / 8)).fill(0xff)
           validity[at >>> 3]! &= ~(1 << (at & 7))
+          if (written) dangling.push(at)
         }
       }
+      for (const at of [...source.wrong(), ...dangling].sort((a, b) => a - b))
+        wrong.push(starts[c]! + at)
       return {
         kind: 'reference',
         index: target.index,
@@ -902,19 +1028,17 @@ function references(native: readonly IndexedChunk[], starts: Uint32Array, target
         length: port.length,
         ...(validity && { validity }),
       }
-    }),
-  )
+    })
+    return { chunks, wrong }
+  })
   return {
     type: { kind: 'reference', to: target.index.type },
     index: target.index,
     starts,
     get chunks() {
-      return decode()
+      return decode().chunks
     },
-    supplied(row) {
-      const chunk = chunkAt(starts, row)
-      return native[chunk]!.supplied(row - starts[chunk]!)
-    },
+    wrong: () => decode().wrong,
   }
 }
 
@@ -973,7 +1097,7 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
               index: table.index,
               rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
               columns: {},
-              ids: idColumn(prefix, chunk),
+              ids: idsOf(prefix, chunk),
             })),
           ).tables[type]!.ids
         })
@@ -990,6 +1114,15 @@ function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
       }),
     ),
   }
+}
+
+/** The `Type/native` IDs of each chunk of native identities, made once: a range a revision keeps
+ *  keeps its chunks, and so its IDs. */
+const ids = new WeakMap<Chunk, Chunk.Text>()
+function idsOf(prefix: Uint8Array, native: Chunk): Chunk.Text {
+  let made = ids.get(native)
+  if (!made) ids.set(native, (made = idColumn(prefix, native)))
+  return made
 }
 
 /** `Type/native` IDs written straight into UTF-8, with no string per row. No identity is null. */

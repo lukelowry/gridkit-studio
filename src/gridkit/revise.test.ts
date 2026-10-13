@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest'
 import { Case } from './case.js'
 import { rowCount } from './columns.js'
 import { catalog } from './definition.js'
+import { diagnose } from './edits.js'
 
 /** What a case reads as, all of it, to tell two reads apart: every column of every table, row by
- *  row, with what each row supplies, its records, the layout of its file, what it found, and its
- *  version. How its tables are cut into chunks is its own. */
+ *  row, with the rows that write what it cannot read, its records, the layout of its file, what it
+ *  found, its tables in their order, and its version. How its tables are cut into chunks is its
+ *  own. */
 function readAll(kase: Case) {
   const tables = Object.fromEntries(
     [...kase.tables].map(([type, table]) => {
@@ -21,10 +23,7 @@ function readAll(kase: Case) {
           fields: Object.fromEntries(
             [...table.fields].map(([name, column]) => [
               name,
-              {
-                values: rows.map((row) => kase.cell(table, name, row)),
-                supplied: column.supplied && rows.map((row) => column.supplied!(row)),
-              },
+              { values: rows.map((row) => kase.cell(table, name, row)), wrong: column.wrong?.() },
             ]),
           ),
         },
@@ -49,10 +48,23 @@ function readAll(kase: Case) {
       ]),
     ),
     found: kase.found,
-    types: Object.keys(kase.schema.types).sort(),
+    types: Object.keys(kase.schema.types),
+    order: [...kase.tables.keys()],
     tables,
   }
 }
+
+/** The issues of `kase`, in the order of where they are. */
+const issuesOf = async (kase: Case) =>
+  (await diagnose(kase, new AbortController().signal)).toSorted(
+    (a, b) => a.offset - b.offset || a.message.localeCompare(b.message),
+  )
+
+/** Whether `kase` was coded with classes the catalog does not know that none of its records has
+ *  any more: the case after it is read whole. */
+const stale = (kase: Case) =>
+  kase.coding.unknown.size >
+  [...kase.tables.keys()].filter((type) => !catalog.shapes.has(type)).length
 
 /** Numbers that seem random, the same each run. */
 function numbers(seed: number) {
@@ -143,6 +155,22 @@ describe('a case read again from the one before it', () => {
         )
         return text.slice(0, start) + next + text.slice(start + written.length)
       },
+      // A second class the catalog does not know, on a device before one of the first, and back.
+      (kase, text) => {
+        const devices = kase.arrays.devices!
+        const classOf = (i: number) =>
+          /"class"\s*:\s*"([^"]*)"/.exec(record(kase, text, 'devices', i).text)?.[1]
+        let mystery = 0
+        while (mystery < devices.starts.length && classOf(mystery) !== 'Mystery') mystery++
+        const { start, text: written } = record(kase, text, 'devices', random(Math.max(1, mystery)))
+        const was = /"class"\s*:\s*"([^"]*)"/.exec(written)?.[1]
+        if (was === 'Mystery') return text
+        const next = written.replace(
+          /"class"\s*:\s*"[^"]*"/,
+          was === 'Enigma' ? '"class":"Branch"' : '"class":"Enigma"',
+        )
+        return text.slice(0, start) + next + text.slice(start + written.length)
+      },
       // A device added first, and one last.
       (kase, text) => {
         const devices = kase.arrays.devices!
@@ -173,15 +201,19 @@ describe('a case read again from the one before it', () => {
       const next = edit(kase, text)
       if (next === text) continue
       const revised = await Case.revise(kase, next)
-      // An edit among the records keeps what it leaves alone; one of the header reads it all.
+      // An edit among the records keeps what it leaves alone; one of the header reads it all, as
+      // does one after a class the case no longer has, which codes its classes anew.
       const kept = revised.parts.filter((part) =>
         kase.parts.some((old) => old.parsed === part.parsed),
       )
-      if (edit === header) expect(kept).toEqual([])
+      if (edit === header || stale(kase)) expect(kept).toEqual([])
       else expect(kept.length).toBeGreaterThan(0)
       // Read whole only every few edits, so what ranges kept have yet to decode moves on with them.
-      if (step % 5 === 4 || step === 39)
-        expect(readAll(revised)).toEqual(readAll(await Case.parse(next, catalog)))
+      if (step % 5 === 4 || step === 39) {
+        const fresh = await Case.parse(next, catalog)
+        expect(readAll(revised)).toEqual(readAll(fresh))
+        expect(await issuesOf(revised)).toEqual(await issuesOf(fresh))
+      }
       text = next
       kase = revised
     }

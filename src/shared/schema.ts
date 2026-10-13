@@ -106,9 +106,19 @@ function routeOf(schema: Schema, type: string): string | undefined {
   )?.[0]
 }
 
+/** What each schema draws, worked out once for each schema object: every view and menu asks. */
+const networks = new WeakMap<Schema, Drawn>()
+const diagrams = new WeakMap<Schema, Drawn>()
+
 /** Edges are types with exactly two undirected references to one type, bent along their route if
  *  they have one; vertices are the types they join, and any other type a map places. */
 export function networkOf(schema: Schema): Drawn {
+  let drawn = networks.get(schema)
+  if (!drawn) networks.set(schema, (drawn = networkFrom(schema)))
+  return drawn
+}
+
+function networkFrom(schema: Schema): Drawn {
   const types = Object.keys(schema.types)
   const joins = types.flatMap((type) => {
     const ends = referencesOf(schema, type).filter(({ direction }) => direction === undefined)
@@ -134,6 +144,12 @@ export function networkOf(schema: Schema): Drawn {
 /** Nets are types that directed references name; blocks are the other types holding those
  *  references, each one a port. */
 export function diagramOf(schema: Schema): Drawn {
+  let drawn = diagrams.get(schema)
+  if (!drawn) diagrams.set(schema, (drawn = diagramFrom(schema)))
+  return drawn
+}
+
+function diagramFrom(schema: Schema): Drawn {
   const directed = Object.keys(schema.types).flatMap((type) =>
     referencesOf(schema, type)
       .filter(({ direction }) => direction !== undefined)

@@ -1,7 +1,7 @@
 import { elementType } from '../shared/schema.js'
 import type { Case, Table } from './case.js'
-import { type Chunk, isValid, STEP_RECORDS } from './columns.js'
-import { Turns } from './turns.js'
+import { type Chunk, isValid } from './columns.js'
+import { STEP_RECORDS, Turns } from './turns.js'
 
 /** Every port connection of a case, by row: the rows each row's ports name, and the rows that name
  *  it, each as its table's number and its row there. */

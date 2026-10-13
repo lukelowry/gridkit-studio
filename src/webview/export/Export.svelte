@@ -144,7 +144,12 @@
               await plotting.until(next, signal)
               return plotting.data(rows)
             }
-      const mapped = chosen.views.includes('network') ? networkNeeds(state) : []
+      // A field the plots read whole over the range is held already, and mapped from what they hold
+      // rather than read again; one they read a slice at a time is read for each moment.
+      const whole = first === undefined
+      const mapped = (chosen.views.includes('network') ? networkNeeds(state) : []).filter(
+        ({ selection }) => !whole || !plotting.has(selection),
+      )
       const gpu = await owner.get()
       signal.throwIfAborted()
       // Each export follows the device it draws on, which an earlier export may have created; the
@@ -169,7 +174,7 @@
             mapping.want(results, mapped, [at, at], { at, travel: 1 })
             await mapping.until([at, at], s)
             moments.push(at)
-            return mapping.data(rows)
+            return mapping.data(whole ? plotting.data(rows) : rows)
           },
           presentation: held.presentation ?? {},
           cameras,

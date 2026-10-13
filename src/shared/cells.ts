@@ -10,7 +10,7 @@ import {
   textAt,
 } from '@latkit/model'
 
-import type { Summary } from './messages.js'
+import type { Summary, TableState } from './messages.js'
 
 /** The most rows one rows query may return. */
 const PAGE = 100
@@ -84,6 +84,48 @@ export function tableFields(
   return Object.keys(fields).filter(
     (field) => !fields[field]!.sampled && field !== identities[type],
   )
+}
+
+/** The type the Case panel shows of a case: the one `table` names while the case has elements of
+ *  it, else the first it has any of. */
+export function shownType(
+  { counts }: Pick<Summary, 'counts'>,
+  table: TableState | undefined,
+): string | undefined {
+  const named = table?.type
+  return named && counts[named] ? named : Object.keys(counts).find((type) => counts[type]! > 0)
+}
+
+/** The columns the Case panel shows of `type`: those `table` chose for it that it can show, else
+ *  its first COLUMNS. */
+export function shownColumns(
+  summary: Pick<Summary, 'schema' | 'identities'>,
+  table: TableState | undefined,
+  type: string,
+): string[] {
+  const fields = tableFields(summary, type)
+  return (
+    table?.columns?.[type]?.filter((field) => fields.includes(field)) ?? fields.slice(0, COLUMNS)
+  )
+}
+
+/** `table` as `change` leaves it: another type than the one shown starts unfiltered, in file
+ *  order. A part changed to nothing is left out, so two tables alike say so alike. */
+export function changedTable(
+  summary: Pick<Summary, 'counts'> | undefined,
+  table: TableState,
+  change: Partial<TableState>,
+): TableState {
+  const shown = summary ? shownType(summary, table) : table.type
+  const other = change.type !== undefined && change.type !== shown
+  const next: Record<string, unknown> = {
+    ...table,
+    ...(other && { filter: undefined, equal: undefined, order: undefined }),
+    ...change,
+  }
+  for (const key of Object.keys(next))
+    if (next[key] === undefined || next[key] === '') delete next[key]
+  return next as TableState
 }
 
 /** An element's id without its type: `7` of `Bus/7`. */

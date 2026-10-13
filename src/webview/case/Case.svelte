@@ -7,19 +7,26 @@
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
   import {
-    COLUMNS,
+    changedTable,
     display,
     leaf,
     native,
     referenceNames,
     rowsOf,
+    shownColumns,
+    shownType,
     tableFields,
   } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import type { Revision, TableState, Value, ViewState } from '../../shared/messages.js'
+  import {
+    type Revision,
+    revisionOf,
+    type TableState,
+    type Value,
+    type ViewState,
+  } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
-  import { revisionOf } from '../rows.js'
   import { appearance } from '../theme.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
@@ -44,13 +51,16 @@
   const summary = $derived(view.summary)
   const version = $derived(view.summary?.version)
   const stale = $derived(view.stale)
-  let type = $state(bridge.state({ type: 'Bus' }).type)
-  let fields = $state<string[]>([])
-  /** The columns chosen for each type, kept as the panel follows a selection between types. */
-  let columns = $state<Record<string, string[]>>({})
-  let filter = $state('')
-  let equal = $state<TableState['equal']>()
-  let order = $state<{ field: string; direction: 'ascending' | 'descending' } | undefined>()
+  /** What the panel shows of its rows: the session's, as it last said, with the changes made here
+   *  since applied at once, which the session takes as they are. */
+  let table = $state.raw<TableState>({})
+  /** The session's table as it last said it, which a state that leaves it as it was keeps. */
+  let told: TableState | undefined
+  const type = $derived(summary ? (shownType(summary, table) ?? '') : '')
+  const fields = $derived(summary && type ? shownColumns(summary, table, type) : [])
+  const filter = $derived(table.filter ?? '')
+  const equal = $derived(table.equal)
+  const order = $derived(table.order)
   /** The first row the panel reads, as it scrolls. */
   let offset = $state(0)
   let total = $state(0)
@@ -71,8 +81,8 @@
   let revealing: string | undefined
   /** The last element selected here, which is in sight already. */
   let own: string | undefined
-  /** The case the panel opened on, as it first read: another starts over from its saved state. */
-  let opened: string | undefined
+  /** What the rows read are of: another type, filter or order starts them over, at the top. */
+  let viewed: { type: string; key: string } | undefined
   const definitions = $derived<Readonly<Record<string, Schema.Field>>>(
     summary?.schema.types[type]?.fields ?? {},
   )
@@ -130,22 +140,10 @@
     target.dataset.vscodeContext = context(id, target.dataset.field)
     setTimeout(() => delete target.dataset.vscodeContext)
   }
-  const persist = () =>
-    bridge.send({
-      kind: 'tableState',
-      table: {
-        type,
-        columns: $state.snapshot(columns),
-        filter,
-        ...(equal && { equal: $state.snapshot(equal) }),
-      },
-      shown: total,
-    })
-  /** Show `next` as the type's columns, and keep them for it. */
-  function show(next: string[]) {
-    fields = next.filter((field) => allFields.includes(field))
-    columns[type] = fields
-    persist()
+  /** Changes what the panel shows, here at once, and in the session, which holds it. */
+  function change(next: Partial<TableState>) {
+    table = changedTable(summary, table, next)
+    bridge.send({ kind: 'table', change: next })
   }
   const cellAt = (row: number, column: number) =>
     scroll?.querySelector<HTMLButtonElement>(`[data-row="${row}"][data-column="${column}"]`)
@@ -224,7 +222,7 @@
       page = { offset: at, rows: rowsOf(blocks, references) }
       total = blocks[0]?.total ?? page.rows.length
       // The view's title says how many rows the filters leave.
-      persist()
+      bridge.send({ kind: 'rows', shown: total })
       await tick()
       if (pending && pending.row >= at && pending.row < at + page.rows.length) {
         focusCell(pending.row, pending.column)
@@ -255,30 +253,27 @@
       controller?.abort()
     }
   })
-  function changeType(next: string) {
-    type = next
-    // The rows go with their type; its own load in a moment.
-    page = { offset: 0, rows: [] }
-    offset = 0
-    filter = ''
-    equal = undefined
-    order = undefined
-    fields =
-      columns[next]?.filter((field) => allFields.includes(field)) ?? allFields.slice(0, COLUMNS)
-    persist()
-    bridge.save({ type })
-    if (scroll) scroll.scrollTop = 0
-  }
-  /** Order the rows by `field`: as `direction` says, else the other way from now. */
-  function sort(field: string, direction?: 'ascending' | 'descending') {
-    order = {
-      field,
-      direction:
-        direction ??
-        (order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending'),
+  // Another type, filter or order reads its rows from the top; another type's rows go at once, and
+  // its own load in a moment.
+  $effect.pre(() => {
+    const key = JSON.stringify([type, filter, equal, order])
+    if (viewed?.key === key) return
+    if (viewed) {
+      if (viewed.type !== type) page = { offset: 0, rows: [] }
+      offset = 0
+      if (scroll) scroll.scrollTop = 0
     }
-    offset = 0
-    scroll.scrollTop = 0
+    viewed = { type, key }
+  })
+  /** Order the rows by `field`, the other way from now. */
+  function sort(field: string) {
+    change({
+      order: {
+        field,
+        direction:
+          order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending',
+      },
+    })
   }
   function select(id: string | null, field?: string) {
     if (!id) return
@@ -351,14 +346,13 @@
    *  once the page holding it loads. */
   async function reveal(id: string) {
     const next = elementType(id)
+    const of = view.uri
     revealing = id
-    if (next !== type) changeType(next)
+    if (next !== type) change({ type: next })
     await tick()
     if (scrolled()) return
     // A row the filters leave out shows once they go.
-    filter = ''
-    equal = undefined
-    order = undefined
+    if (filter || equal || order) change({ filter: undefined, equal: undefined, order: undefined })
     try {
       if (!summary) return
       const blocks = await bridge.request('query', {
@@ -372,9 +366,10 @@
           limit: 1,
         },
       })
-      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn.
+      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn:
+      // while the panel still shows that case, and that element is still the one selected.
       const row = rowsOf(blocks)[0]
-      if (row && view.selection?.id === id) offset = Math.max(0, row.row - 10)
+      if (row && view.uri === of && view.selection?.id === id) offset = Math.max(0, row.row - 10)
     } catch (reason) {
       bridge.report(reason)
     }
@@ -383,7 +378,8 @@
     const stop = bridge.on((message) => {
       if (message.kind === 'state') {
         const other = message.state.uri !== view.uri
-        const before = other ? undefined : view.selection?.id
+        // The selection the panel had in sight: none of a case it has yet to read.
+        const before = other || !view.summary ? undefined : view.selection?.id
         view = merged(view, message.state)
         appearance(view.settings)
         // Another case's rows go with it; its own load once it reads.
@@ -391,64 +387,19 @@
           controller?.abort()
           page = { offset: 0, rows: [] }
           total = 0
-          opened = undefined
         }
-        if (view.summary && opened !== view.uri) {
-          opened = view.uri
-          // Open on the selection's type, else where the panel was left.
-          const saved = view.table
-          const wanted = view.selection ? elementType(view.selection.id) : saved?.type
-          columns = saved?.columns ?? {}
-          const counts = view.summary.counts
-          changeType(
-            wanted && counts[wanted]
-              ? wanted
-              : counts[type]
-                ? type
-                : (Object.keys(counts).find((each) => counts[each]! > 0) ?? 'Bus'),
-          )
-          if (type === saved?.type) {
-            filter = saved.filter ?? ''
-            equal = saved.equal
-          }
-          persist()
+        // What the session says the panel shows, as it changes there: by a command, or as the
+        // session took a change made here.
+        if (other || view.table !== told) {
+          told = view.table
+          table = view.table ?? {}
         }
-        // A selection made in another view is brought into sight; one made here already is.
+        // A selection made in another view is brought into sight, its type shown; one made here
+        // already is.
         const selected = view.selection?.id
         if (selected && selected !== before && selected !== own && view.summary && !view.stale)
           void reveal(selected)
         if (selected !== own) own = undefined
-      } else if (message.kind === 'action') {
-        const value = message.value as Record<string, unknown> | undefined
-        if (message.command === 'columns' && Array.isArray(message.value))
-          show(message.value.filter((field): field is string => typeof field === 'string'))
-        else if (message.command === 'resetColumns') {
-          delete columns[type]
-          fields = allFields.slice(0, COLUMNS)
-        } else if (message.command === 'hideColumn')
-          show(fields.filter((field) => field !== message.value))
-        else if (message.command === 'sort') {
-          if (typeof value?.field === 'string')
-            sort(value.field, value.direction === 'descending' ? 'descending' : 'ascending')
-          else {
-            order = undefined
-            offset = 0
-          }
-        } else if (message.command === 'type' && typeof message.value === 'string') {
-          if (message.value !== type) changeType(message.value)
-        } else if (message.command === 'filter' || message.command === 'filterText') {
-          if (message.command === 'filter')
-            equal =
-              value && typeof value.field === 'string' ? (value as TableState['equal']) : undefined
-          else filter = typeof message.value === 'string' ? message.value : ''
-          offset = 0
-          if (scroll) scroll.scrollTop = 0
-        } else if (message.command === 'clearFilters') {
-          filter = ''
-          equal = undefined
-          offset = 0
-        }
-        persist()
       }
     })
     // Before VS Code, and anything else, reads what a right-click carries.

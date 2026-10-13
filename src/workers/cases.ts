@@ -14,11 +14,11 @@ import {
   transaction,
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
-import { problem, superseded } from '../shared/errors.js'
+import { detail, problem, superseded } from '../shared/errors.js'
 import type { CaseApi, Revision, SourceDelta, Summary } from '../shared/messages.js'
 import { nameOf, summarize, TextCases } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
-import { memory, serve } from './serve.js'
+import { memory, send, serve } from './serve.js'
 
 /** An open case: its source as last sent, the parse under way, and the case that parse read. */
 interface Document {
@@ -89,7 +89,10 @@ serve<CaseApi>(
         ? read!.kase
         : ((key === undefined ? undefined : opened.find(key)) ??
           (read
-            ? await Case.revise(read.kase, text, name, signal)
+            ? await Case.revise(read.kase, text, name, signal, (error) =>
+                // A defect in reading the edit alone is said in the log; the case reads whole.
+                send({ kind: 'log', level: 'error', message: detail(error) }),
+              )
             : await Case.parse(text, catalog, name, signal)))
       if (key) opened.keep(kase, () => key)
       signal.throwIfAborted()

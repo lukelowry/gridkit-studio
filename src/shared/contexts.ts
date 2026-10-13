@@ -1,16 +1,6 @@
-import type { Schema } from '@latkit/model'
-
 import { type Bindings, NUMERIC } from './bindings.js'
 import type { Element, Plot, Revision, Summary } from './messages.js'
-import {
-  diagramOf,
-  type Drawn,
-  elementType,
-  fieldOf,
-  isReference,
-  networkOf,
-  placementOf,
-} from './schema.js'
+import { diagramOf, elementType, fieldOf, isReference, networkOf, placementOf } from './schema.js'
 
 /** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
 type Scope = 'element' | 'value' | 'column' | 'plot'
@@ -44,8 +34,6 @@ export function signalContext(
   return SIGNAL_WORDS.filter((word) => word === 'field' || has[word]).join(' ')
 }
 
-const drawn = new WeakMap<Schema, { network: Drawn; diagram: Drawn }>()
-
 /** VS Code context keys for a menu on `target`, which carry the target to its commands; opening a
  *  menu never selects another row. Every view's menus take these keys, and only these. */
 export function menuContext(
@@ -57,14 +45,8 @@ export function menuContext(
   const type = target.type ?? (target.element && elementType(target.element.id))
   const field = target.field ?? target.element?.field
   const definition = fieldOf(summary.schema, type, field)
-  let views = drawn.get(summary.schema)
-  if (!views)
-    drawn.set(
-      summary.schema,
-      (views = { network: networkOf(summary.schema), diagram: diagramOf(summary.schema) }),
-    )
-  const network = type ? placementOf(views.network, type) : null
-  const diagram = type ? placementOf(views.diagram, type) : null
+  const network = type ? placementOf(networkOf(summary.schema), type) : null
+  const diagram = type ? placementOf(diagramOf(summary.schema), type) : null
   const scope: Scope = target.plot
     ? 'plot'
     : target.origin === 'case' && field

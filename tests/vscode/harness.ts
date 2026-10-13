@@ -1009,7 +1009,13 @@ export class TestHost {
     session.setEditing(false)
     session.setCamera('network', undefined)
     session.setCamera('diagram', undefined)
-    session.setTable({})
+    session.setTable({
+      type: undefined,
+      columns: undefined,
+      order: undefined,
+      filter: undefined,
+      equal: undefined,
+    })
     session.show(undefined)
     session.transport.setLoop('none')
     session.transport.setRate(1)

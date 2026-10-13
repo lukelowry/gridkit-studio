@@ -282,6 +282,35 @@ describe('single catalog and source ownership', () => {
     ).toBe(true)
     await expect(Case.parse(source.replace('115.0', '115.0,"kv":116.0'), catalog)).rejects.toThrow()
   })
+  it('reads a key or a class written with escapes as the name it spells, as JSON does', async () => {
+    const escaped = source.replace(
+      '{"class":"Branch","id":"line"',
+      '{"cl\\u0061ss":"Br\\u0061nch","\\u0069d":"line"',
+    )
+    const kase = await Case.parse(escaped, catalog)
+    // A Branch, known by its id, with its ports as a record written plainly has them.
+    const branch = kase.table('Branch')
+    expect(kase.id(branch, 0)).toBe('Branch/line')
+    expect(kase.locate('Bus/42')).not.toBeNull()
+    expect(kase.found.some(({ field }) => field.includes('\\'))).toBe(false)
+  })
+  it('reads a number of the case’s own as a record’s field reads one: finite, or not at all', async () => {
+    const kase = await Case.parse(source, catalog)
+    const field = kase
+      .table('Case')
+      .shape.fields.find(
+        ({ definition, source }) => definition.type === 'float64' && source.kind === 'parameter',
+      )!
+    const name = field.name.slice(field.name.indexOf('.') + 1)
+    const infinite = await Case.parse(
+      source.replace('"header":', `"params": {"${name}": 1e400}, "header":`),
+      catalog,
+    )
+    expect(infinite.cell(infinite.table('Case'), field.name, 0)).toBeNull()
+    expect(await diagnose(infinite, AbortSignal.any([]))).toContainEqual(
+      expect.objectContaining({ id: 'Case/case', field: field.name, severity: 'error' }),
+    )
+  })
   it('inserts native real-valued tokens without rewriting unrelated numbers', async () => {
     const text = source.replace('\"kv\":115.0', '')
     const kase = await Case.parse(text, catalog)

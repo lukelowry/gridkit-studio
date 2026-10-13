@@ -40,10 +40,12 @@ parentPort.on('message', (message) => {
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
 /** The results worker as the tests start it, keeping what it reads under the tests' output. */
 const options = () => ({ ...OPTIONS, store: resolve('output/tests/client-store') })
+/** What a listener's failure is said by. */
+const failed = vi.fn()
 
 describe('the workers the extension asks', () => {
   it('asks each worker its own methods, and only those running what they hold', async () => {
-    const client = new Client(shipped, options)
+    const client = new Client(shipped, options, failed)
     try {
       expect(await client.stats()).toEqual({})
       const summary = await client.cases.call('parse', {
@@ -72,7 +74,7 @@ describe('the workers the extension asks', () => {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-    const client = new Client(crashing, options)
+    const client = new Client(crashing, options, failed)
     const stopped = vi.fn()
     const casesStopped = vi.fn()
     client.results.failure.event(stopped)

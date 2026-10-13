@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import type { Stamp } from './stamp.js'
 import { type Manifest, Stores } from './store.js'
 
 let root: string
@@ -12,11 +13,19 @@ beforeEach(async () => {
 })
 afterEach(() => rm(root, { recursive: true, force: true }))
 
-/** What a store of `frames` frames of the file at `path`, read through, says it holds. */
-const manifest = (path: string, frames: number, mtimeMs = 1): Omit<Manifest, 'format'> => ({
-  path,
+/** A file of `frames` frames as it stood once written at `modified`. */
+const stamp = (frames: number, modified = 1): Stamp => ({
+  file: '1:1',
   size: frames * 10,
-  mtimeMs,
+  modified: String(modified),
+  changed: String(modified),
+})
+
+/** What a store of `frames` frames of the file at `path`, read through, says it holds. */
+const manifest = (path: string, frames: number, modified = 1): Omit<Manifest, 'format'> => ({
+  path,
+  stamp: stamp(frames, modified),
+  read: frames * 10,
   fingerprint: 'case',
   header: ['time', 'Bus_A_Vm'],
   frames,
@@ -26,7 +35,7 @@ const manifest = (path: string, frames: number, mtimeMs = 1): Omit<Manifest, 'fo
 })
 
 /** A store of the file at `path` read through: `frames` frames of two rows, two to a chunk. */
-async function stored(stores: Stores, path: string, frames: number, mtimeMs = 1) {
+async function stored(stores: Stores, path: string, frames: number, modified = 1) {
   const store = await stores.create(path)
   store.shape([2], 2)
   for (let k = 0; k * 2 < frames; k++) {
@@ -39,7 +48,7 @@ async function stored(stores: Stores, path: string, frames: number, mtimeMs = 1)
     await store.write(k, count, [values])
   }
   await store.finish(
-    manifest(path, frames, mtimeMs),
+    manifest(path, frames, modified),
     Float64Array.from({ length: frames }, (_, i) => i),
   )
   return store
@@ -57,6 +66,7 @@ describe('the stores of the results files a worker reads', () => {
     // The last chunk, cut short with the file.
     expect(Array.from(await store.read(2, 0, 1))).toEqual([400, 401])
     expect(Array.from(await store.times())).toEqual([0, 1, 2, 3, 4])
+    await stores.release(store)
   })
 
   it('finds a store read through only of the same file, as it was, against the same case', async () => {
@@ -64,11 +74,25 @@ describe('the stores of the results files a worker reads', () => {
     const path = join(root, 'a.csv')
     const store = await stored(stores, path, 4)
     await stores.release(store)
-    const now = { size: 40, mtimeMs: 1 }
+    const now = stamp(4)
     expect(await stores.find(path, now, 'case')).toBe(store)
-    expect(await stores.find(path, { ...now, mtimeMs: 2 }, 'case')).toBeUndefined()
+    // Written again, its time set back or not, or another file in its place.
+    expect(await stores.find(path, { ...now, modified: '2' }, 'case')).toBeUndefined()
+    expect(await stores.find(path, { ...now, changed: '2' }, 'case')).toBeUndefined()
+    expect(await stores.find(path, { ...now, file: '1:2' }, 'case')).toBeUndefined()
     expect(await stores.find(path, now, 'another case')).toBeUndefined()
     expect(await stores.find(join(root, 'b.csv'), now, 'case')).toBeUndefined()
+  })
+
+  it('lets a store that does not read go, so its file is read again', async () => {
+    const stores = new Stores(root)
+    const path = join(root, 'a.csv')
+    const store = await stored(stores, path, 4)
+    await stores.release(store)
+    const found = await stores.find(path, stamp(4), 'case')
+    await stores.discard(found!)
+    expect(await stores.find(path, stamp(4), 'case')).toBeUndefined()
+    expect(await folders()).toBe(0)
   })
 
   it('keeps one store of a file, the latest, once nothing reads the one before', async () => {
@@ -102,6 +126,6 @@ describe('the stores of the results files a worker reads', () => {
     const after = new Stores(root)
     await after.sweep([a])
     expect(await folders()).toBe(1)
-    expect((await after.find(a, { size: 40, mtimeMs: 2 }, 'case'))?.manifest?.mtimeMs).toBe(2)
+    expect((await after.find(a, stamp(4, 2), 'case'))?.manifest?.stamp.modified).toBe('2')
   })
 })

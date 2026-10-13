@@ -2,6 +2,14 @@
  *  argument per buffer, and counts the arguments in a byte: buffers past these arrive empty. */
 const MESSAGE_BUFFERS = 253
 
+/** Whether `value` is an array or a plain object: what a message is built of, which is walked and
+ *  copied part by part. Anything else, as a Map, crosses as it is. */
+const plain = (value: unknown): value is object =>
+  Array.isArray(value) ||
+  (!!value &&
+    typeof value === 'object' &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(value) as object | null))
+
 /** `message` as a webview can receive it whole. One that holds more buffers than VS Code sends has
  *  its arrays copied into one buffer, each a view of its own there. */
 export function packed<T>(message: T): T {
@@ -15,8 +23,7 @@ export function packed<T>(message: T): T {
       offsets.set(value, bytes)
       // Every view starts eight-aligned, as a Float64Array or BigInt64Array must.
       bytes += Math.ceil(value.byteLength / 8) * 8
-    } else if (value && typeof value === 'object')
-      for (const item of Object.values(value)) find(item)
+    } else if (plain(value)) for (const item of Object.values(value)) find(item)
   }
   find(message)
   if (buffers.size <= MESSAGE_BUFFERS) return message
@@ -40,7 +47,7 @@ export function packed<T>(message: T): T {
       return view
     }
     if (Array.isArray(value)) return value.map(copy)
-    if (value && typeof value === 'object')
+    if (plain(value))
       return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, copy(item)]))
     return value
   }

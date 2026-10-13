@@ -53,6 +53,7 @@
     retries,
     ticks,
     streaming,
+    stuck,
     onframe,
     onwants,
     onwindow,
@@ -82,6 +83,8 @@
     ticks: boolean
     /** Whether `source` brings the window a slice at a time, letting go of the slices drawn. */
     streaming: boolean
+    /** Whether what the plots lack could not be read. */
+    stuck: boolean
     onframe: () => void
     /** Where its drawing stands after each frame, so the slice it needs next is read; undefined
      *  once it draws no more. */
@@ -202,7 +205,8 @@
         canvas.dataset.rendered = 'true'
         recovery.presented()
         onframe()
-        onwants(made.stats().wants)
+        // Where its drawing stands matters only while the Monitor reads a slice at a time.
+        if (streaming) onwants(made.stats().wants)
       }),
       made.on('select', (items) => {
         bridge.send({
@@ -517,7 +521,9 @@
       {/key}
     {:else}
       <div class="c-empty lane__empty">
-        {#if view.results?.growing || (recorded && view.results?.frames)}
+        <!-- Samples that could not be read were said once, in a notification: the plot stops
+          saying it waits for them. -->
+        {#if !stuck && (view.results?.growing || (recorded && view.results?.frames))}
           <p class="c-empty__text">Waiting for samples…</p>
         {/if}
       </div>

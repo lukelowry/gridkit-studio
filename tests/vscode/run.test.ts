@@ -266,8 +266,13 @@ suite('Run', function () {
     await bench.writeSolver({ tmax: 1000, dt_monitor: 0.001, events: [] })
     const previous = bench.session.run!.id
     bench.run()
+    // The last run's results stay on show until this run's file says what it holds; then its own
+    // take their place, followed live.
     await until(
-      () => bench.session.run?.id !== previous && (bench.session.results?.frames ?? 0) > 64,
+      () =>
+        bench.session.run?.id !== previous &&
+        bench.session.live &&
+        (bench.session.results?.frames ?? 0) > 64,
       'live samples arrive',
     )
     assert.equal(bench.session.run?.state, 'running')

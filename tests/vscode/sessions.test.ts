@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
-import { setup, suite, test } from 'mocha'
+import { setup, suite, teardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import type { Session } from '../../src/extension/session.js'
@@ -49,8 +49,15 @@ suite('Sessions', () => {
     session.release('document')
     assert.equal(studio.get(session.uri), undefined, 'Nothing holds the session, so it closes')
     studio.hold(session.uri, 'document')
+    reopened.push(session.uri)
     return studio.open(document)
   }
+  /** The cases tests reopened, each let go of as its test ends: a document VS Code closes when it
+   *  will would let go of it in the middle of the next test, which counts what is held. */
+  const reopened: string[] = []
+  teardown(() => {
+    for (const uri of reopened.splice(0)) studio.release(uri, 'document')
+  })
 
   setup(async () => {
     studio = (await extension().activate()).studio

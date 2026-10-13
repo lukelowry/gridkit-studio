@@ -587,19 +587,25 @@ export function registerViews(studio: Sessions) {
         {
           resolveWebviewView(panel) {
             studio.panels.set(kind, panel)
-            /** The panel follows the case the views follow, unless it works on another. */
+            // Let go of as it goes, first, so a panel whose view fails to make is never kept.
+            let disposed = false
+            let changed: vscode.Disposable | undefined
+            panel.onDidDispose(() => {
+              disposed = true
+              if (studio.panels.get(kind) === panel) studio.panels.delete(kind)
+              changed?.dispose()
+            })
+            /** The panel follows the case the views follow, unless it works on another. VS Code
+             *  refuses a write to a panel it disposed. */
             const follow = () => {
+              if (disposed) return
               if (!view.busy) view.follow(studio.active)
               panel.description = view.uri && describe(studio, kind, view.uri)
             }
             const view = new View(studio, panel, kind, hidden, { idle: follow })
             // Only the case it shows, or the one it is to show, changes what it shows.
-            const changed = studio.changed.event((uri) => {
+            changed = studio.changed.event((uri) => {
               if (uri === view.uri || uri === studio.active) follow()
-            })
-            panel.onDidDispose(() => {
-              if (studio.panels.get(kind) === panel) studio.panels.delete(kind)
-              changed.dispose()
             })
             follow()
           },

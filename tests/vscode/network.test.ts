@@ -11,6 +11,7 @@ import {
   fills,
   frames,
   idle,
+  replaying,
   stats,
   type TestHost,
   testHost,
@@ -108,10 +109,20 @@ suite('Network', () => {
     bench.session.bind(VM, ['vertexColor'])
     transport.seek(0)
     const still = await frames(network)
-    transport.play()
-    // Frame after frame while the clock plays, with no message from the extension.
-    await until(async () => (await frames(network)) > still + 10, 'the network paints the playhead')
-    transport.pause()
+    // Frame after frame while the clock plays, with no message from the extension. A second of
+    // results plays once, which a slow GPU draws in fewer frames than this asks for, so it plays
+    // again each time it ends.
+    const replay = replaying(bench.studio, bench.session)
+    try {
+      transport.play()
+      await until(
+        async () => (await frames(network)) > still + 10,
+        'the network paints the playhead',
+      )
+    } finally {
+      replay.dispose()
+      transport.pause()
+    }
     await bench.capture('network-mapped-signal')
   })
 

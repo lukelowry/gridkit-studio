@@ -1098,8 +1098,13 @@ export async function notifications(): Promise<string[]> {
     .locator('.notifications-toasts .notification-list-item-message')
     .filter({ visible: true })
     .allInnerTexts()
-  if (shown.length) await vscode.commands.executeCommand('notifications.clearAll')
-  return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()))
+  const said = shown.filter(
+    (text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()),
+  )
+  // Cleared only once there is something to say: clearing a run's progress alone would clear the
+  // failure that follows it as it shows.
+  if (said.length) await vscode.commands.executeCommand('notifications.clearAll')
+  return said
 }
 
 /** Wait for VS Code to show notifications, then clear them. */

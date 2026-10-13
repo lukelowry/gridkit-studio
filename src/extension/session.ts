@@ -270,12 +270,14 @@ export class Session {
         this.#plots = plotsFor(results, this.#plots)
         saving = true
       }
-      // The span starts with the first frames, and a live head is already where they reach: a run
-      // that finishes fast sends no frames after these.
+      // The span starts with the first frames. A run's own start at its head: followed while it
+      // writes, the head already where they reach, as a run that finishes fast sends no frames after
+      // these; at its end once it is done, as one that finished before its first frames showed is.
       if (shown?.id !== results.id || (shown.frames === 0 && results.frames > 0)) {
         this.#window = undefined
         transport.setSpan(results.domain, { live })
         if (live) transport.grow(results.domain[1])
+        else if (this.#running?.results === results.id) transport.seek(results.domain[1])
       } else {
         transport.grow(results.domain[1])
         transport.setLive(live)

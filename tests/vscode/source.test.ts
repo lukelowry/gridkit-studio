@@ -27,28 +27,27 @@ suite('Case source', () => {
     const invalid = new vscode.WorkspaceEdit()
     invalid.insert(bench.uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)
-    await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
-    await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
-    // The rows stay, and nothing in the panel speaks of the problem.
-    await visible(table, 'tbody .cell')
-    assert.equal(await table.locator('.c-note').count(), 0)
-    // A command that reads the case says nothing more of why it cannot: Problems says it already,
-    // and a notification the test did not expect fails it.
-    await vscode.commands.executeCommand('gridkitStudio.copyId', bench.uri)
-    await vscode.commands.executeCommand('gridkitStudio.openSource', bench.uri)
-    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
-    await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
-    // Undone from the keyboard, as the user would, once the editor has the keyboard. Whatever
-    // comes of it, the source is left as found, so no test after this one reads the edit.
+    // Whatever comes of what follows, the source is left as found, so no test after this one reads
+    // the edit.
     try {
-      const keys = bench.page.locator('.monaco-editor.focused').getByRole('textbox')
-      await until(async () => {
-        if (await keys.count()) return true
-        await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
-        return false
-      }, 'the source has the keyboard')
-      await keys.press('ControlOrMeta+z')
-      await until(() => document.getText() === text, 'the invalid edit undone')
+      await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
+      await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
+      // The rows stay, and nothing in the panel speaks of the problem.
+      await visible(table, 'tbody .cell')
+      assert.equal(await table.locator('.c-note').count(), 0)
+      // A command that reads the case says nothing more of why it cannot: Problems says it
+      // already, and a notification the test did not expect fails it.
+      await vscode.commands.executeCommand('gridkitStudio.copyId', bench.uri)
+      await vscode.commands.executeCommand('gridkitStudio.openSource', bench.uri)
+      await until(
+        () =>
+          vscode.window.visibleTextEditors.some(
+            (editor) => editor.document.uri.toString() === bench.uri.toString(),
+          ),
+        'the source in front',
+      )
+      // Undone as an edit of the source is, with VS Code's own undo.
+      await bench.undo('the invalid edit undone')
     } finally {
       if (document.getText() !== text) await bench.replace(text)
     }

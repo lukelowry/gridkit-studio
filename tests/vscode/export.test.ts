@@ -123,7 +123,8 @@ suite('Export', () => {
       }
       await startExport(exporter)
       await bench.dialog(video.fsPath)
-      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
+      // Drawing every slice through the plots first takes about two minutes on a software GPU.
+      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 240_000 })
       await webm(video.fsPath)
       const { slices } = await exporter.evaluate<{ slices: number }>('gridkitExport()')
       assert.ok(slices > 1, `${slices} slices streamed through the plots`)
@@ -133,5 +134,5 @@ suite('Export', () => {
       })
       await bench.session.load(shown.path)
     }
-  }).timeout(180_000)
+  }).timeout(300_000)
 })

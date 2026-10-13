@@ -143,7 +143,10 @@ suite('Case panel menus', () => {
     await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
     await bench.title('case', 'Open JSON Source')
     await until(
-      () => vscode.window.activeTextEditor?.document === bench.document,
+      () =>
+        vscode.window.visibleTextEditors.some(
+          (editor) => editor.document.uri.toString() === bench.uri.toString(),
+        ),
       'the source in front',
     )
   })

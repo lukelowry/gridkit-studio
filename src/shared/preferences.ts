@@ -1,5 +1,5 @@
-/** The display settings of Network, Diagram and Monitor, plus accessibility, each defined once; VS
- *  Code owns the theme. `pnpm settings` writes them into package.json for VS Code Settings. */
+/** The display settings of Network, Diagram and Monitor, each defined once; VS Code owns the theme,
+ *  its contrast and its motion. `pnpm settings` writes them into package.json for VS Code Settings. */
 
 import type { Colormap } from '@latkit/gpu'
 
@@ -159,16 +159,6 @@ const COLORMAPS = [
  *  long row a line of its own. */
 // prettier-ignore
 export const SETTINGS = [
-  category('accessibility', 'Accessibility', [
-    group('', [
-      choice('accessibility.motion', 'Motion', 'system',
-        [['system', 'System'], ['full', 'Full'], ['reduce', 'Reduce']],
-        'Full enables camera animation and interface motion. Reduce disables them. System follows the device.'),
-      choice('accessibility.contrast', 'Contrast', 'system',
-        [['system', 'System'], ['high', 'High']],
-        'Increase contrast for text, borders and controls. System follows the device.'),
-    ]),
-  ]),
   category('network', 'Network', [
     group('Layers', [
       bool('network.markers', 'Vertices', true, 'Off hides vertex labels too.'),
@@ -331,10 +321,8 @@ export const SETTINGS = [
       color('monitor.cursorColor', 'Playhead color', null, 'The line at the time on show.'),
     ]),
     group('Interaction', [
-      choice('monitor.input.mode', 'Mode', 'inspect',
-        [['inspect', 'Inspect'], ['navigate', 'Navigate']],
-        'Navigate adds the Home key to fit the plot.'),
-      bool('monitor.input.keyboard', 'Keyboard', true, 'Select and clear with the keys.'),
+      bool('monitor.input.keyboard', 'Keyboard', true,
+        'Select and clear with the keys, and fit the plot with Home.'),
       num('monitor.pickRadiusPx', 'Pick radius', 8, [0, 32, 1],
         'How near the pointer must be to select a line.'),
     ]),

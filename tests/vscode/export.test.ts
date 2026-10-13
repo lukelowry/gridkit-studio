@@ -7,6 +7,7 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import { formatNumber } from '../../src/shared/format.js'
 import { simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 /** Start the export once it can, with Enter on its button: the view, squeezed under others in the
@@ -52,7 +53,7 @@ suite('Export', () => {
     await bench.capture('export-vscode')
   }).timeout(180_000)
 
-  test('maps each moment it draws from the samples of that moment, chunk after chunk', async () => {
+  test('maps each moment of the times the Monitor shows from the samples of that moment, chunk after chunk', async () => {
     // Results long enough for several chunks, with the Network mapping their voltage.
     const shown = await bench.results()
     const results = await bench.waveform('Long waveform.csv', 30_000, 3)
@@ -64,13 +65,20 @@ suite('Export', () => {
     try {
       const exporter = await bench.show('export')
       await visible(exporter, '[data-testid="video-export"]')
-      // The Network's part alone, over a time that crosses from the first chunk into the third.
+      // The Network's part alone, over the time the Monitor shows: from the first chunk into the
+      // third, at twice the speed.
       const plots = exporter.getByRole('switch', { name: 'Monitor' })
       if ((await plots.getAttribute('aria-checked')) === 'true') await plots.click()
       const start = boundary(1) - 0.05
       const end = boundary(2) + 0.05
-      await exporter.getByLabel('Start (s)').fill(String(start))
-      await exporter.getByLabel('End (s)').fill(String(end))
+      bench.session.setWindow([start, end])
+      bench.session.transport.setRate(2)
+      const time = exporter.locator('[data-testid="video-time"]')
+      const said = `${formatNumber(start)} to ${formatNumber(end)} s`
+      await until(async () => {
+        const text = await time.innerText().catch(() => '')
+        return text.includes(said) && text.includes('2× playback speed')
+      }, 'the video says it shows the times the Monitor shows, at its speed')
       await startExport(exporter)
       await bench.dialog(video.fsPath)
       await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 120_000 })
@@ -85,6 +93,7 @@ suite('Export', () => {
       assert.ok(moments[0]! < boundary(1) && moments.at(-1)! > boundary(2), moments.join())
     } finally {
       bench.session.bind(VM, [])
+      bench.session.transport.setRate(1)
       await bench.session.load(shown.path)
     }
   }).timeout(180_000)

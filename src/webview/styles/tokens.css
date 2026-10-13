@@ -67,20 +67,13 @@ body[data-kind='export'] {
   --color-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }
 
-@media (prefers-reduced-motion: reduce) {
-  body:not([data-motion='full']) {
-    --motion-fast: 0ms;
-    --motion-mid: 0ms;
-  }
-}
-
-body[data-motion='reduce'] {
+/* VS Code says on the body whether it reduces motion, as its own setting or the device's asks. */
+body.vscode-reduce-motion {
   --motion-fast: 0ms;
   --motion-mid: 0ms;
 }
 
-/* Higher contrast: quiet text tiers step up to the foreground, and focus rings thicken. */
-body[data-contrast='high'],
+/* A high contrast theme: quiet text tiers step up to the foreground, and focus rings thicken. */
 body.vscode-high-contrast {
   --color-border: var(--vscode-contrastBorder, var(--color-text-1));
   --color-text-2: var(--color-text-1);

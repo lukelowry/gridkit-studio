@@ -28,8 +28,8 @@ import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
 import { VideoFiles } from './video.js'
 
-/** The views a clock moves. */
-const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor'])
+/** The views a clock moves, and an export, which plays at its speed. */
+const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor', 'export'])
 /** The views in VS Code's panels, which follow the case the views follow. */
 const PANELS = ['case', 'monitor', 'export'] as const
 
@@ -126,13 +126,14 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     window,
     drawnOf(results),
   ],
-  // An export's times follow the results' until the user chooses their own.
-  export: ({ uri, stale, error, bindings, plots, results }) => [
+  // An export shows the times the Monitor shows.
+  export: ({ uri, stale, error, bindings, plots, window, results }) => [
     uri,
     stale,
     error,
     bindings,
     plots,
+    window,
     drawnOf(results),
   ],
 }
@@ -375,7 +376,6 @@ class View {
         const { transport } = session
         if (message.action === 'seek') transport.seek(Number(message.value))
         else if (message.action === 'rate') transport.setRate(Number(message.value))
-        else if (message.action === 'loop') transport.setLoop(message.value)
         else if (message.action === 'playPause') transport.playPause()
         else if (message.action === 'goLive') transport.goLive()
         else if (message.action === 'step') await session.step(message.value === -1 ? -1 : 1)

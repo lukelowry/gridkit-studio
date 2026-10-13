@@ -9,6 +9,7 @@ import { basename, isAbsolute, join } from 'node:path'
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
@@ -17,6 +18,8 @@ import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
 
 const TIMEOUT = 30_000
+/** How long a read of what the page shows now waits for it: a moment, not a timeout. */
+const READ = { timeout: 1000 }
 /** The results file the suites play: a second of every bus's voltage. */
 const SYNTHETIC = 'Synthetic waveform.csv'
 
@@ -210,6 +213,17 @@ export async function idle<T extends { frames: number } = { frames: number }>(
     () => `the view still drawing, at ${now.frames} frames`,
   )
   return now
+}
+
+/** Plays `session`'s results over and over once played, for a test that measures playing for
+ *  longer than they last: each time playback stops at their end, it starts again from their start.
+ *  Dispose of what it returns to stop. */
+export function replaying(studio: Sessions, session: Session): vscode.Disposable {
+  const { transport } = session
+  return studio.clock.event((uri) => {
+    const { status, t, span } = transport.state
+    if (uri === session.uri && status === 'paused' && t >= span[1]) transport.play()
+  })
 }
 
 /** Whether a canvas view's canvas fills its webview edge to edge, with no padding around it. */
@@ -411,7 +425,7 @@ export class TestHost {
   }
 
   /** Make every element of `type` in the case `uri` list `fields` among its outputs and no other,
-   *  as Monitored Signals does, and wait for the case to read so. */
+   *  as Recorded Signals does, and wait for the case to read so. */
   async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
     const key = uri.toString()
     const summary = await this.studio.documents.ensure(this.studio.documents.get(key)!.document)
@@ -445,18 +459,18 @@ export class TestHost {
     return file
   }
 
-  /** Monitored Signals, the native tree of what the case records, once it shows. Unless `reveal`
+  /** Recorded Signals, the native tree of what the case records, once it shows. Unless `reveal`
    *  is false, its own command shows it first. */
   async signals({ reveal = true } = {}): Promise<Locator> {
     if (reveal) await vscode.commands.executeCommand('gridkitStudio.signals.focus')
     const pane = this.page.locator('.pane', {
-      has: this.page.locator('.pane-header', { hasText: /monitored signals/i }),
+      has: this.page.locator('.pane-header', { hasText: /recorded signals/i }),
     })
     await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: TIMEOUT })
     return pane
   }
 
-  /** The row of `type`'s `field` in Monitored Signals, its type opened to show it. */
+  /** The row of `type`'s `field` in Recorded Signals, its type opened to show it. */
   async signalLine(type: string, field: string): Promise<Locator> {
     const signals = await this.signals()
     const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
@@ -470,7 +484,7 @@ export class TestHost {
     return signals.getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
   }
 
-  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
+  /** Check or uncheck `field` of `type` in Recorded Signals as the user does: open its type,
    *  then click its box. */
   async toggleSignal(type: string, field: string): Promise<void> {
     const box = (await this.signalLine(type, field)).getByRole('checkbox')
@@ -592,11 +606,11 @@ export class TestHost {
     this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
   }
 
-  /** Choose `item` for `type`'s `field` in Monitored Signals: from the actions its row shows at its
+  /** Choose `item` for `type`'s `field` in Recorded Signals: from the actions its row shows at its
    *  right with `inline`, else from its right-click menu. */
   signalMenu(type: string, field: string, item: string, inline = false): void {
     const row = this.studio.signalRow?.(type, field)
-    assert.ok(row?.contextValue, `Monitored Signals lists ${type} ${field}`)
+    assert.ok(row?.contextValue, `Recorded Signals lists ${type} ${field}`)
     const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row.contextValue }
     const { command } = this.menus.find(
       'view/item/context',
@@ -608,7 +622,7 @@ export class TestHost {
     this.#run(command, row)
   }
 
-  /** What the right-click menu of `type`'s `field` in Monitored Signals offers. */
+  /** What the right-click menu of `type`'s `field` in Recorded Signals offers. */
   signalOffered(type: string, field: string): string[] {
     const row = this.studio.signalRow?.(type, field)
     const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row?.contextValue }
@@ -696,7 +710,8 @@ export class TestHost {
   // ── VS Code's own prompts, answered from the keyboard ──
 
   /** The quick input on show: a quick pick, an input box, or a file dialog. One closed stays in the
-   *  page hidden, holding what it last asked. */
+   *  page hidden, holding what it last asked. What it says is read with `READ`, as one may close
+   *  between two reads, and a read would otherwise wait out the whole timeout for another. */
   #prompt() {
     const widget = this.page.locator('.quick-input-widget:visible')
     return { widget, input: widget.locator('.quick-input-box input').first() }
@@ -708,7 +723,7 @@ export class TestHost {
     await input.waitFor({ state: 'visible' })
     return widget
       .locator('.quick-input-title')
-      .innerText()
+      .innerText(READ)
       .catch(() => '')
   }
 
@@ -721,9 +736,9 @@ export class TestHost {
       (await widget.isVisible()) &&
       (await widget
         .locator('.quick-input-title')
-        .innerText()
+        .innerText(READ)
         .catch(() => '')) === asked &&
-      (await input.inputValue().catch(() => '')) === entered
+      (await input.inputValue(READ).catch(() => '')) === entered
     await again(
       async () => {
         if (await asking()) await input.press('Enter', { timeout: 2000 }).catch(() => {})
@@ -795,7 +810,7 @@ export class TestHost {
     const { input } = this.#prompt()
     // The dialog opens on the folder it starts in; a picker still closing holds other text.
     await until(
-      async () => /[\\/]/.test(await input.inputValue().catch(() => '')),
+      async () => /[\\/]/.test(await input.inputValue(READ).catch(() => '')),
       'the file dialog',
     )
     const asked = await this.#asked()
@@ -1017,7 +1032,6 @@ export class TestHost {
       equal: undefined,
     })
     session.show(undefined)
-    session.transport.setLoop('none')
     session.transport.setRate(1)
   }
 

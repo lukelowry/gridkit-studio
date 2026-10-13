@@ -106,7 +106,6 @@ suite('Network', () => {
     await bench.results()
     const { transport } = bench.session
     bench.session.bind(VM, ['vertexColor'])
-    transport.setLoop('wrap')
     transport.seek(0)
     const still = await frames(network)
     transport.play()

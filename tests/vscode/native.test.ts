@@ -76,7 +76,7 @@ suite('Native menus', () => {
     await vscode.env.clipboard.writeText('')
     const shown = await bench.native(
       async () => canvas.click({ button: 'right', position: await at() }),
-      'Copy Identifier',
+      'Copy ID',
       async () => (await clipboard()) === id,
     )
     showed(shown, offered, true)
@@ -88,17 +88,16 @@ suite('Native menus', () => {
     await visible(monitor, 'canvas[data-rendered=true]')
     const canvas = monitor.locator('canvas').first()
     const offered = await bench.offered(canvas)
-    const search = bench.page.locator('.settings-editor .search-container .view-lines')
+    const plots = bench.session.plots.length
     const shown = await bench.native(
       () => canvas.click({ button: 'right' }),
-      'Monitor Settings',
-      async () => /gridkitStudio\.monitor/.test(await search.innerText().catch(() => '')),
+      'Remove Plot',
+      () => bench.session.plots.length === plots - 1,
     )
     showed(shown, offered, true)
-    await bench.settings(/gridkitStudio\.monitor/)
   })
 
-  test("a field in Monitored Signals shows its menu's items, and runs the one chosen", async () => {
+  test("a field in Recorded Signals shows its menu's items, and runs the one chosen", async () => {
     const line = await bench.signalLine('Bus', 'Vm')
     const offered = bench.signalOffered('Bus', 'Vm')
     await vscode.env.clipboard.writeText('')
@@ -150,10 +149,10 @@ suite('Native menus', () => {
   })
 
   test('the Command Palette runs a command by its title', async () => {
-    bench.menus.palette('Validate Case', bench.keys())
+    bench.menus.palette('Show Output', bench.keys())
     await vscode.commands.executeCommand('workbench.action.showCommands')
-    const title = 'GridKit Studio: Validate Case'
+    const title = 'GridKit Studio: Show Output'
     await bench.pick(title, '>' + title)
-    await until(async () => /^Problems/.test(await bench.panelShown()), 'Problems on show')
+    await until(async () => (await bench.panelShown()) === 'Output', 'the log on show')
   })
 })

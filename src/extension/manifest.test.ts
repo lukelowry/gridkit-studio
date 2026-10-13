@@ -98,7 +98,7 @@ describe('native VS Code contract', () => {
         (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
       ),
     ).toBe(false)
-    // The side bar holds what the case records and its video; Monitored Signals is a native tree,
+    // The side bar holds what the case records and its video; Recorded Signals is a native tree,
     // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
       ['gridkitStudio.signals', 'gridkitStudio.export'],
@@ -121,12 +121,18 @@ describe('native VS Code contract', () => {
       )
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
     expect(manifest.contributes.taskDefinitions).toBeUndefined()
-    // Playback lives in the status bar and the Network's projections in the Network, not the title
-    // bars; Fit is the canvas editors' own title action.
+    // Playback lives in the status bar, not the title bars; Fit is the canvas editors' own title
+    // action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
       manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
     )
-    for (const command of ['toggleTimeline', 'nextSample', 'loopTime', 'projection', 'orbit'])
+    for (const command of [
+      'playPause',
+      'previousSample',
+      'nextSample',
+      'goToTime',
+      'playbackSpeed',
+    ])
       expect(titled).not.toContain('gridkitStudio.' + command)
     expect(manifest.contributes.menus['editor/title']).toContainEqual(
       expect.objectContaining({ command: 'gridkitStudio.fit', group: 'navigation@1' }),
@@ -168,5 +174,11 @@ describe('native VS Code contract', () => {
     expect(context.gridkitReference).toBe(true)
     expect(context.gridkitNetwork).toBe(false)
     expect(context.gridkitDiagram).toBe(true)
+    // A whole element goes where it refers when its type refers to anything: a branch to its buses,
+    // and a bus nowhere.
+    const element = (id: string) =>
+      menuContext(summary, { ...target, origin: 'network', element: { id } }).gridkitReference
+    expect(element('Branch/one')).toBe(true)
+    expect(element('Bus/1')).toBe(false)
   })
 })

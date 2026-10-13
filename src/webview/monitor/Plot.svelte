@@ -214,7 +214,7 @@
           element: items[0] ? { id: itemId(items[0]), field: plot.field } : null,
         })
       }),
-      made.on('open', () => bridge.command('elementSource')),
+      made.on('open', () => bridge.command('revealInSource')),
       made.on('contextmenu', (event) =>
         nativeMenu(
           canvas,
@@ -454,19 +454,22 @@
     act()
   }
 
+  // A value range the user chose; none fits the values again, or, while the plot streams, spans
+  // its field's measured range as it did.
   onMount(() =>
     bridge.on((incoming) => {
-      if (incoming.kind !== 'action' || incoming.command !== 'signalRange') return
-      const { plot: target, range } = incoming.value as { plot?: Plot; range?: [number, number] }
-      if (
-        target &&
-        samePlot(target, plot) &&
-        range?.length === 2 &&
-        range.every(Number.isFinite) &&
-        range[0] < range[1]
-      )
+      if (incoming.kind !== 'action' || incoming.command !== 'valueRange') return
+      const { plot: target, range } = incoming.value as {
+        plot?: Plot
+        range?: [number, number] | null
+      }
+      if (!monitor || !target || !samePlot(target, plot)) return
+      if (range === null) {
+        const spanned = values()
+        monitor.set({ camera: spanned ? { y: spanned } : { fit: true } })
+      } else if (range?.length === 2 && range.every(Number.isFinite) && range[0] < range[1])
         // Setting y turns fitting off.
-        monitor?.set({ camera: { y: range } })
+        monitor.set({ camera: { y: range } })
     }),
   )
   onMount(() => {
@@ -530,8 +533,8 @@
     {/if}
   </div>
   <span class="c-sr-only" id={`${id}-keys`}>
-    Page Up and Page Down read traces. Space plays or pauses, and Left and Right step through
-    samples. Move the pointer over the paused plot to seek.
+    Page Up and Page Down read traces. Space plays or pauses, Left and Right step through samples,
+    and Home fits the plot. Move the pointer over the paused plot to seek.
   </span>
   <span
     class="c-sr-only"

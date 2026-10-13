@@ -2,7 +2,7 @@
 
 import { type ItemView, parseColor, type RGBA } from '@latkit/gpu'
 
-import type { SettingsReader, SettingsValues } from '../shared/preferences.js'
+import type { SettingsReader } from '../shared/preferences.js'
 
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
@@ -85,6 +85,12 @@ export const mix = (from: RGBA, to: RGBA, t: number): RGBA => [
   from[3],
 ]
 
+/** Whether views move: VS Code marks a page's body when it reduces motion, as its own setting or
+ *  the device's asks; and the class changing tells the theme's watchers. Outside a page, as in
+ *  tests, they move. */
+export const motion = (): 'full' | 'reduce' =>
+  globalThis.document?.body.classList.contains('vscode-reduce-motion') ? 'reduce' : 'full'
+
 /** The style every latkit view shares, from one view's settings: quality, motion, picking, text
  *  and colors, with `fallback`'s theme colors where a color setting is null. */
 export function viewStyle(
@@ -97,7 +103,6 @@ export function viewStyle(
     readonly selectedColor?: RGBA
   },
 ): ItemView.Style {
-  const motion = s.get('accessibility.motion')
   const family = s.get(`${view}.font`) || font
   return {
     msaa: s.get(`${view}.msaa`),
@@ -107,25 +112,13 @@ export function viewStyle(
     animationMs: s.get(`${view}.animationMs`),
     fitPaddingPx: s.get(`${view}.fitPaddingPx`),
     selectedWidthPx: s.get(`${view}.selectedWidthPx`),
-    motion: motion === 'system' ? 'auto' : motion,
+    motion: motion(),
     ...(family && { font: { family } }),
     fontSizePx: s.get(`${view}.fontSizePx`),
     background: color(s.get(`${view}.background`), fallback.background),
     textColor: color(s.get(`${view}.textColor`), fallback.textColor),
     selectedColor: color(s.get(`${view}.selectedColor`), fallback.selectedColor),
   }
-}
-
-/** Expose the user's motion and contrast settings to the tokens. Another contrast changes the
- *  theme's colors, which the watchers hear at once. */
-export function appearance(settings: SettingsValues | undefined) {
-  const { dataset } = document.body
-  const motion = settings?.['accessibility.motion'] ?? 'system'
-  if (dataset.motion !== motion) dataset.motion = motion
-  const contrast = settings?.['accessibility.contrast'] ?? 'system'
-  if (dataset.contrast === contrast) return
-  dataset.contrast = contrast
-  changed()
 }
 
 /** Calls `listener` whenever the theme changes; returns the unsubscribe. */

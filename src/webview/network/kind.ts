@@ -13,7 +13,7 @@ import { createClock } from '../clock.js'
 import type { Host, Kind } from '../kind.js'
 import { drawable, staticNeeds } from '../rows.js'
 import { networkNeeds, Samples } from '../samples.js'
-import { theme } from '../theme.js'
+import { motion, theme } from '../theme.js'
 import { icon, type IconName } from '../ui/glyphs.js'
 import type { Loaded } from './map.js'
 import type { Projection } from './network.js'
@@ -109,7 +109,7 @@ export function network(host: Host): Kind {
     const { results } = state
     const unavailable = results && (t < results.domain[0] || t > results.domain[1])
     const played = clock.state
-    const travel = played.status === 'playing' ? played.rate * played.direction : 0
+    const travel = played.status === 'playing' ? played.rate : 0
     samples.want(results, networkNeeds(state), unavailable ? undefined : [t, t], { at: t, travel })
     const rows = host.rows()
     if (rows) data = samples.data(rows.data)
@@ -195,7 +195,7 @@ export function network(host: Host): Kind {
     node.textContent = text
   }
   const orbit = (view: Network | undefined) => {
-    if (!view || host.state().settings?.['accessibility.motion'] === 'reduce') return
+    if (!view || motion() === 'reduce') return
     view.set({ camera: { orbit: !view.camera.orbit } })
   }
   /** Adds its projections and rotation over its top right; returns what syncs their state. Fit is
@@ -308,10 +308,6 @@ export function network(host: Host): Kind {
     sync: () => {
       sync()
       regrounded()
-    },
-    act(view, command, value) {
-      if (command === 'projection') module!.setProjection(view as Network, value as Projection)
-      else if (command === 'orbit') orbit(view as Network)
     },
     retry() {
       mapped = undefined

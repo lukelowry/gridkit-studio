@@ -74,26 +74,3 @@ export function displayOf(uri: vscode.Uri): SettingsValues {
   }
   return result
 }
-
-/** The choices of the display setting `id`, as its definition names them. */
-export function choicesOf(id: keyof SettingsValues): { label: string; value: unknown }[] {
-  const definition = definitions.find((each) => each.id === id)
-  return definition && 'options' in definition ? [...definition.options] : []
-}
-
-/** Sets the display setting `id` for the case at `uri`: in its workspace folder when it is in one,
- *  which in a workspace of several folders is the case's alone; else in the workspace when one is
- *  open; else for the user. */
-export function choose(id: keyof SettingsValues, value: unknown, uri: vscode.Uri) {
-  return vscode.workspace
-    .getConfiguration(PREFIX, uri)
-    .update(
-      id,
-      value,
-      vscode.workspace.getWorkspaceFolder(uri)
-        ? vscode.ConfigurationTarget.WorkspaceFolder
-        : vscode.workspace.workspaceFolders?.length
-          ? vscode.ConfigurationTarget.Workspace
-          : vscode.ConfigurationTarget.Global,
-    )
-}

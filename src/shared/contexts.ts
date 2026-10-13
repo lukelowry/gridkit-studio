@@ -1,6 +1,14 @@
 import { type Bindings, NUMERIC } from './bindings.js'
 import type { Element, Plot, Revision, Summary } from './messages.js'
-import { diagramOf, elementType, fieldOf, isReference, networkOf, placementOf } from './schema.js'
+import {
+  diagramOf,
+  elementType,
+  fieldOf,
+  isReference,
+  networkOf,
+  placementOf,
+  referencesOf,
+} from './schema.js'
 
 /** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
 type Scope = 'element' | 'value' | 'column' | 'plot'
@@ -23,11 +31,11 @@ interface Rows {
   filtered?: boolean
 }
 
-/** The words a Monitored Signals row's `contextValue` holds, which its menu items match: it is a
+/** The words a Recorded Signals row's `contextValue` holds, which its menu items match: it is a
  *  field, the case records it, a network channel can show it, and one does. */
 export const SIGNAL_WORDS = ['field', 'recorded', 'mappable', 'mapped'] as const
 
-/** A Monitored Signals field row's `contextValue`. */
+/** A Recorded Signals field row's `contextValue`. */
 export function signalContext(
   has: Record<Exclude<(typeof SIGNAL_WORDS)[number], 'field'>, boolean>,
 ) {
@@ -64,11 +72,13 @@ export function menuContext(
     gridkitPort: !!definition?.direction,
     gridkitNetwork: !!network,
     gridkitDiagram: !!diagram,
-    gridkitEdge: network === 'edge',
     // A whole element edits whichever of its fields the user picks.
     gridkitEditable:
       !!target.element && (field ? !!editable?.includes(field) : (editable?.length ?? 0) > 0),
-    gridkitReference: isReference(definition),
+    // A reference field, or, for a whole element, any it has: what Go to Referenced Element follows.
+    gridkitReference: field
+      ? isReference(definition)
+      : !!type && referencesOf(summary.schema, type).length > 0,
     gridkitScalar:
       NUMERIC.has(definition?.type) ||
       definition?.type === 'text' ||

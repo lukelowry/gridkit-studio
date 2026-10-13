@@ -2,12 +2,12 @@
   import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
+  import { formatNumber } from '../../shared/format.js'
   import type { Results, VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { CanvasGpu } from '../gpu.js'
   import { plotStatics, rowsOnce, staticNeeds } from '../rows.js'
   import { networkNeeds, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
-  import { appearance } from '../theme.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -17,12 +17,13 @@
     exportVideo,
     prefetchMap,
     type VideoSettings,
+    videoTimes,
     viewsOf,
   } from './video.js'
 
-  const ENDS = [0, 1] as const
-
   let view = $state.raw<ViewState>({})
+  /** The speed the results play at, which the video plays them at. */
+  let rate = $state(1)
   /** The settings the user chose, kept when the webview reloads. */
   let settings = $state.raw<VideoSettings>({
     ...DEFAULTS,
@@ -33,9 +34,6 @@
   let status = $state<'idle' | 'running' | 'done' | 'cancelled'>('idle')
   /** Where the last video was written. */
   let saved = $state('')
-  /** The results the time range came from, and whether the user has edited it since. */
-  let seeded: string | undefined
-  let touched = false
   /** The samples the Monitor's part plots, all of the time range; and those the Network's part
    *  maps, a moment at a time, read a few chunks ahead of the frame drawn. */
   const plotting = new Samples(bridge, () => {}, plotBudget)
@@ -49,16 +47,17 @@
   let slices = 0
   ;(window as { gridkitExport?: () => unknown }).gridkitExport = () => ({ moments, slices })
   const owner = new CanvasGpu()
-  const id = $props.id()
 
   const busy = $derived(status === 'running')
-  const range = $derived(view.results?.domain)
   const views = $derived(viewsOf(view))
-  const ready = $derived(exportable(settings, view))
+  /** The times the video shows: the Monitor's. */
+  const times = $derived(videoTimes(view))
+  /** The video as it would export now. */
+  const job = $derived(times && { ...settings, timeRange: times, rate })
+  const ready = $derived(exportable(job, view))
   const percent = $derived(
     progress ? Math.floor((100 * progress.completedFrames) / Math.max(1, progress.totalFrames)) : 0,
   )
-  const duration = $derived((settings.timeRange[1] - settings.timeRange[0]) / settings.rate)
 
   const change = (next: Partial<VideoSettings>) => (settings = { ...settings, ...next })
 
@@ -68,25 +67,12 @@
     })
   }
 
-  /** Set one end of the time range. */
-  function bound(end: 0 | 1, value: number): void {
-    touched = true
-    change({
-      timeRange: end === 0 ? [value, settings.timeRange[1]] : [settings.timeRange[0], value],
-    })
-  }
-
-  function useRecordedRange(): void {
-    touched = false
-    if (range) change({ timeRange: [range[0], range[1]] })
-  }
-
   /** Export to a file the user picks, written as frames are encoded. */
   async function start(): Promise<void> {
-    const chosen = settings
+    const chosen = job
     const shown = view
     const { summary, uri } = shown
-    if (busy || !ready || !summary || !uri) return
+    if (busy || !exportable(chosen, shown) || !summary || !uri) return
     const control = (stop = new AbortController())
     const { signal } = control
     /** Aborted once the export ends, however it ends. */
@@ -205,24 +191,14 @@
   onMount(() => {
     const stops = [
       bridge.on((message) => {
+        // A clock of the case on show, its last state said, carries the speed.
+        if (message.kind === 'clock') {
+          if (message.of.showing === bridge.of.showing) rate = message.clock.rate
+          return
+        }
         if (message.kind !== 'state') return
         view = merged(view, message.state)
-        appearance(view.settings)
         prefetchMap(view)
-        const { results } = view
-        // The time range follows the results until the user edits it.
-        if (
-          results &&
-          results.domain[1] > results.domain[0] &&
-          (results.id !== seeded || !touched) &&
-          !busy
-        ) {
-          if (results.id !== seeded) touched = false
-          seeded = results.id
-          const [start, end] = settings.timeRange
-          if (start !== results.domain[0] || end !== results.domain[1])
-            change({ timeRange: [results.domain[0], results.domain[1]] })
-        }
         const offered = viewsOf(view).map(({ value }) => value)
         if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
           change({ views: settings.views.filter((shown) => offered.includes(shown)) })
@@ -272,44 +248,15 @@
           }
         />
       </Section>
-      <Section label="Time">
-        {#each ENDS as end (end)}
-          <div class="c-row c-setting-row">
-            <label class="c-row__label" for="{id}-{end}">{end ? 'End' : 'Start'} (s)</label>
-            <input
-              id="{id}-{end}"
-              class="c-input"
-              type="number"
-              step="any"
-              min={range?.[0]}
-              max={range?.[1]}
-              value={settings.timeRange[end]}
-              oninput={(event) => bound(end, event.currentTarget.valueAsNumber)}
-            />
-          </div>
-        {/each}
-        <button
-          type="button"
-          class="c-btn c-btn--sm export__range"
-          disabled={!range}
-          onclick={useRecordedRange}
-        >
-          Use recorded range
-        </button>
-        <Select
-          label="Playback speed"
-          options={[0.25, 0.5, 1, 2, 4].map((value) => ({ value, label: value + 'x' }))}
-          bind:value={
-            () => settings.rate,
-            (rate) => {
-              if (rate) change({ rate })
-            }
-          }
-        />
-        {#if Number.isFinite(duration) && duration > 0}
-          <p class="c-note">Output duration: {duration.toFixed(2)} s.</p>
-        {/if}
-      </Section>
+      <!-- The Monitor's time window and the playback speed choose these, as they do what plays. -->
+      {#if times}
+        <Section label="Time">
+          <p class="c-note" data-testid="video-time">
+            {formatNumber(times[0])} to {formatNumber(times[1])} s, as the Monitor shows, at
+            {formatNumber(rate)}× playback speed: {formatNumber((times[1] - times[0]) / rate)} s of video.
+          </p>
+        </Section>
+      {/if}
       <Section label="Output">
         <Select
           label="Format"
@@ -394,10 +341,10 @@
           <progress max="100" value={percent} aria-label="Video export progress"></progress>
           <p class="c-note" role="status">
             {progress?.phase === 'finalizing'
-              ? 'Finalizing video...'
+              ? 'Finalizing video…'
               : progress
                 ? 'Exporting video: ' + percent + '%'
-                : 'Preparing video...'}
+                : 'Preparing video…'}
           </p>
         {:else if status === 'done'}
           <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
@@ -428,10 +375,6 @@
 
   .export__fields:disabled {
     opacity: 0.7;
-  }
-
-  .export__range {
-    margin-inline-start: var(--spacing-xs);
   }
 
   .export__footer {

@@ -1,6 +1,6 @@
 /** Playback in the status bar, right of the problem counts behind a bar: step back, play or pause,
- *  step forward, the time, the speed, and the end. They follow the active case's clock while its
- *  results have samples. */
+ *  step forward, the time, and the speed. They follow the active case's clock while its results
+ *  have samples. */
 
 import * as vscode from 'vscode'
 
@@ -31,12 +31,11 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
   bar.color = new vscode.ThemeColor('disabledForeground')
   bar.accessibilityInformation = { label: 'Playback', role: 'separator' }
   const back = item('back', 'Previous Sample', 'previousSample')
-  const play = item('play', 'Play or Pause', 'toggleTimeline')
+  const play = item('play', 'Play or Pause', 'playPause')
   const forward = item('forward', 'Next Sample', 'nextSample')
-  const time = item('time', 'Time', 'seekTime')
-  const speed = item('speed', 'Playback Speed', 'timeSpeed')
-  const end = item('end', 'Go to End', 'followTime')
-  const items = [bar, back, play, forward, time, speed, end]
+  const time = item('time', 'Time', 'goToTime')
+  const speed = item('speed', 'Playback Speed', 'playbackSpeed')
+  const items = [bar, back, play, forward, time, speed]
   /** What each item says now: while the clock plays, only the time changes, so only it is sent. */
   const said = new Map<vscode.StatusBarItem, string>()
   const say = (target: vscode.StatusBarItem, text: string, label: string) => {
@@ -64,7 +63,7 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const { transport } = session
     const t = transport.currentT()
     const playing = state.status === 'playing'
-    const finished = !session.live && !playing && state.loop === 'none' && t >= state.span[1]
+    const finished = !session.live && !playing && t >= state.span[1]
     // The times a run will cover, which its samples fill as they arrive.
     const [from, to] = results.span ?? results.domain
     const unit = studio.documents.get(session.uri)?.summary?.schema.axis?.unit ?? 's'
@@ -81,7 +80,6 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
       `Time ${formatNumber(t)} ${unit} of ${formatNumber(from)} to ${formatNumber(to)} ${unit}. Go to a time`,
     )
     say(speed, `${formatNumber(state.rate)}×`, `Speed: ${formatNumber(state.rate)}×`)
-    say(end, '$(run-all)', session.live ? 'Go live' : 'Go to end')
     if (!shown) for (const each of items) each.show()
     shown = true
     if (playing && !timer) timer = setInterval(show, TICK_MS)

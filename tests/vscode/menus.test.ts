@@ -8,7 +8,6 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame, Locator } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { definitions } from '../../src/shared/preferences.js'
 import {
   clipboard,
   custom,
@@ -54,7 +53,7 @@ suite('Case panel menus', () => {
 
   test("copies a row's id, a value, and a column's path", async () => {
     const [bus] = bench.source.buses
-    await bench.menu(row(String(bus!.number)), 'Copy Identifier')
+    await bench.menu(row(String(bus!.number)), 'Copy ID')
     await until(async () => (await clipboard()) === 'Bus/' + bus!.number, 'the id copied')
     await bench.menu(cells('params.kv').first(), 'Copy Value')
     await until(async () => (await clipboard()) === String(bus!.params.kv), 'the value copied')
@@ -96,15 +95,15 @@ suite('Case panel menus', () => {
     await visible(table, `thead th[data-field="name"]`)
   })
 
-  test("goes to a branch's ends, and to the bus a reference names", async () => {
+  test('goes to the bus of a branch the user picks, and to the bus a reference names', async () => {
     const branch = source().devices.find((device) => device.class === 'Branch')!
-    for (const [item, end] of [
-      ['Go to Endpoint 1', 'bus1'],
-      ['Go to Endpoint 2', 'bus2'],
-    ] as const) {
+    for (const end of ['bus1', 'bus2'] as const) {
+      const bus = 'Bus/' + branch.ports[end]
       await bench.caseType('Branch')
-      await bench.menu(row(branch.id), item)
-      await until(() => selected() === 'Bus/' + branch.ports[end], item)
+      await bench.menu(row(branch.id), 'Go to Referenced Element')
+      // Each reference is offered by its field, with the element it names beside it.
+      await bench.pick(new RegExp(bus + '(?!\\d)'))
+      await until(() => selected() === bus, end)
     }
     // Its second end, among the columns the title bar offers.
     await bench.caseType('Branch')
@@ -177,7 +176,7 @@ suite('Network menus', () => {
 
   test('reveals a bus in the Case panel from its menu', async () => {
     const { number } = bench.source.buses[3]!
-    await menu('Bus/' + number, 'Reveal in Case')
+    await menu('Bus/' + number, 'Reveal in Case Panel')
     const table = await bench.view('case')
     await until(
       async () =>
@@ -246,11 +245,6 @@ suite('Network menus', () => {
       await until(async () => (await frames(network)) > drawn + 10, 'drawn as it turns')
       await turn.click()
       await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still')
-      // The Command Palette turns it as the toolbar does, which says so.
-      await bench.palette('Toggle Orbit')
-      await until(async () => (await turn.getAttribute('aria-pressed')) === 'true', 'turning again')
-      await bench.palette('Toggle Orbit')
-      await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still again')
     } finally {
       await bench.page.emulateMedia({ reducedMotion: null })
     }
@@ -269,28 +263,14 @@ suite('Network menus', () => {
     network = await bench.open('network')
   })
 
-  test('changes projection from the Command Palette', async () => {
-    await bench.palette('Projection…')
-    await bench.pick('tilt')
+  test('changes projection from its own toolbar', async () => {
+    await network.getByRole('button', { name: 'Tilt', exact: true }).click()
     await until(async () => (await camera())?.projection === 'tilt', 'tilted')
     await network.getByRole('button', { name: 'Flat', exact: true }).click()
     await until(async () => (await camera())?.projection === 'flat', 'flat again')
   })
 
-  test('chooses its colormap and opens its settings from the title bar', async () => {
-    const settings = () => vscode.workspace.getConfiguration('gridkitStudio', bench.uri)
-    const before = settings().get('network.colormap')
-    const setting = definitions.find((each) => each.id === 'network.colormap')!
-    const other = ('options' in setting ? setting.options : []).find(
-      (option) => option.value !== before,
-    )!
-    try {
-      await bench.title('editor', 'Colormap')
-      await bench.pick(new RegExp(`^${other.label}$`), other.label)
-      await until(() => settings().get('network.colormap') === other.value, 'the colormap set')
-    } finally {
-      await settings().update('network.colormap', undefined, vscode.ConfigurationTarget.Workspace)
-    }
+  test('opens its settings from the title bar', async () => {
     await bench.title('editor', 'Network Settings')
     await bench.settings(/gridkitStudio\.network/)
   })
@@ -298,7 +278,7 @@ suite('Network menus', () => {
   test('draws again from the start from its title bar', async () => {
     network = await bench.open('network')
     const drawn = (await idle(network)).frames
-    await bench.title('editor', 'Reload Visualization')
+    await bench.title('editor', 'Reload View')
     await until(async () => (await frames(network).catch(() => Infinity)) < drawn, 'a new drawing')
     await visible(network, 'canvas[data-rendered=true]')
   })
@@ -355,7 +335,7 @@ suite('Diagram menus', () => {
 
   test('deletes a block from its menu, and undo brings it back', async () => {
     diagram = await bench.open('diagram')
-    await menu(undefined, 'Delete Diagram Element')
+    await menu(undefined, 'Delete Element')
     await until(() => !device(), 'the block gone from the case')
     await bench.settled()
     await bench.undo('the block back')
@@ -372,7 +352,7 @@ suite('Monitor menus', () => {
   let bench: TestHost
   let monitor: Frame
   const plotted = () =>
-    monitor.evaluate<{ x: number[]; y: number[] }>(
+    monitor.evaluate<{ x: number[]; y: number[]; fit: boolean }>(
       'document.querySelector("canvas").gridkitPlot().camera',
     )
   /** Choose `item` from the menu of the plot `n`. */
@@ -389,25 +369,36 @@ suite('Monitor menus', () => {
   })
   suiteTeardown(() => simpleDialog(undefined))
 
-  test('narrows a plot to another element from its menu', async () => {
+  test('narrows a plot to another element from its menu, and widens it to every element again', async () => {
     const id = 'Bus/' + bench.source.buses[4]!.number
     await menu('Choose Plot Element')
     // The picker names each bus, its id beside the name; typing an exact id finds that one.
     await bench.pick(new RegExp(id), id)
     await until(() => bench.session.plots[0]?.id === id, 'the plot narrowed')
+    await menu('Choose Plot Element')
+    await bench.pick('Every element')
+    await until(() => bench.session.plots[0]?.id === undefined, 'every bus plotted again')
   })
 
-  test("sets a plot's value range from its menu", async () => {
-    await menu('Plot Value Range')
+  test("sets a plot's value range from its menu, and fits its values again", async () => {
+    await menu('Value Range')
     await bench.answer('0.5, 1.5')
     await until(async () => (await plotted()).y.join() === '0.5,1.5', 'the range set')
+    await menu('Value Range')
+    await bench.answer('')
+    // The plot fits its values again, which the next frame frames.
+    await until(async () => {
+      const { fit, y } = await plotted()
+      return fit && y.join() !== '0.5,1.5'
+    }, 'the values fitted')
   })
 
-  test('narrows the time it shows and fits it back from the title bar', async () => {
+  test('narrows the time it shows and shows the whole run again from the title bar', async () => {
     await bench.title('monitor', 'Time Window')
     await bench.answer('0.2, 0.4')
     await until(async () => (await plotted()).x.join() === '0.2,0.4', 'the window narrowed')
-    await bench.title('monitor', 'Fit Recorded Time')
+    await bench.title('monitor', 'Time Window')
+    await bench.answer('')
     const results = bench.session.results!
     await until(
       async () => (await plotted()).x.join() === (results.span ?? results.domain).join(),
@@ -421,7 +412,7 @@ suite('Monitor menus', () => {
       .locator('canvas')
       .first()
       .evaluate((canvas) => (canvas.dataset.before = ''))
-    await bench.title('monitor', 'Reload Monitor')
+    await bench.title('monitor', 'Reload View')
     await until(
       async () => (await monitor.locator('canvas[data-before]').count()) === 0,
       'remounted',
@@ -429,13 +420,11 @@ suite('Monitor menus', () => {
     await visible(monitor, 'canvas[data-rendered=true]')
   })
 
-  test('repeats playback as chosen from the Command Palette', async () => {
-    await bench.palette('Repeat Mode…')
-    await bench.pick('Bounce')
-    await until(() => bench.session.transport.state.loop === 'pingpong', 'bouncing')
-  })
-
   test('adds a plot from the title bar, and removes plots from their menu and close button', async () => {
+    // One bus's voltage, beside which the voltage of every bus is another plot.
+    bench.session.setPlots([
+      { from: 'Bus', field: 'Vm', id: 'Bus/' + bench.source.buses[4]!.number },
+    ])
     await bench.title('monitor', 'Add Plot')
     await bench.pick(/Vm/, 'Vm')
     await until(() => bench.session.plots.length === 2, 'a second plot')
@@ -470,12 +459,10 @@ suite('Monitor menus', () => {
     )
   })
 
-  test('opens results from the title bar, and plots one of their signals', async () => {
+  test('opens results from the title bar, and plots a signal they hold', async () => {
     const path = vscode.Uri.joinPath(folder(), 'Synthetic waveform.csv').fsPath
     await bench.title('monitor', 'Open Results')
     await bench.dialog(path)
-    // Named as its plot is.
-    await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
     // A file read before and unchanged since shows as the results already read.
     await until(() => bench.session.results?.path === path, 'the opened results on show')
     await until(
@@ -494,7 +481,6 @@ suite('Monitor menus', () => {
       await settings.update('resultCacheMiB', 0, vscode.ConfigurationTarget.Global)
       await bench.title('monitor', 'Open Results')
       await bench.dialog(path)
-      await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
       await until(() => bench.session.results?.path === path, 'the results on show')
       await visible(monitor, 'canvas[data-rendered=true]')
       assert.equal((await kept()).cacheBytes, 0)
@@ -511,7 +497,7 @@ suite('Monitor menus', () => {
   })
 })
 
-suite('Monitored Signals menus', () => {
+suite('Recorded Signals menus', () => {
   let bench: TestHost
   const vertexColor = () => bench.session.bindings.vertexColor
 
@@ -580,13 +566,8 @@ suite('Studio commands', () => {
   })
   suiteTeardown(() => simpleDialog(undefined))
 
-  test('validates the case, diagnoses performance and shows the log from the Command Palette', async () => {
-    await bench.palette('Validate Case')
-    await until(async () => /^Problems/.test(await bench.panelShown()), 'Problems on show')
-    await bench.palette('Show Performance Diagnostics')
-    await until(async () => (await bench.panelShown()) === 'Output', 'the diagnostics on show')
-    await vscode.commands.executeCommand('workbench.action.closePanel')
-    await bench.palette('Show Simulation Output')
+  test('shows the log from the Command Palette', async () => {
+    await bench.palette('Show Output')
     await until(async () => (await bench.panelShown()) === 'Output', 'the log on show')
   })
 

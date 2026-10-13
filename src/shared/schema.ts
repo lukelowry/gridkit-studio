@@ -81,7 +81,8 @@ export function nameFieldOf(schema: Schema, type: string): string | null {
   return (texts.find(([field]) => field === 'name') ?? texts[0])?.[0] ?? null
 }
 
-function referencesOf(schema: Schema, type: string): Reference[] {
+/** The fields of `type` that name a row of another type, in the order the schema has them. */
+export function referencesOf(schema: Schema, type: string): Reference[] {
   return Object.entries(fieldsOf(schema, type)).flatMap(([field, { type: data, direction }]) =>
     typeof data === 'object' && data.kind === 'reference'
       ? [{ field, to: data.to, ...(direction !== undefined && { direction }) }]

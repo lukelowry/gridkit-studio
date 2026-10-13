@@ -1,6 +1,6 @@
 <!-- One lane per plotted signal of the results on show, stacked over one time axis that the last
   labels. Plots are added from the view's title bar, which also names the results, and played from
-  the status bar. -->
+  the status bar. Without results or plots, it says how to get them. -->
 <script lang="ts">
   import type { Data, Domain, Query } from '@latkit/model'
   import { onMount } from 'svelte'
@@ -13,7 +13,7 @@
   import { Recovery } from '../recovery.js'
   import { ofShown, plotStatics, Rows, type Snapshot } from '../rows.js'
   import { leastWants, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
-  import { appearance, theme, watchTheme } from '../theme.js'
+  import { theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
 
@@ -142,25 +142,23 @@
         if (incoming.kind === 'state') {
           const before = view
           view = merged(view, incoming.state)
-          appearance(view.settings)
           // Other results reset the window, and the plots draw them from the start; a window the
           // extension set replaces the user's.
           if (view.results?.id !== before.results?.id) {
             clearTimeout(telling)
             chosen = told = undefined
             wants = new Map()
-          } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
-            chosen = undefined
-        } else if (incoming.kind === 'shown') visible = incoming.shown
-        else if (incoming.kind === 'action') {
-          if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
-          else if (incoming.command === 'retryMonitor') {
-            recovery.reset()
-            retries++
-            epoch++
-            cases.retry()
-            samples.retry()
+          } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told)) {
+            clearTimeout(telling)
+            chosen = told = undefined
           }
+        } else if (incoming.kind === 'shown') visible = incoming.shown
+        else if (incoming.kind === 'action' && incoming.command === 'reloadView') {
+          recovery.reset()
+          retries++
+          epoch++
+          cases.retry()
+          samples.retry()
         }
       }),
       watchTheme(() => (colors = theme())),
@@ -196,9 +194,12 @@
       {:else if !view.summary}
         <p class="c-empty__text">Loading case…</p>
       {:else if !results}
-        <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
-          Choose monitored signals
-        </button>
+        <p class="c-empty__text">
+          Right-click a .solver.json and choose Run Dynamic Simulation to see its results here.
+        </p>
+      {:else if results.outputs.length}
+        <!-- Until GridKit writes the header, the results hold nothing to plot yet. -->
+        <p class="c-empty__text">Add a plot from the title bar.</p>
       {/if}
     </div>
   {:else}

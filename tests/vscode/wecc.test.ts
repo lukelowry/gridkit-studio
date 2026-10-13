@@ -167,8 +167,8 @@ suite('WECC240 run', function () {
 
   test('runs with Va alone, mapped to color and height on a tilted network', async () => {
     const key = uri.toString()
-    // The case records bus angles alone, as Monitored Signals makes it.
-    await vscode.commands.executeCommand('gridkitStudio.clearSignals')
+    // The case records bus angles alone, as Recorded Signals makes it.
+    await vscode.commands.executeCommand('gridkitStudio.recordNoSignals')
     await until(
       () => !Object.keys(bench.studio.state(key).summary?.recording.listed ?? {}).length,
       'the case records nothing',

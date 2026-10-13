@@ -51,20 +51,21 @@ suite('Run', function () {
     network = await bench.open('network')
   })
 
-  test('records what Monitored Signals checks, and runs from the solver file in place', async () => {
+  test('records what Recorded Signals checks, and runs from the solver file in place', async () => {
     assert.deepEqual(bench.session.plots, [])
     monitor = await bench.show('monitor')
-    // The Monitor's own button brings the native Monitored Signals view back into sight.
-    await vscode.commands.executeCommand('workbench.action.closeSidebar')
-    const pane = bench.page.locator('.pane', {
-      has: bench.page.locator('.pane-header', { hasText: /monitored signals/i }),
-    })
-    await again(
-      () => monitor.getByRole('button', { name: 'Choose monitored signals' }).click(),
-      () => pane.getByRole('treeitem').first().isVisible(),
-      'Monitored Signals shown',
+    // Without results, the Monitor says how to get them.
+    await until(
+      async () =>
+        /Run Dynamic Simulation/.test(
+          await monitor
+            .locator('.c-empty__text')
+            .innerText()
+            .catch(() => ''),
+        ),
+      'the Monitor says how to run',
     )
-    const signals = await bench.signals({ reveal: false })
+    const signals = await bench.signals()
     // Record nothing, through the view's own title action: the case's every list goes empty.
     const listed = () => Object.keys(bench.studio.state(bench.key).summary?.recording.listed ?? {})
     await again(
@@ -78,7 +79,9 @@ suite('Run', function () {
       () => !listed().length,
       'the case records nothing',
     )
-    // A run says what keeps it from starting, and offers to choose what to record.
+    // A run says what keeps it from starting, and offers to choose what to record, which brings
+    // the view back into sight.
+    await vscode.commands.executeCommand('workbench.action.closeSidebar')
     bench.run()
     await bench.notice('Choose Signals').click()
     await bench.signals({ reveal: false })
@@ -189,7 +192,7 @@ suite('Run', function () {
     const t = bench.session.transport.currentT()
     await bench.playback('Next sample').click()
     await until(() => bench.session.transport.currentT() > t, 'step one recorded sample')
-    await vscode.commands.executeCommand('gridkitStudio.seekTime', end)
+    await vscode.commands.executeCommand('gridkitStudio.goToTime', end)
     await bench.playback('Replay').click()
     await until(() => bench.session.transport.state.status === 'playing', 'replay starts')
     await bench.playback('Pause').click()
@@ -202,7 +205,7 @@ suite('Run', function () {
     await bench.title('monitor', 'Clear Results')
     await until(() => !bench.session.results, 'the results go')
     // The solver file's menu reads the file its runs write, as written.
-    bench.explorer(bench.solver, 'Show Results')
+    bench.explorer(bench.solver, 'Show Last Results')
     await until(
       () => bench.session.results?.frames === written.frames,
       'the solver file’s results show again',
@@ -213,7 +216,7 @@ suite('Run', function () {
     await visible(monitor, 'canvas[data-rendered=true]')
     // The Monitor's title bar runs the solver file of the results it shows.
     const previous = bench.session.run?.id
-    await bench.title('monitor', 'Run Again')
+    await bench.title('monitor', 'Run Simulation Again')
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',
       'the solver file runs again',
@@ -289,7 +292,8 @@ suite('Run', function () {
       'all live plots keep the solver file’s end time',
     )
     assert.equal((await bench.times())[1], 1000)
-    await bench.playback('Go live').click()
+    // Go to End goes to the head of a run still writing, and follows it.
+    await bench.palette('Go to End')
     await until(() => bench.session.transport.state.follow, 'follow live again')
     await bench.stop()
     await until(() => bench.session.run?.state === 'cancelled', 'the run stopped')

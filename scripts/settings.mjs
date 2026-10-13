@@ -64,7 +64,7 @@ function property(group, setting) {
 const groups = SETTINGS.map((category) => ({
   id: 'gridkitStudio.' + category.id,
   title: 'GridKit Studio: ' + category.label,
-  order: ['network', 'diagram', 'monitor', 'accessibility'].indexOf(category.id) + 1,
+  order: ['network', 'diagram', 'monitor'].indexOf(category.id) + 1,
   properties: Object.fromEntries(
     category.groups.flatMap((group) =>
       group.settings.map((setting) => ['gridkitStudio.' + setting.id, property(group, setting)]),

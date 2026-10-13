@@ -16,7 +16,7 @@ import type { Drawn, Host } from './kind.js'
 import { network } from './network/kind.js'
 import { Recovery } from './recovery.js'
 import { Rows, type Snapshot } from './rows.js'
-import { appearance, watchTheme } from './theme.js'
+import { watchTheme } from './theme.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
@@ -122,7 +122,7 @@ function boot() {
   }
   const open = (element: Element) => {
     select(element)
-    bridge.command('elementSource')
+    bridge.command('revealInSource')
   }
   const host: Host = {
     element,
@@ -178,7 +178,6 @@ function boot() {
     // State arrives before the matching rows. Keep the last valid frame until both refer to the
     // same revision, rather than applying new row selections to old tables.
     if (!kind.current(snapshot) || !kind.ready()) return
-    appearance(state.settings)
     try {
       kind.paint(view, snapshot)
       drawn = received
@@ -318,7 +317,7 @@ function boot() {
         const item =
           typeof message.value === 'string' ? drawnItem({ id: message.value }) : view.selection[0]
         if (item) view.fit(view.neighborhood(item as never) as never, { animate: true })
-      } else kind.act(view, message.command, message.value)
+      }
       kind.sync()
     }
   })

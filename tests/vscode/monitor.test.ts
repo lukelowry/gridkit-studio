@@ -38,7 +38,7 @@ suite('Monitor', () => {
 
   test("follows the case's one clock when a command moves it", async () => {
     assert.equal(transport().state.status, 'paused')
-    await vscode.commands.executeCommand('gridkitStudio.seekTime', 0.5)
+    await vscode.commands.executeCommand('gridkitStudio.goToTime', 0.5)
     assert.equal(transport().currentT(), 0.5)
     await until(
       async () => Math.abs((await bench.times())[0]! - 0.5) < 0.01,
@@ -49,7 +49,7 @@ suite('Monitor', () => {
   test('changes that clock from the status bar', async () => {
     await bench.playback('Play').click()
     await until(() => transport().state.status === 'playing', 'playback from the status bar')
-    await vscode.commands.executeCommand('gridkitStudio.toggleTimeline')
+    await vscode.commands.executeCommand('gridkitStudio.playPause')
     assert.equal(transport().state.status, 'paused')
     const paused = transport().currentT()
     await bench.playback('Next sample').click()
@@ -61,7 +61,7 @@ suite('Monitor', () => {
     await bench.pick('2')
     await until(() => transport().state.rate === 2, 'a faster speed')
     await until(async () => (await bench.playback('Speed').innerText()).includes('2'), 'it says so')
-    await bench.playback('Go to end').click()
+    await bench.palette('Go to End')
     await until(() => transport().currentT() === transport().state.span[1], 'the run ends')
   })
 
@@ -86,10 +86,23 @@ suite('Monitor', () => {
     await until(() => transport().state.status === 'playing', 'Space plays')
     await canvas.press(' ')
     await until(() => transport().state.status === 'paused', 'Space pauses')
+    // Home fits the plot to the whole run, which every plot then shows.
+    const whole = bench.session.results!.domain
+    const middle = (whole[0] + whole[1]) / 2
+    bench.session.setWindow([whole[0], middle])
+    const shown = () =>
+      monitor.evaluate<number[]>(`document.querySelector('canvas').gridkitPlot().camera.x`)
+    await until(async () => (await shown())[1] === middle, 'half the run shown')
+    await canvas.press('Home')
+    await until(async () => {
+      const [start, end] = await shown()
+      const width = whole[1] - whole[0]
+      return Math.abs(start - whole[0]) < width * 1e-6 && Math.abs(end - whole[1]) < width * 1e-6
+    }, 'Home shows the whole run')
   })
 
-  test('opens its settings from its menu', async () => {
-    await bench.menu(monitor.locator('canvas'), 'Monitor Settings')
+  test('opens its settings from its title bar', async () => {
+    await bench.title('monitor', 'Monitor Settings')
     await bench.settings(/gridkitStudio\.monitor/)
   })
 
@@ -102,28 +115,23 @@ suite('Monitor', () => {
     assert.equal(await monitor.locator('.lane').count(), plots.length)
   })
 
-  test("moves as the motion setting says, over the device's own preference", async () => {
-    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+  test("moves as VS Code's own motion setting says", async () => {
+    const workbench = vscode.workspace.getConfiguration('workbench')
     const motion = () =>
       monitor.evaluate(`({
         duration: getComputedStyle(document.body).getPropertyValue('--motion-fast').trim(),
         renderer: document.querySelector('canvas').gridkitPlot().motion
       })`) as Promise<{ duration: string; renderer: string }>
     const set = (value: string | undefined) =>
-      settings.update('accessibility.motion', value, vscode.ConfigurationTarget.Global)
+      workbench.update('reduceMotion', value, vscode.ConfigurationTarget.Global)
     try {
-      await bench.page.emulateMedia({ reducedMotion: 'reduce' })
-      await set('full')
-      await until(async () => (await motion()).renderer === 'full', 'Full overrides the device')
+      await set('on')
+      await until(async () => (await motion()).renderer === 'reduce', 'motion reduced')
+      assert.equal((await motion()).duration, '0ms')
+      await set('off')
+      await until(async () => (await motion()).renderer === 'full', 'full motion')
       assert.equal((await motion()).duration, '80ms')
-      await set('reduce')
-      await until(async () => (await motion()).renderer === 'reduce', 'Reduce')
-      assert.equal((await motion()).duration, '0ms')
-      await set('system')
-      await until(async () => (await motion()).renderer === 'auto', 'System follows the device')
-      assert.equal((await motion()).duration, '0ms')
     } finally {
-      await bench.page.emulateMedia({ reducedMotion: null })
       await set(undefined)
     }
   })
@@ -185,7 +193,7 @@ suite('Monitor', () => {
       )
       // The middle comes once asked for again.
       lacking = [0, 0]
-      await vscode.commands.executeCommand('gridkitStudio.retryMonitor', bench.uri)
+      await vscode.commands.executeCommand('gridkitStudio.reloadView', bench.uri)
       await until(
         async () => (await readings(middle))?.some((frame) => frame >= chunk && frame < 3 * chunk),
         'the Monitor draws the middle of the run once it comes',
@@ -210,7 +218,7 @@ suite('Monitor', () => {
       assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
       bench.session.setPlots([{ from: VM.type, field: VM.field }])
       // A plot drawn anew, so what it draws is counted from now.
-      await vscode.commands.executeCommand('gridkitStudio.retryMonitor', bench.uri)
+      await vscode.commands.executeCommand('gridkitStudio.reloadView', bench.uri)
       type Drawn = { rows: number; segments: number; refining: boolean; wants: unknown }
       const drawn = () =>
         monitor.evaluate<Drawn | null>(`document.querySelector('canvas')?.gridkitPlot?.() ?? null`)

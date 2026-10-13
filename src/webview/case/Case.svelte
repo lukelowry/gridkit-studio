@@ -27,7 +27,6 @@
   } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
-  import { appearance } from '../theme.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
 
@@ -381,7 +380,6 @@
         // The selection the panel had in sight: none of a case it has yet to read.
         const before = other || !view.summary ? undefined : view.selection?.id
         view = merged(view, message.state)
-        appearance(view.settings)
         // Another case's rows go with it; its own load once it reads.
         if (other) {
           controller?.abort()

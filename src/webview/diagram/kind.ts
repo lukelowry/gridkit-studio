@@ -60,7 +60,6 @@ export function diagram(host: Host): Kind {
     unmount() {},
     item: (view, element) => module!.diagramItem(view as Diagram, element),
     sync() {},
-    act() {},
     retry() {},
     stats: () => ({}),
     dispose() {},

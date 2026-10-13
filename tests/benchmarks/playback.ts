@@ -6,19 +6,12 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import type { SamplesInput } from '../../src/shared/messages.js'
-import { pause, testHost, until, VIEWPORT, visible, VM } from '../vscode/harness.js'
+import { pause, replaying, testHost, until, VIEWPORT, visible, VM } from '../vscode/harness.js'
 
 export async function run() {
   const bench = await testHost()
   try {
     assert.ok(await bench.gridkit(), 'Installed GridKit is required')
-    await vscode.workspace
-      .getConfiguration('gridkitStudio')
-      .update('accessibility.motion', 'full', vscode.ConfigurationTarget.Global)
-    await until(
-      () => bench.session.settings['accessibility.motion'] === 'full',
-      'Full motion enabled',
-    )
     await bench.record('Bus', ['Vm', 'Va'])
     bench.run(
       'Run Dynamic Simulation',
@@ -70,7 +63,8 @@ export async function run() {
     await pause(1500)
     const before = await sample()
     const { transport } = bench.session
-    transport.setLoop('wrap')
+    // The run plays again each time it ends, for as long as the replay lasts.
+    const replay = replaying(bench.studio, bench.session)
     transport.seek(0)
     transport.play()
     const started = performance.now()
@@ -79,6 +73,7 @@ export async function run() {
       await pause(500)
       samples.push(await sample())
     }
+    replay.dispose()
     transport.pause()
     const after = samples.at(-1)!
     const report = {
@@ -240,7 +235,7 @@ export async function run() {
       said.every((error) => /Injected read failure/.test(error)),
       said.join('\n'),
     )
-    bench.studio.action.fire({ uri: bench.key, view: 'monitor', command: 'retryMonitor' })
+    bench.studio.action.fire({ uri: bench.key, view: 'monitor', command: 'reloadView' })
     await until(
       async () =>
         (await sample()).filter((p) => p.visible).every((p) => p.historyBytes > 0 && !p.refining),
@@ -276,7 +271,7 @@ export async function run() {
     bench.studio.action.fire({
       uri: bench.key,
       view: 'monitor',
-      command: 'signalRange',
+      command: 'valueRange',
       value: { plot: bench.session.plots[0], range: [0.5, 1.5] },
     })
     await until(

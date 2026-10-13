@@ -113,7 +113,7 @@ suite('Links', () => {
     })
     for (const item of [
       'Reveal in Source',
-      'Reveal in Case',
+      'Reveal in Case Panel',
       'Zoom to Neighborhood',
       'Plot Signal…',
     ])

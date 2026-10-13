@@ -22,18 +22,23 @@ import { reader } from '../../shared/preferences.js'
 import { diagramOf, networkOf } from '../../shared/schema.js'
 import { diagrammed } from '../diagram/diagram.js'
 import { diagramConfig } from '../diagram/style.js'
-import { axisLabel, plotConfig, plotOptions, plotRows, streamedValues } from '../monitor/plot.js'
+import {
+  axisLabel,
+  monitorWindow,
+  plotConfig,
+  plotOptions,
+  plotRows,
+  streamedValues,
+} from '../monitor/plot.js'
 import { isFlat, isGeographic, projectionOf } from '../network/network.js'
 import { networkConfig } from '../network/style.js'
 import { leastWants, type Wants } from '../samples.js'
 import { theme } from '../theme.js'
 
+/** What the user chooses of a video. */
 export interface VideoSettings {
   readonly views: readonly VideoView[]
   readonly layout: 'column' | 'row'
-  readonly timeRange: Domain
-  /** Simulated seconds per second of video. */
-  readonly rate: number
   readonly format: 'mp4' | 'webm'
   readonly width: number
   readonly height: number
@@ -41,11 +46,16 @@ export interface VideoSettings {
   readonly quality: 'medium' | 'high' | 'very-high'
 }
 
+/** A video to export: as chosen, over the times the Monitor shows, at the speed the results play. */
+export interface VideoJob extends VideoSettings {
+  readonly timeRange: Domain
+  /** Simulated seconds per second of video. */
+  readonly rate: number
+}
+
 export const DEFAULTS: VideoSettings = {
   views: ['network'],
   layout: 'column',
-  timeRange: [0, 0],
-  rate: 1,
   format: 'mp4',
   width: 1920,
   height: 1080,
@@ -110,24 +120,23 @@ export function prefetchMap(state: ViewState): void {
     .catch(() => {})
 }
 
-/** Whether the export can start: a case with results, a view, a signal for the Monitor's part, a
- *  time range within the results, an even size and a positive speed. */
-export function exportable(settings: VideoSettings, state: ViewState): boolean {
-  const range = state.results?.domain
-  if (!state.summary || !range || !(range[1] > range[0])) return false
-  if (settings.views.length === 0) return false
-  if (settings.views.includes('monitor') && plotsOf(state).length === 0) return false
-  const [start, end] = settings.timeRange
+/** The times a video of `state` shows: those the Monitor shows, within those its results hold. */
+export function videoTimes(state: ViewState): Domain | undefined {
+  const held = state.results?.domain
+  if (!held || !(held[1] > held[0])) return undefined
+  const [start, end] = monitorWindow(state.results, state.window)
+  const times: Domain = [Math.max(start, held[0]), Math.min(end, held[1])]
+  return times[1] > times[0] ? times : undefined
+}
+
+/** Whether the export can start: a case with results to show, a view, a signal for the Monitor's
+ *  part, an even size and a positive speed. */
+export function exportable(job: VideoJob | undefined, state: ViewState): job is VideoJob {
+  if (!job || !state.summary || job.views.length === 0) return false
+  if (job.views.includes('monitor') && plotsOf(state).length === 0) return false
   return (
-    Number.isFinite(start) &&
-    Number.isFinite(end) &&
-    start >= range[0] &&
-    end <= range[1] &&
-    end > start &&
-    [settings.width, settings.height].every(
-      (n) => Number.isSafeInteger(n) && n > 0 && n % 2 === 0,
-    ) &&
-    settings.rate > 0
+    [job.width, job.height].every((n) => Number.isSafeInteger(n) && n > 0 && n % 2 === 0) &&
+    job.rate > 0
   )
 }
 
@@ -136,7 +145,7 @@ export function exportable(settings: VideoSettings, state: ViewState): boolean {
  *  caller closes or aborts `output`. */
 export async function exportVideo(
   gpu: Gpu,
-  settings: VideoSettings,
+  settings: VideoJob,
   { state, rows, plotted, stream, mapped, presentation, cameras }: VideoInputs,
   output: WritableStream<VideoWrite>,
   cancel: AbortSignal,
@@ -301,7 +310,7 @@ async function prime(
   view: View,
   plots: readonly Monitor[],
   stream: (wants: Wants) => Promise<Data | undefined>,
-  settings: VideoSettings,
+  settings: VideoJob,
   signal: AbortSignal,
 ): Promise<void> {
   const target = kit.createPresentation(gpu, {

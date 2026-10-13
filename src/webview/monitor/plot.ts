@@ -243,7 +243,8 @@ export function plotOptions(
     traceColor: color(s.get('monitor.traceColor') ?? defaults['monitor.traceColor']),
     traceWidthPx: s.get('monitor.traceWidthPx'),
     unselectedAlpha: s.get('monitor.unselectedAlpha'),
-    input: { mode: s.get('monitor.input.mode'), keyboard: s.get('monitor.input.keyboard') },
+    // Home, or a double click off the traces, fits the plot to the whole run.
+    input: { mode: 'navigate', keyboard: s.get('monitor.input.keyboard') },
     axisColor: color(s.get('monitor.axisColor'), palette?.border),
     gridColor: color(s.get('monitor.gridColor'), palette ? gridLine(palette) : undefined),
     cursorColor: color(s.get('monitor.cursorColor'), palette?.primaryText),

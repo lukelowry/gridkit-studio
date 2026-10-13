@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { advance, clamp, type ClockState, fold, IDLE, Transport } from './transport.js'
+import { advance, clamp, type ClockState, IDLE, Transport } from './transport.js'
 
 const SPAN: readonly [number, number] = [0, 10]
 
-/** A state playing SPAN from 0 at rate 1 with no loop, unless `over` says otherwise. */
+/** A state playing SPAN from 0 at rate 1, unless `over` says otherwise. */
 const playing = (over: Partial<ClockState> = {}): ClockState => ({
   ...IDLE,
   epoch: 1,
@@ -28,53 +28,26 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('clamp and fold', () => {
+describe('clamp', () => {
   it('keeps a time within the span', () => {
     expect(clamp(-1, SPAN)).toBe(0)
     expect(clamp(4, SPAN)).toBe(4)
     expect(clamp(11, SPAN)).toBe(10)
-  })
-
-  it('stops a playhead that plays once at an end, and says it ran past', () => {
-    expect(fold(5, SPAN, 'none', 1)).toEqual({ t: 5, direction: 1, ended: false })
-    expect(fold(12, SPAN, 'none', 1)).toEqual({ t: 10, direction: 1, ended: true })
-    expect(fold(10, SPAN, 'none', 1)).toEqual({ t: 10, direction: 1, ended: true })
-    expect(fold(10, SPAN, 'none', -1)).toEqual({ t: 10, direction: -1, ended: false })
-    expect(fold(0, SPAN, 'none', 1)).toEqual({ t: 0, direction: 1, ended: false })
-    expect(fold(-2, SPAN, 'none', -1)).toEqual({ t: 0, direction: -1, ended: true })
-  })
-
-  it('wraps around a looping span and bounces off the ends of a pingpong one', () => {
-    expect(fold(12, SPAN, 'wrap', 1).t).toBeCloseTo(2, 12)
-    expect(fold(-3, SPAN, 'wrap', 1).t).toBeCloseTo(7, 12)
-    expect(fold(12, SPAN, 'wrap', 1).ended).toBe(false)
-    expect(fold(13, SPAN, 'pingpong', 1)).toMatchObject({ direction: -1, ended: false })
-    expect(fold(13, SPAN, 'pingpong', 1).t).toBeCloseTo(7, 12)
-    expect(fold(13, SPAN, 'pingpong', -1).direction).toBe(1)
-    expect(fold(24, SPAN, 'pingpong', 1)).toMatchObject({ direction: 1 })
-    expect(fold(24, SPAN, 'pingpong', 1).t).toBeCloseTo(4, 12)
-  })
-
-  it('pins every time of an empty span to its start', () => {
-    expect(fold(5, [3, 3], 'none', 1)).toEqual({ t: 3, direction: 1, ended: true })
-    expect(fold(5, [3, 3], 'wrap', 1)).toEqual({ t: 3, direction: 1, ended: false })
   })
 })
 
 describe('advance', () => {
   it('holds a clock that is not playing, within its span', () => {
     expect(advance(playing({ status: 'paused', t: 4 }), 5_000).t).toBe(4)
-    expect(advance(playing({ status: 'paused', t: 99 }), 0)).toEqual({
-      t: 10,
-      direction: 1,
-      ended: false,
-    })
+    expect(advance(playing({ status: 'paused', t: 99 }), 0)).toEqual({ t: 10, ended: false })
   })
 
-  it('moves a playing clock by the time passed, its rate and its direction', () => {
-    expect(advance(playing({ t: 1, rate: 2 }), 1_500).t).toBeCloseTo(4, 12)
-    expect(advance(playing({ t: 9 }), 2_000)).toMatchObject({ t: 10, ended: true })
-    expect(advance(playing({ t: 5, loop: 'pingpong', direction: -1 }), 2_000).t).toBeCloseTo(3, 12)
+  it('moves a playing clock by the time passed and its rate, and stops it at the end', () => {
+    expect(advance(playing({ t: 1, rate: 2 }), 1_500)).toEqual({ t: 4, ended: false })
+    expect(advance(playing({ t: 9 }), 2_000)).toEqual({ t: 10, ended: true })
+    expect(advance(playing({ t: 9 }), 1_000)).toEqual({ t: 10, ended: true })
+    // Every time of an empty span is its end.
+    expect(advance(playing({ t: 3, span: [3, 3] }), 500)).toEqual({ t: 3, ended: true })
   })
 })
 
@@ -88,8 +61,6 @@ describe('Transport', () => {
       status: 'paused',
       t: 0,
       rate: 1,
-      loop: 'none',
-      direction: 1,
       span: [0, 4],
       follow: false,
     })
@@ -111,8 +82,18 @@ describe('Transport', () => {
     transport.seek(1)
     transport.goLive()
     transport.setRate(2)
-    transport.setLoop('wrap')
     expect(changes).toHaveLength(3)
+  })
+
+  it('plays other results at the speed the results before played at, until it is cleared', () => {
+    const { transport } = rig()
+    transport.setSpan([0, 4])
+    transport.setRate(2)
+    transport.setSpan([0, 8])
+    expect(transport.state).toMatchObject({ epoch: 2, rate: 2, t: 0, status: 'paused' })
+    transport.clear()
+    transport.setSpan([0, 8])
+    expect(transport.state.rate).toBe(1)
   })
 
   it('follows a live head, lets go on a seek back, and latches again at the head', () => {
@@ -246,25 +227,7 @@ describe('Transport', () => {
     transport.dispose()
   })
 
-  it('wraps and bounces as its loop says, keeping direction only while bouncing', () => {
-    const { transport, wait } = rig()
-    transport.setSpan([0, 10])
-    transport.setLoop('wrap')
-    transport.play()
-    wait(12_000)
-    expect(transport.currentT()).toBeCloseTo(2, 9)
-
-    transport.setLoop('pingpong')
-    wait(10_000)
-    expect(transport.currentT()).toBeCloseTo(8, 9)
-    transport.pause()
-    expect(transport.state).toMatchObject({ direction: -1, loop: 'pingpong' })
-    transport.setLoop('none')
-    expect(transport.state.direction).toBe(1)
-    transport.dispose()
-  })
-
-  it('pauses at the end of a span it plays once, woken by its own alarm, and reports it', () => {
+  it('pauses at the end of its span, woken by its own alarm, and reports it', () => {
     vi.useFakeTimers()
     const { transport, wait, changes } = rig()
     transport.setSpan([0, 1])
@@ -321,13 +284,11 @@ describe('Transport', () => {
   it('gives a reader the clock settled at the instant it asks', () => {
     const { transport, wait } = rig()
     transport.setSpan([0, 10])
-    transport.setLoop('pingpong')
     transport.play()
-    wait(12_000)
-    // Two seconds back from the far end; `state` itself holds the last change.
-    expect(transport.snapshot()).toMatchObject({ status: 'playing', direction: -1 })
-    expect(transport.snapshot().t).toBeCloseTo(8, 12)
-    expect(transport.state).toMatchObject({ t: 0, direction: 1 })
+    wait(4_000)
+    // `state` itself holds the last change.
+    expect(transport.snapshot()).toMatchObject({ status: 'playing', t: 4 })
+    expect(transport.state).toMatchObject({ status: 'playing', t: 0 })
     transport.dispose()
   })
 

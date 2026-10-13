@@ -14,7 +14,16 @@ import * as vscode from 'vscode'
 
 import { rowsOf } from '../../src/shared/cells.js'
 import type { ViewKind } from '../../src/shared/messages.js'
-import { fills, idle, pause, simpleDialog, testHost, until, VM } from '../vscode/harness.js'
+import {
+  fills,
+  idle,
+  pause,
+  replaying,
+  simpleDialog,
+  testHost,
+  until,
+  VM,
+} from '../vscode/harness.js'
 
 /** Cases by bus count; compare.mjs reports time per bus across them. */
 const CASES = [
@@ -40,11 +49,11 @@ const SIZE = ['drawCalls', 'segments', 'geometryBytes', 'pickingBytes'] as const
 type Stats = Record<(typeof WORK)[number] | (typeof SIZE)[number] | 'frames', number>
 /** A plot's counters, as its canvas reports them. */
 type Plot = { frames: number; at?: number; segments: number; refining: boolean; visible: boolean }
-/** Work must not depend on timing: no hover search, easing, or motion. */
+/** Work must not depend on timing: no hover search, easing, or motion, which VS Code's own
+ *  setting reduces. */
 const STILL = {
   'network.hover': 'off',
   'network.animationMs': 0,
-  'accessibility.motion': 'reduce',
   // Pin the workload across changes to application defaults.
   'network.vertices.labels': true,
   'network.grid': true,
@@ -176,6 +185,8 @@ export async function run() {
   const settings = vscode.workspace.getConfiguration('gridkitStudio')
   const global = vscode.ConfigurationTarget.Global
   for (const [key, value] of Object.entries(STILL)) await settings.update(key, value, global)
+  const workbench = vscode.workspace.getConfiguration('workbench')
+  await workbench.update('reduceMotion', 'on', global)
   const gridkit = await bench.gridkit()
   /** The GridKit build the runs use, which compare.mjs matches between runs. */
   const build = gridkit ? await bench.gridkitBuild() : undefined
@@ -386,7 +397,8 @@ export async function run() {
       const { transport } = session
       const span = session.results!.domain
       await steady(monitor)
-      transport.setLoop('wrap')
+      // The run is shorter than the time measured, so it plays again each time it ends.
+      const replay = replaying(bench.studio, session)
       /** The time between frames each view presents while playing: one display frame at best. */
       async function playback(scenario: string) {
         transport.seek(span[0])
@@ -412,6 +424,7 @@ export async function run() {
       bench.studio.get(key)!.select({ id: bus })
       await steady(monitor)
       await playback('frame, selected')
+      replay.dispose()
       bench.studio.get(key)!.select()
       const at = (i: number) => span[0] + SEEKS[i]! * (span[1] - span[0])
       await time(`playback ${size} > seek`, SEEKS.length, {
@@ -567,6 +580,7 @@ export async function run() {
     await simpleDialog(undefined)
     for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.map.source'])
       await settings.update(key, undefined, global)
+    await workbench.update('reduceMotion', undefined, global)
     await bench.browser.close()
   }
 }

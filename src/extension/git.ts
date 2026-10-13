@@ -7,7 +7,8 @@ interface GitApi {
   openRepository(root: vscode.Uri): Promise<unknown>
   toGitUri(uri: vscode.Uri, ref: string): vscode.Uri
 }
-export async function reviewChanges(uri: vscode.Uri) {
+/** Opens the case's changes since its last commit beside it, as Git's own Open Changes does. */
+export async function openChanges(uri: vscode.Uri) {
   const extension = vscode.extensions.getExtension<{
     enabled: boolean
     getAPI(version: 1): GitApi

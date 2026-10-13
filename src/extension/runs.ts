@@ -9,10 +9,9 @@ import * as vscode from 'vscode'
 import { PROGRAM } from '../gridkit/index.js'
 import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
-import { commandId } from '../shared/ids.js'
 import type { Results } from '../shared/messages.js'
 import { cancellable } from './client.js'
-import { notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
+import { CHOOSE_SIGNALS, notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
 import type { Sessions } from './sessions.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
@@ -66,10 +65,7 @@ export function registerRuns(studio: Sessions) {
     // GridKit accepts it is GridKit's to say.
     const summary = await readable(document, 'it can run')
     if (!Object.keys(summary.recording.listed).length)
-      throw notice(`${nameOf(model)} records nothing.`, {
-        title: 'Choose Signals',
-        command: commandId('chooseSignals'),
-      })
+      throw notice(`${nameOf(model)} records nothing.`, CHOOSE_SIGNALS)
     const output = writtenBy(solver, study, summary)
     // GridKit writes over the file it writes to, so that file must not be one the run reads.
     if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
@@ -126,9 +122,9 @@ export function registerRuns(studio: Sessions) {
   return [
     studio.command('runSimulation', run),
     studio.command('stopSimulation', () => studio.current().stop()),
-    studio.command('showResults', show),
+    studio.command('showLastResults', show),
     // The solver file of the results on show, run again.
-    studio.command('runAgain', () => {
+    studio.command('runSimulationAgain', () => {
       const { solver } = studio.current().results ?? {}
       if (!solver) throw new Error('These results were not written by a run of a solver file.')
       return run(vscode.Uri.file(solver))

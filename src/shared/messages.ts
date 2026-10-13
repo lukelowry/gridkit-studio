@@ -17,7 +17,7 @@ import type {
   RuntimeProcess,
 } from './simulation.js'
 import type { Sink } from './study.js'
-import type { ClockState, LoopMode } from './transport.js'
+import type { ClockState } from './transport.js'
 export type {
   GridKit,
   Results,
@@ -321,16 +321,7 @@ export interface Cameras {
 
 /** What a command asks of a view. */
 export type ViewAction =
-  | 'fit'
-  | 'reloadView'
-  | 'neighborhood'
-  | 'orbit'
-  | 'projection'
-  | 'diagramEditing'
-  | 'arrangeDiagram'
-  | 'retryMonitor'
-  | 'resetMonitorWindow'
-  | 'signalRange'
+  'fit' | 'reloadView' | 'neighborhood' | 'diagramEditing' | 'arrangeDiagram' | 'valueRange'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -363,7 +354,6 @@ export type ToView =
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
 export type TransportAction =
   | { action: 'seek' | 'rate'; value: number }
-  | { action: 'loop'; value: LoopMode }
   | { action: 'step'; value: 1 | -1 }
   | { action: 'playPause' | 'goLive' }
 

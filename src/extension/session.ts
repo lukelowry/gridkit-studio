@@ -540,9 +540,17 @@ export class Session {
     this.setPlots(this.#plots.filter((each) => !samePlot(each, plot)))
   }
 
-  /** Plots `plot`'s field of the element `id` alone. */
-  plotElement(plot: Plot, id: string): void {
-    this.setPlots(this.#plots.map((each) => (samePlot(each, plot) ? { ...each, id } : each)))
+  /** Plots `plot`'s field of the element `id` alone, or, with none, of every element: the plot
+   *  it then is, if there is one already, stays alone. */
+  plotElement(plot: Plot, id?: string): void {
+    const next: Plot = { from: plot.from, field: plot.field, ...(id !== undefined && { id }) }
+    if (samePlot(next, plot)) return
+    const there = this.#plots.some((each) => samePlot(each, next))
+    this.setPlots(
+      there
+        ? this.#plots.filter((each) => !samePlot(each, plot))
+        : this.#plots.map((each) => (samePlot(each, plot) ? next : each)),
+    )
   }
 
   /** Shows `window` in the Monitor; with none, the whole run. */

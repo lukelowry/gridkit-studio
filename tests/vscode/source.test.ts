@@ -34,8 +34,8 @@ suite('Case source', () => {
     assert.equal(await table.locator('.c-note').count(), 0)
     // A command that reads the case says nothing more of why it cannot: Problems says it already,
     // and a notification the test did not expect fails it.
-    await vscode.commands.executeCommand('gridkitStudio.copyReference', bench.uri)
-    await vscode.commands.executeCommand('gridkitStudio.showSource', bench.uri)
+    await vscode.commands.executeCommand('gridkitStudio.copyId', bench.uri)
+    await vscode.commands.executeCommand('gridkitStudio.openSource', bench.uri)
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
     await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
     // Undone from the keyboard, as the user would, once the editor has the keyboard. Whatever
@@ -85,7 +85,7 @@ suite('Case source', () => {
   })
 
   test('reviews its changes in the native diff editor', async () => {
-    await vscode.commands.executeCommand('gridkitStudio.reviewChanges', bench.uri)
+    await vscode.commands.executeCommand('gridkitStudio.openChanges', bench.uri)
     await until(
       () =>
         vscode.window.tabGroups.all.some((group) =>

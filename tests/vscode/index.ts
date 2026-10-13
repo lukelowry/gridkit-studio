@@ -9,8 +9,10 @@ export async function run(): Promise<void> {
     ui: 'tdd',
     color: true,
     timeout: 60_000,
-    // One suite or test by name, such as GRIDKIT_TEST_GREP=Monitor.
+    // One suite or test by name, such as GRIDKIT_TEST_GREP=Monitor; never `.only`, which would let
+    // a run pass on the tests it left out.
     grep: process.env.GRIDKIT_TEST_GREP,
+    forbidOnly: true,
   })
   mocha.rootHooks({
     async afterEach(this: Mocha.Context) {
@@ -20,7 +22,7 @@ export async function run(): Promise<void> {
       }
       // An error the user would see only in the log fails the test, as does a notification; a
       // test that expects one takes it first.
-      const logged = extension().exports.studio.errors.splice(0)
+      const logged = extension().exports.studio.reporter.errors.splice(0)
       const shown = await notifications()
       if (logged.length) throw new Error('GridKit Studio logged errors:\n' + logged.join('\n'))
       if (shown.length) throw new Error('VS Code showed notifications:\n' + shown.join('\n'))

@@ -6,11 +6,7 @@ import { csvMessages } from './csv.js'
 
 /** Every number of the rows in `text`, read under a header of `width` columns. */
 async function numbers(text: string, width: number): Promise<number[]> {
-  const known = Array.from({ length: width }, (_, i) => ({
-    name: i ? `c${i}` : 't',
-    type: 'float64' as const,
-    nullable: i !== 0,
-  }))
+  const known = Array.from({ length: width }, (_, i) => (i ? `c${i}` : 't'))
   const values: number[] = []
   for await (const message of csvMessages(Readable.from([Buffer.from(text)]), known))
     if (message.kind === 'rows') values.push(...message.values.subarray(0, message.length * width))
@@ -25,6 +21,39 @@ describe('CSV results', () => {
       ...tokens.map((token) => Number(token.trim().replaceAll('"', ''))),
     ])
     expect(await numbers('0,nan,-inf,Infinity,\n', 5)).toEqual([0, NaN, -Infinity, Infinity, NaN])
+    // As MSVC prints them, which a GridKit built on Windows writes.
+    const windows = ['-nan(ind)', 'nan(snan)', '1.#QNAN', '-1.#IND', '1.#INF', '-1.#INF']
+    expect(await numbers(`0,${windows.join(',')}\n`, 1 + windows.length)).toEqual([
+      0,
+      NaN,
+      NaN,
+      NaN,
+      NaN,
+      Infinity,
+      -Infinity,
+    ])
+  })
+
+  it('numbers a frame from the start of its file, wherever a read of it starts', async () => {
+    const read = async () => {
+      for await (const _ of csvMessages(
+        Readable.from([Buffer.from('0,1\n1,2,3\n')]),
+        ['t', 'a'],
+        undefined,
+        1000,
+      ));
+    }
+    await expect(read()).rejects.toThrow('CSV frame 1002 does not match its header.')
+  })
+
+  it('leaves out a last row its writer never finished, and keeps one only its newline misses', async () => {
+    expect(await numbers('0,1,2\n1,3,4\n2,5', 3)).toEqual([0, 1, 2, 1, 3, 4])
+    expect(await numbers('0,1,2\n1,3,4\n2,5,', 3)).toEqual([0, 1, 2, 1, 3, 4])
+    expect(await numbers('0,1,2\n1,3,4', 3)).toEqual([0, 1, 2, 1, 3, 4])
+    // A row cut short anywhere but at the end is not the writer stopping.
+    await expect(numbers('0,1,2\n1,3\n2,5,6\n', 3)).rejects.toThrow(
+      'CSV frame 2 does not match its header.',
+    )
   })
 
   it('rejects the hexadecimal, octal and binary numbers GridKit never writes', async () => {
@@ -42,8 +71,9 @@ describe('CSV results', () => {
     }
     const bytes = Buffer.from('t,"Bus_é€𝄞_Vm"\n0,1\n')
     for (let split = 0; split <= bytes.length; split++)
-      expect((await messages(bytes.subarray(0, split), bytes.subarray(split)))[0]).toMatchObject({
-        fields: [{ name: 't' }, { name: 'Bus_é€𝄞_Vm' }],
+      expect((await messages(bytes.subarray(0, split), bytes.subarray(split)))[0]).toEqual({
+        kind: 'schema',
+        names: ['t', 'Bus_é€𝄞_Vm'],
       })
     await expect(messages(Buffer.from('t,a\n0,1€').subarray(0, -1))).rejects.toThrow(
       'The CSV results end inside a UTF-8 character.',

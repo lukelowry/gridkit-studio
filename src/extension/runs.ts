@@ -1,35 +1,20 @@
-/** GridKit's programs, run on a .solver.json from its menu as a shell runs them:
+/** GridKit's DynamicSimulation, run on a .solver.json from its menu as a shell runs it:
  *  `DynamicSimulation IEEE39.solver.json` in the solver file's folder. The solver file names the
  *  case, whose Monitor shows the run. A notification says how far it has come, and cancelling it
  *  stops the run. The same menu shows what a solver file's last run wrote, and the Monitor runs the
  *  solver file of the results it shows again. */
 
-import { dirname, resolve } from 'node:path'
-
 import * as vscode from 'vscode'
 
+import { PROGRAM } from '../gridkit/index.js'
+import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
-import type { GridKit, Program, Results } from '../shared/messages.js'
-import { cacheBytesOf, notice, type Sessions } from './sessions.js'
+import type { Results } from '../shared/messages.js'
+import { cancellable } from './client.js'
+import { CHOOSE_SIGNALS, notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
+import type { Sessions } from './sessions.js'
+import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
-import { showView } from './views.js'
-
-/** The GridKit install the settings name for the case at `uri`; a relative path resolves against
- *  its workspace folder. */
-export function gridkitOf(uri: vscode.Uri): GridKit {
-  const settings = vscode.workspace.getConfiguration('gridkitStudio', uri)
-  const path = settings.get<string>('gridkitPath', '').trim()
-  return {
-    path: path
-      ? resolve(vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath), path)
-      : '',
-    image: settings.get<string>('gridkitImage', '').trim(),
-    cli: settings.get<string>('containerCli', '').trim(),
-  }
-}
-
-/** Where Problems lists why a case cannot be read. */
-const PROBLEMS = { title: 'Show Problems', command: 'workbench.actions.view.problems' }
 
 /** The solver file a menu was opened on, which must be on this machine. */
 function solverOf(target: unknown, doing: string): vscode.Uri {
@@ -38,10 +23,8 @@ function solverOf(target: unknown, doing: string): vscode.Uri {
   return target
 }
 
-/** How far a run has come, by the `results` it has written so far, in percent and in words. A
- *  study runs its contingencies at once, so only a simulation counts. */
-function progressOf(program: Program, results?: Results) {
-  if (program === 'ContingencyAnalysis') return { percent: 0, message: 'Faulting each bus' }
+/** How far a run has come, by the `results` it has written so far, in percent and in words. */
+function progressOf(results?: Results) {
   const { span, domain, frames } = results ?? {}
   if (!frames || !span || !domain || !(span[1] > span[0]))
     return { percent: 0, message: 'Starting' }
@@ -52,133 +35,99 @@ function progressOf(program: Program, results?: Results) {
 }
 
 export function registerRuns(studio: Sessions) {
-  /** Each case's run, from its menu until it ends. Aborting one stops it. */
-  const runs = new Map<string, AbortController>()
-
-  const run = (program: Program) => async (target: unknown) => {
-    const solver = solverOf(target, 'run it')
-    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
+  /** The solver file `target` names, what it says, and the case it names, read as GridKit reads
+   *  them, with the file a run of it writes. */
+  const solverRun = async (target: unknown, doing: string) => {
+    const solver = solverOf(target, doing)
     const { document: input, study, model } = await solverAt(solver)
-    const uri = model.toString()
-    if (runs.has(uri)) throw new Error(`${nameOf(model)} is already running.`)
-    const stop = new AbortController()
-    runs.set(uri, stop)
+    const document = await vscode.workspace.openTextDocument(model)
+    return { solver, input, study, model, document }
+  }
+  /** The case `document` holds, as it reads; a notice that it has problems to fix `before`, which
+   *  Problems lists; or why else it could not be read. */
+  const readable = async (document: vscode.TextDocument, before: string) => {
     try {
-      const document = await vscode.workspace.openTextDocument(model)
-      // GridKit reads the files as saved, so they are saved first, as VS Code's tasks do.
-      for (const each of [input, document])
-        if (each.isDirty && !(await each.save()))
-          throw new Error(`${nameOf(each.uri)} was not saved.`)
-      // The Monitor reads the output against the case, so Studio must read the case. Whether
-      // GridKit accepts it is GridKit's to say.
-      const summary = await studio.documents.ensure(document).catch(() => undefined)
-      if (!summary)
-        throw notice(`${nameOf(model)} has problems to fix before it can run.`, PROBLEMS)
-      if (!Object.keys(summary.recording.listed).length)
-        throw notice(`${nameOf(model)} records nothing.`, {
-          title: 'Choose Signals',
-          command: 'gridkitStudio.chooseSignals',
-        })
-      const { uri: output, format } = writtenBy(solver, study, summary)
-      // A run removes the file it writes before it starts, so that file must not be one it reads.
-      if ([solver, model].some((file) => file.toString() === output.toString()))
-        throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
-      await studio.open(document)
-      await showView('monitor')
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: `${program} ${nameOf(solver)}`,
-          cancellable: true,
-        },
-        async (progress, token) => {
-          let shown = 0
-          const report = (results?: Results) => {
-            const { percent, message } = progressOf(program, results)
-            progress.report({ increment: percent - shown, message })
-            shown = percent
-          }
-          /** The results the run writes, once it begins to. */
-          let writes: string | undefined
-          const listening = [
-            token.onCancellationRequested(() => stop.abort()),
-            studio.client.event.event((event) => {
-              if (event.kind === 'run' && event.run.uri === uri) {
-                writes = event.run.results
-                if (!writes) report()
-              } else if (event.kind === 'results' && event.results.id === writes)
-                report(event.results)
-            }),
-          ]
-          try {
-            // The call is the run. It settles when the run ends, and aborting it stops the run.
-            // The case is as GridKit reads it, saved, which the results are read against.
-            await studio.withCase(uri, (source) =>
-              studio.client.results.call(
-                'run',
-                {
-                  ...source,
-                  program,
-                  solver: solver.fsPath,
-                  output: output.fsPath,
-                  format,
-                  tmax: study.tmax,
-                  // What a container mounts: the solver file's workspace folder.
-                  root: (
-                    vscode.workspace.getWorkspaceFolder(solver)?.uri ??
-                    vscode.Uri.joinPath(solver, '..')
-                  ).fsPath,
-                  gridkit: gridkitOf(model),
-                  cacheBytes: cacheBytesOf(model),
-                },
-                stop.signal,
-              ),
-            )
-          } finally {
-            for (const each of listening) each.dispose()
-          }
-        },
-      )
-    } finally {
-      runs.delete(uri)
+      return await studio.documents.read(document)
+    } catch (error) {
+      if (!saidInProblems(error)) throw error
+      throw notice(`${nameOf(document.uri)} has problems to fix before ${before}.`, SHOW_PROBLEMS)
     }
+  }
+
+  const run = async (target: unknown) => {
+    if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
+    const { solver, input, study, model, document } = await solverRun(target, 'run it')
+    // GridKit reads the files as saved, so they are saved first, as VS Code's tasks do.
+    for (const each of [input, document])
+      if (each.isDirty && !(await each.save()))
+        throw new Error(`${nameOf(each.uri)} was not saved.`)
+    // The Monitor reads the output against the case, so Studio must read the case. Whether
+    // GridKit accepts it is GridKit's to say.
+    const summary = await readable(document, 'it can run')
+    if (!Object.keys(summary.recording.listed).length)
+      throw notice(`${nameOf(model)} records nothing.`, CHOOSE_SIGNALS)
+    const output = writtenBy(solver, study, summary)
+    // GridKit writes over the file it writes to, so that file must not be one the run reads.
+    if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
+      throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
+    const session = await studio.open(document)
+    await studio.showView('monitor')
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `${PROGRAM} ${nameOf(solver)}`,
+        cancellable: true,
+      },
+      async (progress, token) => {
+        let shown = 0
+        // The call is the run. It settles when the run ends, and cancelling it stops the run. It
+        // says how far it has come by what it has written, whatever the views show meanwhile.
+        await cancellable(token, (signal) =>
+          session.start(
+            {
+              solver: solver.fsPath,
+              output: output.fsPath,
+              tmax: study.tmax,
+              // What a container mounts: the solver file's workspace folder.
+              root: (
+                vscode.workspace.getWorkspaceFolder(solver)?.uri ??
+                vscode.Uri.joinPath(solver, '..')
+              ).fsPath,
+              // As the settings of the folder it mounts say.
+              gridkit: gridkitOf(solver),
+            },
+            signal,
+            (written) => {
+              const { percent, message } = progressOf(written)
+              progress.report({ increment: Math.max(0, percent - shown), message })
+              shown = Math.max(shown, percent)
+            },
+          ),
+        )
+      },
+    )
   }
 
   /** Shows what a solver file's last simulation wrote, read against its case, without running it. */
   const show = async (target: unknown) => {
-    const solver = solverOf(target, 'show its results')
-    const { study, model } = await solverAt(solver)
-    const document = await vscode.workspace.openTextDocument(model)
-    const summary = await studio.documents.ensure(document).catch(() => undefined)
-    if (!summary)
-      throw notice(`${nameOf(model)} has problems to fix before its results can be read.`, PROBLEMS)
-    const { uri: output } = writtenBy(solver, study, summary)
+    const { solver, study, document } = await solverRun(target, 'show its results')
+    const output = writtenBy(solver, study, await readable(document, 'its results can be read'))
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
     const session = await studio.open(document)
-    await showView('monitor')
-    const results = await studio.withCase(session.uri, (source) =>
-      studio.client.results.call('open', {
-        ...source,
-        path: output.fsPath,
-        solver: solver.fsPath,
-        cacheBytes: cacheBytesOf(model),
-      }),
-    )
-    studio.show(session, results, false)
-    studio.changed.fire(session.uri)
+    await studio.showView('monitor')
+    await session.load(output.fsPath, solver.fsPath)
   }
 
   return [
-    studio.command('gridkitStudio.runSimulation', run('DynamicSimulation')),
-    studio.command('gridkitStudio.runContingencies', run('ContingencyAnalysis')),
-    studio.command('gridkitStudio.stopSimulation', () => runs.get(studio.active ?? '')?.abort()),
-    studio.command('gridkitStudio.showResults', show),
-    // The solver file of the results on show, run as they were: a study's again as a study.
-    studio.command('gridkitStudio.runAgain', () => {
-      const { solver, contingency } = studio.current().results ?? {}
+    studio.command('runSimulation', run),
+    studio.command('stopSimulation', () => studio.current().stop()),
+    studio.command('showLastResults', show),
+    // The solver file of the results on show, run again.
+    studio.command('runSimulationAgain', () => {
+      const { solver } = studio.current().results ?? {}
       if (!solver) throw new Error('These results were not written by a run of a solver file.')
-      return run(contingency ? 'ContingencyAnalysis' : 'DynamicSimulation')(vscode.Uri.file(solver))
+      return run(vscode.Uri.file(solver))
     }),
   ]
 }

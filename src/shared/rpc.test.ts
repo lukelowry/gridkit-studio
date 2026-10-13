@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { answerer, Caller, type Cancel, type Handlers, type Reply, type Request } from './rpc.js'
+import { problem } from './errors.js'
+import {
+  answerer,
+  Caller,
+  type Cancel,
+  type Handlers,
+  type Reply,
+  type Request,
+  resent,
+} from './rpc.js'
 
 interface Echo {
   echo: { input: { text: string }; output: string }
@@ -37,9 +46,16 @@ describe('a request across a channel', () => {
   it('settles with its answer, or the problem it met', async () => {
     const { caller } = channel(handlers)
     expect(await caller.call('echo', { text: 'hi' })).toBe('hi')
-    const failed = await caller.call('fail', { code: 'stale', offset: 4 }).catch((error) => error)
+    const failed = await caller
+      .call('fail', { code: 'superseded', offset: 4 })
+      .catch((error) => error)
     expect(failed).toBeInstanceOf(Error)
-    expect(failed).toMatchObject({ message: 'It failed.', code: 'stale', offset: 4, length: 2 })
+    expect(failed).toMatchObject({
+      message: 'It failed.',
+      code: 'superseded',
+      offset: 4,
+      length: 2,
+    })
     expect(failed.detail).toMatch(/It failed/)
     // A failure with no code of its own has the general one.
     await expect(caller.call('fail', {})).rejects.toMatchObject({ code: 'operation-failed' })
@@ -72,8 +88,23 @@ describe('a request across a channel', () => {
     controller.abort()
     await expect(call).rejects.toMatchObject({ name: 'AbortError' })
     expect(heard?.aborted).toBe(true)
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    // The answer settles in microtasks alone, all run before the next macrotask.
+    await new Promise((resolve) => setImmediate(resolve))
     expect(sent.map(({ kind }) => kind)).toEqual(['request', 'cancel'])
+  })
+
+  it('fails a call whose input cannot cross, and keeps nothing of it', async () => {
+    const post = vi.fn(() => {
+      throw new DOMException('could not be cloned', 'DataCloneError')
+    })
+    const caller = new Caller<Echo>(post)
+    const controller = new AbortController()
+    await expect(caller.call('echo', { text: 'hi' }, controller.signal)).rejects.toThrow(
+      'could not be cloned',
+    )
+    // Nothing waits on it any more, so letting go of it sends no cancellation.
+    controller.abort()
+    expect(post).toHaveBeenCalledTimes(1)
   })
 
   it('answers a value that cannot cross as a defect', async () => {
@@ -98,6 +129,27 @@ describe('a request across a channel', () => {
     for (const call of calls) await expect(call).rejects.toThrow('The worker stopped.')
     // A reply that comes after settles nothing.
     caller.settle({ kind: 'reply', id: 1, value: 'late' })
+  })
+
+  it('sends what the other side lacks only when it says it lacks it', async () => {
+    const sent: string[] = []
+    const call = async (input: string) => {
+      sent.push(input)
+      if (input === 'lean') throw problem('needs-source', 'Send the source.')
+      return input
+    }
+    expect(await resent(call, 'needs-source', 'lean', () => 'whole')).toBe('whole')
+    expect(sent).toEqual(['lean', 'whole'])
+    // Any other failure is the call's own.
+    await expect(resent(call, 'stale-source', 'lean', () => 'whole')).rejects.toMatchObject({
+      code: 'needs-source',
+    })
+    // Nor is it sent again once the asker let go.
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      resent(call, 'needs-source', 'lean', () => 'whole', controller.signal),
+    ).rejects.toMatchObject({ code: 'needs-source' })
   })
 
   it('lets go of every answer under way at once', async () => {

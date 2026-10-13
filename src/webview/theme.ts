@@ -1,12 +1,15 @@
 /** The VS Code theme as the renderers read it, through the CSS tokens. */
 
-import { parseColor, type RGBA } from '@latkit/gpu'
+import { type ItemView, parseColor, type RGBA } from '@latkit/gpu'
 
-import type { SettingsValues } from '../shared/preferences.js'
+import type { SettingsReader } from '../shared/preferences.js'
 
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
   background: ['--color-bg', '#1e1e1e'],
+  /** The editor's background, which the Network and Diagram sit on wherever they draw, a video's
+   *  too, though the page drawing them sits elsewhere. */
+  editor: ['--vscode-editor-background', '#1e1e1e'],
   surface1: ['--color-surface-1', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
   text1: ['--color-text-1', '#cccccc'],
@@ -68,15 +71,54 @@ export function color(value: string | null, fallback?: RGBA): RGBA | undefined {
   return value === null ? fallback : (parseColor(value) ?? fallback)
 }
 
-/** Expose the user's motion and contrast settings to the tokens. Another contrast changes the
- *  theme's colors, which the watchers hear at once. */
-export function appearance(settings: SettingsValues | undefined) {
-  const { dataset } = document.body
-  dataset.motion = settings?.['accessibility.motion'] ?? 'system'
-  const contrast = settings?.['accessibility.contrast'] ?? 'system'
-  if (dataset.contrast === contrast) return
-  dataset.contrast = contrast
-  changed()
+/** `color` with its alpha scaled by `alpha`. */
+export const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
+
+/** A grid's lines: the theme's secondary text, faint whatever its own alpha. */
+export const gridLine = ({ text2: [r, g, b] }: Palette): RGBA => [r, g, b, 0.15]
+
+/** `from` moved `t` of the way toward `to`, keeping its alpha. */
+export const mix = (from: RGBA, to: RGBA, t: number): RGBA => [
+  from[0] + (to[0] - from[0]) * t,
+  from[1] + (to[1] - from[1]) * t,
+  from[2] + (to[2] - from[2]) * t,
+  from[3],
+]
+
+/** Whether views move: VS Code marks a page's body when it reduces motion, as its own setting or
+ *  the device's asks; and the class changing tells the theme's watchers. Outside a page, as in
+ *  tests, they move. */
+export const motion = (): 'full' | 'reduce' =>
+  globalThis.document?.body.classList.contains('vscode-reduce-motion') ? 'reduce' : 'full'
+
+/** The style every latkit view shares, from one view's settings: quality, motion, picking, text
+ *  and colors, with `fallback`'s theme colors where a color setting is null. */
+export function viewStyle(
+  s: SettingsReader,
+  view: 'network' | 'diagram' | 'monitor',
+  font: string | null,
+  fallback: {
+    readonly background?: RGBA
+    readonly textColor?: RGBA
+    readonly selectedColor?: RGBA
+  },
+): ItemView.Style {
+  const family = s.get(`${view}.font`) || font
+  return {
+    msaa: s.get(`${view}.msaa`),
+    hover: s.get(`${view}.hover`),
+    hoverBudgetMs: s.get(`${view}.hoverBudgetMs`),
+    pickRadiusPx: s.get(`${view}.pickRadiusPx`),
+    animationMs: s.get(`${view}.animationMs`),
+    fitPaddingPx: s.get(`${view}.fitPaddingPx`),
+    selectedWidthPx: s.get(`${view}.selectedWidthPx`),
+    motion: motion(),
+    ...(family && { font: { family } }),
+    fontSizePx: s.get(`${view}.fontSizePx`),
+    background: color(s.get(`${view}.background`), fallback.background),
+    textColor: color(s.get(`${view}.textColor`), fallback.textColor),
+    selectedColor: color(s.get(`${view}.selectedColor`), fallback.selectedColor),
+  }
 }
 
 /** Calls `listener` whenever the theme changes; returns the unsubscribe. */

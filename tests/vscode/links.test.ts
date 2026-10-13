@@ -18,10 +18,8 @@ suite('Links', () => {
   let network: Frame
   let table: Frame
   const shown = () => network.evaluate<Shown | null>('gridkitSelection()')
-  const header = (field: string): Locator =>
-    table.locator(`thead th[data-vscode-context*='"field":"${field}"']`)
-  const cells = (field: string): Locator =>
-    table.locator(`td[data-vscode-context*='"field":"${field}"'] .cell`)
+  const header = (field: string): Locator => table.locator(`thead th[data-field="${field}"]`)
+  const cells = (field: string): Locator => table.locator(`td[data-field="${field}"] .cell`)
   /** Where the Network drew `id` in its latest frame. */
   const point = (id: string) =>
     until(
@@ -38,7 +36,7 @@ suite('Links', () => {
   })
 
   test('shows a device the Network does not draw by the bus it joins', async () => {
-    bench.studio.select(bench.key, { id: 'Genrou/30_1_genrou' })
+    bench.session.select({ id: 'Genrou/30_1_genrou' })
     await until(async () => (await shown())?.ids.join() === 'Bus/30', 'its bus selected')
     // The table follows to the generators, with the generator's row selected.
     await until(
@@ -115,7 +113,7 @@ suite('Links', () => {
     })
     for (const item of [
       'Reveal in Source',
-      'Reveal in Case',
+      'Reveal in Case Panel',
       'Zoom to Neighborhood',
       'Plot Signal…',
     ])
@@ -159,6 +157,6 @@ suite('Links', () => {
     await bench.menu(header('params.kv'), 'Hide Column')
     await until(async () => (await header('params.kv').count()) === 0, 'the column hidden')
     await vscode.commands.executeCommand('gridkitStudio.resetColumns')
-    await visible(table, `thead th[data-vscode-context*='"field":"params.kv"']`)
+    await visible(table, `thead th[data-field="params.kv"]`)
   })
 })

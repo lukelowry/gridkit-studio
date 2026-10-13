@@ -1,5 +1,5 @@
 import { failure } from '@latkit/model'
-import { findNodeAtLocation, parseTree } from 'jsonc-parser'
+import { findNodeAtLocation } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import type { Case } from './case.js'
@@ -11,14 +11,22 @@ import {
   nativePath,
   realText,
   textOffset,
+  treeOf,
   withValue,
 } from './edits.js'
 
-/** Resolve the entire proposed identity set before fields, so a branch may name new buses. */
+/** The records `changes` add, as a transaction plans them: each identity proposed is resolved
+ *  before any field, so a branch may name new buses, through the transaction's `resolve`, which
+ *  knows what it removes and adds besides. A record goes after the last that stays, placed in the
+ *  diagram where `positions` says. */
 export function createRecords(
   kase: Case,
   changes: readonly Extract<Mutation, { kind: 'add' }>[],
-  options?: {
+  {
+    resolve,
+    removed,
+    positions,
+  }: {
     resolve(id: string, type: string): string | number | undefined
     removed: ReadonlySet<string>
     positions: ReadonlyMap<string, readonly [number, number] | null>
@@ -43,16 +51,6 @@ export function createRecords(
       throw failure('invalid-input', `Identity already exists: ${id}.`)
     declared.set(id, change)
   }
-  const occupied = new Set<string>()
-  for (const table of options ? [] : kase.tables.values())
-    for (const port of table.shape.ports) {
-      if (port.definition.direction !== 'out') continue
-      for (let row = 0; row < table.records.length; row++) {
-        const target = kase.cell(table, port.name, row)
-        if (typeof target === 'number')
-          occupied.add(kase.id(kase.table(port.definition.type.to), target))
-      }
-    }
   const records = new Map<ArrayName, string[]>()
   for (const [id, change] of declared) {
     const shape = kase.catalog.shapes.get(change.type)!
@@ -64,27 +62,10 @@ export function createRecords(
       const plan = shape.plan.get(field)
       if (!plan || !editable(plan))
         throw failure('invalid-input', `Unknown or non-writable field: ${change.type}.${field}.`)
-      const native = fieldValue(
-        plan,
-        value,
-        options?.resolve ??
-          ((targetId, type) => {
-            const added = declared.get(targetId)
-            if (added?.type === type) return added.key
-            const target = kase.locate(targetId)
-            return target?.table.shape.type === type
-              ? kase.native(target.table, target.row)
-              : undefined
-          }),
-      )
-      if (!options && plan.definition.direction === 'out' && value !== null) {
-        if (occupied.has(String(value)))
-          throw failure('invalid-input', `This signal already has an output driver: ${value}.`)
-        occupied.add(String(value))
-      }
+      const native = fieldValue(plan, value, resolve)
       text = withValue(text, nativePath(plan), native)
       if (plan.definition.type === 'float64' && typeof native === 'number') {
-        const node = findNodeAtLocation(parseTree(text)!, nativePath(plan))!
+        const node = findNodeAtLocation(treeOf(text), nativePath(plan))!
         text = apply(text, [{ offset: node.offset, length: node.length, text: realText(native) }])
       }
     }
@@ -95,7 +76,7 @@ export function createRecords(
         (change.fields[plan.name] === undefined || change.fields[plan.name] === null)
       )
         throw failure('invalid-input', `${id} requires ${plan.name}.`)
-    const position = options?.positions.get(id)
+    const position = positions.get(id)
     if (position) text = withValue(text, ['extension', 'diagram', 'position'], position)
     const list = records.get(shape.array!) ?? []
     list.push(text)
@@ -111,9 +92,9 @@ export function createRecords(
       continue
     }
     let last = array.ends.length - 1
-    if (options?.removed.size) {
+    if (removed.size) {
       const removedRows = new Set<number>()
-      for (const id of options.removed) {
+      for (const id of removed) {
         const found = kase.locate(id)
         if (found?.table.shape.array === name) removedRows.add(found.table.records[found.row]!)
       }

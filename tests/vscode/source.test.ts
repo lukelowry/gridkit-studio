@@ -27,18 +27,30 @@ suite('Case source', () => {
     const invalid = new vscode.WorkspaceEdit()
     invalid.insert(bench.uri, new vscode.Position(0, 0), '{')
     await vscode.workspace.applyEdit(invalid)
-    await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
-    await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
-    // The rows stay, and nothing in the panel speaks of the problem.
-    await visible(table, 'tbody .cell')
-    assert.equal(await table.locator('.c-note').count(), 0)
-    await vscode.commands.executeCommand('gridkitStudio.showSource', bench.uri)
-    await vscode.commands.executeCommand('gridkitStudio.stopSimulation', bench.uri)
-    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup')
-    await until(() => vscode.window.activeTextEditor?.document === document, 'the source in focus')
-    // Undone from the keyboard, as the user would.
-    await bench.page.locator('.monaco-editor.focused').getByRole('textbox').press('ControlOrMeta+z')
-    await until(() => document.getText() === text, 'the invalid edit undone')
+    // Whatever comes of what follows, the source is left as found, so no test after this one reads
+    // the edit.
+    try {
+      await until(() => bench.studio.state(bench.key).stale, 'the invalid source is noticed')
+      await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
+      // The rows stay, and nothing in the panel speaks of the problem.
+      await visible(table, 'tbody .cell')
+      assert.equal(await table.locator('.c-note').count(), 0)
+      // A command that reads the case says nothing more of why it cannot: Problems says it
+      // already, and a notification the test did not expect fails it.
+      await vscode.commands.executeCommand('gridkitStudio.copyId', bench.uri)
+      await vscode.commands.executeCommand('gridkitStudio.openSource', bench.uri)
+      await until(
+        () =>
+          vscode.window.visibleTextEditors.some(
+            (editor) => editor.document.uri.toString() === bench.uri.toString(),
+          ),
+        'the source in front',
+      )
+      // Undone as an edit of the source is, with VS Code's own undo.
+      await bench.undo('the invalid edit undone')
+    } finally {
+      if (document.getText() !== text) await bench.replace(text)
+    }
     await bench.settled()
   })
 
@@ -69,18 +81,6 @@ suite('Case source', () => {
     assert.match(diff.stdout, /\+.*kv/)
     assert.ok(diff.stdout.length < 3000, 'A field edit should not reserialize the case')
     bench.report.gitDiffBytes = diff.stdout.length
-  })
-
-  test('reviews its changes in the native diff editor', async () => {
-    await vscode.commands.executeCommand('gridkitStudio.reviewChanges', bench.uri)
-    await until(
-      () =>
-        vscode.window.tabGroups.all.some((group) =>
-          group.tabs.some((tab) => tab.input instanceof vscode.TabInputTextDiff),
-        ),
-      'the native Git text diff',
-    )
-    await bench.capture('git-diff')
     await bench.undo('the edit undone')
     await bench.document.save()
   })

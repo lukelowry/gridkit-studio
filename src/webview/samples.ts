@@ -2,22 +2,21 @@
  *  change once read, so a view keeps what it was sent, asks only for what it lacks over the times
  *  it shows, and, past its budget, lets go of the chunks farthest from them. */
 
-import {
-  appendData,
-  blockByteLength,
-  type Data,
-  type Domain,
-  type FieldSelection,
-  type SampleBatch,
-} from '@latkit/model'
+import { appendData, blockByteLength, type Data, type Domain, type Query } from '@latkit/model'
 
 import { recordedWhole } from '../shared/bindings.js'
-import { cancelled } from '../shared/format.js'
+import { failedWith, quiet } from '../shared/errors.js'
 import type { Results, ViewState } from '../shared/messages.js'
+import { holdsPlot } from '../shared/plots.js'
 import type { Asker } from './asker.js'
 
 /** The samples a view holds besides those it needs now, in bytes. */
 export const SAMPLE_BUDGET = 96 << 20
+
+/** What plots hold besides what they draw now, in the Monitor and in a video: the budget, or less,
+ *  as a test sets on the page to stream a short run. */
+export const plotBudget = (): number =>
+  (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget ?? SAMPLE_BUDGET
 /** About the most bytes one reply brings. */
 const REPLY_BYTES = 8 << 20
 /** Results decode to float64. */
@@ -26,7 +25,7 @@ const SAMPLE_BYTES = 8
 /** One field of results a view draws, and the rows it selects; without rows, every row the file
  *  holds. `rows` counts them. */
 interface Need {
-  readonly selection: FieldSelection
+  readonly selection: Query.Selection
   readonly rows: number
 }
 
@@ -63,8 +62,7 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
   if (!results?.frames || !summary) return []
   const fields = new Map<string, { from: string; field: string; ids?: string[] }>()
   for (const { from, field, id } of plots) {
-    if (!results.outputs.some((output) => output.from === from && output.select.includes(field)))
-      continue
+    if (!holdsPlot(results, { from, field })) continue
     const found = fields.get(from + '\n' + field)
     if (!found) fields.set(from + '\n' + field, { from, field, ...(id && { ids: [id] }) })
     else if (!id) delete found.ids
@@ -76,8 +74,48 @@ export const plotNeeds = memo(({ results, summary, plots = [] }) => {
   }))
 })
 
+/** Where a plot's drawing stands, as its monitor says: the time of the last frame it drew, `start`
+ *  while it has drawn nothing, null once it has drawn its window to the end. */
+export type Wants = number | 'start' | null
+
+/** Where the drawing of `all` the plots stands: the least of them, `start` for one that has not said. */
+export function leastWants(all: readonly (Wants | undefined)[]): Wants {
+  let least: number | null = null
+  for (const wants of all) {
+    if (wants === undefined || wants === 'start') return 'start'
+    if (wants !== null) least = least === null ? wants : Math.min(least, wants)
+  }
+  return least
+}
+
+/**
+ * What plots of `needs` read of `results` over `window` when every sample there would hold more than
+ * `budget` bytes: the next slice, from where their drawing stands (`wants`) on, half a budget's
+ * worth, a chunk at least; or null once they have drawn the window. Undefined when the window fits,
+ * so the plots read it whole. A results file's frames never change, so a plot keeps what it drew of
+ * a slice, and the slices before it go as later ones come.
+ */
+export function streamSlice(
+  results: Results | undefined,
+  needs: readonly Need[],
+  window: Domain,
+  budget: number,
+  wants: Wants,
+): Domain | null | undefined {
+  const frameBytes = needs.reduce((n, need) => n + (need.rows + 1) * SAMPLE_BYTES, 0)
+  if (!results || results.frames < 2 || !frameBytes) return undefined
+  const step = (results.domain[1] - results.domain[0]) / (results.frames - 1)
+  const end = Math.min(window[1], results.domain[1])
+  const frames = (end - Math.max(window[0], results.domain[0])) / step + 1
+  if (!(step > 0) || frames * frameBytes <= budget) return undefined
+  const from = wants === 'start' ? window[0] : wants
+  if (from === null || from >= end) return null
+  const span = Math.max(results.chunk, Math.floor(budget / 2 / frameBytes)) * step
+  return [from, Math.min(end, from + span)]
+}
+
 /** What names a selection of fields and rows, so equal selections compare equal. */
-export function selectionKey({ from, select, rows }: FieldSelection): string {
+function selectionKey({ from, select, rows }: Query.Selection): string {
   return `${from}\n${select.join(',')}\n${rows ? JSON.stringify(rows) : ''}`
 }
 
@@ -94,7 +132,18 @@ function clip([a, b]: Domain, [start, end]: Domain): Domain | undefined {
   return from <= to ? [from, to] : undefined
 }
 
-const meet = (a: Domain, b: Domain) => a[0] <= b[1] && b[0] <= a[1]
+/** The chunks that cover `window`, as a view's runs of them do: from the last that starts at or
+ *  before its start to the first that ends at or after its end. A window ending between two chunks'
+ *  frames needs the later chunk's first frame to close it. */
+function needed(chunks: ReadonlyMap<number, Chunk>, [a, b]: Domain): [number, number] {
+  let first = -Infinity
+  let last = Infinity
+  for (const [k, { domain }] of chunks) {
+    if (domain[0] <= a) first = Math.max(first, k)
+    if (domain[1] >= b) last = Math.min(last, k)
+  }
+  return [first, last]
+}
 
 /** How far `domain` lies from `at`. */
 const away = ([start, end]: Domain, at: number) =>
@@ -105,7 +154,7 @@ const away = ([start, end]: Domain, at: number) =>
 interface Chunk {
   count: number
   domain: Domain
-  readonly pieces: SampleBatch[]
+  readonly pieces: Data.SampleBatch[]
   bytes: number
 }
 
@@ -126,7 +175,11 @@ interface Ask {
 export class Samples {
   #results?: Results
   #needs: readonly Need[] = []
+  /** What names each need, by its place among them, and all of them. */
+  #keys: readonly string[] = []
   #named = ''
+  /** The needs that last held samples, which stay the same array while they stay the same. */
+  #sampled: Query.Selection[] = []
   /** By need, then chunk. */
   readonly #held = new Map<string, Map<number, Chunk>>()
   /** The times each need's chunks span without a gap, by need. */
@@ -137,7 +190,7 @@ export class Samples {
   /** Bumped whenever chunks go: data made before then is made again. */
   #generation = 0
   /** The pieces taken in since the generation began, in order. */
-  #arrived: { key: string; batch: SampleBatch }[] = []
+  #arrived: { key: string; batch: Data.SampleBatch }[] = []
   #assembled?: {
     rows: Data
     generation: number
@@ -150,16 +203,25 @@ export class Samples {
   #flight?: { ask: Ask; controller: AbortController }
   #pumping = false
   #again = false
+  /** Whether it has asked for all it can since anything changed: a playhead moving through what it
+   *  holds then asks for nothing, and so is not walked through each frame. */
+  #idle = false
   /** Who waits on what the view holds, hearing each change. */
   readonly #waiters = new Set<() => void>()
 
   /** Asks the worker, through `asker`, for what each need lacks, and tells `changed` of each
-   *  change in what the view holds, which keeps `budget` bytes besides those needed now. */
+   *  change in what the view holds, which keeps `budget` bytes besides those needed now: a number,
+   *  or what it reads each time it is asked. */
   constructor(
     private readonly asker: Asker,
     private readonly changed: () => void,
-    private readonly budget = SAMPLE_BUDGET,
+    private readonly limit: number | (() => number) = SAMPLE_BUDGET,
   ) {}
+
+  /** The bytes it keeps besides those needed now. */
+  get budget(): number {
+    return typeof this.limit === 'number' ? this.limit : this.limit()
+  }
 
   /** The results the view holds samples of. */
   get results(): string | undefined {
@@ -175,13 +237,22 @@ export class Samples {
     near?: Near,
   ): void {
     if (results?.id !== this.#results?.id) this.#reset()
+    // More frames read, or other needs, may have more to ask for. What brought nothing of fewer
+    // frames is never asked again, so it is let go of.
+    if (results !== this.#results) this.#idle = false
+    if (results?.frames !== this.#results?.frames) this.#spent.clear()
     this.#results = results
-    const named = needs.map(({ selection }) => selectionKey(selection)).join('\t')
-    if (named !== this.#named) {
-      this.#named = named
+    // The same needs, as a view asks each frame, are named once.
+    if (needs !== this.#needs) {
+      const keys = needs.map(({ selection }) => selectionKey(selection))
+      const named = keys.join('\t')
       this.#needs = needs
-      const keys = new Set(needs.map(({ selection }) => selectionKey(selection)))
-      for (const key of [...this.#held.keys()]) if (!keys.has(key)) this.#drop(key)
+      this.#keys = keys
+      if (named !== this.#named) {
+        this.#idle = false
+        this.#named = named
+        for (const key of [...this.#held.keys()]) if (!keys.includes(key)) this.#drop(key)
+      }
     }
     this.#required = results && required && clip(required, results.domain)
     this.#near = near
@@ -196,7 +267,24 @@ export class Samples {
         : !this.holds(this.#required))
     )
       flight.controller.abort()
+    if (this.#idle && this.holds(this.#required)) return
     this.#pump()
+  }
+
+  /** Ask for what plots of `needs` draw over `window`: all of it when it fits the budget, then what
+   *  lies around `near`; else the slice from where their drawing stands, `wants`. Returns that
+   *  slice, null once they have drawn the window, or undefined when they read it whole. */
+  plot(
+    results: Results | undefined,
+    needs: readonly Need[],
+    window: Domain,
+    wants: Wants,
+    near?: Near,
+  ): Domain | null | undefined {
+    const slice = streamSlice(results, needs, window, this.budget, wants)
+    if (slice === undefined) this.want(results, needs, window, near)
+    else this.want(results, needs, slice ?? undefined)
+    return slice
   }
 
   /** `rows` with the samples held. The same value stays while nothing arrives; one that arrives
@@ -225,7 +313,7 @@ export class Samples {
       }
     }
     // Made anew from every piece held, in frame order.
-    const pieces: { key: string; batch: SampleBatch }[] = []
+    const pieces: { key: string; batch: Data.SampleBatch }[] = []
     for (const [key, chunks] of this.#held)
       for (const chunk of chunks.values())
         for (const batch of chunk.pieces) pieces.push({ key, batch })
@@ -248,17 +336,20 @@ export class Samples {
 
   /** Whether the samples held of `from`'s `field` cover all of `window`. */
   covers(from: string, field: string, window: Domain): boolean {
-    const need = this.#needs.find(
+    const n = this.#needs.findIndex(
       ({ selection }) => selection.from === from && selection.select[0] === field,
     )
-    return !!need && this.#covers(selectionKey(need.selection), window)
+    return n >= 0 && this.#covers(this.#keys[n]!, window)
+  }
+
+  /** Whether `selection`, its rows the same, is one of the needs it reads. */
+  has(selection: Query.Selection): boolean {
+    return this.#keys.includes(selectionKey(selection))
   }
 
   /** Whether every need's samples cover `window`, or there is no window to cover. */
   holds(window: Domain | undefined): boolean {
-    return (
-      !window || this.#needs.every(({ selection }) => this.#covers(selectionKey(selection), window))
-    )
+    return !window || this.#keys.every((key) => this.#covers(key, window))
   }
 
   /** Settles once every need's samples cover `window`, the one last asked for, or fails once what
@@ -289,18 +380,22 @@ export class Samples {
     return (
       !!required &&
       !this.#flight &&
-      this.#needs.some(({ selection }) => {
-        const key = selectionKey(selection)
-        return !this.#covers(key, required) && this.#spent.has(`${key}|${required}|${frames}`)
-      })
+      this.#keys.some(
+        (key) => !this.#covers(key, required) && this.#spent.has(`${key}|${required}|${frames}`),
+      )
     )
   }
 
-  /** The needs that hold samples: the fields, and their rows, the view can draw. */
-  sampled(): FieldSelection[] {
-    return this.#needs
+  /** The needs that hold samples: the fields, and their rows, the view can draw. The same array
+   *  while they are the same, so what a view makes of it is not made again. */
+  sampled(): Query.Selection[] {
+    const sampled = this.#needs
       .map(({ selection }) => selection)
-      .filter((selection) => !!this.#held.get(selectionKey(selection))?.size)
+      .filter((_, n) => !!this.#held.get(this.#keys[n]!)?.size)
+    const last = this.#sampled
+    if (sampled.length === last.length && sampled.every((selection, n) => selection === last[n]))
+      return last
+    return (this.#sampled = sampled)
   }
 
   /** What the view holds, for the benchmarks. */
@@ -313,6 +408,7 @@ export class Samples {
   /** Ask again for what failed, or brought nothing, as when the user reloads a view. */
   retry(): void {
     this.#spent.clear()
+    this.#idle = false
     this.#pump()
   }
 
@@ -321,6 +417,7 @@ export class Samples {
     this.#reset()
     this.#results = undefined
     this.#needs = []
+    this.#keys = []
     this.#named = ''
   }
 
@@ -337,9 +434,12 @@ export class Samples {
   #gone() {
     this.#generation++
     this.#arrived = []
+    this.#idle = false
   }
 
   #drop(key: string) {
+    // An ask for what the view no longer draws brings nothing it keeps.
+    if (this.#flight?.ask.key === key) this.#flight.controller.abort()
     for (const chunk of this.#held.get(key)?.values() ?? []) this.#bytes -= chunk.bytes
     this.#held.delete(key)
     this.#runs.delete(key)
@@ -380,21 +480,24 @@ export class Samples {
     if (!results?.chunk || !results.frames) return undefined
     const required = this.#required
     if (required)
-      for (const need of this.#needs) {
-        const key = selectionKey(need.selection)
+      for (const [n, need] of this.#needs.entries()) {
+        const key = this.#keys[n]!
         const spent = `${key}|${required}|${results.frames}`
         if (this.#covers(key, required) || this.#spent.has(spent)) continue
         const near = this.#near ?? { at: required[0], travel: 0 }
         return { need, key, window: required, near, bytes: REPLY_BYTES, required: true, spent }
       }
     const near = this.#near
-    if (!near) return undefined
+    // A page VS Code hides reads ahead no more; what it needs to show, it still reads, as an export
+    // working while hidden does.
+    if (!near || (globalThis as { document?: { hidden?: boolean } }).document?.hidden)
+      return undefined
     // The need holding least goes first, a share of a reply at a time, so the fields a view draws
     // together reach as far around it as each other.
     const room = this.budget - this.#bytes
     const share = Math.min(REPLY_BYTES, room) / this.#needs.length
     const least = this.#needs
-      .map((need) => ({ need, key: selectionKey(need.selection) }))
+      .map((need, n) => ({ need, key: this.#keys[n]! }))
       .map((each) => ({ ...each, held: this.#heldBytes(each.key) }))
       .sort((a, b) => a.held - b.held)
     for (const { need, key } of least) {
@@ -440,8 +543,12 @@ export class Samples {
     })
   }
 
-  /** Ask for what the view lacks, one ask at a time, until it lacks nothing it can have. */
+  /** Ask for what the view lacks, one ask at a time, until it lacks nothing it can have. An ask the
+   *  view's showing gave way to meanwhile is no failure: what it asks next, as its new state comes,
+   *  asks again. */
   async #serve() {
+    this.#idle = false
+    let superseded = false
     for (let ask = this.#next(); ask; ask = this.#next()) {
       const results = this.#results!
       const controller = new AbortController()
@@ -468,16 +575,20 @@ export class Samples {
         tell = true
       } catch (error) {
         if (controller.signal.aborted) continue
-        this.#spent.add(ask.spent)
-        // Results let go of, as when they are cleared or replaced, are no failure.
-        if (!cancelled(error) && (error as { code?: string })?.code !== 'results-unavailable')
-          this.asker.report(error)
-        tell = true
+        superseded = failedWith(error, 'superseded')
+        if (!superseded) {
+          this.#spent.add(ask.spent)
+          // Results closed, as when they are cleared or replaced, are no failure.
+          if (!quiet(error)) this.asker.report(error)
+          tell = true
+        }
       } finally {
         if (this.#flight?.controller === controller) this.#flight = undefined
       }
+      if (superseded) break
       if (tell) this.#tell()
     }
+    this.#idle = !superseded
   }
 
   /** The frames of each chunk `key` holds. */
@@ -488,8 +599,8 @@ export class Samples {
   }
 
   /** Hold `batches`, the frames `key` lacked; whether any came. */
-  #take(key: string, batches: readonly SampleBatch[]): boolean {
-    if (!this.#needs.some(({ selection }) => selectionKey(selection) === key)) return false
+  #take(key: string, batches: readonly Data.SampleBatch[]): boolean {
+    if (!this.#keys.includes(key)) return false
     const size = this.#results!.chunk
     let chunks = this.#held.get(key)
     if (!chunks) this.#held.set(key, (chunks = new Map()))
@@ -501,6 +612,9 @@ export class Samples {
       const end = batch.firstFrame + count - k * size
       const bytes = blockByteLength([batch])
       const found = chunks.get(k)
+      // A chunk is held as its first frames, so frames that would leave a gap after them, as an ask
+      // made for frames since let go of brings, are not taken: the view asks for them again.
+      if (batch.firstFrame - k * size !== (found?.count ?? 0)) continue
       if (found) {
         found.pieces.push(batch)
         found.count = Math.max(found.count, end)
@@ -531,9 +645,10 @@ export class Samples {
     const required = this.#required
     const at = this.#near?.at ?? (required ? (required[0] + required[1]) / 2 : 0)
     const far: { key: string; k: number; chunk: Chunk }[] = []
-    for (const [key, chunks] of this.#held)
-      for (const [k, chunk] of chunks)
-        if (!required || !meet(chunk.domain, required)) far.push({ key, k, chunk })
+    for (const [key, chunks] of this.#held) {
+      const [first, last] = required ? needed(chunks, required) : [Infinity, -Infinity]
+      for (const [k, chunk] of chunks) if (k < first || k > last) far.push({ key, k, chunk })
+    }
     far.sort((a, b) => away(b.chunk.domain, at) - away(a.chunk.domain, at))
     let dropped = false
     for (const { key, k, chunk } of far) {

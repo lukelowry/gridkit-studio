@@ -1,11 +1,13 @@
-import { failure, type Value } from '@latkit/model'
+import { failure } from '@latkit/model'
 
+import type { Value } from '../shared/messages.js'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf, elementType } from '../shared/schema.js'
-import type { Case } from './case.js'
+import type { Case, Table } from './case.js'
+import { type Chunk, isValid } from './columns.js'
 import { createRecords } from './create.js'
 import type { ArrayName } from './definition.js'
-import { apply, editField, minimal, recordOf, textOffset, withValue } from './edits.js'
+import { apply, editCase, editField, minimal, recordOf, textOffset, withValue } from './edits.js'
 import { recordEdits } from './recording.js'
 
 type Addition = Extract<Mutation, { kind: 'add' }>
@@ -18,9 +20,7 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
       throw failure('invalid-input', 'Change what a case records in a batch of its own.')
     if (new Set(records.map(({ type }) => type)).size < records.length)
       throw failure('invalid-input', 'Change what each type records once in a batch.')
-    return records
-      .flatMap(({ type, add, remove }) => recordEdits(kase, type, add, remove))
-      .sort((a, b) => a.offset - b.offset)
+    return recordEdits(kase, records)
   }
   const added = new Map<string, Addition>()
   const removed = new Set<string>()
@@ -167,17 +167,58 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
       occupied.set(target, id + '.' + port.name)
     }
   }
-  for (const table of kase.tables.values())
-    for (let row = 0; row < table.records.length; row++) {
-      const id = kase.id(table, row)
-      if (!removed.has(id)) check(id)
-    }
+  // Only a removal or a rewired net can break a row the batch leaves alone, so without either only
+  // the rows it adds are checked. The rows it leaves alone are checked by row, from the ports the
+  // case read: an id is made of one only to say what is wrong with it.
+  if (removed.size || touchedNets.size) {
+    const gone = rowsOf(kase, removed)
+    const nets = rowsOf(kase, touchedNets)
+    const checked = rowsOf(kase, [...removed, ...fields.keys()])
+    for (const table of kase.tables.values())
+      for (const port of table.shape.ports) {
+        const target = kase.tables.get(port.definition.type.to)
+        const removing = target && gone.get(target)
+        const driving = target && port.definition.direction === 'out' ? nets.get(target) : undefined
+        const column = table.fields.get(port.name)
+        if (!target || !column || (!removing && !driving)) continue
+        const skipped = checked.get(table)
+        column.chunks.forEach((value, c) => {
+          const chunk = value as Chunk.Reference
+          for (let at = 0; at < chunk.length; at++) {
+            const row = column.starts[c]! + at
+            if (!isValid(chunk, at) || skipped?.has(row)) continue
+            const named = chunk.values[chunk.offset + at]!
+            if (removing?.has(named))
+              throw failure(
+                'invalid-input',
+                `${kase.id(table, row)}.${port.name} still references removed ${kase.id(target, named)}.`,
+              )
+            if (!driving?.has(named)) continue
+            const net = kase.id(target, named)
+            const driver = `${kase.id(table, row)}.${port.name}`
+            const previous = occupied.get(net)
+            if (previous)
+              throw failure(
+                'invalid-input',
+                `This signal already has an output driver: ${net} (${previous}, ${driver}).`,
+              )
+            occupied.set(net, driver)
+          }
+        })
+      }
+    for (const id of fields.keys()) if (!removed.has(id) && !added.has(id)) check(id)
+  }
   for (const id of added.keys()) check(id)
   const edits: SourceEdit[] = []
   for (const id of new Set([...fields.keys(), ...positions.keys()])) {
     const addition = added.get(id)
     if (addition) {
       Object.assign(addition.fields, Object.fromEntries(fields.get(id) ?? []))
+      continue
+    }
+    // The case's own fields are in its header and params, each changed alone.
+    if (kase.locate(id)?.table.shape.array === null) {
+      edits.push(...editCase(kase, fields.get(id) ?? new Map(), resolve))
       continue
     }
     const record = recordOf(kase, id)
@@ -223,4 +264,17 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
     else combined.push(edit)
   }
   return combined
+}
+
+/** The rows of `kase` the elements `ids` are, by their tables; an id of none is passed over. */
+function rowsOf(kase: Case, ids: Iterable<string>): Map<Table, Set<number>> {
+  const rows = new Map<Table, Set<number>>()
+  for (const id of ids) {
+    const located = kase.locate(id)
+    if (!located) continue
+    let held = rows.get(located.table)
+    if (!held) rows.set(located.table, (held = new Set()))
+    held.add(located.row)
+  }
+  return rows
 }

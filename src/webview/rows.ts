@@ -2,19 +2,19 @@
  *  lacks of the revision it shows. A field asked for stays held while the revision stands, so a
  *  mapping taken away changes nothing drawn, and mapping it again asks for nothing. */
 
-import type { Positions } from '@latkit/gpu'
-import {
-  createData,
-  type Data,
-  type FieldSelection,
-  type RowBatch,
-  type Schema,
-  staticFields,
-} from '@latkit/model'
+import type { Layout } from '@latkit/gpu'
+import { createData, type Data, type Query, type Schema, staticFields } from '@latkit/model'
 
 import type { Bindings } from '../shared/bindings.js'
-import { cancelled } from '../shared/format.js'
-import type { Revision, Summary, ViewState } from '../shared/messages.js'
+import { failedWith, quiet } from '../shared/errors.js'
+import {
+  type Plot,
+  type Revision,
+  revisionOf,
+  type Source,
+  type Summary,
+  type ViewState,
+} from '../shared/messages.js'
 import { isReference, nameFieldOf, networkOf, positionOf } from '../shared/schema.js'
 import type { Asker } from './asker.js'
 
@@ -24,7 +24,7 @@ export function staticNeeds(
   summary: Summary,
   bindings: Bindings | undefined,
   network: boolean,
-): FieldSelection[] {
+): Query.Selection[] {
   const { schema } = summary
   const bound = Object.values(bindings ?? {})
   const drawn = networkOf(schema)
@@ -33,43 +33,57 @@ export function staticNeeds(
     : undefined
   return staticFields(schema)
     .filter((field) => !types || types.has(field.from))
-    .map((field) => ({
-      ...field,
-      select: field.select.filter(
-        (name) =>
-          bound.some((binding) => binding.type === field.from && binding.field === name) ||
-          name === nameFieldOf(schema, field.from) ||
-          [positionOf(schema, field.from)?.x, positionOf(schema, field.from)?.y].includes(name) ||
-          drawn.edges.some((edge) => edge.type === field.from && edge.bends === name) ||
-          isReference(schema.types[field.from]!.fields[name]),
-      ),
-    }))
+    .map((field) => {
+      const type = field.from
+      const position = positionOf(schema, type)
+      // What a type is drawn by, worked out once for all its fields.
+      const drawnBy = new Set([
+        nameFieldOf(schema, type),
+        position?.x,
+        position?.y,
+        ...drawn.edges.filter((edge) => edge.type === type).map((edge) => edge.bends),
+        ...bound.filter((binding) => binding.type === type).map((binding) => binding.field),
+      ])
+      const definitions = schema.types[type]!.fields
+      return {
+        ...field,
+        select: field.select.filter((name) => drawnBy.has(name) || isReference(definitions[name])),
+      }
+    })
     .filter((field) => field.select.length > 0)
+}
+
+/** The static fields plots read of the types `plots` draw: one each, which brings its rows and
+ *  their ids. A trace is known by its row's id, and draws nothing else of the case. */
+export function plotStatics(summary: Summary, plots: readonly Plot[]): Query.Selection[] {
+  const { schema } = summary
+  const types = new Set(plots.map(({ from }) => from))
+  return staticFields(schema).flatMap((field) => {
+    const name = nameFieldOf(schema, field.from) ?? field.select[0]
+    return types.has(field.from) && name ? [{ ...field, select: [name] }] : []
+  })
 }
 
 /** What a view's rows are of: a case's revision, or, with `results`, the case they were read
  *  against, which `summary` then describes. */
-export interface Of {
+interface Of {
   readonly summary: Summary
   readonly results?: string
 }
 
-/** The rows held, as data, and what they are of. */
+/** The rows held, as data, and what they are of: a revision, and its content, which a version of a
+ *  document VS Code opened again can name anew. */
 export interface Snapshot {
   readonly data: Data
   readonly revision: Revision
+  readonly fingerprint: string
   /** The static fields held, each as `type.field`. */
   readonly fields: ReadonlySet<string>
   /** Where the diagram's blocks are arranged, when it was asked for. */
-  readonly presentation?: Record<string, Positions>
+  readonly presentation?: Record<string, Layout.Positions>
 }
 
 const nameOf = (type: string, field: string) => type + '.' + field
-const revisionOf = ({ uri, version, attachmentId }: Summary): Revision => ({
-  uri,
-  version,
-  ...(attachmentId !== undefined && { attachmentId }),
-})
 
 /** Each schema by its text: a revision carries a copy, and the renderers keep their cached work only
  *  for the same schema object. */
@@ -81,7 +95,10 @@ function schemaOf(schema: Schema): Schema {
 }
 
 /** `batches` with each type's ids held once: rows asked for again bring their ids again. */
-function joined(held: readonly RowBatch[], batches: readonly RowBatch[]): RowBatch[] {
+function joined(
+  held: readonly Data.RowBatch[],
+  batches: readonly Data.RowBatch[],
+): Data.RowBatch[] {
   const named = new Set(held.filter((batch) => batch.ids).map((batch) => batch.index.type))
   return [
     ...held,
@@ -98,17 +115,14 @@ function joined(held: readonly RowBatch[], batches: readonly RowBatch[]): RowBat
 function ask(
   asker: Asker,
   { summary, results }: Of,
-  fields: readonly FieldSelection[] | undefined,
+  fields: readonly Query.Selection[] | undefined,
   presentation: boolean,
   signal: AbortSignal,
 ) {
-  const revision = revisionOf(summary)
+  const source: Source = results ? { results } : { revision: revisionOf(summary) }
   return Promise.all([
-    fields &&
-      asker.request('rows', results ? { results, fields } : { ...revision, fields }, signal),
-    presentation
-      ? asker.request('presentation', results ? { results } : revision, signal)
-      : undefined,
+    fields && asker.request('rows', { ...source, fields }, signal),
+    presentation ? asker.request('presentation', source, signal) : undefined,
   ])
 }
 
@@ -116,7 +130,7 @@ function ask(
 export async function rowsOnce(
   asker: Asker,
   of: Of,
-  fields: readonly FieldSelection[],
+  fields: readonly Query.Selection[],
   presentation: boolean,
   signal: AbortSignal,
 ): Promise<Snapshot> {
@@ -126,6 +140,7 @@ export async function rowsOnce(
   return {
     data: createData(schemaOf(summary.schema), joined([], batches)),
     revision,
+    fingerprint: summary.fingerprint,
     fields: new Set(fields.flatMap(({ from, select }) => select.map((name) => nameOf(from, name)))),
     ...(positions && { presentation: positions }),
   }
@@ -136,10 +151,10 @@ export class Rows {
   #snapshot?: Snapshot
   /** What the held batches are of, and the batches. */
   #key = ''
-  #batches: RowBatch[] = []
+  #batches: Data.RowBatch[] = []
   #held = new Set<string>()
-  #positions?: Record<string, Positions>
-  #wanted?: { of: Of; fields: readonly FieldSelection[]; presentation: boolean }
+  #positions?: Record<string, Layout.Positions>
+  #wanted?: { of: Of; fields: readonly Query.Selection[]; presentation: boolean }
   #flight?: AbortController
   /** Asks that failed, not asked again until something changes. */
   readonly #spent = new Set<string>()
@@ -157,7 +172,7 @@ export class Rows {
 
   /** Ask for the rows of `of` that `fields` select and the view lacks, and, with `presentation`,
    *  where the diagram's blocks are arranged. */
-  want(of: Of | undefined, fields: readonly FieldSelection[], presentation = false): void {
+  want(of: Of | undefined, fields: readonly Query.Selection[], presentation = false): void {
     if (!of) return
     this.#wanted = { of, fields, presentation }
     const { summary } = of
@@ -170,6 +185,8 @@ export class Rows {
       this.#batches = []
       this.#held = new Set()
       this.#positions = undefined
+      // What failed of another revision is never asked of again.
+      this.#spent.clear()
     }
     if (this.#flight) return
     const lacking = fields
@@ -179,7 +196,9 @@ export class Rows {
       }))
       .filter(({ select }) => select.length > 0)
     const placed = !presentation || this.#positions !== undefined
-    const spent = key + '\n' + JSON.stringify(lacking) + placed
+    // An ask that failed of results let go of says nothing of other results read against the same
+    // case, which are asked of anew.
+    const spent = [key, of.results ?? '', JSON.stringify(lacking), placed].join('\n')
     if ((!lacking.length && placed && this.#snapshot && this.#current()) || this.#spent.has(spent))
       return
     void this.#ask(key, of, lacking, !placed, spent)
@@ -194,18 +213,18 @@ export class Rows {
   /** Whether the rows held are of the revision last asked for. */
   #current(): boolean {
     const summary = this.#wanted?.of.summary
-    const revision = this.#snapshot?.revision
-    return !!summary && revision?.uri === summary.uri && revision.version === summary.version
+    return !!summary && same(this.#snapshot, summary)
   }
 
   async #ask(
     key: string,
     of: Of,
-    lacking: readonly FieldSelection[],
+    lacking: readonly Query.Selection[],
     placing: boolean,
     spent: string,
   ) {
     const controller = (this.#flight = new AbortController())
+    let superseded = false
     const revision = revisionOf(of.summary)
     try {
       const [batches = [], positions = this.#positions] = await ask(
@@ -223,35 +242,43 @@ export class Rows {
       this.#snapshot = {
         data: createData(schemaOf(of.summary.schema), this.#batches),
         revision,
+        fingerprint: of.summary.fingerprint,
         fields: new Set(this.#held),
         ...(positions && { presentation: positions }),
       }
       this.changed()
     } catch (error) {
       if (controller.signal.aborted) return
-      this.#spent.add(spent)
-      // A revision read again since it was asked for is no failure: the newer one is asked for.
-      if (!cancelled(error) && (error as { code?: string })?.code !== 'stale')
-        this.asker.report(error)
+      // A revision read again since it was asked for, or a showing the view gave way to, is no
+      // failure: what the view wants next, as its new state comes, is asked for.
+      superseded = failedWith(error, 'superseded')
+      if (!superseded) this.#spent.add(spent)
+      if (!quiet(error)) this.asker.report(error)
     } finally {
       if (this.#flight === controller) this.#flight = undefined
       // What the view came to want meanwhile.
-      if (this.#wanted && !controller.signal.aborted)
+      if (this.#wanted && !controller.signal.aborted && !superseded)
         this.want(this.#wanted.of, this.#wanted.fields, this.#wanted.presentation)
     }
   }
 }
 
-/** Whether `snapshot` holds the rows of the revision `state` shows. */
-export function ofShown(snapshot: Snapshot | undefined, state: ViewState): boolean {
-  const summary = state.summary
+/** Whether `snapshot` holds rows of the revision `summary` describes, and of its content. */
+function same(snapshot: Snapshot | undefined, summary: Summary): boolean {
   const revision = snapshot?.revision
   return (
     !!revision &&
-    !!summary &&
     revision.uri === summary.uri &&
     revision.version === summary.version &&
-    revision.attachmentId === summary.attachmentId
+    snapshot.fingerprint === summary.fingerprint
+  )
+}
+
+/** Whether `snapshot` holds the rows of the revision `state` shows. */
+export function ofShown(snapshot: Snapshot | undefined, state: ViewState): boolean {
+  const { summary } = state
+  return (
+    !!summary && same(snapshot, summary) && snapshot!.revision.attachmentId === summary.attachmentId
   )
 }
 

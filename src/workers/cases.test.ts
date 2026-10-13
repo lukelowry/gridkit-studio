@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 
+import { applyChanges } from '../gridkit/index.js'
 import type { CaseApi } from '../shared/messages.js'
 import { bundle, start } from './rig.js'
 
@@ -65,7 +66,8 @@ describe('the case worker', () => {
     const { call, stop } = rig
     try {
       const revision = { uri: 'file:///test.case.json', version: 1 }
-      await call('parse', { ...revision, text: await readFile('cases/TwoArea.case.json', 'utf8') })
+      const text = await readFile('cases/TwoArea.case.json', 'utf8')
+      await call('parse', { ...revision, text })
       expect(
         (
           await call('query', {
@@ -78,15 +80,21 @@ describe('the case worker', () => {
         ...revision,
         mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'Delta Ω' }],
       })
+      const length = applyChanges(text, [edits]).length
+      // Changes that make a text of another length than the extension's were made to another text.
+      await expect(
+        call('parse', { ...revision, version: 2, baseVersion: 1, changes: [edits], length: 1 }),
+      ).rejects.toThrow(/mirror is stale/)
       const delta = await call('parse', {
         ...revision,
         version: 2,
         baseVersion: 1,
         changes: [edits],
+        length,
       })
       expect(delta.version).toBe(2)
       await expect(
-        call('parse', { ...revision, version: 3, baseVersion: 1, changes: [edits] }),
+        call('parse', { ...revision, version: 3, baseVersion: 1, changes: [edits], length }),
       ).rejects.toThrow(/mirror is stale/)
       // A malformed newer revision keeps the old projection unavailable to stale edits.
       await expect(call('parse', { ...revision, version: 4, text: '{' })).rejects.toThrow()
@@ -100,6 +108,22 @@ describe('the case worker', () => {
       expect(await call('stats', {})).toMatchObject({ cases: 0 })
     } finally {
       await stop()
+    }
+  })
+
+  it('holds no document a completion alone brought it', async () => {
+    const rig = await start<CaseApi>(script)
+    try {
+      await rig.call('complete', {
+        uri: 'file:///typed.case.json',
+        version: 1,
+        attachmentId: 'typed',
+        offset: 2,
+        text: '{"',
+      })
+      expect(await rig.call('stats', {})).toMatchObject({ cases: 0 })
+    } finally {
+      await rig.stop()
     }
   })
 

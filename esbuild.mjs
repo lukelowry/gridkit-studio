@@ -1,7 +1,7 @@
 ﻿/** Bundle the extension and its two workers for Node, and the webviews for the browser, into dist/.
  *  `--watch` rebuilds on change, unminified. */
 
-import { copyFile, mkdir, rm } from 'node:fs/promises'
+import { cp, mkdir, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -46,7 +46,8 @@ const builds = [
     format: 'esm',
     splitting: true,
     target: 'es2022',
-    conditions: ['browser'],
+    // Svelte's production build, without its checks for development.
+    conditions: ['browser', watch ? 'development' : 'production'],
     plugins: [svelte({ compilerOptions: { css: 'external' } })],
   },
 ]
@@ -56,4 +57,4 @@ for (const options of builds) {
   else await build(config)
 }
 
-await copyFile('assets/borders.bin', 'dist/webview/borders.bin')
+await cp('assets/maps', 'dist/webview/maps', { recursive: true })

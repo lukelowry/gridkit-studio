@@ -1,16 +1,19 @@
 /** Turn the diagram's editing gestures into transactions on the case document. */
 
 import { arrange, type Diagram } from '@latkit/diagram'
-import type { Gpu, Positions } from '@latkit/gpu'
+import type { Gpu, Layout } from '@latkit/gpu'
 import { itemId, numberAt, rowAt, rowCount } from '@latkit/model'
 
-import type { Mutation, ViewState } from '../../shared/messages.js'
+import { type Mutation, revisionOf, type ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
 import { layoutOf } from './options.js'
 
 /** The moves that put each block where `positions` says. */
-function moves(diagram: Diagram, positions: Readonly<Record<string, Positions>>): Mutation[] {
+function moves(
+  diagram: Diagram,
+  positions: Readonly<Record<string, Layout.Positions>>,
+): Mutation[] {
   const changes: Mutation[] = []
   for (const { x, y } of Object.values(positions)) {
     if (x.values.kind !== 'numeric' || y.values.kind !== 'numeric') continue
@@ -56,7 +59,7 @@ export function editing(
     busy = true
     try {
       await bridge.request('transact', {
-        version: current.summary.version,
+        revision: revisionOf(current.summary),
         mutations: changes,
         label,
       })

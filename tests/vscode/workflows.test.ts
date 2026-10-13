@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict'
 
-import type { RowsBlock } from '@latkit/model'
+import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 
@@ -26,7 +26,7 @@ suite('Workflows', function () {
     table
       .locator('tbody tr')
       .filter({ has: table.locator('th[scope="row"]', { hasText: new RegExp(`^${bus.number}$`) }) })
-  const kv = () => row().locator(`td[data-vscode-context*='"field":"params.kv"']`)
+  const kv = () => row().locator(`td[data-field="params.kv"]`)
   /** The bus's recorded voltage at time `t` of `results`. */
   async function voltage(results: string, t: number): Promise<number> {
     const blocks = await bench.studio.client.results.call('query', {
@@ -40,7 +40,7 @@ suite('Workflows', function () {
         at: t,
       },
     })
-    return rowsOf(blocks as RowsBlock[])[0]!.values.Vm as number
+    return rowsOf(blocks as Block.Rows[])[0]!.values.Vm as number
   }
 
   suiteSetup(async function () {
@@ -98,7 +98,7 @@ suite('Workflows', function () {
   test('records its voltage, faults it in the solver file, runs that, and reads the drop in the Monitor', async () => {
     await bench.toggleSignal('Bus', 'Vm')
     await bench.menu(row().locator('th[scope="row"]'), 'Plot Signal')
-    await bench.pick('Bus.Vm')
+    await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
     await until(
       () => bench.session.plots.some((plot) => plot.field === 'Vm' && plot.id === id),
       'its voltage plotted',
@@ -125,8 +125,10 @@ suite('Workflows', function () {
     )
     const run = bench.session.run!
     assert.equal(run.state, 'complete', run.message)
-    const steady = await voltage(run.results!, 0.95)
-    const faulted = await voltage(run.results!, 1.05)
+    // The results a run writes are those on show once it ends.
+    const written = bench.session.results!.id
+    const steady = await voltage(written, 0.95)
+    const faulted = await voltage(written, 1.05)
     assert.ok(faulted < steady - 0.1, `the faulted bus's voltage drops: ${steady} → ${faulted}`)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

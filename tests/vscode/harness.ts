@@ -2,19 +2,26 @@
  *  exports and from outside by Playwright over the window's DevTools port. */
 
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 
 import { type Browser, chromium, type Frame, type Locator, type Page } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { gridkitOf } from '../../src/extension/runs.js'
+import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
+import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
+import { contextKey } from '../../src/shared/ids.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
 
 const TIMEOUT = 30_000
+/** How long a read of what the page shows now waits for it: a moment, not a timeout. */
+const READ = { timeout: 1000 }
+/** The results file the suites play: a second of every bus's voltage. */
+const SYNTHETIC = 'Synthetic waveform.csv'
 
 /** The title bars `title` runs commands from: a panel or side bar view's, or the custom editor's
  *  in front. */
@@ -106,6 +113,17 @@ export const VIEWPORT = { width: 1600, height: 1000 }
 /** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
 export const VM = { type: 'Bus', field: 'Vm' } as const
 
+/** The text on the clipboard. */
+export const clipboard = () => vscode.env.clipboard.readText()
+
+/** The custom editor in front: its kind and file. */
+export function custom(): { viewType: string; path: string } | undefined {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  return input instanceof vscode.TabInputCustom
+    ? { viewType: input.viewType, path: input.uri.path.toLowerCase() }
+    : undefined
+}
+
 /** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
  *  once the wait fails, what it found instead. */
 export async function until<T>(
@@ -180,17 +198,32 @@ export const stats = <T extends { frames: number } = { frames: number }>(frame: 
 /** How many frames a canvas view has drawn. */
 export const frames = (frame: Frame) => frame.evaluate<number>('gridkitStats().frames')
 
-/** Wait for a canvas view to stop drawing, and return its counters. */
+/** Wait for a canvas view to stop drawing, and return its counters. One that draws on says so. */
 export async function idle<T extends { frames: number } = { frames: number }>(
   frame: Frame,
 ): Promise<T> {
   let last = await stats<T>(frame)
-  for (;;) {
-    await pause(250)
-    const now = await stats<T>(frame)
-    if (now.frames === last.frames) return now
-    last = now
-  }
+  let now = last
+  await until(
+    async () => {
+      await pause(250)
+      ;[last, now] = [now, await stats<T>(frame)]
+      return now.frames === last.frames
+    },
+    () => `the view still drawing, at ${now.frames} frames`,
+  )
+  return now
+}
+
+/** Plays `session`'s results over and over once played, for a test that measures playing for
+ *  longer than they last: each time playback stops at their end, it starts again from their start.
+ *  Dispose of what it returns to stop. */
+export function replaying(studio: Sessions, session: Session): vscode.Disposable {
+  const { transport } = session
+  return studio.clock.event((uri) => {
+    const { status, t, span } = transport.state
+    if (uri === session.uri && status === 'paused' && t >= span[1]) transport.play()
+  })
 }
 
 /** Whether a canvas view's canvas fills its webview edge to edge, with no padding around it. */
@@ -259,7 +292,6 @@ export class TestHost {
   readonly vscodeErrors: string[] = []
   /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
-  #results?: Promise<Results>
 
   private constructor(
     readonly extension: vscode.Extension<{ studio: Sessions }>,
@@ -322,7 +354,7 @@ export class TestHost {
     return this.uri.toString()
   }
   get session() {
-    return this.studio.all.get(this.key)!
+    return this.studio.get(this.key)!
   }
   /** The solver file beside the case, which runs it. */
   get solver(): vscode.Uri {
@@ -374,7 +406,7 @@ export class TestHost {
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await this.view('network')
     await visible(network, 'canvas[data-rendered=true]')
-    await until(() => this.studio.documents.entries.get(uri.toString())?.summary, name + ' parsed')
+    await until(() => this.studio.documents.get(uri.toString())?.summary, name + ' parsed')
     return { uri, network }
   }
 
@@ -396,9 +428,7 @@ export class TestHost {
    *  as Monitored Signals does, and wait for the case to read so. */
   async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
     const key = uri.toString()
-    const summary = await this.studio.documents.ensure(
-      this.studio.documents.entries.get(key)!.document,
-    )
+    const summary = await this.studio.documents.ensure(this.studio.documents.get(key)!.document)
     const definitions = summary.schema.types[type]!.fields
     const sampled = Object.keys(definitions).filter((field) => definitions[field]!.sampled)
     await this.studio.documents.transact(
@@ -440,9 +470,8 @@ export class TestHost {
     return pane
   }
 
-  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
-   *  then click its box. */
-  async toggleSignal(type: string, field: string): Promise<void> {
+  /** The row of `type`'s `field` in Monitored Signals, its type opened to show it. */
+  async signalLine(type: string, field: string): Promise<Locator> {
     const signals = await this.signals()
     const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
     if ((await group.getAttribute('aria-expanded')) !== 'true') {
@@ -452,9 +481,13 @@ export class TestHost {
         type + ' open',
       )
     }
-    const box = signals
-      .getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
-      .getByRole('checkbox')
+    return signals.getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
+  }
+
+  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
+   *  then click its box. */
+  async toggleSignal(type: string, field: string): Promise<void> {
+    const box = (await this.signalLine(type, field)).getByRole('checkbox')
     // Done once what the case records changes, not once the box looks it: a tree drawn again for
     // another case can change the box when no click took.
     const recorded = () => this.recorded(type, field)
@@ -508,7 +541,7 @@ export class TestHost {
   keys(): Keys {
     return {
       ...Object.fromEntries(
-        [...this.studio.contexts].map(([key, value]) => ['gridkitStudio.' + key, value]),
+        [...this.studio.contexts].map(([key, value]) => [contextKey(key), value]),
       ),
       isWorkspaceTrusted: vscode.workspace.isTrusted,
     }
@@ -571,6 +604,32 @@ export class TestHost {
     assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
     const origin = context.gridkitOrigin as string
     this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
+  }
+
+  /** Choose `item` for `type`'s `field` in Monitored Signals: from the actions its row shows at its
+   *  right with `inline`, else from its right-click menu. */
+  signalMenu(type: string, field: string, item: string, inline = false): void {
+    const row = this.studio.signalRow?.(type, field)
+    assert.ok(row?.contextValue, `Monitored Signals lists ${type} ${field}`)
+    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row.contextValue }
+    const { command } = this.menus.find(
+      'view/item/context',
+      item,
+      keys,
+      (group) => (group?.startsWith('inline') ?? false) === inline,
+    )
+    assert.ok(this.menus.enabled(command, keys), item + ' enabled')
+    this.#run(command, row)
+  }
+
+  /** What the right-click menu of `type`'s `field` in Monitored Signals offers. */
+  signalOffered(type: string, field: string): string[] {
+    const row = this.studio.signalRow?.(type, field)
+    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row?.contextValue }
+    return this.menus
+      .offered('view/item/context', keys)
+      .filter(({ group }) => !group?.startsWith('inline'))
+      .map(({ title }) => title)
   }
 
   /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
@@ -645,14 +704,16 @@ export class TestHost {
   #run(command: string, ...args: unknown[]): void {
     void vscode.commands
       .executeCommand(command, ...args)
-      .then(undefined, (error: unknown) => this.studio.error(error))
+      .then(undefined, (error: unknown) => this.studio.reporter.error(error))
   }
 
   // ── VS Code's own prompts, answered from the keyboard ──
 
-  /** The quick input on show: a quick pick, an input box, or a file dialog. */
+  /** The quick input on show: a quick pick, an input box, or a file dialog. One closed stays in the
+   *  page hidden, holding what it last asked. What it says is read with `READ`, as one may close
+   *  between two reads, and a read would otherwise wait out the whole timeout for another. */
   #prompt() {
-    const widget = this.page.locator('.quick-input-widget')
+    const widget = this.page.locator('.quick-input-widget:visible')
     return { widget, input: widget.locator('.quick-input-box input').first() }
   }
 
@@ -662,7 +723,7 @@ export class TestHost {
     await input.waitFor({ state: 'visible' })
     return widget
       .locator('.quick-input-title')
-      .innerText()
+      .innerText(READ)
       .catch(() => '')
   }
 
@@ -675,9 +736,9 @@ export class TestHost {
       (await widget.isVisible()) &&
       (await widget
         .locator('.quick-input-title')
-        .innerText()
+        .innerText(READ)
         .catch(() => '')) === asked &&
-      (await input.inputValue().catch(() => '')) === entered
+      (await input.inputValue(READ).catch(() => '')) === entered
     await again(
       async () => {
         if (await asking()) await input.press('Enter', { timeout: 2000 }).catch(() => {})
@@ -749,7 +810,7 @@ export class TestHost {
     const { input } = this.#prompt()
     // The dialog opens on the folder it starts in; a picker still closing holds other text.
     await until(
-      async () => /[\\/]/.test(await input.inputValue().catch(() => '')),
+      async () => /[\\/]/.test(await input.inputValue(READ).catch(() => '')),
       'the file dialog',
     )
     const asked = await this.#asked()
@@ -859,19 +920,26 @@ export class TestHost {
   }
 
   /** Results to play: a second of every bus's voltage, each a little out of step with the last,
-   *  opened once, with the first bus's plotted. */
-  results(): Promise<Results> {
-    return (this.#results ??= this.waveform('Synthetic waveform.csv', 100, 1).then((results) => {
-      this.plot()
-      return results
-    }))
+   *  shown with the first bus's plotted. Those on show, or, once others took their place, the file
+   *  read anew. */
+  async results(): Promise<Results> {
+    const shown = this.session.results
+    if (shown?.name === SYNTHETIC && !shown.growing) return shown
+    const results = await this.waveform(SYNTHETIC, 100, 1)
+    this.plot()
+    return results
   }
 
   /** Results of `frames` frames over `seconds`, every bus's voltage a little out of step with the
-   *  last, written beside the case as `name` and shown once they are read. */
-  async waveform(name: string, frames: number, seconds: number): Promise<Results> {
+   *  last, written beside the case as `name` and shown once they are read; with `digits`, values
+   *  are written to that many decimals, which keeps a long run's file small. */
+  async waveform(name: string, frames: number, seconds: number, digits?: number): Promise<Results> {
     const csv = vscode.Uri.joinPath(this.uri, '..', name)
     const { buses } = this.source
+    const voltage = (i: number, k: number) => {
+      const value = 1 + 0.1 * Math.sin(i / 10 + k)
+      return digits === undefined ? value : value.toFixed(digits)
+    }
     await vscode.workspace.fs.writeFile(
       csv,
       new TextEncoder().encode(
@@ -879,22 +947,13 @@ export class TestHost {
           '\n' +
           Array.from(
             { length: frames },
-            (_, i) =>
-              [(i * seconds) / frames, ...buses.map((_, k) => 1 + 0.1 * Math.sin(i / 10 + k))] +
-              '\n',
+            (_, i) => [(i * seconds) / frames, ...buses.map((_, k) => voltage(i, k))] + '\n',
           ).join(''),
       ),
     )
-    const results = await this.studio.withCase(this.key, (source) =>
-      this.studio.client.results.call('open', {
-        ...source,
-        path: csv.fsPath,
-        cacheBytes: 32 << 20,
-      }),
-    )
-    this.studio.show(this.session, results)
+    await this.session.load(csv.fsPath)
     await until(
-      () => this.session.results?.id === results.id && !this.session.results.growing,
+      () => this.session.results?.path === csv.fsPath && !this.session.results.growing,
       name + ' read',
     )
     return this.session.results!
@@ -902,10 +961,9 @@ export class TestHost {
 
   /** Plot the first bus's voltage in the Monitor. */
   plot(): void {
-    this.session.plots = [
+    this.session.setPlots([
       { from: VM.type, field: VM.field, id: 'Bus/' + this.source.buses[0]!.number },
-    ]
-    this.studio.changed.fire(this.key)
+    ])
   }
 
   /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
@@ -919,15 +977,30 @@ export class TestHost {
     )
   }
 
+  /** Which GridKit the runs use: the image's ID, which stays the same however its tags move, or the
+   *  installed program. Runs on different builds time different simulations. */
+  async gridkitBuild(): Promise<string> {
+    const runtime = await available(gridkitOf(this.uri))
+    if (runtime.kind === 'installed') return runtime.program
+    return new Promise((resolve, reject) =>
+      execFile(
+        runtime.cli,
+        ['image', 'inspect', '--format', '{{.Id}}', runtime.image],
+        { windowsHide: true },
+        (error, stdout) => (error ? reject(error) : resolve(stdout.trim())),
+      ),
+    )
+  }
+
   /** Back to the case alone in its Network editor: its source as found and saved, nothing
    *  selected or mapped, its clock at rest. */
   async reset(): Promise<void> {
     // A prompt a test left asking holds its command open, and would take the next one's keys.
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
-    // A run under way is let go of, which stops it.
-    if (this.session?.run?.state === 'running') {
-      await this.studio.client.results.call('clear', { uri: this.key })
-      await until(() => this.session.run?.state !== 'running', 'the run stops')
+    // A run under way is stopped.
+    if (this.session?.running) {
+      this.session.stop()
+      await until(() => !this.session.running, 'the run stops')
     }
     if (this.document.getText() !== this.text) await this.replace(this.text)
     if (this.document.isDirty) await this.document.save()
@@ -945,18 +1018,21 @@ export class TestHost {
     await vscode.commands.executeCommand('workbench.action.closeEditorsInOtherGroups')
     await vscode.commands.executeCommand('workbench.action.closeOtherEditors')
     const { session } = this
-    this.studio.select(this.key)
-    session.plots = []
-    session.bindings = {}
-    session.diagramEditing = false
-    session.cameras = {}
-    session.table = {}
-    this.studio.show(session, undefined)
-    session.transport.setLoop('none')
+    session.select()
+    session.setPlots([])
+    for (const { type, field } of Object.values(session.bindings)) session.bind({ type, field }, [])
+    session.setEditing(false)
+    session.setCamera('network', undefined)
+    session.setCamera('diagram', undefined)
+    session.setTable({
+      type: undefined,
+      columns: undefined,
+      order: undefined,
+      filter: undefined,
+      equal: undefined,
+    })
+    session.show(undefined)
     session.transport.setRate(1)
-    this.#results = undefined
-    await this.studio.persist(session)
-    this.studio.changed.fire(this.key)
   }
 
   /** Keep what every view showed when `test` failed, with the files of its results. */
@@ -1011,7 +1087,7 @@ export async function testHost(): Promise<TestHost> {
 const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
 /** A run's own progress, which says how far it has come rather than that anything failed. A
  *  notice that a run failed names it the same way. */
-const PROGRESS = /^(DynamicSimulation|ContingencyAnalysis) (?!.*\bfailed\b)/
+const PROGRESS = /^DynamicSimulation (?!.*\bfailed\b)/
 
 /** The notifications VS Code shows, which are then cleared. Studio shows one only when something
  *  the user asked for fails, so a test that sees one expected it or found a fault. */
@@ -1022,8 +1098,13 @@ export async function notifications(): Promise<string[]> {
     .locator('.notifications-toasts .notification-list-item-message')
     .filter({ visible: true })
     .allInnerTexts()
-  if (shown.length) await vscode.commands.executeCommand('notifications.clearAll')
-  return shown.filter((text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()))
+  const said = shown.filter(
+    (text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()),
+  )
+  // Cleared only once there is something to say: clearing a run's progress alone would clear the
+  // failure that follows it as it shows.
+  if (said.length) await vscode.commands.executeCommand('notifications.clearAll')
+  return said
 }
 
 /** Wait for VS Code to show notifications, then clear them. */

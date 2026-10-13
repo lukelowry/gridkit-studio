@@ -28,6 +28,17 @@ it('coalesces failures, backs off repeated losses and keeps retrying', () => {
   expect(restart).toHaveBeenCalledTimes(8)
 })
 
+it('says a restart is pending while it waits out its backoff', () => {
+  vi.useFakeTimers()
+  const recovery = new Recovery(vi.fn(), vi.fn())
+  expect(recovery.pending).toBe(false)
+  recovery.fail(lost)
+  expect(recovery.pending).toBe(true)
+  vi.advanceTimersByTime(250)
+  expect(recovery.pending).toBe(false)
+  recovery.dispose()
+})
+
 it('resets backoff after sustained successful presentation', () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
   const restart = vi.fn()
@@ -45,7 +56,7 @@ it('resets backoff after sustained successful presentation', () => {
   recovery.dispose()
 })
 
-it('reports contract failures once without remounting and ignores superseded reads', () => {
+it('reports contract failures once without remounting and ignores cancelled reads', () => {
   vi.useFakeTimers()
   const restart = vi.fn()
   const report = vi.fn()
@@ -53,10 +64,31 @@ it('reports contract failures once without remounting and ignores superseded rea
   const invalid = Object.assign(new Error('Incomplete rows'), { code: 'invalid-input' })
   recovery.fail(invalid)
   recovery.fail(invalid)
-  recovery.fail(Object.assign(new Error('Obsolete'), { code: 'superseded' }))
+  recovery.fail(new DOMException('The read was let go of.', 'AbortError'))
+  recovery.fail(Object.assign(new Error('Closed'), { code: 'closed' }))
   vi.advanceTimersByTime(60_000)
   expect(restart).not.toHaveBeenCalled()
   expect(report).toHaveBeenCalledOnce()
   expect(recovery.blocked).toBe(true)
+  recovery.dispose()
+})
+
+it('says a failure again once the view is reloaded, and restarts from the first wait', () => {
+  vi.useFakeTimers()
+  const restart = vi.fn()
+  const report = vi.fn()
+  const recovery = new Recovery(restart, report)
+  const invalid = Object.assign(new Error('Incomplete rows'), { code: 'invalid-input' })
+  recovery.fail(invalid)
+  recovery.reset()
+  expect(recovery.blocked).toBe(false)
+  recovery.fail(invalid)
+  expect(report).toHaveBeenCalledTimes(2)
+  recovery.reset()
+  recovery.fail(lost)
+  recovery.reset()
+  recovery.fail(lost)
+  vi.advanceTimersByTime(250)
+  expect(restart).toHaveBeenCalledOnce()
   recovery.dispose()
 })

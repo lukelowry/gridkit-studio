@@ -16,10 +16,20 @@ import type { Drawn, Host } from './kind.js'
 import { network } from './network/kind.js'
 import { Recovery } from './recovery.js'
 import { Rows, type Snapshot } from './rows.js'
-import { appearance, watchTheme } from './theme.js'
+import { watchTheme } from './theme.js'
 
 /** How long the camera rests before its framing is saved. */
 const SAVE_MS = 200
+/** What of the state a canvas draws from; the selection it shows apart. */
+const DRAWN = [
+  'summary',
+  'settings',
+  'bindings',
+  'results',
+  'diagramEditing',
+  'writable',
+  'stale',
+] as const satisfies readonly (keyof ViewState)[]
 
 const mark = (name: string) => {
   if (!performance.getEntriesByName(name).length) performance.mark(name)
@@ -91,6 +101,7 @@ function boot() {
   }
   const drop = () => {
     view?.destroy()
+    kind.unmount()
     view = undefined
     delete canvas.dataset.rendered
   }
@@ -101,7 +112,7 @@ function boot() {
   }, error)
   /** Replace a lost GPU and redraw where the camera was. */
   const lost = (reason: unknown) => {
-    restore = view?.camera
+    restore = view?.camera ?? restore
     drop()
     recovery.fail(reason)
   }
@@ -111,7 +122,7 @@ function boot() {
   }
   const open = (element: Element) => {
     select(element)
-    bridge.command('elementSource')
+    bridge.command('revealInSource')
   }
   const host: Host = {
     element,
@@ -123,7 +134,10 @@ function boot() {
     rendered: () => !!canvas.dataset.rendered,
     closed: () => closed,
     received: () => void received++,
-    render: () => void render().catch(error),
+    // A restart waiting out its backoff is the one that draws again: the clock does not.
+    render: () => {
+      if (!recovery.pending) void render().catch(error)
+    },
     paint,
     paintNow,
     drop,
@@ -138,8 +152,8 @@ function boot() {
   }
   const kind = (name === 'network' ? network : diagram)(host)
   // The renderer loads while the worker prepares the case.
-  void kind.loaded.catch(error)
-  void owner.get(lost).catch(error)
+  void kind.loaded.then(() => mark('canvas:loaded'), error)
+  void owner.get(lost).then(() => mark('canvas:device'), error)
 
   /** The item the view draws for `element`; undefined when it draws none, or not yet. */
   const drawnItem = (element: Element) => {
@@ -164,7 +178,6 @@ function boot() {
     // State arrives before the matching rows. Keep the last valid frame until both refer to the
     // same revision, rather than applying new row selections to old tables.
     if (!kind.current(snapshot) || !kind.ready()) return
-    appearance(state.settings)
     try {
       kind.paint(view, snapshot)
       drawn = received
@@ -264,6 +277,7 @@ function boot() {
   })
   bridge.on((message) => {
     if (message.kind === 'state') {
+      const before = state
       state = merged(state, message.state)
       // The rows this state draws: a case read again is asked for once it reads.
       if (state.summary && !state.stale) {
@@ -282,15 +296,15 @@ function boot() {
       )
       say()
       selection()
-      paint()
+      // Only what the view draws from restyles it: a selection, say, it shows on its own.
+      if (DRAWN.some((key) => state[key] !== before[key])) paint()
+    } else if (message.kind === 'shown') {
+      shown = message.shown
+      view?.set({ paused: !shown || document.hidden })
+      if (shown) paint()
     } else if (message.kind === 'action') {
-      if (message.command === 'shown') {
-        shown = message.value === true
-        view?.set({ paused: !shown || document.hidden })
-        if (shown) paint()
-        return
-      }
       if (message.command === 'reloadView') {
+        recovery.reset()
         drop()
         kind.retry()
         rows.retry()
@@ -303,7 +317,7 @@ function boot() {
         const item =
           typeof message.value === 'string' ? drawnItem({ id: message.value }) : view.selection[0]
         if (item) view.fit(view.neighborhood(item as never) as never, { animate: true })
-      } else kind.act(view, message.command, message.value)
+      }
       kind.sync()
     }
   })
@@ -341,10 +355,9 @@ function boot() {
     unwatch()
     kind.dispose()
     recovery.dispose()
-    view?.destroy()
-    view = undefined
+    drop()
     owner.dispose()
   })
-  bridge.send({ kind: 'ready' })
+  bridge.ready()
 }
 boot()

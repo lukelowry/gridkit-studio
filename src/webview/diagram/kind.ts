@@ -2,7 +2,7 @@
  *  and where the case places its blocks. It maps no samples, so time leaves it as it is. */
 
 import type { Diagram } from '@latkit/diagram'
-import type { Positions } from '@latkit/gpu'
+import type { Layout } from '@latkit/gpu'
 
 import { bridge } from '../bridge.js'
 import type { Host, Kind } from '../kind.js'
@@ -18,7 +18,7 @@ export function diagram(host: Host): Kind {
     },
   )
   /** Where the case saves its diagram blocks, as last sent. */
-  let presented: Record<string, Positions> = {}
+  let presented: Record<string, Layout.Positions> = {}
   const config = (rows: Snapshot) =>
     styles!.diagramConfig(rows.data, host.state(), (presented = rows.presentation ?? presented))
 
@@ -57,9 +57,9 @@ export function diagram(host: Host): Kind {
     paint: (view, rows) => (view as Diagram).set(config(rows), { replace: true }),
     painted() {},
     presented() {},
+    unmount() {},
     item: (view, element) => module!.diagramItem(view as Diagram, element),
     sync() {},
-    act() {},
     retry() {},
     stats: () => ({}),
     dispose() {},

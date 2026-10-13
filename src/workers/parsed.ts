@@ -8,52 +8,52 @@ import { editable } from '../gridkit/edits.js'
 import { recordingOf } from '../gridkit/recording.js'
 import type { Issue, Revision, Summary } from '../shared/messages.js'
 
-/** Reopened documents reuse their immutable source index, decoded fields and diagnostics.
- *  The byte budget conservatively includes source, spans and materialized columns; entries
- *  also have a count limit. Active documents own their cases independently of this cache. */
-export class CaseCache {
+/** The name of the case at `uri` when its header gives none: its file's, as the Explorer shows it. */
+export const nameOf = (uri: string) => decodeURIComponent(uri.split('/').at(-1) || 'Case')
+
+/** How many bytes of cases, and how many cases, the case worker keeps of documents let go of. */
+const KEPT_BYTES = 128 << 20
+const KEPT_CASES = 4
+
+/** Cases the case worker read, by the hash of their whole text, so a document opened again parses
+ *  nothing. Only whole texts are hashed: an open, or a document let go of, never an edit. Past
+ *  `count` cases or about `limit` bytes the least recently used go, and one larger than the limit
+ *  is read again when it opens again. */
+export class TextCases {
   readonly #entries = new Map<string, { kase: Case; bytes: number }>()
   #bytes = 0
   constructor(
-    readonly limit = 128 << 20,
-    readonly count = 4,
+    readonly limit = KEPT_BYTES,
+    readonly count = KEPT_CASES,
   ) {}
 
-  /** The case `name` whose content `fingerprint` names, when it is held. */
-  find(fingerprint: string, name: string): Case | undefined {
-    for (const [key, entry] of this.#entries)
-      if (entry.kase.version === fingerprint && entry.kase.name === name) {
-        this.#entries.delete(key)
-        this.#entries.set(key, entry)
-        return entry.kase
-      }
-    return undefined
-  }
-
-  async parse(text: string, catalog: Catalog, name: string, signal: AbortSignal): Promise<Case> {
-    signal.throwIfAborted()
-    const key = createHash('sha256')
+  /** The key of `text` read as `name` with `catalog`. */
+  static key(text: string, catalog: Catalog, name: string): string {
+    return createHash('sha256')
       .update(JSON.stringify([catalog.text, name]))
       .update(text)
       .digest('hex')
-    const cached = this.#entries.get(key)
-    if (cached) {
-      this.#entries.delete(key)
-      this.#entries.set(key, cached)
-      return cached.kase
-    }
-    const kase = await Case.parse(text, catalog, name, signal)
-    signal.throwIfAborted()
-    const bytes =
-      kase.file.byteLength * 4 +
-      [...kase.tables.values()].reduce(
-        (sum, table) => sum + table.records.length * (24 * table.fields.size + 16),
-        0,
-      )
-    if (bytes > this.limit || this.count < 1) return kase
-    // Another attachment may have finished the same source while this parse yielded.
-    const existing = this.#entries.get(key)
-    if (existing) return existing.kase
+  }
+
+  /** Whether a case read from `text` may be small enough to keep: one that cannot is never hashed. */
+  fits(text: string): boolean {
+    return Case.leastBytes(text) <= this.limit
+  }
+
+  find(key: string): Case | undefined {
+    const entry = this.#entries.get(key)
+    if (!entry) return undefined
+    this.#entries.delete(key)
+    this.#entries.set(key, entry)
+    return entry.kase
+  }
+
+  /** Keeps `kase` by the key `keyOf` gives, asked only for a case small enough to keep. */
+  keep(kase: Case, keyOf: () => string): void {
+    const { bytes } = kase
+    if (bytes > this.limit) return
+    const key = keyOf()
+    if (this.#entries.has(key)) return
     while (
       this.#entries.size &&
       (this.#bytes + bytes > this.limit || this.#entries.size >= this.count)
@@ -64,29 +64,25 @@ export class CaseCache {
     }
     this.#entries.set(key, { kase, bytes })
     this.#bytes += bytes
-    return kase
   }
 }
 
-export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: Issue[]): Summary {
+/** What the extension is told of `kase`, read at `revision`: what it counts, and what it records,
+ *  read until `signal` lets go. */
+export async function summarize(
+  kase: Case,
+  revision: Revision,
+  {
+    parseMs = 0,
+    issues,
+    signal,
+  }: { parseMs?: number; issues?: Issue[]; signal?: AbortSignal } = {},
+): Promise<Summary> {
   return {
     ...revision,
     name: kase.name,
     fingerprint: kase.version,
     schema: kase.schema,
-    creation: Object.fromEntries(
-      [...kase.catalog.shapes]
-        .filter(([, shape]) => shape.array)
-        .map(([type, shape]) => [
-          type,
-          {
-            keyType: shape.identity.type,
-            required: [...shape.plan.values()]
-              .filter((plan) => plan.required && plan.source.kind !== 'identity')
-              .map((plan) => plan.name),
-          },
-        ]),
-    ),
     editable: Object.fromEntries(
       [...kase.tables].map(([type, { shape }]) => [
         type,
@@ -99,7 +95,7 @@ export function summarize(kase: Case, revision: Revision, parseMs = 0, issues?: 
     counts: Object.fromEntries(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
-    recording: recordingOf(kase),
+    recording: await recordingOf(kase, signal),
     issues: issues ?? [],
     validation: issues ? 'complete' : 'pending',
     parseMs,

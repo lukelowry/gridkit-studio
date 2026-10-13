@@ -24,23 +24,23 @@ Studio runs GridKit from an install or from a container image.
 "gridkitStudio.gridkitPath": "/opt/gridkit"
 ```
 
-**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
+**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image. The default names one GridKit build, `0.2.0-perf`, by its digest, so it stays the same when a tag moves.
 
 ```sh
-docker pull ghcr.io/lukelowry/gridkit:latest
+docker pull ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985
 ```
 
 ```json
-"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit:latest"
+"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985"
 ```
 
 ## How to use
 
-Right-click a `*.solver.json` and choose **Run Dynamic Simulation** or **Run Contingency Analysis**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
+Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
 
-- **Monitored Signals** chooses what the case records.
-- **Show Results** on a solver file shows what its last run wrote, and **Run Again** in the Monitor runs it again.
-- **Open Results…** in the Monitor shows any other output.
+- **Monitored Signals** chooses what the case records. Right-click a signal there to plot it, or to map it onto the network.
+- **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
+- **Open Results…** in the Monitor shows any other CSV GridKit wrote.
 
 ## Features
 
@@ -57,7 +57,7 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _An IEEE39 generator with its exciter and stabilizer in the diagram_
 
-- Dynamic simulation and contingency analysis from a solver file's menu
+- Dynamic simulation from a solver file's menu
 - Monitor for plotting and playing back signals
 
 ![IEEE39 during a fault with voltage magnitude on the network and in the Monitor](docs/media/monitor.png)

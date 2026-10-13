@@ -20,7 +20,7 @@ const FRAMING = { notches: 4, above: 180 }
 /** Run the case at `uri` with the solver file `solver` beside it, from that file's menu, and wait
  *  for the run to finish. */
 async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promise<void> {
-  const session = bench.studio.all.get(uri.toString())!
+  const session = bench.studio.get(uri.toString())!
   const previous = session.run?.id
   bench.run('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
   await until(
@@ -41,9 +41,7 @@ async function faultAt(
   X: number,
 ) {
   const key = uri.toString()
-  const summary = await bench.studio.documents.ensure(
-    bench.studio.documents.entries.get(key)!.document,
-  )
+  const summary = await bench.studio.documents.ensure(bench.studio.documents.get(key)!.document)
   const element = summary.counts.BusFault ?? 0
   await bench.studio.documents.transact(
     key,
@@ -100,10 +98,10 @@ async function hub(path: string): Promise<string> {
 /** Show the case at `path` alone, full window, with `map` driving `channels`. */
 async function show(bench: TestHost, path: string, map: FieldRef, channels: Channel[]) {
   const { uri, network } = await bench.openCase(path)
-  bench.studio.bind(uri.toString(), map, channels)
+  bench.studio.get(uri.toString())!.bind(map, channels)
   await vscode.commands.executeCommand('workbench.action.closePanel')
   await vscode.commands.executeCommand('workbench.action.closeSidebar')
-  return { uri, network, session: bench.studio.all.get(uri.toString())! }
+  return { uri, network, session: bench.studio.get(uri.toString())! }
 }
 
 /** Set the camera's projection from the view's own control. */
@@ -128,7 +126,6 @@ export async function run() {
     'diagram.hover': 'off',
     'network.colormap': 'batlow',
     'network.vertexRadiusPx': 2,
-    'network.zScale': 0.4,
   }
   for (const [key, value] of Object.entries(SHOWN)) await set(key, value)
   try {
@@ -211,7 +208,7 @@ export async function run() {
     })
     // Nothing selected, and no focus ring from the right-click.
     await diagram.locator('canvas').blur()
-    bench.studio.select(bench.key, undefined)
+    bench.session.select()
     await shoot(bench, 'diagram', diagram)
 
     // IEEE39 during its own fault at bus 16: every bus voltage on the network and in the Monitor,
@@ -220,7 +217,7 @@ export async function run() {
     await set('network.colormap', 'thermal')
     const ieee = await bench.open('network')
     await bench.record('Bus', ['Vm'])
-    bench.studio.bind(bench.key, VM, ['vertexColor'])
+    bench.session.bind(VM, ['vertexColor'])
     await simulate(bench, bench.uri, {
       tmax: 5,
       dt_monitor: 0.01,
@@ -229,8 +226,7 @@ export async function run() {
         { time: 0.6, type: 'fault_off', element_id: 0 },
       ],
     })
-    bench.session.plots = [{ from: VM.type, field: VM.field }]
-    bench.studio.changed.fire(bench.key)
+    bench.session.setPlots([{ from: VM.type, field: VM.field }])
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     const monitor = await bench.show('monitor')
     bench.session.transport.seek(0.55)

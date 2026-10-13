@@ -2,11 +2,10 @@
 
 import { failure } from '@latkit/model'
 
-import type { ArrowField } from './arrow.js'
 import { BATCH_BYTES } from './limits.js'
 
 type CsvMessage =
-  | { readonly kind: 'schema'; readonly fields: readonly ArrowField[] }
+  | { readonly kind: 'schema'; readonly names: readonly string[] }
   | {
       readonly kind: 'rows'
       readonly length: number
@@ -16,11 +15,16 @@ type CsvMessage =
     }
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
- *  `known` is the header's columns, when another read of the same results parsed it: `source` is
- *  then rows alone. */
+ *  `known` is the header's names, when another read of the same results parsed it: `source` is
+ *  then rows alone, the first of them frame `first` of the file, as a problem numbers it. With
+ *  `parse`, only the columns it marks are read as numbers, the time always: the others are
+ *  counted, so each row still matches its header, and left NaN. A last row cut short, as a writer
+ *  that was stopped leaves it, is left out. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
-  known?: readonly ArrowField[],
+  known?: readonly string[],
+  parse?: Uint8Array,
+  first = 0,
 ): AsyncGenerator<CsvMessage> {
   let header = ''
   let quoted = false
@@ -30,17 +34,18 @@ export async function* csvMessages(
   let capacity = 0
   let column = 0
   let rows = 0
-  let received = 0
+  /** The frames before this batch's, counted from the file's first. */
+  let received = first
   let pending = ''
-  const schema = (fields: readonly ArrowField[]): CsvMessage => {
+  const schema = (names: readonly string[]): CsvMessage => {
     headed = true
-    width = fields.length
+    width = names.length
     capacity = Math.max(1, Math.floor(BATCH_BYTES / (8 * width)))
-    return { kind: 'schema', fields }
+    return { kind: 'schema', names }
   }
   if (known) yield schema(known)
 
-  for await (const text of textChunks(source)) {
+  for await (const [text, closing] of textChunks(source)) {
     let start = 0
     if (!headed) {
       for (; start < text.length; start++) {
@@ -50,9 +55,7 @@ export async function* csvMessages(
       }
       header += text.slice(0, start)
       if (start === text.length) continue
-      yield schema(
-        headerOf(header).map((name, i) => ({ name, type: 'float64' as const, nullable: i !== 0 })),
-      )
+      yield schema(headerOf(header))
       header = ''
       start++
     }
@@ -66,16 +69,22 @@ export async function* csvMessages(
         pending += text.slice(start)
         break
       }
-      const token = pending + text.slice(start, end)
+      // A column left unread is never cut out of the text.
+      const read = column === 0 || !parse || parse[column] === 1
+      const carried = pending
+      const token = read ? carried + text.slice(start, end) : ''
       pending = ''
       const last = end === newline
       start = end + 1
       if (last) newline = text.indexOf('\n', start)
       else comma = text.indexOf(',', start)
       if (last && column === 0 && token.trim() === '') continue
+      // The newline that closes the source ends a row only its writer's newline is missing from;
+      // one cut short, or cut after its last comma, it never finished.
+      if (closing && (column !== width - 1 || carried === '')) break
       if (column >= width || (last && column !== width - 1))
         throw failure('io', `CSV frame ${received + rows + 1} does not match its header.`)
-      const value = numberOf(token, received + rows + 1, column + 1)
+      const value = read ? numberOf(token, received + rows + 1, column + 1) : NaN
       if (column === 0) {
         if (!Number.isFinite(value)) throw failure('io', 'A CSV frame must have a finite time.')
         // A batch's buffer grows as its rows arrive, so a page of a few rows allocates little.
@@ -100,10 +109,12 @@ export async function* csvMessages(
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
 }
 
-/** `source` as text, with a newline after it to end a last record that has none. Each part is
- *  decoded whole, several times faster than streaming, once the bytes of a character it ends
- *  partway through are carried to the next. */
-async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<string> {
+/** `source` as text, then a closing newline to end a last record that has none, each with whether
+ *  it is that newline. Each part is decoded whole, several times faster than streaming, once the
+ *  bytes of a character it ends partway through are carried to the next. */
+async function* textChunks(
+  source: AsyncIterable<Uint8Array>,
+): AsyncGenerator<readonly [string, boolean]> {
   const decoder = new TextDecoder('utf-8', { fatal: true })
   let carried: Uint8Array = new Uint8Array(0)
   for await (const part of source) {
@@ -116,10 +127,10 @@ async function* textChunks(source: AsyncIterable<Uint8Array>): AsyncGenerator<st
     } catch {
       throw failure('io', 'The CSV results are not valid UTF-8.')
     }
-    yield text
+    yield [text, false]
   }
   if (carried.length) throw failure('io', 'The CSV results end inside a UTF-8 character.')
-  yield '\n'
+  yield ['\n', true]
 }
 
 /** How many of the last of `bytes` begin a UTF-8 character that they do not finish. */
@@ -175,6 +186,10 @@ function headerOf(text: string): string[] {
   return names
 }
 
+/** A value that is not a number, and an infinite one, however a C library prints them. */
+const NAN = /^[+-]?(?:nan(?:\(\w*\))?|1\.#(?:s|q)?nan|1\.#ind)$/i
+const INFINITY = /^[+-]?(?:inf(?:inity)?|1\.#inf)$/i
+
 function numberOf(text: string, frame: number, column: number): number {
   let token = text
   // A bare number has nothing to trim or unquote; only a token that starts or ends otherwise does.
@@ -188,8 +203,9 @@ function numberOf(text: string, frame: number, column: number): number {
   if (!(token.charCodeAt(0) === 48 && (prefix === 120 || prefix === 111 || prefix === 98))) {
     const value = Number(token)
     if (!Number.isNaN(value)) return value
-    if (/^[+-]?nan$/i.test(token)) return NaN
-    if (/^[+-]?inf(?:inity)?$/i.test(token)) return token[0] === '-' ? -Infinity : Infinity
+    // As C libraries print them, MSVC's among them: `-nan(ind)`, `1.#QNAN`, `-1.#INF`.
+    if (NAN.test(token)) return NaN
+    if (INFINITY.test(token)) return token[0] === '-' ? -Infinity : Infinity
   }
   throw failure('io', `CSV frame ${frame}, column ${column} is not a number.`)
 }

@@ -21,18 +21,17 @@ describe("GridKit's own lines", () => {
 
   it("logs a simulation's first error as the reason, and later ones as details", () => {
     const line = '[ERROR][x] some words'
-    expect(solverLine(line, 'DynamicSimulation', false)).toEqual({
+    expect(solverLine(line, false)).toEqual({
       level: 'error',
       message: 'some words',
       raw: line,
     })
-    expect(solverLine(line, 'DynamicSimulation', true)).toMatchObject({ level: 'debug' })
-    // A contingency's failure is not the study's.
-    expect(solverLine(line, 'ContingencyAnalysis', false)).toMatchObject({ level: 'warn' })
-    expect(solverLine('some words', undefined, false)).toEqual({
+    expect(solverLine(line, true)).toMatchObject({ level: 'debug' })
+    expect(solverLine('[WARNING] careful', true)).toMatchObject({ level: 'warn' })
+    expect(solverLine('some words', false)).toEqual({
       level: 'info',
       message: 'some words',
     })
-    expect(solverLine('[ERROR]  ', undefined, false)).toBeUndefined()
+    expect(solverLine('[ERROR]  ', false)).toBeUndefined()
   })
 })

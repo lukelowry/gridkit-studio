@@ -18,6 +18,7 @@ const path = new URL('../package.json', import.meta.url)
 const source = await readFile(path, 'utf8')
 const manifest = JSON.parse(source)
 const runtime = manifest.contributes.configuration.find((group) => group.title === 'GridKit Studio')
+if (!runtime) throw new Error('package.json has no "GridKit Studio" settings to keep.')
 
 /** A setting as package.json declares it. `--check` compares key order too. */
 function property(group, setting) {
@@ -63,7 +64,7 @@ function property(group, setting) {
 const groups = SETTINGS.map((category) => ({
   id: 'gridkitStudio.' + category.id,
   title: 'GridKit Studio: ' + category.label,
-  order: ['network', 'diagram', 'monitor', 'accessibility'].indexOf(category.id) + 1,
+  order: ['network', 'diagram', 'monitor'].indexOf(category.id) + 1,
   properties: Object.fromEntries(
     category.groups.flatMap((group) =>
       group.settings.map((setting) => ['gridkitStudio.' + setting.id, property(group, setting)]),

@@ -7,6 +7,15 @@ export interface SolverLine {
   text: string
 }
 
+/** How much of one line Studio keeps: a debug dump of a whole case's values says no more past it. */
+export const LINE_CHARS = 4096
+
+/** `line`, past LINE_CHARS cut short, saying by how much. */
+export const clipped = (line: string) =>
+  line.length <= LINE_CHARS
+    ? line
+    : `${line.slice(0, LINE_CHARS)}… (${(line.length - LINE_CHARS).toLocaleString()} more characters)`
+
 /** A level, then any bracketed parts, then what the line says. */
 const PRINTED = /^\[(ERROR|WARNING|INFO|DEBUG)\](?:\[[^\]]*\])*\s*(.*)$/
 const LEVELS = { ERROR: 'error', WARNING: 'warn', INFO: 'info', DEBUG: 'debug' } as const
@@ -20,26 +29,18 @@ export function readSolverLine(raw: string): SolverLine {
 }
 
 /** A line of a run for Studio's log at its level, with the line as printed when that differs, or
- *  nothing for a blank line. A ContingencyAnalysis's errors are its contingencies' own, so they are
- *  warnings; a simulation's errors after the first restate it as GridKit unwinds, so once it has
+ *  nothing for a blank line. Errors after the first restate it as GridKit unwinds, so once it has
  *  `said` why, they are details. */
 export function solverLine(
   raw: string,
-  program: unknown,
   said: boolean,
 ): { level: SolverLine['level']; message: string; raw?: string } | undefined {
-  const { level, text } = readSolverLine(raw)
+  const line = clipped(raw)
+  const { level, text } = readSolverLine(line)
   if (!text) return undefined
   return {
-    level:
-      level !== 'error'
-        ? level
-        : program === 'ContingencyAnalysis'
-          ? 'warn'
-          : said
-            ? 'debug'
-            : 'error',
+    level: level === 'error' && said ? 'debug' : level,
     message: text,
-    ...(text !== raw.trim() && { raw }),
+    ...(text !== line.trim() && { raw: line }),
   }
 }

@@ -2,40 +2,39 @@
   paused. -->
 <script lang="ts">
   import type { Gpu } from '@latkit/gpu'
-  import {
-    type Data,
-    type Domain,
-    type FieldSelection,
-    itemId,
-    read,
-    type RowsBlock,
-  } from '@latkit/model'
+  import { type Block, type Data, type Domain, itemId, type Query, read } from '@latkit/model'
   import { createMonitor, type Monitor } from '@latkit/monitor'
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
 
-  import { rowsOf } from '../../shared/cells.js'
+  import { native, rowsOf } from '../../shared/cells.js'
   import type { Plot, ViewState } from '../../shared/messages.js'
+  import { holdsPlot, plotName, samePlot } from '../../shared/plots.js'
   import { reader } from '../../shared/preferences.js'
-  import { fieldName, typeName } from '../../shared/schema.js'
+  import { fieldName } from '../../shared/schema.js'
   import { clamp, type ClockState } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import { nativeMenu } from '../menu.js'
   import { Recovery } from '../recovery.js'
+  import type { Wants } from '../samples.js'
   import type { Theme } from '../theme.js'
   import CanvasHost from '../ui/CanvasHost.svelte'
   import Icon from '../ui/Icon.svelte'
   import {
     holds,
-    PLOT_LIMITS,
-    plotBindings,
+    plotConfig,
     plotOptions,
     plotRows,
     sameSelection,
     sameWindow,
+    streamedValues,
     traceCount,
     traceSelection,
   } from './plot.js'
+
+  /** How long a plot goes without a frame before the GPU is asked whether it still finishes work,
+   *  and how long it then has to answer. */
+  const STALL_MS = 10_000
 
   let {
     plot,
@@ -51,8 +50,12 @@
     gpu,
     paused,
     generation,
+    retries,
     ticks,
+    streaming,
+    stuck,
     onframe,
+    onwants,
     onwindow,
   }: {
     plot: Plot
@@ -60,7 +63,7 @@
     /** The case with the frames read so far; a new snapshot each time frames arrive. */
     source: Data | undefined
     /** The fields, and their rows, whose samples `source` holds. */
-    sampled: readonly FieldSelection[]
+    sampled: readonly Query.Selection[]
     /** Whether the samples held cover `window` of `from`'s `field`. */
     covers: (from: string, field: string, window: Domain) => boolean
     /** The playhead. */
@@ -74,57 +77,60 @@
     gpu: () => Promise<Gpu>
     paused: boolean
     generation: number
+    /** How many times the user asked the plots to try again: each starts over what it failed. */
+    retries: number
     /** Whether its time ticks are labelled: the last of the plots, which share one time axis. */
     ticks: boolean
+    /** Whether `source` brings the window a slice at a time, letting go of the slices drawn. */
+    streaming: boolean
+    /** Whether what the plots lack could not be read. */
+    stuck: boolean
     onframe: () => void
+    /** Where its drawing stands after each frame, so the slice it needs next is read; undefined
+     *  once it draws no more. */
+    onwants: (stands: Wants | undefined) => void
     /** The user panned or zoomed this plot to `bounds`. */
     onwindow: (bounds: Domain) => void
   } = $props()
 
   const id = $props.id()
+  // What the plot reads of the state, each apart: a message that leaves one as it was changes
+  // nothing that depends on it alone, as a selection leaves the plot's options.
   const schema = $derived(view.summary?.schema)
+  const results = $derived(view.results)
+  const mappings = $derived(view.bindings)
+  const settings = $derived(reader(view.settings))
   const definition = $derived(schema?.types[plot.from]?.fields[plot.field])
   const unit = $derived(definition?.unit ? ` ${definition.unit}` : '')
   /** The type, the element when it plots one, and the field: "Bus 16 · Va". */
-  const name = $derived(
-    schema === undefined
-      ? plot.field
-      : typeName(schema, plot.from) +
-          (plot.id ? ` ${plot.id.slice(plot.from.length + 1)}` : '') +
-          ` · ${fieldName(definition, plot.field)}`,
-  )
+  const name = $derived(plotName(schema, plot))
   /** Whether the results on show hold the plotted field. */
-  const recorded = $derived(
-    view.results?.outputs.some(
-      (output) => output.from === plot.from && output.select.includes(plot.field),
-    ) ?? false,
-  )
+  const recorded = $derived(holdsPlot(results, plot))
   /** Whether the samples on hand are the plot's: a plot just added waits for its own. */
-  const streamed = $derived(
-    holds(sampled, { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) }),
-  )
-  const settings = $derived(reader(view.settings))
+  const streamed = $derived(holds(sampled, plot))
   const style = $derived(
     plotOptions(settings, theme.palette, theme.font, {
       ticks,
       ...(settings.get('monitor.yAxis.label') && { caption: fieldName(definition, plot.field) }),
     }),
   )
-  const rows = $derived(
-    source && source.tables[plot.from]
-      ? plotRows(source, view.results, { type: plot.from, field: plot.field, id: plot.id })
-      : undefined,
-  )
+  /** The table the plot reads: samples arriving keep its index, and its rows. */
+  const table = $derived(source?.tables[plot.from]?.index)
+  /** What the results hold, which only grows once, as their header is read. */
+  const held = $derived(`${results?.id}:${results?.outputs.length}`)
+  /** The rows the plot draws: of its table and what the results hold, never of the samples, so
+   *  frames arriving find them again for nothing. */
+  const rows = $derived.by(() => {
+    void table
+    void held
+    const { from, field, id } = plot
+    return untrack(() =>
+      source && table ? plotRows(source, results, { from, field, id }) : undefined,
+    )
+  })
   /** How many traces the plot draws, once its case's rows are held. */
-  const traces = $derived(source && rows ? traceCount(source, plot.from, rows) : undefined)
-  const bindings = $derived(
-    plotBindings(
-      settings,
-      { type: plot.from, field: plot.field, ...(plot.id && { id: plot.id }) },
-      view.bindings,
-      rows,
-      view.results,
-    ),
+  const traces = $derived(
+    table && rows ? untrack(() => traceCount(source!, plot.from, rows)) : undefined,
   )
 
   let monitor = $state.raw<Monitor | null>(null)
@@ -147,16 +153,30 @@
         at: t,
       }),
   )
+  // Asked to try again, a plot says a failure again should it recur.
+  $effect.pre(() => {
+    void retries
+    untrack(() => recovery.reset())
+  })
   let windowUpdate = 0
   let previousFit: boolean | undefined
   /** The plot's whole config, besides its canvas, time, and camera. */
-  const config = $derived(source && { ...style, source, ...bindings, limits: PLOT_LIMITS })
+  const config = $derived(
+    source &&
+      plotConfig(style, source, settings, plot, { bindings: mappings, results, rows, streaming }),
+  )
+  /** The values the streamed plot was last given to span. */
+  let streamedFor: Domain | undefined
+  /** A streamed plot never holds its whole window, so its values span the field's range as the
+   *  results measured it while reading, rather than fit what it holds. */
+  const values = () => (streaming ? streamedValues(results, plot, streamedFor) : undefined)
 
   /** Draw the plot on `canvas`; resolves to the teardown. */
   async function mount(canvas: HTMLCanvasElement, signal: AbortSignal): Promise<() => void> {
     if (!config) throw new Error('Nothing to plot.')
     const device = await gpu()
     signal.throwIfAborted()
+    const spanned = values()
     const made = createMonitor(device, {
       ...config,
       canvas,
@@ -165,9 +185,12 @@
       camera: {
         ...camera,
         x: [shown[0], shown[1]],
-        fit: camera?.fit ?? settings.get('monitor.camera.fit'),
+        ...(spanned
+          ? { y: spanned, fit: false }
+          : { fit: camera?.fit ?? settings.get('monitor.camera.fit') }),
       },
     })
+    streamedFor = spanned
     let lastFrame = performance.now()
     let presentedAt: number | undefined
     const failed = (error: unknown) => {
@@ -182,6 +205,8 @@
         canvas.dataset.rendered = 'true'
         recovery.presented()
         onframe()
+        // Where its drawing stands matters only while the Monitor reads a slice at a time.
+        if (streaming) onwants(made.stats().wants)
       }),
       made.on('select', (items) => {
         bridge.send({
@@ -189,7 +214,7 @@
           element: items[0] ? { id: itemId(items[0]), field: plot.field } : null,
         })
       }),
-      made.on('open', () => bridge.command('elementSource')),
+      made.on('open', () => bridge.command('revealInSource')),
       made.on('contextmenu', (event) =>
         nativeMenu(
           canvas,
@@ -248,27 +273,43 @@
       gpu: device.stats(),
       ...made.stats(),
     })
-    // Detect a wedged renderer from presented frames, not from the independent host clock.
-    // Hidden lanes and idle plots need no frames. Give initialization/refinement time to work.
+    // A renderer wedges when the GPU queue never finishes what it was given. A plot that is only slow
+    // to prepare, as a large one is, has a queue that still drains, and draws however long that
+    // takes; hidden lanes and idle plots need no frames at all.
+    let probing = false
+    let unmounted = false
     const health = setInterval(() => {
       if (resting || recovery.blocked) {
         lastFrame = performance.now()
         return
       }
       if (
-        (presentedAt === undefined || made.config.at !== presentedAt) &&
-        performance.now() - lastFrame > 10_000
-      ) {
+        probing ||
+        (presentedAt !== undefined && made.config.at === presentedAt) ||
+        performance.now() - lastFrame <= STALL_MS
+      )
+        return
+      probing = true
+      const drained = device.device.queue.onSubmittedWorkDone().then(
+        () => true,
+        () => true,
+      )
+      const late = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), STALL_MS))
+      void Promise.race([drained, late]).then((alive) => {
+        probing = false
         lastFrame = performance.now()
         // A stuck submission occupies the shared GPU's in-flight slots. Replacing only this
         // renderer would leave its replacement waiting on the same never-settling queue.
-        if (!device.signal.aborted) {
-          bridge.report(new Error('Monitor stopped presenting frames. Restarting graphics.'))
+        if (!alive && !unmounted && !device.signal.aborted) {
+          bridge.report(new Error('The GPU stopped finishing its work. Restarting graphics.'))
           device.destroy()
         }
-      }
+      })
     }, 1000)
     return () => {
+      unmounted = true
+      // A plot drawn again starts its window over; one gone needs nothing.
+      onwants(undefined)
       camera = made.camera
       clearInterval(health)
       delete inspected.gridkitPlot
@@ -291,10 +332,18 @@
   })
   $effect(() => {
     const fit = settings.get('monitor.camera.fit')
+    const spanned = values()
+    // A streamed plot's values span its field's range; setting them turns fitting off.
+    if (spanned) {
+      if (monitor && !sameWindow(spanned, streamedFor)) monitor.set({ camera: { y: spanned } })
+      streamedFor = monitor ? spanned : undefined
+      return
+    }
     // A recovered plot restores its camera, including a manually chosen value range.
-    // Only a settings change should replace that choice after mounting.
-    if (fit !== previousFit) monitor?.set({ camera: { fit } })
+    // Only a settings change, or the end of streaming, should replace that choice after mounting.
+    if (fit !== previousFit || streamedFor) monitor?.set({ camera: { fit } })
     previousFit = fit
+    streamedFor = undefined
   })
   $effect(() => {
     if (monitor && !sameWindow(monitor.camera.x, shown)) {
@@ -304,10 +353,10 @@
       queueMicrotask(() => windowUpdate--)
     }
   })
+  const selected = $derived(view.selection?.id)
   // Highlight the selected element's trace when it is of the plotted type. The plot hears only of
   // another trace: each selection it is given draws the highlighted trace again.
   $effect(() => {
-    const selected = view.selection?.id
     void source // Each new snapshot needs the row found again.
     if (!monitor) return
     const next = traceSelection(monitor.config.source, selected, plot.from, rows)
@@ -332,30 +381,33 @@
     const at = t
     const snapshot = source
     const selection = rows
-    if (!snapshot || !covers(plot.from, plot.field, [at, at])) {
+    if (!snapshot) {
       sample = null
       return
     }
+    // Samples the plot does not hold, as while a long window streams, are read from the results.
+    const held = covers(plot.from, plot.field, [at, at])
     const { from, field, id } = plot
     const offset = id ? 0 : trace
     const reading = new AbortController()
     const timer = setTimeout(() => {
       void (async () => {
-        const blocks: RowsBlock[] = []
-        for await (const block of read(
-          snapshot,
-          {
-            kind: 'rows',
-            from,
-            select: [field],
-            ids: true,
-            offset,
-            limit: 1,
-            at,
-            rows: selection,
-          },
-          { signal: reading.signal },
-        ))
+        const query = {
+          kind: 'rows' as const,
+          from,
+          select: [field],
+          ids: true,
+          offset,
+          limit: 1,
+          at,
+          rows: selection,
+        }
+        if (!held) {
+          const results = view.results?.id
+          return results ? bridge.request('query', { results, query }, reading.signal) : []
+        }
+        const blocks: Block.Rows[] = []
+        for await (const block of read(snapshot, query, { signal: reading.signal }))
           if (block.kind === 'rows') blocks.push(block)
         return blocks
       })().then(
@@ -365,7 +417,7 @@
           const value = row?.values[field]
           sample = row?.id
             ? {
-                label: row.id.slice(from.length + 1),
+                label: native(row.id),
                 value: typeof value === 'number' ? value : null,
                 t: at,
               }
@@ -388,8 +440,10 @@
   /** The plot's keys; any other key is left to VS Code. */
   const keys: Readonly<Record<string, () => void>> = {
     PageUp: () => (trace = Math.max(0, trace - 1)),
-    PageDown: () => (trace = trace + 1),
+    PageDown: () => (trace = Math.min(Math.max(0, (traces ?? 1) - 1), trace + 1)),
     ' ': () => clock.act({ action: 'playPause' }),
+    ArrowLeft: () => clock.act({ action: 'step', value: -1 }),
+    ArrowRight: () => clock.act({ action: 'step', value: 1 }),
   }
 
   function key(event: KeyboardEvent): void {
@@ -400,20 +454,22 @@
     act()
   }
 
+  // A value range the user chose; none fits the values again, or, while the plot streams, spans
+  // its field's measured range as it did.
   onMount(() =>
     bridge.on((incoming) => {
-      if (incoming.kind !== 'action' || incoming.command !== 'signalRange') return
-      const { plot: target, range } = incoming.value as { plot?: Plot; range?: [number, number] }
-      if (
-        target?.from === plot.from &&
-        target.field === plot.field &&
-        target.id === plot.id &&
-        range?.length === 2 &&
-        range.every(Number.isFinite) &&
-        range[0] < range[1]
-      )
+      if (incoming.kind !== 'action' || incoming.command !== 'valueRange') return
+      const { plot: target, range } = incoming.value as {
+        plot?: Plot
+        range?: [number, number] | null
+      }
+      if (!monitor || !target || !samePlot(target, plot)) return
+      if (range === null) {
+        const spanned = values()
+        monitor.set({ camera: spanned ? { y: spanned } : { fit: true } })
+      } else if (range?.length === 2 && range.every(Number.isFinite) && range[0] < range[1])
         // Setting y turns fitting off.
-        monitor?.set({ camera: { y: range } })
+        monitor.set({ camera: { y: range } })
     }),
   )
   onMount(() => {
@@ -468,15 +524,17 @@
       {/key}
     {:else}
       <div class="c-empty lane__empty">
-        {#if view.results?.growing || (recorded && view.results?.frames)}
+        <!-- Samples that could not be read were said once, in a notification: the plot stops
+          saying it waits for them. -->
+        {#if !stuck && (view.results?.growing || (recorded && view.results?.frames))}
           <p class="c-empty__text">Waiting for samples…</p>
         {/if}
       </div>
     {/if}
   </div>
   <span class="c-sr-only" id={`${id}-keys`}>
-    Page Up and Page Down read traces. Space plays or pauses. Move the pointer over the paused plot
-    to seek.
+    Page Up and Page Down read traces. Space plays or pauses, Left and Right step through samples,
+    and Home fits the plot. Move the pointer over the paused plot to seek.
   </span>
   <span
     class="c-sr-only"

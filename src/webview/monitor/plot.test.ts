@@ -3,7 +3,36 @@ import { describe, expect, it } from 'vitest'
 
 import { reader } from '../../shared/preferences.js'
 import type { Results } from '../../shared/simulation.js'
-import { axisLabel, axisName, holds, monitorWindow, plotBindings, plotOptions } from './plot.js'
+import {
+  axisLabel,
+  axisName,
+  holds,
+  monitorWindow,
+  plotBindings,
+  plotOptions,
+  streamedValues,
+} from './plot.js'
+
+describe('the values a streamed plot spans', () => {
+  const voltage = { from: 'Bus', field: 'Vm' }
+  const measured = (min: number, max: number) => ({ domains: { Bus: { Vm: [min, max] as const } } })
+
+  it("spans the field's measured range, and grows by half again only past it", () => {
+    const first = streamedValues(measured(0.9, 1.1), voltage)!
+    expect(first[0]).toBeLessThan(0.9)
+    expect(first[1]).toBeGreaterThan(1.1)
+    // Extremes within it keep it, so nothing draws again.
+    expect(streamedValues(measured(0.95, 1.05), voltage, first)).toBe(first)
+    // Past it, half the measured range again on each side.
+    const grown = streamedValues(measured(0.5, 1.1), voltage, first)!
+    expect(grown[0]).toBeCloseTo(0.2)
+    expect(grown[1]).toBeCloseTo(1.4)
+    // Unmeasured, it keeps what it spans; a flat field still spans values.
+    expect(streamedValues(undefined, voltage, first)).toBe(first)
+    const flat = streamedValues(measured(1, 1), voltage)!
+    expect(flat[1]).toBeGreaterThan(flat[0])
+  })
+})
 
 describe('the window a plot shows', () => {
   it('keeps the configured interval before samples, during streaming, and after completion or cancellation', () => {
@@ -26,7 +55,7 @@ it('colors a mapped trace by the value it plots, over the results’ recorded ra
   for (const id of [undefined, 'Bus/1']) {
     const { traces } = plotBindings(
       reader(),
-      { ...binding, id },
+      { from: 'Bus', field: 'Vm', id },
       { vertexColor: binding },
       undefined,
       results,
@@ -37,7 +66,7 @@ it('colors a mapped trace by the value it plots, over the results’ recorded ra
   }
   const { traces } = plotBindings(
     reader(),
-    binding,
+    { from: 'Bus', field: 'Vm' },
     { vertexColor: { ...binding, domain: [0, 2] } },
     undefined,
     results,
@@ -48,31 +77,31 @@ it('colors a mapped trace by the value it plots, over the results’ recorded ra
 it('waits for the samples a plot draws: its field, for its row or for every row', () => {
   const one = { from: 'Bus', select: ['Vm'], rows: { kind: 'ids' as const, ids: ['Bus/1'] } }
   const every = { from: 'Bus', select: ['Vm'] }
-  expect(holds([one], { type: 'Bus', field: 'Vm', id: 'Bus/1' })).toBe(true)
+  expect(holds([one], { from: 'Bus', field: 'Vm', id: 'Bus/1' })).toBe(true)
   // A plot of every bus, added beside one of a single bus, waits for the samples of all of them.
-  expect(holds([one], { type: 'Bus', field: 'Vm' })).toBe(false)
-  expect(holds([every], { type: 'Bus', field: 'Vm' })).toBe(true)
-  expect(holds([every], { type: 'Bus', field: 'Va' })).toBe(false)
+  expect(holds([one], { from: 'Bus', field: 'Vm' })).toBe(false)
+  expect(holds([every], { from: 'Bus', field: 'Vm' })).toBe(true)
+  expect(holds([every], { from: 'Bus', field: 'Va' })).toBe(false)
 })
 
 it('changes only a trace’s color when live extrema or the colormap change', () => {
-  const field = { type: 'Bus', field: 'Vm' }
-  const bindings = { vertexColor: field }
+  const plot = { from: 'Bus', field: 'Vm' }
+  const bindings = { vertexColor: { type: 'Bus', field: 'Vm' } }
   const config = (range: [number, number], palette: 'batlow' | 'viridis') =>
-    plotBindings(reader({ 'network.colormap': palette }), field, bindings, undefined, {
+    plotBindings(reader({ 'network.colormap': palette }), plot, bindings, undefined, {
       domains: { Bus: { Vm: range } },
     } as unknown as Results).traces.plotted!
   const before = config([1, 1], 'batlow')
   const after = config([0.2, 1.8], 'viridis')
   expect({ ...after, color: undefined }).toEqual({ ...before, color: undefined })
   expect(after.color).not.toEqual(before.color)
-  expect(plotBindings(reader(), field, {}, undefined).traces.plotted).not.toHaveProperty('color')
+  expect(plotBindings(reader(), plot, {}, undefined).traces.plotted).not.toHaveProperty('color')
 })
 
 it('replaces the plotted field in place, under one trace', () => {
-  const { traces } = plotBindings(reader(), { type: 'Hub', field: 'level' })
+  const { traces } = plotBindings(reader(), { from: 'Hub', field: 'level' })
   expect(Object.keys(traces)).toEqual(
-    Object.keys(plotBindings(reader(), { type: 'Line', field: 'flow' }).traces),
+    Object.keys(plotBindings(reader(), { from: 'Line', field: 'flow' }).traces),
   )
   expect(Object.values(traces)[0]).toMatchObject({ from: 'Hub', y: 'level' })
   expect(Object.values(traces)[0]).not.toHaveProperty('color')
@@ -81,7 +110,7 @@ it('replaces the plotted field in place, under one trace', () => {
 it('colors a field as the network colors it: its colormap, over the same range', () => {
   const s = reader({ 'network.colormap': 'batlow' })
   const vertexColor = { type: 'Hub', field: 'level', domain: [0.5, 1.5] as const }
-  const config = plotBindings(s, { type: 'Hub', field: 'level' }, { vertexColor })
+  const config = plotBindings(s, { from: 'Hub', field: 'level' }, { vertexColor })
   expect(config.traces.plotted!.color).toMatchObject({
     field: 'level',
     domain: [0.5, 1.5],
@@ -89,7 +118,7 @@ it('colors a field as the network colors it: its colormap, over the same range',
   })
   const height = { vertexHeight: vertexColor }
   expect(
-    Object.values(plotBindings(s, { type: 'Hub', field: 'level' }, height).traces)[0],
+    Object.values(plotBindings(s, { from: 'Hub', field: 'level' }, height).traces)[0],
   ).not.toHaveProperty('color')
 })
 
@@ -98,16 +127,23 @@ it('names the time axis in sentence case, and leaves the values to the signal me
   expect(axisLabel({ name: 'time', unit: 's' })).toBe('Time (s)')
   expect(axisLabel(undefined)).toBe('Coordinate')
   expect(plotOptions(reader(), null, null, { ticks: true, time: 'Time (s)' })).toMatchObject({
-    xAxis: { label: 'Time (s)', labels: true },
+    xAxis: { label: 'Time (s)', tickLabels: true },
     yAxis: { label: '' },
   })
 })
 
-it('frames each plot, and labels the time ticks of the last of those stacked over one axis', () => {
+it('outlines each plot, and labels the time ticks of the last of those stacked over one axis', () => {
   const above = plotOptions(reader(), null, null, { ticks: false, time: 'Time (s)' })
-  expect(above).toMatchObject({ frame: true, xAxis: { label: '', labels: false, grid: true } })
+  expect(above).toMatchObject({
+    outline: true,
+    xAxis: { label: '', tickLabels: false, grid: true },
+  })
   const last = plotOptions(reader(), null, null, { ticks: true, caption: 'Bus · Vm' })
-  expect(last).toMatchObject({ frame: true, xAxis: { labels: true }, yAxis: { label: 'Bus · Vm' } })
+  expect(last).toMatchObject({
+    outline: true,
+    xAxis: { tickLabels: true },
+    yAxis: { label: 'Bus · Vm' },
+  })
 })
 
 it('draws every trace in the chosen color and width', () => {

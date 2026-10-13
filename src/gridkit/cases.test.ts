@@ -14,7 +14,7 @@ describe('the cases in cases/', () => {
     async (name) => {
       const kase = await Case.parse(await readFile(join('cases', name), 'utf8'), catalog)
       // Every class and member is one the catalog knows.
-      expect(diagnose(kase)).toEqual([])
+      expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
     },
   )
 })

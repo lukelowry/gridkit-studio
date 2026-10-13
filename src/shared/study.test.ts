@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { contingencyFile, outputOf, readSolver } from './study.js'
+import { outputOf, readSolver } from './study.js'
 
 describe('a solver file as Studio reads it', () => {
   it('reads the case, end time and output file, and nothing else', () => {
@@ -31,21 +31,11 @@ describe('a solver file as Studio reads it', () => {
   })
 
   it("takes the case's monitor over output_file, as GridKit does", () => {
-    const solver = { model: 'a.case.json', tmax: 1, output: 'study.csv' }
-    expect(outputOf('a.solver.json', solver, { file: 'case.arrow', format: 'arrow' })).toEqual({
-      file: 'case.arrow',
-      format: 'arrow',
-    })
-    expect(outputOf('a.solver.json', solver, undefined)).toEqual({
-      file: 'study.csv',
-      format: 'csv',
-    })
+    const solver = { model: 'a.case.json', tmax: 1, output: 'run.csv' }
+    expect(outputOf('a.solver.json', solver, { file: 'case.csv' })).toEqual({ file: 'case.csv' })
+    expect(outputOf('a.solver.json', solver, undefined)).toEqual({ file: 'run.csv' })
     expect(() => outputOf('a.solver.json', { model: 'a.case.json', tmax: 1 }, undefined)).toThrow(
       'write nothing to show',
     )
-  })
-
-  it("names a study's files as GridKit does", () => {
-    expect(contingencyFile({ base: '/work/IEEE39', ext: '.csv' }, 12)).toBe('/work/IEEE39_12.csv')
   })
 })

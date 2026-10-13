@@ -7,14 +7,23 @@
 
 import assert from 'node:assert/strict'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import { rowsOf } from '../../src/shared/cells.js'
 import type { ViewKind } from '../../src/shared/messages.js'
-import { fills, idle, pause, simpleDialog, testHost, until, VM } from '../vscode/harness.js'
+import {
+  fills,
+  idle,
+  pause,
+  replaying,
+  simpleDialog,
+  testHost,
+  until,
+  VM,
+} from '../vscode/harness.js'
 
 /** Cases by bus count; compare.mjs reports time per bus across them. */
 const CASES = [
@@ -24,6 +33,8 @@ const CASES = [
   ['cases/ACTIVSg10k.case.json', 10000],
 ] as const
 const RUNS = 5
+/** Exports per case, each a second of video. */
+const EXPORTS = 3
 /** Counters that only grow, compared per run. */
 const WORK = [
   'queries',
@@ -38,11 +49,11 @@ const SIZE = ['drawCalls', 'segments', 'geometryBytes', 'pickingBytes'] as const
 type Stats = Record<(typeof WORK)[number] | (typeof SIZE)[number] | 'frames', number>
 /** A plot's counters, as its canvas reports them. */
 type Plot = { frames: number; at?: number; segments: number; refining: boolean; visible: boolean }
-/** Work must not depend on timing: no hover search, easing, or motion. */
+/** Work must not depend on timing: no hover search, easing, or motion, which VS Code's own
+ *  setting reduces. */
 const STILL = {
   'network.hover': 'off',
   'network.animationMs': 0,
-  'accessibility.motion': 'reduce',
   // Pin the workload across changes to application defaults.
   'network.vertices.labels': true,
   'network.grid': true,
@@ -57,6 +68,15 @@ const SEEKS = [0.9, 0.1, 0.6, 0.3, 0.75]
 const timings: Record<string, number[]> = {}
 const work: Record<string, Record<string, number>> = {}
 const stages: Record<string, unknown> = {}
+
+/** A fixed piece of work, timed: how fast the machine runs now, whatever Studio does. compare.mjs
+ *  leaves out a case whose canary ran slow, as a busy machine slows everything it times. */
+function canary(): number {
+  const start = performance.now()
+  let sink = 0
+  for (let i = 0; i < 2e7; i++) sink += Math.sqrt(i)
+  return performance.now() - start + (sink < 0 ? 1 : 0)
+}
 
 /** Wait for `check` to hold, looking every few milliseconds so the time it takes is its own. */
 async function settle(check: () => unknown, label: string, timeout = 60_000): Promise<void> {
@@ -165,7 +185,11 @@ export async function run() {
   const settings = vscode.workspace.getConfiguration('gridkitStudio')
   const global = vscode.ConfigurationTarget.Global
   for (const [key, value] of Object.entries(STILL)) await settings.update(key, value, global)
+  const workbench = vscode.workspace.getConfiguration('workbench')
+  await workbench.update('reduceMotion', 'on', global)
   const gridkit = await bench.gridkit()
+  /** The GridKit build the runs use, which compare.mjs matches between runs. */
+  const build = gridkit ? await bench.gridkitBuild() : undefined
   await simpleDialog(true)
   try {
     for (const [path, buses] of CASES) {
@@ -173,6 +197,8 @@ export async function run() {
       const size = `${buses} buses`
       let network!: Frame
       let uri!: vscode.Uri
+      // How fast the machine runs, timed again as the case goes on.
+      const paced = (timings[`machine ${size} > canary`] = [canary()])
 
       // ── Network ──
       const firsts: number[] = []
@@ -189,7 +215,7 @@ export async function run() {
         )
       }
       const key = uri.toString()
-      const session = bench.studio.all.get(key)!
+      const session = bench.studio.get(key)!
       const summary = () => bench.studio.state(key).summary!
       // Until the view settles, and until the page's own first frame: what the user sees first.
       timings[`network ${size} > first frame`] = firsts
@@ -218,7 +244,9 @@ export async function run() {
         ])
       }
       const field = { type: 'Bus', field: 'init.Vr' }
-      await measure('restyle', (i) => bench.studio.bind(key, field, i % 2 ? [] : ['vertexColor']))
+      await measure('restyle', (i) =>
+        bench.studio.get(key)!.bind(field, i % 2 ? [] : ['vertexColor']),
+      )
       await measure('camera move', async (i) => {
         await network.locator('canvas').hover()
         await bench.page.mouse.wheel(0, i % 2 ? 240 : -240)
@@ -227,21 +255,20 @@ export async function run() {
         settings.update('network.vertices.labels', i % 2 === 1, global),
       )
       await settings.update('network.vertices.labels', true, global)
-      // Borders draw only on Earth, after the first frame.
+      // The map draws only on Earth, after the first frame.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {
-        await measure('borders', (i) => settings.update('network.borders', i % 2 === 1, global))
-        const without = await idle<Stats>(network)
-        await settings.update('network.borders', undefined, global)
-        await network.waitForFunction(
-          '(segments) => gridkitStats().segments > segments',
-          without.segments,
-          { timeout: 60_000 },
+        await measure('map', (i) =>
+          settings.update('network.map.source', i % 2 === 1 ? 'borders' : 'none', global),
         )
+        await settings.update('network.map.source', undefined, global)
+        await network.waitForFunction('() => gridkitStats().map.vertices > 0', undefined, {
+          timeout: 60_000,
+        })
       }
       const bus = 'Bus/' + JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       // A selection draws again over the rest, glowing. Clearing it draws as before.
-      await measure('select', (i) => bench.studio.select(key, i % 2 ? undefined : { id: bus }))
-      bench.studio.select(key)
+      await measure('select', (i) => bench.studio.get(key)!.select(i % 2 ? undefined : { id: bus }))
+      bench.studio.get(key)!.select()
 
       // ── Diagram ──
       await vscode.commands.executeCommand(
@@ -283,31 +310,31 @@ export async function run() {
       // ── Case panel ──
       const counts = summary().counts
       const rows = (count: number) => `table[aria-rowcount="${count + 1}"]`
-      let started = performance.now()
-      await vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri)
-      // The panel takes up each case on a page of its own, so the page is found again each look.
-      const table = await shows('case', rows(counts.Bus!))
-      timings[`case ${size} > open`] = [performance.now() - started]
+      // The panel's page goes when it hides, so each open loads it anew. The page is found again
+      // each look, as the panel takes up each case on a page of its own.
+      let table!: Frame
+      await time(`case ${size} > open`, RUNS, {
+        ready: async () => {
+          await vscode.commands.executeCommand('workbench.action.closePanel')
+          await pause(300)
+        },
+        act: () => vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri),
+        done: async () => (table = await shows('case', rows(counts.Bus!))),
+      })
       // The type with the most rows besides buses, and back.
       const [other] = Object.entries(counts)
         .filter(([type]) => type !== 'Bus')
         .sort((a, b) => b[1] - a[1])
-      const choose = (type: string) =>
-        bench.studio.action.fire({ uri: key, view: 'case', command: 'type', value: type })
+      const choose = (type: string) => bench.studio.get(key)!.setTable({ type })
       if (other)
-        await time(`case ${size} > change type`, 2, {
+        await time(`case ${size} > change type`, 2 * RUNS, {
           act: (i) => choose(i % 2 ? 'Bus' : other[0]),
           done: (i) =>
             table.locator(rows(i % 2 ? counts.Bus! : other[1])).waitFor({ timeout: 60_000 }),
         })
-      await time(`case ${size} > filter`, 2, {
+      await time(`case ${size} > filter`, 2 * RUNS, {
         act: (i) =>
-          bench.studio.action.fire({
-            uri: key,
-            view: 'case',
-            command: 'filterText',
-            value: i % 2 ? '' : 'no name holds this',
-          }),
+          bench.studio.get(key)!.setTable({ filter: i % 2 ? undefined : 'no name holds this' }),
         done: (i) => table.locator(rows(i % 2 ? counts.Bus! : 0)).waitFor({ timeout: 60_000 }),
       })
 
@@ -316,8 +343,8 @@ export async function run() {
       // ── A second of simulation, followed live ──
       await bench.record('Bus', ['Vm'], uri)
       const solver = await bench.writeSolver(RUN, uri)
-      session.plots = [{ from: 'Bus', field: 'Vm' }]
-      bench.studio.bind(key, VM, ['vertexColor'])
+      session.setPlots([{ from: 'Bus', field: 'Vm' }])
+      session.bind(VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
       // This case has no run yet, unlike the one before it.
       const monitor = await shows('monitor', '.monitor .c-empty')
@@ -329,12 +356,10 @@ export async function run() {
         (await network.evaluate<{ received?: number }>('gridkitStats()')).received ?? 0
       /** The run started here, once it shows. */
       const ran = () => (session.run?.id !== previous ? session.run : undefined)
-      /** What the run started here wrote, as read so far. */
-      const wrote = () => {
-        const id = ran()?.results
-        return id && session.results?.id === id ? session.results : undefined
-      }
-      started = performance.now()
+      /** What the run started here wrote, as read so far: the case had no results on show, so any
+       *  shown since the run began are its own. */
+      const wrote = () => (ran() ? session.results : undefined)
+      const started = performance.now()
       const since = () => performance.now() - started
       bench.run('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
@@ -366,11 +391,14 @@ export async function run() {
       ] as const)
         work[`simulation ${size} > ${view} messages`] = await heard(frame)
 
+      paced.push(canary())
+
       // ── Playback ──
       const { transport } = session
       const span = session.results!.domain
       await steady(monitor)
-      transport.setLoop('wrap')
+      // The run is shorter than the time measured, so it plays again each time it ends.
+      const replay = replaying(bench.studio, session)
       /** The time between frames each view presents while playing: one display frame at best. */
       async function playback(scenario: string) {
         transport.seek(span[0])
@@ -393,10 +421,11 @@ export async function run() {
       await playback('frame')
       // A selected bus draws again over the rest in the Network, and fades the other traces in
       // the Monitor.
-      bench.studio.select(key, { id: bus })
+      bench.studio.get(key)!.select({ id: bus })
       await steady(monitor)
       await playback('frame, selected')
-      bench.studio.select(key)
+      replay.dispose()
+      bench.studio.get(key)!.select()
       const at = (i: number) => span[0] + SEEKS[i]! * (span[1] - span[0])
       await time(`playback ${size} > seek`, SEEKS.length, {
         act: (i) => transport.seek(at(i)),
@@ -421,18 +450,24 @@ export async function run() {
 
       // ── Plots ──
       const first = bus
+      const alone = [...session.plots]
       const lanesBefore = (await plots(monitor)).length
-      await time(`monitor ${size} > add plot`, 1, {
-        act: () => {
-          session.plots = [...session.plots, { from: 'Bus', field: 'Vm', id: first }]
-          bench.studio.changed.fire(key)
+      /** Until the Monitor draws `count` plots. */
+      const lanes = (count: number) =>
+        monitor.waitForFunction(
+          `(count) => document.querySelectorAll('canvas[data-rendered=true]').length === count`,
+          count,
+          { polling: 'raf', timeout: 60_000 },
+        )
+      // Each sample adds the plot afresh: the one the sample before added goes first, untimed.
+      await time(`monitor ${size} > add plot`, RUNS, {
+        ready: async () => {
+          if (session.plots.length === alone.length) return
+          session.setPlots(alone)
+          await lanes(lanesBefore)
         },
-        done: () =>
-          monitor.waitForFunction(
-            `(count) => document.querySelectorAll('canvas[data-rendered=true]').length > count`,
-            lanesBefore,
-            { polling: 'raf', timeout: 60_000 },
-          ),
+        act: () => session.setPlots([...alone, { from: 'Bus', field: 'Vm', id: first }]),
+        done: () => lanes(lanesBefore + 1),
       })
       // A new range colors the drawn lines again, and draws none of them.
       const recolored = await steady(monitor)
@@ -440,7 +475,7 @@ export async function run() {
       await time(`monitor ${size} > recolor`, RUNS, {
         ready: () => plots(monitor),
         act: (i) =>
-          bench.studio.bind(key, VM, ['vertexColor'], [range[0] - i - 1, range[1] + i + 1]),
+          bench.studio.get(key)!.bind(VM, ['vertexColor'], [range[0] - i - 1, range[1] + i + 1]),
         done: (_, lanes) => plotted(monitor, lanes),
       })
       assert.deepEqual(
@@ -479,7 +514,12 @@ export async function run() {
         }
         return times
       })()`)
-      await time(`monitor ${size} > select`, 1, {
+      // Each sample selects the trace afresh, from nothing selected.
+      await time(`monitor ${size} > select`, RUNS, {
+        ready: async () => {
+          bench.studio.get(key)!.select()
+          await settle(() => session.selection === undefined, 'nothing selected')
+        },
         act: () =>
           monitor
             .locator('canvas')
@@ -487,6 +527,8 @@ export async function run() {
             .click({ position: { x: point[0], y: point[1] } }),
         done: () => settle(() => session.selection?.id === first, 'the trace selected'),
       })
+
+      paced.push(canary())
 
       // ── Video export ──
       await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)
@@ -508,24 +550,37 @@ export async function run() {
       await exporter.locator('[role="option"][data-value="webm"]').click()
       await exporter.locator('[data-testid="video-resolution"]').click()
       await exporter.locator('[role="option"][data-value="720"]').click()
-      const video = vscode.Uri.joinPath(uri, '..', `bench ${buses}.webm`)
-      await exporter.locator('[data-testid="video-start"]').click()
-      await bench.dialog(video.fsPath)
-      started = performance.now()
-      await exporter.locator('[data-testid="video-done"]').waitFor({ timeout: 300_000 })
-      timings[`export ${size} > network 1 s at 720p`] = [performance.now() - started]
-      work[`export ${size} > network 1 s at 720p`] = { bytes: (await stat(video.fsPath)).size }
-      bench.studio.select(key)
+      // Each export writes a file of its own, and is timed from the file chosen to the video done.
+      const video = (i: number) => vscode.Uri.joinPath(uri, '..', `bench ${buses} ${i}.webm`)
+      await time(`export ${size} > network 1 s at 720p`, EXPORTS, {
+        ready: async (i) => {
+          await exporter.locator('[data-testid="video-start"]').click()
+          await bench.dialog(video(i).fsPath)
+        },
+        act: () => {},
+        done: (i) =>
+          exporter
+            .locator('[data-testid="video-done"]', { hasText: basename(video(i).fsPath) })
+            .waitFor({ timeout: 300_000 }),
+      })
+      work[`export ${size} > network 1 s at 720p`] = {
+        bytes: (await stat(video(EXPORTS - 1).fsPath)).size,
+      }
+      bench.studio.get(key)!.select()
     }
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')
     await mkdir(output, { recursive: true })
-    await writeFile(join(output, 'head.json'), JSON.stringify({ timings, work, stages }, null, 2))
+    await writeFile(
+      join(output, 'head.json'),
+      JSON.stringify({ gridkit: build, timings, work, stages }, null, 2),
+    )
     console.log(`Benchmarks: ${Object.keys(timings).length} timed, written to ${output}`)
-    assert.deepEqual(bench.studio.errors, [], 'Studio reported no error')
+    assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
   } finally {
     await simpleDialog(undefined)
-    for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.borders'])
+    for (const key of [...Object.keys(STILL), 'network.vertices.labels', 'network.map.source'])
       await settings.update(key, undefined, global)
+    await workbench.update('reduceMotion', undefined, global)
     await bench.browser.close()
   }
 }

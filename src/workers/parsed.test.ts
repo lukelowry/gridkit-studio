@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { Case } from '../gridkit/case.js'
 import { catalog, catalogOf } from '../gridkit/definition.js'
-import { diagnose, diagnoseAsync } from '../gridkit/edits.js'
-import { CaseCache, summarize } from './parsed.js'
+import { diagnose } from '../gridkit/edits.js'
+import { summarize, TextCases } from './parsed.js'
 
 const text = '{"buses":[{"class":"Bus","number":1,"name":"one","params":{"kv":230}}]}'
 const signal = () => new AbortController().signal
@@ -13,7 +13,7 @@ describe('indexed case opening', () => {
     const kase = await Case.parse(text, catalog)
     const kv = kase.table('Bus').fields.get('params.kv')!
     const decoding = vi.spyOn(kv, 'chunks', 'get')
-    expect(summarize(kase, { uri: 'file:///one', version: 1 }).validation).toBe('pending')
+    expect((await summarize(kase, { uri: 'file:///one', version: 1 })).validation).toBe('pending')
     const data = kase.data
     const names = data.tables.Bus!.fields.name!
     expect(names.length).toBeGreaterThan(0)
@@ -21,37 +21,49 @@ describe('indexed case opening', () => {
     const values = data.tables.Bus!.fields['params.kv']!
     expect(values).toBe(data.tables.Bus!.fields['params.kv'])
     expect(decoding).toHaveBeenCalled()
-    const issues = await diagnoseAsync(kase, signal())
-    expect(diagnose(kase)).toBe(issues)
+    const issues = await diagnose(kase, signal())
+    expect(await diagnose(kase, signal())).toBe(issues)
     expect(kase.data).toBe(data)
     expect(data.tables.Bus!.fields.name).toBe(names)
   })
 
-  it('reuses only identical source, catalog and fallback name, with bounded eviction', async () => {
-    const cache = new CaseCache(1 << 20, 1)
-    const first = await cache.parse(text, catalog, 'one', signal())
-    expect(await cache.parse(text, catalog, 'one', signal())).toBe(first)
-    const changed = text.replace('230', '115')
-    expect(await cache.parse(changed, catalog, 'one', signal())).not.toBe(first)
-    expect(await cache.parse(text, catalog, 'one', signal())).not.toBe(first)
-    const current = await cache.parse(text, catalog, 'one', signal())
-    expect(await cache.parse(text, catalog, 'two', signal())).not.toBe(current)
-    const second = await cache.parse(text, catalog, 'two', signal())
-    const revisedCatalog = catalogOf({ ...JSON.parse(catalog.text), revision: 2 })
-    expect(await cache.parse(text, revisedCatalog, 'two', signal())).not.toBe(second)
-    const uncached = new CaseCache(0)
-    expect(await uncached.parse(text, catalog, 'one', signal())).not.toBe(
-      await uncached.parse(text, catalog, 'one', signal()),
-    )
+  it('names content apart: an edit, or another catalog, reads as other content', async () => {
+    const first = await Case.parse(text, catalog, 'one')
+    expect((await Case.parse(text, catalog, 'one')).version).toBe(first.version)
+    const changed = await Case.parse(text.replace('230', '115'), catalog, 'one')
+    expect(changed.version).not.toBe(first.version)
+    const revised = catalogOf({ ...JSON.parse(catalog.text), revision: 2 })
+    expect((await Case.parse(text, revised, 'one')).version).not.toBe(first.version)
   })
 
-  it('cancellation applies to cache hits and validation, without poisoning later reads', async () => {
-    const cache = new CaseCache()
-    const kase = await cache.parse(text, catalog, 'one', signal())
+  it('finds a whole text read before by its hash, and keeps no case past its budget', async () => {
+    const kase = await Case.parse(text, catalog, 'one')
+    const key = TextCases.key(text, catalog, 'one')
+    expect(key).not.toBe(TextCases.key(text, catalog, 'two'))
+    const cases = new TextCases()
+    cases.keep(kase, () => key)
+    expect(cases.find(key)).toBe(kase)
+    const asked = vi.fn(() => key)
+    const none = new TextCases(0)
+    none.keep(kase, asked)
+    expect(none.find(key)).toBeUndefined()
+    // A case past the budget is never hashed to be kept.
+    expect(asked).not.toHaveBeenCalled()
+    const one = new TextCases(1 << 20, 1)
+    one.keep(kase, () => 'first')
+    one.keep(kase, () => 'second')
+    expect(one.find('first')).toBeUndefined()
+    expect(one.find('second')).toBe(kase)
+  })
+
+  it('cancellation applies to parses and validation, without poisoning later reads', async () => {
+    const kase = await Case.parse(text, catalog, 'one', signal())
     const controller = new AbortController()
     controller.abort(new Error('superseded'))
-    await expect(cache.parse(text, catalog, 'one', controller.signal)).rejects.toThrow('superseded')
-    await expect(diagnoseAsync(kase, controller.signal)).rejects.toThrow('superseded')
-    expect(await diagnoseAsync(kase, signal())).toEqual(diagnose(kase))
+    await expect(Case.parse(text, catalog, 'one', controller.signal)).rejects.toThrow('superseded')
+    await expect(diagnose(kase, controller.signal)).rejects.toThrow('superseded')
+    expect(await diagnose(kase, signal())).toEqual(
+      await diagnose(await Case.parse(text, catalog), signal()),
+    )
   })
 })

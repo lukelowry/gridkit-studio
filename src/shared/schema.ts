@@ -1,6 +1,6 @@
 /** A case's topology, read from its schema alone: what the network and the diagram draw. */
 
-import type { FieldDefinition, Schema } from '@latkit/model'
+import type { Schema } from '@latkit/model'
 
 /** A field of one type that names a row of another. */
 interface Reference {
@@ -42,27 +42,34 @@ export function typeName(schema: Schema, type: string): string {
   return schema.types[type]?.label ?? type
 }
 
-function fieldsOf(schema: Schema, type: string): Readonly<Record<string, FieldDefinition>> {
+function fieldsOf(schema: Schema, type: string): Readonly<Record<string, Schema.Field>> {
   return schema.types[type]?.fields ?? {}
 }
 
+/** `type`'s `field`, when both are named and the schema has it. */
+export const fieldOf = (
+  schema: Schema,
+  type: string | undefined,
+  field: string | undefined,
+): Schema.Field | undefined => (type && field ? schema.types[type]?.fields[field] : undefined)
+
 /** The one format for a name with a unit. */
-function withUnit(name: string, unit: string | undefined): string {
+export function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 
 /** A field's unit, unless its own name already says it, as `kv` says kV. */
-export function unitOf(definition: FieldDefinition | undefined, field: string): string {
+export function unitOf(definition: Schema.Field | undefined, field: string): string {
   const unit = definition?.unit ?? ''
   return unit.toLowerCase() === field.slice(field.indexOf('.') + 1).toLowerCase() ? '' : unit
 }
 
 /** A field's label, or its key, with its unit. */
-export function fieldName(definition: FieldDefinition | undefined, field: string): string {
+export function fieldName(definition: Schema.Field | undefined, field: string): string {
   return withUnit(definition?.label ?? field, unitOf(definition, field))
 }
 
-export function isReference(definition: FieldDefinition | undefined): boolean {
+export function isReference(definition: Schema.Field | undefined): boolean {
   return typeof definition?.type === 'object' && definition.type.kind === 'reference'
 }
 
@@ -74,7 +81,8 @@ export function nameFieldOf(schema: Schema, type: string): string | null {
   return (texts.find(([field]) => field === 'name') ?? texts[0])?.[0] ?? null
 }
 
-function referencesOf(schema: Schema, type: string): Reference[] {
+/** The fields of `type` that name a row of another type, in the order the schema has them. */
+export function referencesOf(schema: Schema, type: string): Reference[] {
   return Object.entries(fieldsOf(schema, type)).flatMap(([field, { type: data, direction }]) =>
     typeof data === 'object' && data.kind === 'reference'
       ? [{ field, to: data.to, ...(direction !== undefined && { direction }) }]
@@ -99,9 +107,19 @@ function routeOf(schema: Schema, type: string): string | undefined {
   )?.[0]
 }
 
+/** What each schema draws, worked out once for each schema object: every view and menu asks. */
+const networks = new WeakMap<Schema, Drawn>()
+const diagrams = new WeakMap<Schema, Drawn>()
+
 /** Edges are types with exactly two undirected references to one type, bent along their route if
  *  they have one; vertices are the types they join, and any other type a map places. */
 export function networkOf(schema: Schema): Drawn {
+  let drawn = networks.get(schema)
+  if (!drawn) networks.set(schema, (drawn = networkFrom(schema)))
+  return drawn
+}
+
+function networkFrom(schema: Schema): Drawn {
   const types = Object.keys(schema.types)
   const joins = types.flatMap((type) => {
     const ends = referencesOf(schema, type).filter(({ direction }) => direction === undefined)
@@ -127,6 +145,12 @@ export function networkOf(schema: Schema): Drawn {
 /** Nets are types that directed references name; blocks are the other types holding those
  *  references, each one a port. */
 export function diagramOf(schema: Schema): Drawn {
+  let drawn = diagrams.get(schema)
+  if (!drawn) diagrams.set(schema, (drawn = diagramFrom(schema)))
+  return drawn
+}
+
+function diagramFrom(schema: Schema): Drawn {
   const directed = Object.keys(schema.types).flatMap((type) =>
     referencesOf(schema, type)
       .filter(({ direction }) => direction !== undefined)

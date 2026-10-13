@@ -6,7 +6,6 @@ import { reader } from '../../shared/preferences.js'
 import { plotBindings } from '../monitor/plot.js'
 import { networkConfig } from './style.js'
 
-vi.mock('./borders.js', () => ({ BORDERS: [] }))
 vi.mock('../theme.js', async (original) => ({
   ...(await original<typeof import('../theme.js')>()),
   theme: () => ({ font: 'monospace', palette: new Proxy({}, { get: () => [0.8, 0.8, 0.8, 1] }) }),
@@ -71,11 +70,17 @@ it('uses the same global normalization in Network and Monitor whatever pages are
           },
         },
       ])
-      const config = networkConfig(kase.data, samples, view, false, null)
+      const config = networkConfig(kase.data, samples, view, null)
       for (const channel of ['color', 'z', 'radiusPx'] as const)
         expect(config.vertices.Bus![channel]).toMatchObject({ domain: [0.5, 2] })
       expect(
-        plotBindings(reader(), field, view.bindings, undefined, results).traces.plotted!.color,
+        plotBindings(
+          reader(),
+          { from: field.type, field: field.field },
+          view.bindings,
+          undefined,
+          results,
+        ).traces.plotted!.color,
       ).toMatchObject({ domain: [0.5, 2] })
       const fixed = networkConfig(
         kase.data,
@@ -84,7 +89,6 @@ it('uses the same global normalization in Network and Monitor whatever pages are
           ...view,
           bindings: { vertexColor: { ...field, domain: [0, 3] } },
         },
-        false,
         null,
       )
       expect(fixed.vertices.Bus!.color).toMatchObject({ domain: [0, 3] })

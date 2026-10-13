@@ -1,10 +1,11 @@
 /** Playback in the status bar, right of the problem counts behind a bar: step back, play or pause,
- *  step forward, the time, the speed, and the end. They follow the active case's clock while its
- *  results have samples. */
+ *  step forward, the time, and the speed. They follow the active case's clock while its results
+ *  have samples. */
 
 import * as vscode from 'vscode'
 
 import { formatNumber } from '../shared/format.js'
+import { type Command, commandId, PREFIX } from '../shared/ids.js'
 import type { Sessions } from './sessions.js'
 
 /** How often the time follows a playing clock. */
@@ -15,41 +16,46 @@ const PROBLEMS = 50
 export function registerPlayback(studio: Sessions): vscode.Disposable[] {
   // Higher priorities sit further left, so the items keep the order they are made in.
   let priority = PROBLEMS
-  const item = (id: string, name: string, command?: string) => {
+  const item = (id: string, name: string, command?: Command) => {
     const made = vscode.window.createStatusBarItem(
-      'gridkitStudio.playback.' + id,
+      `${PREFIX}.playback.${id}`,
       vscode.StatusBarAlignment.Left,
       --priority,
     )
     made.name = 'GridKit ' + name
-    made.command = command
+    made.command = command && commandId(command)
     return made
   }
   const bar = item('bar', 'Playback')
   bar.text = '│'
   bar.color = new vscode.ThemeColor('disabledForeground')
   bar.accessibilityInformation = { label: 'Playback', role: 'separator' }
-  const back = item('back', 'Previous Sample', 'gridkitStudio.previousSample')
-  const play = item('play', 'Play or Pause', 'gridkitStudio.toggleTimeline')
-  const forward = item('forward', 'Next Sample', 'gridkitStudio.nextSample')
-  const time = item('time', 'Time', 'gridkitStudio.seekTime')
-  const speed = item('speed', 'Playback Speed', 'gridkitStudio.timeSpeed')
-  const end = item('end', 'Go to End', 'gridkitStudio.followTime')
-  const items = [bar, back, play, forward, time, speed, end]
+  const back = item('back', 'Previous Sample', 'previousSample')
+  const play = item('play', 'Play or Pause', 'playPause')
+  const forward = item('forward', 'Next Sample', 'nextSample')
+  const time = item('time', 'Time', 'goToTime')
+  const speed = item('speed', 'Playback Speed', 'playbackSpeed')
+  const items = [bar, back, play, forward, time, speed]
+  /** What each item says now: while the clock plays, only the time changes, so only it is sent. */
+  const said = new Map<vscode.StatusBarItem, string>()
   const say = (target: vscode.StatusBarItem, text: string, label: string) => {
+    if (said.get(target) === text + '\n' + label) return
+    said.set(target, text + '\n' + label)
     target.text = text
     target.tooltip = label
     target.accessibilityInformation = { label, role: 'button' }
   }
+  let shown = false
   let timer: ReturnType<typeof setInterval> | undefined
 
   const show = () => {
     const uri = studio.active
-    const session = uri ? studio.all.get(uri) : undefined
+    const session = uri ? studio.get(uri) : undefined
     const results = session?.results
     const state = session?.transport.state
     if (!session || !results?.frames || !state || state.status === 'idle') {
-      for (const each of items) each.hide()
+      if (shown) for (const each of items) each.hide()
+      shown = false
       clearInterval(timer)
       timer = undefined
       return
@@ -57,10 +63,10 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const { transport } = session
     const t = transport.currentT()
     const playing = state.status === 'playing'
-    const finished = !transport.live && !playing && state.loop === 'none' && t >= state.span[1]
+    const finished = !session.live && !playing && t >= state.span[1]
     // The times a run will cover, which its samples fill as they arrive.
     const [from, to] = results.span ?? results.domain
-    const unit = studio.documents.entries.get(uri!)?.summary?.schema.axis?.unit ?? 's'
+    const unit = studio.documents.get(session.uri)?.summary?.schema.axis?.unit ?? 's'
     say(back, '$(chevron-left)', 'Previous sample')
     say(
       play,
@@ -74,8 +80,8 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
       `Time ${formatNumber(t)} ${unit} of ${formatNumber(from)} to ${formatNumber(to)} ${unit}. Go to a time`,
     )
     say(speed, `${formatNumber(state.rate)}×`, `Speed: ${formatNumber(state.rate)}×`)
-    say(end, '$(run-all)', transport.live ? 'Go live' : 'Go to end')
-    for (const each of items) each.show()
+    if (!shown) for (const each of items) each.show()
+    shown = true
     if (playing && !timer) timer = setInterval(show, TICK_MS)
     else if (!playing && timer) {
       clearInterval(timer)

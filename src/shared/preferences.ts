@@ -1,7 +1,7 @@
-/** The display settings of Network, Diagram and Monitor, plus accessibility, each defined once; VS
- *  Code owns the theme. `pnpm settings` writes them into package.json for VS Code Settings. */
+/** The display settings of Network, Diagram and Monitor, each defined once; VS Code owns the theme,
+ *  its contrast and its motion. `pnpm settings` writes them into package.json for VS Code Settings. */
 
-import type { ColormapName } from '@latkit/gpu'
+import type { Colormap } from '@latkit/gpu'
 
 /** One setting: the default a reset restores and the values it takes. Null leaves a number or
  *  color to the view. */
@@ -153,46 +153,51 @@ const COLORMAPS = [
   ['vanimo', 'Vanimo'],
   ['vik', 'Vik'],
   ['vlag', 'Vlag'],
-] as const satisfies Options<ColormapName>
+] as const satisfies Options<Colormap.Name>
 
 /** Every display setting, by category and group. A table: prettier would give each argument of a
  *  long row a line of its own. */
 // prettier-ignore
 export const SETTINGS = [
-  category('accessibility', 'Accessibility', [
-    group('', [
-      choice('accessibility.motion', 'Motion', 'system',
-        [['system', 'System'], ['full', 'Full'], ['reduce', 'Reduce']],
-        'Full enables camera animation and interface motion. Reduce disables them. System follows the device.'),
-      choice('accessibility.contrast', 'Contrast', 'system',
-        [['system', 'System'], ['high', 'High']],
-        'Increase contrast for text, borders and controls. System follows the device.'),
-    ]),
-  ]),
   category('network', 'Network', [
     group('Layers', [
       bool('network.markers', 'Vertices', true, 'Off hides vertex labels too.'),
-      bool('network.lines', 'Edges', true, 'Off leaves the world’s borders drawn.'),
-      bool('network.borders', 'Borders', true,
-        'Draw coasts and country borders under a network on Earth.'),
+      bool('network.lines', 'Edges', true, 'Off leaves the map drawn.'),
       bool('network.poles', 'Height poles', false,
         'Draw stems from the ground up to raised vertices.'),
       bool('network.grid', 'Grid', true,
-        'Draw a coordinate grid under the network, latitude and longitude on the globe.'),
-      bool('network.earthAxis', 'Earth axis', true, 'Draw the axis the globe turns on.'),
+        'Lines of longitude and latitude under a network on Earth, and of x and y under one laid out.'),
+    ]),
+    group('Map', [
+      choice('network.map.source', 'Map', 'borders',
+        [['borders', 'Coasts and borders'], ['openstreetmap', 'OpenStreetMap'], ['none', 'None']],
+        'What lies under a network on Earth. Coasts and borders ship with Studio and draw offline. OpenStreetMap loads vector tiles from the tiles URL.'),
+      text('network.map.tilesUrl', 'Tiles URL', 'https://tiles.openfreemap.org/planet',
+        'OpenStreetMap vector tiles in the OpenMapTiles schema: a PMTiles archive, TileJSON, or a {z}/{x}/{y} template.'),
+      bool('network.map.earthAxis', 'Earth axis', true, 'Draw the axis the globe turns on.'),
+      bool('network.map.daylight', 'Daylight', false,
+        'Light the Earth and the network by where the sun is now.'),
+      num('network.map.nightFloor', 'Night floor', 0.3, [0, 1, 0.01],
+        'Brightness on the night side.'),
+      num('network.map.terminatorWidth', 'Terminator width', 0.12, [0, 0.5, 0.01],
+        'Softness of the edge between day and night.'),
+      num('network.map.lineWidthPx', 'Border width', 1, [0, 4, 0.25],
+        'Stroke width of coasts and borders.'),
+      color('network.map.groundColor', 'Ground', null, 'The Earth under the network.'),
+      color('network.map.lineColor', 'Border color', null, 'Coasts and borders.'),
     ]),
     group('Size', [
       num('network.vertexRadiusPx', 'Vertex radius', 3, [0, 16, 0.5],
         'Marker radius before a bound size scales it.'),
+      num('network.vertexMinRadiusPx', 'Smallest vertex radius', 1, [0, 16, 0.25],
+        'Zoomed out, markers shrink toward this as edges shorten on screen, so neighbors stay apart. The vertex radius or more keeps one size.'),
       num('network.edgeWidthPx', 'Edge width', 1.4, [0, 8, 0.1]),
-      num('network.zScale', 'Height', 3, [0, 8, 0.05],
+      num('network.zScale', 'Height', 0.4, [0, 8, 0.05],
         'Multiplies how high a bound height raises vertices.'),
       num('network.dashPeriodPx', 'Dash period', 12, [0, 48, 1],
         'Length of one dash on edges a field dashes.'),
       num('network.edgeSpacingPx', 'Parallel spacing', 0, [0, 24, 0.5],
         'Draw edges joining the same two vertices this far apart. 0 draws them over each other.'),
-      num('network.pathWidthPx', 'Border width', 1, [0, 4, 0.25],
-        'Stroke width of coasts and country borders.'),
       bool('network.shadows', 'Shadows', false, 'Lift markers off the lines with a soft shadow.'),
     ]),
     group('Labels', [
@@ -207,16 +212,6 @@ export const SETTINGS = [
         'How far the ground’s color reaches around label text.'),
       text('network.font', 'Font', ''),
       color('network.textColor', 'Color', null),
-    ]),
-    group('Lighting', [
-      bool('network.daylight', 'Daylight', false,
-        'Light a network on Earth by where the sun is now.'),
-      num('network.nightFloor', 'Night floor', 0.55, [0, 1, 0.01],
-        'Brightness of the network on the night side.'),
-      num('network.surfaceNightFloor', 'Ground night floor', 0.15, [0, 1, 0.01],
-        'Brightness of the ground on the night side.'),
-      num('network.terminatorWidth', 'Terminator width', 0.12, [0, 0.5, 0.01],
-        'Softness of the edge between day and night.'),
     ]),
     group('Highlight', [
       bool('network.selectedEnds', 'Selected edge ends', true,
@@ -239,15 +234,12 @@ export const SETTINGS = [
         'Vertices while no field drives their color.'),
       color('network.edgeColor', 'Edge color', null, 'Edges while no field drives their color.'),
       color('network.background', 'Background', null),
-      color('network.surfaceColor', 'Ground', null,
-        'The globe, and the ground under a tilted view.'),
       color('network.gridColor', 'Grid color', null),
-      color('network.pathColor', 'Border color', null, 'Coasts and country borders.'),
     ]),
     group('Camera', [
       choice('network.camera.projection', 'Projection', 'flat',
         [['flat', 'Flat'], ['tilt', 'Tilt'], ['globe', 'Globe']],
-        'How a network first shows. Globe needs geography.'),
+        'How a network first shows. A network on Earth lies flat as a Web Mercator map. Globe needs one on Earth.'),
       num('network.fitPitch', 'Tilt', 55, [0, 80, 1],
         'How far a tilted view leans from straight down.'),
       num('network.fitBearing', 'Bearing', 0, [0, 359, 1], 'Rotation a fitted view settles at.'),
@@ -329,10 +321,8 @@ export const SETTINGS = [
       color('monitor.cursorColor', 'Playhead color', null, 'The line at the time on show.'),
     ]),
     group('Interaction', [
-      choice('monitor.input.mode', 'Mode', 'inspect',
-        [['inspect', 'Inspect'], ['navigate', 'Navigate']],
-        'Navigate adds the Home key to fit the plot.'),
-      bool('monitor.input.keyboard', 'Keyboard', true, 'Select and clear with the keys.'),
+      bool('monitor.input.keyboard', 'Keyboard', true,
+        'Select and clear with the keys, and fit the plot with Home.'),
       num('monitor.pickRadiusPx', 'Pick radius', 8, [0, 32, 1],
         'How near the pointer must be to select a line.'),
     ]),

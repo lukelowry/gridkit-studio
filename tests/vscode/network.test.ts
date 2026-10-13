@@ -11,7 +11,7 @@ import {
   fills,
   frames,
   idle,
-  pause,
+  replaying,
   stats,
   type TestHost,
   testHost,
@@ -20,11 +20,13 @@ import {
   VM,
 } from './harness.js'
 
-/** Markers large enough that their center pixels are solid, with nothing drawn over them. */
+/** Markers large enough that their center pixels are solid, at one size whatever the zoom, with
+ *  nothing drawn over them. */
 const SOLID: Record<string, unknown> = {
   'network.vertexRadiusPx': 8,
+  'network.vertexMinRadiusPx': 8,
   'network.vertices.labels': false,
-  'network.borders': false,
+  'network.map.source': 'none',
   'network.hover': 'off',
   'network.selectedColor': '#00000000',
 }
@@ -42,7 +44,7 @@ suite('Network', () => {
   })
 
   test('draws the case, filling its editor', async () => {
-    assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, 39)
+    assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, bench.source.buses.length)
     assert.equal(await network.locator('.status').count(), 0)
     assert.ok(await fills(network), 'Network must fill its editor')
     bench.report.network = await stats(network)
@@ -51,7 +53,8 @@ suite('Network', () => {
 
   test('carries its projections and rotation, and Fit in the editor title bar', async () => {
     await visible(network, '[data-testid="view-toolbar"]')
-    assert.equal(await network.locator('.toolbar button').count(), 4)
+    for (const name of ['Flat', 'Tilt', 'Globe', 'Auto-rotate'])
+      assert.equal(await network.getByRole('button', { name, exact: true }).count(), 1, name)
     await bench.page
       .locator('.part.editor')
       .getByRole('button', { name: /^Fit All/ })
@@ -62,9 +65,29 @@ suite('Network', () => {
     )
   })
 
+  test('shrinks its markers as the view zooms out, so neighbors stay apart, and grows them back', async () => {
+    /** How much markers shrink at the drawn zoom: 1 while they have room for their radius. */
+    const fit = () => network.evaluate<number>('gridkitStats().markerFit')
+    const wheel = async (deltaY: number) => {
+      await network.locator('canvas').hover()
+      await bench.page.mouse.wheel(0, deltaY)
+      await idle(network)
+      return fit()
+    }
+    try {
+      await until(async () => (await wheel(-240)) === 1, 'markers at their own size, zoomed in')
+      await until(async () => (await wheel(240)) < 1, 'markers shrink as the view zooms out')
+      const out = await fit()
+      assert.ok(out > 0, 'a shrunken marker still draws')
+      await until(async () => (await wheel(-240)) === 1, 'markers grow back as the view zooms in')
+    } finally {
+      await vscode.commands.executeCommand('gridkitStudio.fit')
+    }
+  })
+
   test('clearing the canvas selection clears the shared selection', async () => {
     const drawn = await frames(network)
-    bench.studio.select(bench.key, { id: 'Bus/' + bench.source.buses[0]!.number })
+    bench.session.select({ id: 'Bus/' + bench.source.buses[0]!.number })
     await until(async () => (await frames(network)) > drawn, 'the selected bus is drawn')
     await network.locator('canvas').focus()
     await network.locator('canvas').press('Escape')
@@ -83,24 +106,36 @@ suite('Network', () => {
   test('paints a mapped signal at the playhead every view shares', async () => {
     await bench.results()
     const { transport } = bench.session
-    bench.studio.bind(bench.key, VM, ['vertexColor'])
-    transport.setLoop('wrap')
+    bench.session.bind(VM, ['vertexColor'])
     transport.seek(0)
     const still = await frames(network)
-    transport.play()
-    // Frame after frame while the clock plays, with no message from the extension.
-    await until(async () => (await frames(network)) > still + 10, 'the network paints the playhead')
-    transport.pause()
+    // Frame after frame while the clock plays, with no message from the extension. A second of
+    // results plays once, which a slow GPU draws in fewer frames than this asks for, so it plays
+    // again each time it ends.
+    const replay = replaying(bench.studio, bench.session)
+    try {
+      transport.play()
+      await until(
+        async () => (await frames(network)) > still + 10,
+        'the network paints the playhead',
+      )
+    } finally {
+      replay.dispose()
+      transport.pause()
+    }
     await bench.capture('network-mapped-signal')
   })
 
   test('draws nothing while hidden, though the clock plays on', async () => {
     const { transport } = bench.session
     await bench.open('diagram')
-    await pause(300)
-    const hidden = await frames(network)
+    const hidden = (await idle(network)).frames
+    // From the start, so the clock has the run before it to play on rather than wrap.
+    transport.seek(0)
+    const from = transport.currentT()
     transport.play()
-    await pause(500)
+    // Time enough for the visible view to have drawn many frames.
+    await until(() => transport.currentT() > from + 0.2, 'the clock plays on')
     assert.equal(transport.state.status, 'playing')
     assert.equal(await frames(network), hidden)
     transport.pause()
@@ -142,20 +177,20 @@ suite('Network', () => {
       }
       const plain = await colors()
       const given = { type: 'Bus', field: 'init.Vr' }
-      const mapped = await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      const mapped = await redraw(() => bench.session.bind(given, ['vertexColor']))
       assert.ok(
         mapped.some((color, i) => apart(color, plain[i]!)),
         'a field mapped colors the buses',
       )
-      const unmapped = await redraw(() => bench.studio.bind(bench.key, given, []))
+      const unmapped = await redraw(() => bench.session.bind(given, []))
       assert.ok(
         unmapped.every((color, i) => !apart(color, plain[i]!)),
         'a mapping taken away colors them as before',
       )
       // The same once the case is edited, and so laid out again, while the field is mapped.
-      await redraw(() => bench.studio.bind(bench.key, given, ['vertexColor']))
+      await redraw(() => bench.session.bind(given, ['vertexColor']))
       await bench.record('Bus', ['Vm'])
-      const after = await redraw(() => bench.studio.bind(bench.key, given, []))
+      const after = await redraw(() => bench.session.bind(given, []))
       assert.ok(
         after.every((color, i) => !apart(color, plain[i]!)),
         'a mapping taken away after a relayout colors them as before',
@@ -185,5 +220,14 @@ suite('Network', () => {
       'the network on the globe',
     )
     await bench.capture('network-globe')
+  })
+
+  test("lays Natural Earth's borders beneath a case on Earth, once it is on screen", async () => {
+    await until(
+      async () => (await network.evaluate<number>('gridkitStats().map?.vertices ?? 0')) > 0,
+      'the borders drawn',
+      60_000,
+    )
+    await bench.capture('network-borders')
   })
 })

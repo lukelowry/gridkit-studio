@@ -1,6 +1,6 @@
-import { colormaps } from '@latkit/gpu'
+import { colormaps, type View } from '@latkit/gpu'
 import type { Data } from '@latkit/model'
-import type { NetworkConfig } from '@latkit/network'
+import type { Network } from '@latkit/network'
 
 import { type FieldRef, recordedWhole } from '../../shared/bindings.js'
 import type { ViewState } from '../../shared/messages.js'
@@ -8,12 +8,8 @@ import { located as isLocated } from '../../shared/positions.js'
 import { reader } from '../../shared/preferences.js'
 import { nameFieldOf, networkOf, positionOf } from '../../shared/schema.js'
 import { theme } from '../theme.js'
-import { BORDERS } from './borders.js'
 import { channelsOf, type Sampled } from './channels.js'
 import { networkOptions } from './options.js'
-
-/** Province lines relative to coasts and countries, which draw as every path. */
-const PROVINCE = { width: 0.75, alpha: 0.6 }
 
 /** Whether any row of `type` has a point in its route `field`. */
 function routed(source: Data, type: string, field: string): boolean {
@@ -26,21 +22,19 @@ function routed(source: Data, type: string, field: string): boolean {
   return false
 }
 
-/** The network config for `source`: vertices at the positions the case gives them, the network
- *  laying out those without. Sampled fields share the run's global ranges; labels wait for
- *  `labelled`. */
+/** The network config for `source` over `ground`, the map under a network on Earth: vertices at
+ *  the positions the case gives them, the network laying out those without. Sampled fields
+ *  share the run's global ranges; labels wait for `labelled`. */
 export function networkConfig(
   source: Data,
   samples: Data,
   state: ViewState,
-  geographic: boolean,
-  borders: Data | null,
+  ground: View | null,
   labelled = true,
-): Omit<NetworkConfig, 'canvas' | 'camera'> {
+): Omit<Network.Config, 'canvas' | 'camera'> {
   const s = reader(state.settings)
   const drawn = networkOf(source.schema)
   const { palette, font } = theme()
-  const options = networkOptions(s, palette, font, geographic)
   const colormap = colormaps[s.get('network.colormap')]
   const sampled = sampledFrom(samples, state)
   const bindings = state.bindings ?? {}
@@ -55,10 +49,10 @@ export function networkConfig(
         }
       : null
   }
-  const [r, g, b, a] = options.pathColor!
   return {
-    ...options,
+    ...networkOptions(s, palette, font),
     source,
+    ground,
     vertices: Object.fromEntries(
       drawn.vertices.map((type) => [
         type,
@@ -79,28 +73,12 @@ export function networkConfig(
           // of their ends: pass it only where the case routes lines and places are its own.
           ...(bends !== undefined && located && routed(source, type, bends) && { bends }),
           ...channelsOf(bindings, type, 'edge', colormap, sampled),
-          // Hides edges only; borders stay drawn.
+          // Hides edges only; the map stays drawn.
           ...(!s.get('network.lines') && { visible: false }),
           labels: labels(type, s.get('network.edges.labels')),
         },
       ]),
     ),
-    paths:
-      geographic && s.get('network.borders') && borders
-        ? Object.fromEntries(
-            BORDERS.map((type) => [
-              type,
-              {
-                source: borders,
-                points: 'points',
-                ...(type === 'Province' && {
-                  color: [r, g, b, a * PROVINCE.alpha] as const,
-                  widthPx: options.pathWidthPx! * PROVINCE.width,
-                }),
-              },
-            ]),
-          )
-        : {},
   }
 }
 

@@ -1,26 +1,34 @@
+/** A case's source as VS Code's editor reads it: completion, hover, go to definition, the outline,
+ *  and the element under the cursor, selected in every view. */
+
 import * as vscode from 'vscode'
 
+import { CASE_FILE, CASE_GLOB } from '../shared/ids.js'
+import { type CaseSymbol, revisionOf } from '../shared/messages.js'
+import { withUnit } from '../shared/schema.js'
 import { cancellable } from './client.js'
+import { rangeOf } from './documents.js'
 import type { Sessions } from './sessions.js'
-const selector: vscode.DocumentSelector = { language: 'json', pattern: '**/*.case.json' }
+
+const selector: vscode.DocumentSelector = { language: 'json', pattern: CASE_GLOB }
+/** How many records the outline lists when VS Code's JSON features say nothing: their default. */
+const OUTLINE_ITEMS = 5000
+
 export function registerNavigation(studio: Sessions) {
-  // A case that does not parse answers nothing: its diagnostic already says why.
-  const parsed = (document: vscode.TextDocument) =>
-    studio.documents.ensure(document).catch(() => undefined)
-  /** The case at `position`, with the summary it was read from. */
+  /** The case at `position`, with the summary it was read from. A case that does not parse answers
+   *  nothing: its diagnostic already says why. */
   const inspect = async (
     document: vscode.TextDocument,
     position: vscode.Position,
     token?: vscode.CancellationToken,
   ) => {
-    const summary = await parsed(document)
+    const summary = await studio.documents.parsed(document)
     if (!summary) return undefined
     const context = await cancellable(token, (signal) =>
       studio.client.cases.call(
         'context',
         {
-          uri: document.uri.toString(),
-          version: summary.version,
+          ...revisionOf(summary),
           offset: document.offsetAt(position),
         },
         signal,
@@ -34,11 +42,7 @@ export function registerNavigation(studio: Sessions) {
       {
         async provideCompletionItems(document, position, token) {
           const completions = await cancellable(token, (signal) =>
-            studio.client.cases.call(
-              'complete',
-              { text: document.getText(), offset: document.offsetAt(position) },
-              signal,
-            ),
+            studio.documents.complete(document, document.offsetAt(position), signal),
           )
           return completions.map((field) => {
             const item = new vscode.CompletionItem(field.name, vscode.CompletionItemKind.Field)
@@ -59,12 +63,9 @@ export function registerNavigation(studio: Sessions) {
           : undefined
         return new vscode.Hover(
           new vscode.MarkdownString().appendText(
-            `${context.element.field}${field?.unit ? ' [' + field.unit + ']' : ''}\n${field?.description ?? context.reference ?? context.element.id}`,
+            `${withUnit(context.element.field, field?.unit)}\n${field?.description ?? context.reference ?? context.element.id}`,
           ),
-          new vscode.Range(
-            document.positionAt(context.range.offset),
-            document.positionAt(context.range.offset + context.range.length),
-          ),
+          rangeOf(document, context.range),
         )
       },
     }),
@@ -76,56 +77,61 @@ export function registerNavigation(studio: Sessions) {
         const range = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'locate',
-            { uri: document.uri.toString(), version: context.summary.version, id },
+            {
+              ...revisionOf(context.summary),
+              id,
+            },
             signal,
           ),
         )
-        return new vscode.Location(
-          document.uri,
-          new vscode.Range(
-            document.positionAt(range.offset),
-            document.positionAt(range.offset + range.length),
-          ),
-        )
+        return new vscode.Location(document.uri, rangeOf(document, range))
       },
     }),
     vscode.languages.registerDocumentSymbolProvider(selector, {
       async provideDocumentSymbols(document, token) {
-        const summary = await parsed(document)
+        const summary = await studio.documents.parsed(document)
         if (!summary) return undefined
+        // As many records as VS Code outlines of any JSON file, by its own setting.
+        const limit =
+          vscode.workspace.getConfiguration('json', document).get<number>('maxItemsComputed') ??
+          OUTLINE_ITEMS
         const symbols = await cancellable(token, (signal) =>
           studio.client.cases.call(
             'symbols',
-            { uri: document.uri.toString(), version: summary.version },
+            {
+              ...revisionOf(summary),
+              limit,
+            },
             signal,
           ),
         )
-        return symbols.map(
-          (symbol) =>
-            new vscode.DocumentSymbol(
-              symbol.name,
-              symbol.detail,
-              vscode.SymbolKind.Object,
-              new vscode.Range(
-                document.positionAt(symbol.offset),
-                document.positionAt(symbol.offset + symbol.length),
-              ),
-              new vscode.Range(
-                document.positionAt(symbol.offset),
-                document.positionAt(symbol.offset + 1),
-              ),
-            ),
-        )
+        // The file's arrays, each holding its records.
+        const symbolOf = (symbol: CaseSymbol): vscode.DocumentSymbol => {
+          const made = new vscode.DocumentSymbol(
+            symbol.name,
+            symbol.detail,
+            symbol.children ? vscode.SymbolKind.Array : vscode.SymbolKind.Object,
+            rangeOf(document, symbol),
+            rangeOf(document, { offset: symbol.offset, length: 1 }),
+          )
+          made.children = symbol.children?.map(symbolOf) ?? []
+          return made
+        }
+        return symbols.map(symbolOf)
       },
     }),
     vscode.window.onDidChangeTextEditorSelection((event) => {
-      if (!/\.case\.json$/i.test(event.textEditor.document.fileName)) return
-      void inspect(event.textEditor.document, event.selections[0]!.active)
+      const { document } = event.textEditor
+      if (!CASE_FILE.test(document.fileName)) return
+      const uri = document.uri.toString()
+      // Typing moves the cursor: the case is read once the typing pauses, not at every key.
+      if (studio.documents.get(uri)?.stale) return
+      void inspect(document, event.selections[0]!.active)
         .then((context) => {
-          if (context?.element)
-            studio.select(event.textEditor.document.uri.toString(), context.element)
+          if (context?.element) studio.get(uri)?.select(context.element)
         })
-        .catch(() => {})
+        // A revision a newer one replaced says nothing; anything else is said once, as any is.
+        .catch((error) => studio.reporter.report(error))
     }),
   ]
 }

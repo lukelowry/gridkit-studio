@@ -2,51 +2,93 @@
   chosen from the view's title bar, which also says what shows; a column's menu maps it onto the
   network. -->
 <script lang="ts">
-  import type { FieldDefinition, RowsQuery, Value } from '@latkit/model'
+  import type { Query, Schema } from '@latkit/model'
   import { onMount, tick } from 'svelte'
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
-  import { display, leaf, native, referenceNames, rowsOf } from '../../shared/cells.js'
+  import {
+    changedTable,
+    display,
+    leaf,
+    native,
+    referenceNames,
+    rowsOf,
+    shownColumns,
+    shownType,
+    tableFields,
+  } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
-  import type { TableState, ViewState } from '../../shared/messages.js'
+  import {
+    type Revision,
+    revisionOf,
+    type TableState,
+    type Value,
+    type ViewState,
+  } from '../../shared/messages.js'
   import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
-  import { appearance } from '../theme.js'
 
-  /** How many columns a type shows until the user picks them. */
-  const COLUMNS = 12
+  type Row = ReturnType<typeof rowsOf>[number]
+
   /** Row height in px for virtual scrolling: the --spacing-row-h token. */
   const height = 28
+  /** The keys that move between cells. */
+  const MOVES = [
+    'ArrowUp',
+    'ArrowDown',
+    'ArrowLeft',
+    'ArrowRight',
+    'Home',
+    'End',
+    'PageUp',
+    'PageDown',
+  ]
 
-  let view = $state<ViewState>({})
-  let type = $state(bridge.state({ type: 'Bus' }).type)
-  let fields = $state<string[]>([])
-  /** The columns chosen for each type, kept as the panel follows a selection between types. */
-  let columns = $state<Record<string, string[]>>({})
-  let filter = $state('')
-  let equal = $state<TableState['equal']>()
-  let order = $state<{ field: string; direction: 'ascending' | 'descending' } | undefined>()
+  let view = $state.raw<ViewState>({})
+  // What the rows are read from, each apart: a message that leaves it as it was, as a selection
+  // does, reads nothing again.
+  const summary = $derived(view.summary)
+  const version = $derived(view.summary?.version)
+  const stale = $derived(view.stale)
+  /** What the panel shows of its rows: the session's, as it last said, with the changes made here
+   *  since applied at once, which the session takes as they are. */
+  let table = $state.raw<TableState>({})
+  /** The session's table as it last said it, which a state that leaves it as it was keeps. */
+  let told: TableState | undefined
+  const type = $derived(summary ? (shownType(summary, table) ?? '') : '')
+  const fields = $derived(summary && type ? shownColumns(summary, table, type) : [])
+  const filter = $derived(table.filter ?? '')
+  const equal = $derived(table.equal)
+  const order = $derived(table.order)
+  /** The first row the panel reads, as it scrolls. */
   let offset = $state(0)
   let total = $state(0)
   let loading = $state(false)
-  let rows = $state<ReturnType<typeof rowsOf>>([])
-  let editing = $state<{ id: string; field: string; text: string; version: number } | undefined>()
+  /** The rows read, and the row they start at: until the next page comes, the last stays where it
+   *  was read. */
+  let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
+  let editing = $state<
+    | { id: string; field: string; text: string; revision: Revision; row: number; column: number }
+    | undefined
+  >()
   let scroll: HTMLDivElement
   let generation = 0
   let controller: AbortController | undefined
+  /** A cell the keys moved to on a page not yet read, which takes focus once it is. */
+  let pending: { row: number; column: number } | undefined
   /** The selected row the panel scrolls to once it is drawn. */
   let revealing: string | undefined
   /** The last element selected here, which is in sight already. */
   let own: string | undefined
-  const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
-    view.summary?.schema.types[type]?.fields ?? {},
+  /** What the rows read are of: another type, filter or order starts them over, at the top. */
+  let viewed: { type: string; key: string } | undefined
+  const definitions = $derived<Readonly<Record<string, Schema.Field>>>(
+    summary?.schema.types[type]?.fields ?? {},
   )
   /** The field each row is known by, shown as the row's own header. */
-  const identity = $derived(view.summary?.identities[type])
+  const identity = $derived(summary?.identities[type])
   /** The type's static fields besides its identity; sampled ones belong to the Monitor. */
-  const allFields = $derived(
-    Object.keys(definitions).filter((field) => !definitions[field]?.sampled && field !== identity),
-  )
+  const allFields = $derived(summary ? tableFields(summary, type) : [])
   /** A cell as text: a number to six significant digits, which hover and editing show whole. */
   const text = (value: unknown) =>
     typeof value === 'number'
@@ -61,14 +103,22 @@
       }),
     ),
   )
+  /** The cell Tab enters the grid at: the selection's, or its row's first, else the first. */
+  const anchor = $derived.by(() => {
+    const at = page.rows.findIndex((row) => row.id === view.selection?.id)
+    return {
+      row: page.offset + Math.max(at, 0),
+      column: at < 0 ? 0 : Math.max(fields.indexOf(view.selection?.field ?? ''), 0),
+    }
+  })
   const context = (id: string | null, field?: string) =>
-    view.summary
+    summary
       ? JSON.stringify(
           menuContext(
-            view.summary,
+            summary,
             {
-              uri: view.summary.uri,
-              version: view.summary.version,
+              uri: summary.uri,
+              version: summary.version,
               origin: 'case',
               type,
               field,
@@ -80,93 +130,103 @@
           ),
         )
       : '{}'
-  const persist = () =>
-    bridge.send({
-      kind: 'tableState',
-      table: {
-        type,
-        columns: $state.snapshot(columns),
-        filter,
-        ...(equal && { equal: $state.snapshot(equal) }),
-      },
-      shown: total,
-    })
-  /** Show `next` as the type's columns, and keep them for it. */
-  function show(next: string[]) {
-    fields = next.filter((field) => allFields.includes(field))
-    columns[type] = fields
-    persist()
+  /** Gives the header, row or cell right-clicked its menu's context as the menu opens, before VS
+   *  Code reads it, so the rows need not carry one each. */
+  function contextmenu(event: MouseEvent) {
+    const target = (event.target as Element | null)?.closest<HTMLElement>('[data-field], [data-id]')
+    if (!target || !scroll?.contains(target)) return
+    const id = target.closest<HTMLElement>('[data-id]')?.dataset.id || null
+    target.dataset.vscodeContext = context(id, target.dataset.field)
+    setTimeout(() => delete target.dataset.vscodeContext)
   }
-  async function move(event: KeyboardEvent, row: number, column: number) {
-    const key = event.key
-    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return
+  /** Changes what the panel shows, here at once, and in the session, which holds it. */
+  function change(next: Partial<TableState>) {
+    table = changedTable(summary, table, next)
+    bridge.send({ kind: 'table', change: next })
+  }
+  const cellAt = (row: number, column: number) =>
+    scroll?.querySelector<HTMLButtonElement>(`[data-row="${row}"][data-column="${column}"]`)
+  /** Focus the cell at `row`, `column`, which selects its element as a click does, so the Network
+   *  follows. */
+  function focusCell(row: number, column: number) {
+    cellAt(row, column)?.focus()
+    select(page.rows[row - page.offset]?.id ?? null, fields[column])
+  }
+  /** Moves from the cell at `row`, `column` as `event`'s key says: a cell, a screen of rows, or, with
+   *  Ctrl, to the first or last cell. A cell on a page not yet read is focused once it is. */
+  function move(event: KeyboardEvent, row: number, column: number) {
+    const { key } = event
+    if (!MOVES.includes(key)) return
     event.preventDefault()
-    const nextRow = Math.max(
-      0,
-      Math.min(total - 1, row + (key === 'ArrowDown' ? 1 : key === 'ArrowUp' ? -1 : 0)),
+    const ends = (event.ctrlKey || event.metaKey) && (key === 'Home' || key === 'End')
+    const screen = Math.max(1, Math.floor(scroll.clientHeight / height) - 1)
+    const step = { ArrowDown: 1, ArrowUp: -1, PageDown: screen, PageUp: -screen }[key] ?? 0
+    const within = (n: number, last: number) => Math.max(0, Math.min(last, n))
+    const nextRow = within(ends ? (key === 'Home' ? 0 : total - 1) : row + step, total - 1)
+    const nextColumn = within(
+      key === 'Home'
+        ? 0
+        : key === 'End'
+          ? fields.length - 1
+          : column + (key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0),
+      fields.length - 1,
     )
-    const nextColumn = Math.max(
-      0,
-      Math.min(
-        fields.length - 1,
-        key === 'Home'
-          ? 0
-          : key === 'End'
-            ? fields.length - 1
-            : column + (key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0),
-      ),
-    )
-    if (nextRow < offset || nextRow >= offset + rows.length) {
+    if (nextRow < page.offset || nextRow >= page.offset + page.rows.length) {
+      pending = { row: nextRow, column: nextColumn }
       offset = Math.max(0, nextRow - 10)
       scroll.scrollTop = nextRow * height
-      await load()
+      return
     }
-    await tick()
-    scroll
-      .querySelector<HTMLButtonElement>(
-        '[data-row="' + nextRow + '"][data-column="' + nextColumn + '"]',
-      )
-      ?.focus()
-    // The keys move the selection as a click does, so the Network follows.
-    select(rows[nextRow - offset]?.id ?? null, fields[nextColumn])
+    focusCell(nextRow, nextColumn)
   }
   async function load() {
     controller?.abort()
-    if (!view.summary || view.stale) return
+    if (!summary || stale) return
     const request = (controller = new AbortController())
     const current = ++generation
+    const at = offset
+    // The rows are of the revision on show now, whatever the panel shows by the time they come.
+    const revision = revisionOf(summary)
     loading = true
     try {
       // The filter matches a row's name, else its identity.
       const named = allFields.includes('name') ? 'name' : identity
-      const where: NonNullable<RowsQuery['where']>[number][] = [
+      const where: NonNullable<Query.Rows['where']>[number][] = [
         ...(filter && named
           ? [{ field: named, operator: 'contains', value: filter } as const]
           : []),
         ...(equal ? [{ field: equal.field, operator: 'equal', value: equal.value } as const] : []),
       ]
-      const query: RowsQuery = {
+      const query: Query.Rows = {
         kind: 'rows',
         from: type,
         select: fields,
-        offset,
+        offset: at,
         limit: 100,
         count: true,
         ids: true,
         ...(order ? { orderBy: [order] } : {}),
         ...(where.length ? { where } : {}),
       }
-      const blocks = await bridge.request('query', $state.snapshot(query), request.signal)
-      if (generation !== current) return
-      const references = await referenceNames(blocks, (query) =>
-        bridge.request('query', query, request.signal),
+      const blocks = await bridge.request(
+        'query',
+        { revision, query: $state.snapshot(query) },
+        request.signal,
       )
       if (generation !== current) return
-      rows = rowsOf(blocks, references)
-      total = blocks[0]?.total ?? rows.length
+      const references = await referenceNames(blocks, (query) =>
+        bridge.request('query', { revision, query }, request.signal),
+      )
+      if (generation !== current) return
+      page = { offset: at, rows: rowsOf(blocks, references) }
+      total = blocks[0]?.total ?? page.rows.length
       // The view's title says how many rows the filters leave.
-      persist()
+      bridge.send({ kind: 'rows', shown: total })
       await tick()
+      if (pending && pending.row >= at && pending.row < at + page.rows.length) {
+        focusCell(pending.row, pending.column)
+        pending = undefined
+      }
       scrolled()
     } catch (reason) {
       if (generation === current && !request.signal.aborted) bridge.report(reason)
@@ -176,8 +236,8 @@
   }
   $effect(() => {
     generation++
-    void view.summary?.version
-    void view.stale
+    void version
+    void stale
     void type
     void offset
     void fields
@@ -192,44 +252,42 @@
       controller?.abort()
     }
   })
-  function changeType(next: string) {
-    type = next
-    // The rows go with their type; its own load in a moment.
-    rows = []
-    offset = 0
-    filter = ''
-    equal = undefined
-    order = undefined
-    fields =
-      columns[next]?.filter((field) => allFields.includes(field)) ?? allFields.slice(0, COLUMNS)
-    persist()
-    bridge.save({ type })
-    if (scroll) scroll.scrollTop = 0
-  }
-  /** Order the rows by `field`: as `direction` says, else the other way from now. */
-  function sort(field: string, direction?: 'ascending' | 'descending') {
-    order = {
-      field,
-      direction:
-        direction ??
-        (order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending'),
+  // Another type, filter or order reads its rows from the top; another type's rows go at once, and
+  // its own load in a moment.
+  $effect.pre(() => {
+    const key = JSON.stringify([type, filter, equal, order])
+    if (viewed?.key === key) return
+    if (viewed) {
+      if (viewed.type !== type) page = { offset: 0, rows: [] }
+      offset = 0
+      if (scroll) scroll.scrollTop = 0
     }
-    offset = 0
-    scroll.scrollTop = 0
+    viewed = { type, key }
+  })
+  /** Order the rows by `field`, the other way from now. */
+  function sort(field: string) {
+    change({
+      order: {
+        field,
+        direction:
+          order?.field === field && order.direction === 'ascending' ? 'descending' : 'ascending',
+      },
+    })
   }
   function select(id: string | null, field?: string) {
     if (!id) return
     own = id
     bridge.send({ kind: 'select', element: { id, ...(field ? { field } : {}) } })
   }
-  function edit(id: string | null, field: string, value: unknown) {
-    if (!id || view.stale || !view.writable || !view.summary?.editable[type]?.includes(field))
-      return
-    const spec = view.summary?.schema.types[type]?.fields[field]
+  function edit(id: string | null, field: string, value: unknown, row: number, column: number) {
+    if (!id || stale || !view.writable || !summary?.editable[type]?.includes(field)) return
+    const spec = summary.schema.types[type]?.fields[field]
     editing = {
       id,
       field,
-      version: view.summary!.version,
+      row,
+      column,
+      revision: revisionOf(summary),
       text:
         spec?.type === 'text'
           ? String(value ?? '')
@@ -246,10 +304,10 @@
   }
   async function commit() {
     const edit = editing
-    if (!edit || !view.summary) return
+    if (!edit || !summary) return
     editing = undefined
     try {
-      const spec = view.summary.schema.types[type]!.fields[edit.field]!
+      const spec = summary.schema.types[type]!.fields[edit.field]!
       const value: Value =
         spec.type === 'text' || isReference(spec)
           ? isReference(spec) && edit.text === 'null'
@@ -257,13 +315,23 @@
             : edit.text
           : JSON.parse(edit.text)
       await bridge.request('transact', {
-        version: edit.version,
+        // The edit's state is reactive; a message carries plain values.
+        revision: $state.snapshot(edit.revision),
         mutations: [{ kind: 'set', id: edit.id, field: edit.field, value }],
         label: 'Edit ' + leaf(edit.field),
       })
     } catch (reason) {
       bridge.report(reason)
     }
+  }
+  /** Ends the edit from its keys, keeping or dropping it, and goes back to its cell. */
+  async function close(keep: boolean) {
+    const edit = editing
+    if (!edit) return
+    if (keep) void commit()
+    else editing = undefined
+    await tick()
+    cellAt(edit.row, edit.column)?.focus()
   }
   /** Scroll the selected row into view once it is drawn; whether it was. */
   function scrolled(): boolean {
@@ -277,26 +345,30 @@
    *  once the page holding it loads. */
   async function reveal(id: string) {
     const next = elementType(id)
+    const of = view.uri
     revealing = id
-    if (next !== type) changeType(next)
+    if (next !== type) change({ type: next })
     await tick()
     if (scrolled()) return
     // A row the filters leave out shows once they go.
-    filter = ''
-    equal = undefined
-    order = undefined
+    if (filter || equal || order) change({ filter: undefined, equal: undefined, order: undefined })
     try {
+      if (!summary) return
       const blocks = await bridge.request('query', {
-        kind: 'rows',
-        from: next,
-        select: [],
-        ids: true,
-        rows: { kind: 'ids', ids: [id] },
-        limit: 1,
+        revision: revisionOf(summary),
+        query: {
+          kind: 'rows',
+          from: next,
+          select: [],
+          ids: true,
+          rows: { kind: 'ids', ids: [id] },
+          limit: 1,
+        },
       })
-      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn.
+      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn:
+      // while the panel still shows that case, and that element is still the one selected.
       const row = rowsOf(blocks)[0]
-      if (row && view.selection?.id === id) offset = Math.max(0, row.row - 10)
+      if (row && view.uri === of && view.selection?.id === id) offset = Math.max(0, row.row - 10)
     } catch (reason) {
       bridge.report(reason)
     }
@@ -304,70 +376,36 @@
   onMount(() => {
     const stop = bridge.on((message) => {
       if (message.kind === 'state') {
-        const first = !view.summary
-        const before = view.selection?.id
+        const other = message.state.uri !== view.uri
+        // The selection the panel had in sight: none of a case it has yet to read.
+        const before = other || !view.summary ? undefined : view.selection?.id
         view = merged(view, message.state)
-        appearance(view.settings)
-        if (first && view.summary) {
-          // Open on the selection's type, else where the panel was left.
-          const saved = view.table
-          const wanted = view.selection ? elementType(view.selection.id) : saved?.type
-          columns = saved?.columns ?? {}
-          const counts = view.summary.counts
-          changeType(
-            wanted && counts[wanted]
-              ? wanted
-              : counts[type]
-                ? type
-                : (Object.keys(counts).find((each) => counts[each]! > 0) ?? 'Bus'),
-          )
-          if (type === saved?.type) {
-            filter = saved.filter ?? ''
-            equal = saved.equal
-          }
-          persist()
+        // Another case's rows go with it; its own load once it reads.
+        if (other) {
+          controller?.abort()
+          page = { offset: 0, rows: [] }
+          total = 0
         }
-        // A selection made in another view is brought into sight; one made here already is.
+        // What the session says the panel shows, as it changes there: by a command, or as the
+        // session took a change made here.
+        if (other || view.table !== told) {
+          told = view.table
+          table = view.table ?? {}
+        }
+        // A selection made in another view is brought into sight, its type shown; one made here
+        // already is.
         const selected = view.selection?.id
         if (selected && selected !== before && selected !== own && view.summary && !view.stale)
           void reveal(selected)
         if (selected !== own) own = undefined
-      } else if (message.kind === 'action') {
-        const value = message.value as Record<string, unknown> | undefined
-        if (message.command === 'columns' && Array.isArray(message.value))
-          show(message.value.filter((field): field is string => typeof field === 'string'))
-        else if (message.command === 'resetColumns') {
-          delete columns[type]
-          fields = allFields.slice(0, COLUMNS)
-        } else if (message.command === 'hideColumn')
-          show(fields.filter((field) => field !== message.value))
-        else if (message.command === 'sort') {
-          if (typeof value?.field === 'string')
-            sort(value.field, value.direction === 'descending' ? 'descending' : 'ascending')
-          else {
-            order = undefined
-            offset = 0
-          }
-        } else if (message.command === 'type' && typeof message.value === 'string') {
-          if (message.value !== type) changeType(message.value)
-        } else if (message.command === 'filter' || message.command === 'filterText') {
-          if (message.command === 'filter')
-            equal =
-              value && typeof value.field === 'string' ? (value as TableState['equal']) : undefined
-          else filter = typeof message.value === 'string' ? message.value : ''
-          offset = 0
-          if (scroll) scroll.scrollTop = 0
-        } else if (message.command === 'clearFilters') {
-          filter = ''
-          equal = undefined
-          offset = 0
-        }
-        persist()
       }
     })
-    bridge.send({ kind: 'ready' })
+    // Before VS Code, and anything else, reads what a right-click carries.
+    window.addEventListener('contextmenu', contextmenu, true)
+    bridge.ready()
     return () => {
       stop()
+      window.removeEventListener('contextmenu', contextmenu, true)
       controller?.abort()
     }
   })
@@ -391,7 +429,7 @@
             <th
               scope="col"
               aria-sort={order?.field === field ? order.direction : 'none'}
-              data-vscode-context={context(null, field)}
+              data-field={field}
             >
               <button onclick={() => sort(field)} title={field}>
                 {leaf(field)}{#if unit}<span class="case__unit">
@@ -411,37 +449,36 @@
         </tr>
       </thead>
       <tbody>
-        {#if offset > 0}<tr aria-hidden="true">
+        {#if page.offset > 0}<tr aria-hidden="true">
             <td
               colspan={fields.length + 2}
-              style:height={offset * height + 'px'}
+              style:height={page.offset * height + 'px'}
               class="spacer"
             ></td>
           </tr>{/if}
-        {#each rows as row, rowIndex (row.id)}
+        {#each page.rows as row, rowIndex (row.id)}
           <tr
             class:selected={view.selection?.id === row.id}
-            aria-rowindex={offset + rowIndex + 2}
-            data-vscode-context={context(row.id)}
+            aria-rowindex={page.offset + rowIndex + 2}
+            data-id={row.id ?? ''}
           >
             <th scope="row">
-              <button onclick={() => select(row.id)} title={row.id ?? ''}>
+              <button tabindex="-1" onclick={() => select(row.id)} title={row.id ?? ''}>
                 {row.id ? native(row.id) : ''}
               </button>
             </th>
             {#each fields as field, columnIndex (field)}
-              <td
-                data-vscode-context={context(row.id, field)}
-                class:numeric={typeof row.values[field] === 'number'}
-              >
+              <td data-field={field} class:numeric={typeof row.values[field] === 'number'}>
                 {#if editing?.id === row.id && editing.field === field}
                   <input
                     use:focus
                     aria-label={'Edit ' + leaf(field)}
                     bind:value={editing.text}
                     onkeydown={(event) => {
-                      if (event.key === 'Enter') void commit()
-                      if (event.key === 'Escape') editing = undefined
+                      if (event.key === 'Enter' || event.key === 'Escape') {
+                        event.preventDefault()
+                        void close(event.key === 'Enter')
+                      }
                     }}
                     onblur={() => void commit()}
                     placeholder={isReference(definitions[field]) ? 'Type/ID' : ''}
@@ -449,19 +486,19 @@
                 {:else}
                   <button
                     class="cell"
-                    data-row={offset + rowIndex}
+                    data-row={page.offset + rowIndex}
                     data-column={columnIndex}
-                    tabindex={(view.selection?.id === row.id && view.selection?.field === field) ||
-                    (!view.selection && rowIndex === 0 && columnIndex === 0)
+                    tabindex={page.offset + rowIndex === anchor.row && columnIndex === anchor.column
                       ? 0
                       : -1}
                     onclick={() => select(row.id, field)}
-                    ondblclick={() => edit(row.id, field, row.values[field])}
+                    ondblclick={() =>
+                      edit(row.id, field, row.values[field], page.offset + rowIndex, columnIndex)}
                     onkeydown={(event) => {
                       if (event.key === 'Enter' || event.key === 'F2') {
                         event.preventDefault()
-                        edit(row.id, field, row.values[field])
-                      } else void move(event, offset + rowIndex, columnIndex)
+                        edit(row.id, field, row.values[field], page.offset + rowIndex, columnIndex)
+                      } else move(event, page.offset + rowIndex, columnIndex)
                     }}
                     title={(typeof row.values[field] === 'number'
                       ? String(row.values[field]) + '. '
@@ -477,18 +514,18 @@
             <td class="case__fill" aria-hidden="true"></td>
           </tr>
         {/each}
-        {#if total > offset + rows.length}<tr aria-hidden="true">
+        {#if total > page.offset + page.rows.length}<tr aria-hidden="true">
             <td
               colspan={fields.length + 2}
-              style:height={(total - offset - rows.length) * height + 'px'}
+              style:height={(total - page.offset - page.rows.length) * height + 'px'}
               class="spacer"
             ></td>
           </tr>{/if}
       </tbody>
     </table>
-    {#if (!view.summary && !view.error) || (view.summary && !total && !loading)}
+    {#if view.uri && ((!summary && !view.error) || (summary && !total && !loading))}
       <div class="c-empty">
-        <p class="c-empty__text">{view.summary ? 'No matching elements.' : 'Loading case…'}</p>
+        <p class="c-empty__text">{summary ? 'No matching elements.' : 'Loading case…'}</p>
       </div>
     {/if}
   </div>

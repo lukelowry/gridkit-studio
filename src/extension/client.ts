@@ -8,6 +8,7 @@ import type {
   CaseApi,
   FromWorker,
   ResultsApi,
+  ResultsOptions,
   RuntimeProcess,
   WorkerEvent,
 } from '../shared/messages.js'
@@ -29,9 +30,10 @@ export async function cancellable<T>(
 }
 
 /** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
- *  One listener's failure leaves the others theirs. */
+ *  One listener's failure leaves the others theirs, and is said as every failure is, by `failed`. */
 class Emitter<T> {
   readonly #listeners = new Set<(value: T) => void>()
+  constructor(private readonly failed: (error: unknown) => void) {}
   readonly event = (listener: (value: T) => void) => {
     this.#listeners.add(listener)
     return { dispose: () => void this.#listeners.delete(listener) }
@@ -41,9 +43,7 @@ class Emitter<T> {
       try {
         listener(value)
       } catch (error) {
-        queueMicrotask(() => {
-          throw error
-        })
+        this.failed(error)
       }
   }
   dispose(): void {
@@ -58,25 +58,44 @@ interface Owner {
   release(): Promise<void>
 }
 
+/** A worker that stops this many times within `CRASH_MS` is unsteady: what it held is read again
+ *  only once the user asks, so what may stop it does not stop it over and over. */
+export const CRASHES = 3
+const CRASH_MS = 60_000
+
 /** A worker of the extension's, started when first asked and again after it stops. */
 class Thread<A extends Api<A>> {
   /** Hears why the worker stopped, each time it does. */
-  readonly failure = new Emitter<Error>()
+  readonly failure: Emitter<Error>
   #worker?: Worker
   #caller?: Caller<A>
   /** The teardown of one that stopped: calls wait for it before another starts. */
   #teardown?: Promise<void>
   #closed = false
+  /** When the worker last stopped. */
+  #crashes: number[] = []
 
   constructor(
     private readonly name: string,
     private readonly script: string,
     private readonly owner: Owner,
-  ) {}
+    /** Says a failure of what hears of the worker. */
+    failed: (error: unknown) => void,
+    /** What each worker started is started with. */
+    private readonly data?: () => unknown,
+  ) {
+    this.failure = new Emitter(failed)
+  }
 
   /** Whether the worker runs now. */
   get running(): boolean {
     return this.#worker !== undefined
+  }
+
+  /** Whether it stopped fewer than CRASHES times in the last CRASH_MS, so what it held may be read
+   *  again at once. */
+  get steady(): boolean {
+    return this.#crashes.length < CRASHES
   }
 
   /** Calls `method` of the worker, starting it if it is not running. */
@@ -93,13 +112,15 @@ class Thread<A extends Api<A>> {
 
   #start(): Caller<A> {
     if (this.#caller) return this.#caller
-    const worker = new Worker(this.script)
+    const worker = new Worker(this.script, { workerData: this.data?.() })
     const caller = new Caller<A>((message) => worker.postMessage(message))
     this.#worker = worker
     this.#caller = caller
     const stopped = (error: Error) => {
       if (this.#worker !== worker) return
       this.#worker = this.#caller = undefined
+      const now = Date.now()
+      this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
       // Set before anyone hears, so a call the failure prompts waits for the teardown.
       this.#teardown = this.owner
         .release()
@@ -143,20 +164,23 @@ class Thread<A extends Api<A>> {
 }
 
 /** The extension's two workers: the case worker, which reads open cases as they are edited, and the
- *  results worker, which runs GridKit and reads results files. Their bundles are in `folder`. */
+ *  results worker, which runs GridKit and reads results files, started with `results`. Their
+ *  bundles are in `folder`. What fails as it hears of them is said by `failed`. */
 export class Client {
-  readonly event = new Emitter<Exclude<WorkerEvent, { kind: 'process' }>>()
-  /** The GridKit process the results worker runs for each case, terminated here if it dies. */
+  readonly event: Emitter<Exclude<WorkerEvent, { kind: 'process' }>>
+  /** The GridKit process of each run the results worker has under way, by the run's id, ended here
+   *  should the worker stop before it ends them. */
   readonly #owned = new Map<string, RuntimeProcess>()
   readonly cases: Thread<CaseApi>
   readonly results: Thread<ResultsApi>
 
-  constructor(folder: string) {
+  constructor(folder: string, results: () => ResultsOptions, failed: (error: unknown) => void) {
+    this.event = new Emitter(failed)
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
         if (event.kind !== 'process') return this.event.fire(event)
-        if (event.process) this.#owned.set(event.uri, event.process)
-        else this.#owned.delete(event.uri)
+        if (event.process) this.#owned.set(event.run, event.process)
+        else this.#owned.delete(event.run)
       },
       release,
     })
@@ -164,11 +188,14 @@ export class Client {
       'case',
       join(folder, 'cases.cjs'),
       owner(async () => {}),
+      failed,
     )
     this.results = new Thread(
       'results',
       join(folder, 'results.cjs'),
       owner(() => this.#terminate()),
+      failed,
+      results,
     )
   }
 
@@ -188,9 +215,8 @@ export class Client {
     await Promise.all(owned.map(terminateRuntime))
   }
 
+  /** Stops both workers, and every GridKit process the results worker started. */
   async dispose() {
-    // A run under way ends as interrupted; nothing is started to be told to.
-    if (this.results.running) await this.results.call('shutdown', {}).catch(() => {})
     await Promise.all([this.cases.dispose(), this.results.dispose()])
     await this.#terminate()
     this.event.dispose()

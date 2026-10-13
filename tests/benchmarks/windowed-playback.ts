@@ -19,7 +19,7 @@ export async function run() {
     assert.ok(await bench.gridkit(), 'Installed GridKit is required')
     const { uri, network } = await bench.openCase('cases/ACTIVSg10k.case.json')
     const key = uri.toString()
-    const session = bench.studio.all.get(key)!
+    const session = bench.studio.get(key)!
     const source = JSON.parse(await readFile(uri.fsPath, 'utf8'))
     const id = `Bus/${source.buses[0].number}`
     await bench.record('Bus', ['Vm', 'Va'], uri)
@@ -49,13 +49,12 @@ export async function run() {
       'The two mapped fields must exceed what the Network holds at once',
     )
     session.transport.pause()
-    session.plots = [
+    session.setPlots([
       { from: 'Bus', field: 'Vm' },
       { from: 'Bus', field: 'Vm', id },
-    ]
-    bench.studio.bind(key, VM, ['vertexColor'])
-    bench.studio.bind(key, { type: 'Bus', field: 'Va' }, ['vertexHeight'])
-    bench.studio.changed.fire(key)
+    ])
+    session.bind(VM, ['vertexColor'])
+    session.bind({ type: 'Bus', field: 'Va' }, ['vertexHeight'])
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
@@ -208,7 +207,7 @@ export async function run() {
       .nth(1)
       .click({ position: { x: point[0], y: point[1] } })
     await until(() => session.selection?.id === id, 'mouse selects the rendered trace')
-    bench.studio.select(key)
+    bench.studio.get(key)!.select()
     session.transport.play()
     await pause(150)
     await monitor
@@ -227,7 +226,7 @@ export async function run() {
       windows.every((window) => window[0] === 0 && window[1] === 10),
       'Configured interval stays fixed',
     )
-    assert.deepEqual(bench.studio.errors, [])
+    assert.deepEqual(bench.studio.reporter.errors, [])
     await writeFile(
       join(bench.output, 'tests', 'windowed-playback.json'),
       JSON.stringify(
@@ -241,7 +240,7 @@ export async function run() {
           hits,
           densePick,
           windows,
-          errors: bench.studio.errors,
+          errors: bench.studio.reporter.errors,
         },
         null,
         2,
@@ -251,7 +250,7 @@ export async function run() {
       `10k replay passed: ${results.frames} frames, delayed samples, rapid seeks, a scrub, real trace click, fixed intervals; no errors.`,
     )
   } catch (error) {
-    console.error('Studio errors:', JSON.stringify(bench.studio.errors))
+    console.error('Studio errors:', JSON.stringify(bench.studio.reporter.errors))
     const frame = await bench.view('monitor').catch(() => undefined)
     if (frame) console.error('Monitor state:', await frame.evaluate('document.body.innerText'))
     await bench.failed('windowed-playback')

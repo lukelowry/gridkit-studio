@@ -2,13 +2,15 @@
 
 import {
   bitAt,
+  type Block,
   type Column,
   type Index,
   numberAt,
-  type RowsBlock,
-  type RowsQuery,
+  type Query,
   textAt,
 } from '@latkit/model'
+
+import type { Summary, TableState } from './messages.js'
 
 /** The most rows one rows query may return. */
 const PAGE = 100
@@ -51,7 +53,7 @@ function cell(column: Column, row: number, references?: ReadonlyMap<string, stri
 }
 
 export function rowsOf(
-  blocks: readonly RowsBlock[],
+  blocks: readonly Block.Rows[],
   references?: ReadonlyMap<string, string>,
 ): Row[] {
   return blocks.flatMap((block) => {
@@ -67,6 +69,63 @@ export function rowsOf(
       ),
     }))
   })
+}
+
+/** How many columns the Case panel shows of a type until the user picks them. */
+export const COLUMNS = 12
+
+/** The fields the Case panel can show of `type`: its static ones besides its identity, which heads
+ *  each row. Its sampled ones belong to the Monitor. */
+export function tableFields(
+  { schema, identities }: Pick<Summary, 'schema' | 'identities'>,
+  type: string,
+): string[] {
+  const fields = schema.types[type]?.fields ?? {}
+  return Object.keys(fields).filter(
+    (field) => !fields[field]!.sampled && field !== identities[type],
+  )
+}
+
+/** The type the Case panel shows of a case: the one `table` names while the case has elements of
+ *  it, else the first it has any of. */
+export function shownType(
+  { counts }: Pick<Summary, 'counts'>,
+  table: TableState | undefined,
+): string | undefined {
+  const named = table?.type
+  return named && counts[named] ? named : Object.keys(counts).find((type) => counts[type]! > 0)
+}
+
+/** The columns the Case panel shows of `type`: those `table` chose for it that it can show, else
+ *  its first COLUMNS. */
+export function shownColumns(
+  summary: Pick<Summary, 'schema' | 'identities'>,
+  table: TableState | undefined,
+  type: string,
+): string[] {
+  const fields = tableFields(summary, type)
+  return (
+    table?.columns?.[type]?.filter((field) => fields.includes(field)) ?? fields.slice(0, COLUMNS)
+  )
+}
+
+/** `table` as `change` leaves it: another type than the one shown starts unfiltered, in file
+ *  order. A part changed to nothing is left out, so two tables alike say so alike. */
+export function changedTable(
+  summary: Pick<Summary, 'counts'> | undefined,
+  table: TableState,
+  change: Partial<TableState>,
+): TableState {
+  const shown = summary ? shownType(summary, table) : table.type
+  const other = change.type !== undefined && change.type !== shown
+  const next: Record<string, unknown> = {
+    ...table,
+    ...(other && { filter: undefined, equal: undefined, order: undefined }),
+    ...change,
+  }
+  for (const key of Object.keys(next))
+    if (next[key] === undefined || next[key] === '') delete next[key]
+  return next as TableState
 }
 
 /** An element's id without its type: `7` of `Bus/7`. */
@@ -94,8 +153,8 @@ export function display(value: unknown, { native: short = false } = {}): string 
 /** The ids of the rows the reference columns of `blocks` point at, for `rowsOf`; physical row
  *  numbers are never shown. */
 export async function referenceNames(
-  blocks: readonly RowsBlock[],
-  query: (query: RowsQuery) => Promise<RowsBlock[]>,
+  blocks: readonly Block.Rows[],
+  query: (query: Query.Rows) => Promise<Block.Rows[]>,
 ): Promise<Map<string, string>> {
   const groups = new Map<string, { index: Index; rows: Set<number> }>()
   const visit = (column: Column, row: number) => {

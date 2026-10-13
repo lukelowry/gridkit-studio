@@ -1,46 +1,53 @@
-import type { Positions } from '@latkit/gpu'
-import { failure, type FieldValues } from '@latkit/model'
-import { findNodeAtLocation, parseTree } from 'jsonc-parser'
+import type { Layout } from '@latkit/gpu'
+import { failure, type FieldInput } from '@latkit/model'
+import { findNodeAtLocation } from 'jsonc-parser'
 
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import { diagramOf } from '../shared/schema.js'
 import type { Case } from './case.js'
-import { apply, recordOf } from './edits.js'
+import { apply, recordText, treeOf } from './edits.js'
 import { planTransaction } from './plan.js'
-
-const decoder = new TextDecoder()
-const MAX_MUTATIONS = 10000
+import { Turns } from './turns.js'
 
 /** The source edits that make `mutations`, by row ID; only the records they touch are read. */
 export function transaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
-  if (!Array.isArray(mutations) || !mutations.length || mutations.length > MAX_MUTATIONS)
-    throw failure('resource-limit', 'A transaction must contain 1–10,000 changes.')
+  if (!Array.isArray(mutations) || !mutations.length)
+    throw failure('invalid-input', 'A transaction needs a change.')
   return planTransaction(kase, mutations)
 }
-const presentations = new WeakMap<Case, Record<string, Positions>>()
+const presentations = new WeakMap<Case, Record<string, Layout.Positions>>()
+/** What a record that places a diagram block writes. */
+const DIAGRAM = Buffer.from('"diagram"')
 
-/** Each diagram block's position, from `extension.diagram.position` in its own record. */
-export function presentation(kase: Case): Record<string, Positions> {
+/** Each diagram block's position, from `extension.diagram.position` in its own record. Only the
+ *  records that write `"diagram"` are read, found by one search of the file's bytes. */
+export async function presentation(
+  kase: Case,
+  signal: AbortSignal,
+): Promise<Record<string, Layout.Positions>> {
   const cached = presentations.get(kase)
   if (cached) return cached
-  const result: Record<string, Positions> = {}
-  if (!decoder.decode(kase.file).includes('"diagram"')) {
-    presentations.set(kase, result)
-    return result
-  }
+  const work = new Turns(signal)
+  const result: Record<string, Layout.Positions> = {}
+  const file = Buffer.from(kase.file.buffer, kase.file.byteOffset, kase.file.byteLength)
+  const found: number[] = []
+  for (let at = file.indexOf(DIAGRAM); at >= 0; at = file.indexOf(DIAGRAM, at + 1)) found.push(at)
   for (const type of diagramOf(kase.schema).vertices) {
     const table = kase.tables.get(type)
-    if (!table?.records.length) continue
+    const array = table?.shape.array ? kase.arrays[table.shape.array] : undefined
+    if (!table || !array) continue
     const rows: number[] = []
     const xs: number[] = []
     const ys: number[] = []
+    let next = 0
     for (let row = 0; row < table.records.length; row++) {
-      const record = recordOf(kase, kase.id(table, row))
-      const position = findNodeAtLocation(parseTree(record.text)!, [
-        'extension',
-        'diagram',
-        'position',
-      ])
+      const record = table.records[row]!
+      // A table's records are in file order, as is what was found.
+      while (next < found.length && found[next]! < array.starts[record]!) next++
+      if (!(next < found.length && found[next]! < array.ends[record]!)) continue
+      await work.step()
+      const text = recordText(kase, table, row)
+      const position = findNodeAtLocation(treeOf(text), ['extension', 'diagram', 'position'])
       if (
         position?.type === 'array' &&
         position.children?.length === 2 &&
@@ -53,7 +60,7 @@ export function presentation(kase: Case): Record<string, Positions> {
     }
     if (rows.length) {
       const placed = { kind: 'indices', values: Uint32Array.from(rows) } as const
-      const axis = (values: number[]): FieldValues => ({
+      const axis = (values: number[]): FieldInput.Values => ({
         index: table.index,
         rows: placed,
         values: {
@@ -74,4 +81,24 @@ export function presentation(kase: Case): Record<string, Positions> {
 export function applyChanges(text: string, changes: readonly (readonly SourceEdit[])[]): string {
   for (const group of changes) text = apply(text, group)
   return text
+}
+
+/** How much of a text `length` UTF-16 units long `changes` leave as it was, each group of them made
+ *  against the text the one before made: its first `prefix` units, and its last `suffix`. Known from
+ *  the changes alone, without comparing a text to another. */
+export function unchangedBy(
+  length: number,
+  changes: readonly (readonly SourceEdit[])[],
+): { readonly prefix: number; readonly suffix: number } {
+  let prefix = length
+  let suffix = length
+  let current = length
+  for (const group of changes) {
+    for (const edit of group) {
+      prefix = Math.min(prefix, edit.offset)
+      suffix = Math.min(suffix, current - edit.offset - edit.length)
+    }
+    current += group.reduce((grown, edit) => grown + edit.text.length - edit.length, 0)
+  }
+  return { prefix, suffix }
 }

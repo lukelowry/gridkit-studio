@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -50,6 +50,7 @@
     "settings": "node scripts/settings.mjs",
     "settings:check": "node scripts/settings.mjs --check",
     "test": "vitest run --project unit",
+    "coverage": "vitest run --project unit --coverage --testTimeout=60000",
     "test:simulation": "vitest run --project simulation",
     "test:playback": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/playback.ts",
     "test:windowed": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/windowed-playback.ts",
@@ -61,15 +62,16 @@
     "bench:compare": "node tests/benchmarks/compare.mjs output/bench/base.json output/bench/head.json",
     "screenshots": "pnpm build && node tests/vscode/launch.mjs tests/vscode/screenshots.ts",
     "package": "pnpm exec vsce package --no-dependencies --out dist/",
-    "vscode:prepublish": "pnpm build"
+    "vscode:prepublish": "node esbuild.mjs"
   },
   "dependencies": {
-    "@latkit/diagram": "0.11.0",
-    "@latkit/gpu": "0.18.0",
-    "@latkit/model": "4.1.0",
-    "@latkit/monitor": "0.17.0",
-    "@latkit/network": "0.21.0",
-    "@latkit/video": "0.6.4",
+    "@latkit/diagram": "0.12.0",
+    "@latkit/geography": "0.1.0",
+    "@latkit/gpu": "0.19.0",
+    "@latkit/model": "4.2.0",
+    "@latkit/monitor": "0.18.0",
+    "@latkit/network": "0.22.0",
+    "@latkit/video": "0.7.0",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
@@ -78,6 +80,7 @@
     "@types/pngjs": "6.0.5",
     "@types/vscode": "1.140.0",
     "@typescript-eslint/parser": "^8.71.1",
+    "@vitest/coverage-v8": "5.0.3",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
     "@webgpu/types": "^0.1.74",
@@ -101,9 +104,8 @@
       "esbuild"
     ],
     "patchedDependencies": {
-      "@latkit/network@0.21.0": "patches/@latkit__network@0.21.0.patch",
-      "@latkit/video@0.6.4": "patches/@latkit__video@0.6.4.patch",
-      "@latkit/monitor@0.17.0": "patches/@latkit__monitor@0.17.0.patch"
+      "@latkit/network@0.22.0": "patches/@latkit__network@0.22.0.patch",
+      "@latkit/monitor@0.18.0": "patches/@latkit__monitor@0.18.0.patch"
     }
   },
   "capabilities": {
@@ -113,7 +115,8 @@
       "restrictedConfigurations": [
         "gridkitStudio.gridkitPath",
         "gridkitStudio.gridkitImage",
-        "gridkitStudio.containerCli"
+        "gridkitStudio.containerCli",
+        "gridkitStudio.network.map.tilesUrl"
       ]
     },
     "virtualWorkspaces": {
@@ -137,7 +140,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.reveal",
+        "command": "gridkitStudio.revealInNetwork",
         "title": "Reveal in Network",
         "category": "GridKit Studio",
         "icon": "$(globe)",
@@ -151,7 +154,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.revealDiagram",
+        "command": "gridkitStudio.revealInDiagram",
         "title": "Reveal in Diagram",
         "category": "GridKit Studio",
         "icon": "$(type-hierarchy)",
@@ -165,8 +168,8 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.showInCase",
-        "title": "Reveal in Case",
+        "command": "gridkitStudio.revealInCase",
+        "title": "Reveal in Case Panel",
         "category": "GridKit Studio",
         "icon": "$(table)",
         "enablement": "gridkitStudio.hasCase"
@@ -179,28 +182,21 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.showSource",
+        "command": "gridkitStudio.openSource",
         "title": "Open JSON Source",
         "category": "GridKit Studio",
         "icon": "$(json)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.elementSource",
+        "command": "gridkitStudio.revealInSource",
         "title": "Reveal in Source",
         "category": "GridKit Studio",
         "icon": "$(go-to-file)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.validateCase",
-        "title": "Validate Case",
-        "category": "GridKit Studio",
-        "icon": "$(check)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.followReference",
+        "command": "gridkitStudio.goToReference",
         "title": "Go to Referenced Element",
         "category": "GridKit Studio",
         "icon": "$(references)",
@@ -214,8 +210,8 @@
         "enablement": "gridkitStudio.editable"
       },
       {
-        "command": "gridkitStudio.copyReference",
-        "title": "Copy Identifier",
+        "command": "gridkitStudio.copyId",
+        "title": "Copy ID",
         "category": "GridKit Studio",
         "icon": "$(copy)",
         "enablement": "gridkitStudio.hasCase"
@@ -228,20 +224,21 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.chooseSignals",
-        "title": "Choose Monitored Signals",
+        "command": "gridkitStudio.copyFieldPath",
+        "title": "Copy Field Path",
         "category": "GridKit Studio",
+        "icon": "$(copy)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.selectAllSignals",
+        "command": "gridkitStudio.recordAllSignals",
         "title": "Record All Signals",
         "category": "GridKit Studio",
         "icon": "$(check-all)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.clearSignals",
+        "command": "gridkitStudio.recordNoSignals",
         "title": "Record No Signals",
         "category": "GridKit Studio",
         "icon": "$(clear-all)",
@@ -255,21 +252,14 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
-        "command": "gridkitStudio.runContingencies",
-        "title": "Run Contingency Analysis",
-        "category": "GridKit Studio",
-        "icon": "$(run-all)",
-        "enablement": "isWorkspaceTrusted"
-      },
-      {
-        "command": "gridkitStudio.showResults",
-        "title": "Show Results",
+        "command": "gridkitStudio.showLastResults",
+        "title": "Show Last Results",
         "category": "GridKit Studio",
         "icon": "$(graph-line)"
       },
       {
-        "command": "gridkitStudio.runAgain",
-        "title": "Run Again",
+        "command": "gridkitStudio.runSimulationAgain",
+        "title": "Run Simulation Again",
         "category": "GridKit Studio",
         "icon": "$(debug-rerun)",
         "enablement": "isWorkspaceTrusted && gridkitStudio.fromSolver && !gridkitStudio.running"
@@ -286,18 +276,18 @@
         "title": "Clear Results",
         "category": "GridKit Studio",
         "icon": "$(clear-all)",
+        "enablement": "gridkitStudio.hasResults"
+      },
+      {
+        "command": "gridkitStudio.plotSignal",
+        "title": "Plot Signal…",
+        "category": "GridKit Studio",
+        "icon": "$(graph-line)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.chooseContingency",
-        "title": "Show Contingency…",
-        "category": "GridKit Studio",
-        "icon": "$(list-selection)",
-        "enablement": "gridkitStudio.contingency"
-      },
-      {
-        "command": "gridkitStudio.plot",
-        "title": "Plot Signal…",
+        "command": "gridkitStudio.addPlot",
+        "title": "Add Plot…",
         "category": "GridKit Studio",
         "icon": "$(graph-line)",
         "enablement": "gridkitStudio.hasCase"
@@ -310,7 +300,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.signalElements",
+        "command": "gridkitStudio.choosePlotElement",
         "title": "Choose Plot Element…",
         "category": "GridKit Studio",
         "icon": "$(list-selection)",
@@ -328,30 +318,23 @@
         "title": "Export CSV…",
         "category": "GridKit Studio",
         "icon": "$(export)",
-        "enablement": "gridkitStudio.hasCase"
+        "enablement": "gridkitStudio.hasResults"
       },
       {
         "command": "gridkitStudio.showOutput",
-        "title": "Show Simulation Output",
+        "title": "Show Output",
         "category": "GridKit Studio",
         "icon": "$(terminal)"
       },
       {
-        "command": "gridkitStudio.performance",
-        "title": "Show Performance Diagnostics",
-        "category": "GridKit Studio",
-        "icon": "$(dashboard)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.toggleTimeline",
+        "command": "gridkitStudio.playPause",
         "title": "Play or Pause",
         "category": "GridKit Studio",
         "icon": "$(play)",
         "enablement": "gridkitStudio.hasSamples"
       },
       {
-        "command": "gridkitStudio.seekTime",
+        "command": "gridkitStudio.goToTime",
         "title": "Go to Time…",
         "category": "GridKit Studio",
         "icon": "$(watch)",
@@ -372,21 +355,14 @@
         "enablement": "gridkitStudio.hasSamples"
       },
       {
-        "command": "gridkitStudio.followTime",
+        "command": "gridkitStudio.goToEnd",
         "title": "Go to End",
         "category": "GridKit Studio",
         "icon": "$(arrow-right)",
         "enablement": "gridkitStudio.hasSamples"
       },
       {
-        "command": "gridkitStudio.loopTime",
-        "title": "Repeat Mode…",
-        "category": "GridKit Studio",
-        "icon": "$(sync)",
-        "enablement": "gridkitStudio.hasSamples"
-      },
-      {
-        "command": "gridkitStudio.timeSpeed",
+        "command": "gridkitStudio.playbackSpeed",
         "title": "Playback Speed…",
         "category": "GridKit Studio",
         "icon": "$(dashboard)",
@@ -400,42 +376,35 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.neighborhood",
+        "command": "gridkitStudio.zoomToNeighborhood",
         "title": "Zoom to Neighborhood",
         "category": "GridKit Studio",
         "icon": "$(target)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.orbit",
-        "title": "Toggle Orbit",
-        "category": "GridKit Studio",
-        "icon": "$(sync)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.retryMonitor",
-        "title": "Reload Monitor",
+        "command": "gridkitStudio.reloadView",
+        "title": "Reload View",
         "category": "GridKit Studio",
         "icon": "$(refresh)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.resetMonitorWindow",
-        "title": "Fit Recorded Time",
-        "category": "GridKit Studio",
-        "icon": "$(screen-full)",
-        "enablement": "gridkitStudio.hasSamples"
-      },
-      {
-        "command": "gridkitStudio.monitorWindow",
+        "command": "gridkitStudio.timeWindow",
         "title": "Time Window…",
         "category": "GridKit Studio",
         "icon": "$(watch)",
         "enablement": "gridkitStudio.hasSamples"
       },
       {
-        "command": "gridkitStudio.chooseOverlapping",
+        "command": "gridkitStudio.valueRange",
+        "title": "Value Range…",
+        "category": "GridKit Studio",
+        "icon": "$(symbol-number)",
+        "enablement": "gridkitStudio.hasSamples"
+      },
+      {
+        "command": "gridkitStudio.selectOverlapping",
         "title": "Select Overlapping…",
         "category": "GridKit Studio",
         "icon": "$(list-selection)",
@@ -445,21 +414,14 @@
         "command": "gridkitStudio.chooseType",
         "title": "Choose Type…",
         "category": "GridKit Studio",
-        "icon": "$(filter)",
+        "icon": "$(symbol-class)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
         "command": "gridkitStudio.filterRows",
         "title": "Filter Rows…",
         "category": "GridKit Studio",
-        "icon": "$(search)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.addPlot",
-        "title": "Add Plot…",
-        "category": "GridKit Studio",
-        "icon": "$(graph-line)",
+        "icon": "$(filter)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -498,7 +460,7 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.filterValue",
+        "command": "gridkitStudio.filterToValue",
         "title": "Filter to This Value",
         "category": "GridKit Studio",
         "icon": "$(filter)",
@@ -519,66 +481,24 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.copyFieldPath",
-        "title": "Copy Field Path",
-        "category": "GridKit Studio",
-        "icon": "$(copy)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.fromEndpoint",
-        "title": "Go to Endpoint 1",
-        "category": "GridKit Studio",
-        "icon": "$(arrow-left)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.toEndpoint",
-        "title": "Go to Endpoint 2",
-        "category": "GridKit Studio",
-        "icon": "$(arrow-right)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.projection",
-        "title": "Projection…",
-        "category": "GridKit Studio",
-        "icon": "$(globe)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.bind",
+        "command": "gridkitStudio.mapTo",
         "title": "Map To…",
         "category": "GridKit Studio",
         "icon": "$(symbol-color)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.mapRange",
+        "command": "gridkitStudio.mappingRange",
         "title": "Mapping Range…",
         "category": "GridKit Studio",
         "icon": "$(arrow-both)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.unbind",
+        "command": "gridkitStudio.removeMapping",
         "title": "Remove Mapping",
         "category": "GridKit Studio",
         "icon": "$(close)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.signalRange",
-        "title": "Plot Value Range…",
-        "category": "GridKit Studio",
-        "icon": "$(symbol-number)",
-        "enablement": "gridkitStudio.hasSamples"
-      },
-      {
-        "command": "gridkitStudio.colormap",
-        "title": "Colormap…",
-        "category": "GridKit Studio",
-        "icon": "$(symbol-color)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -603,19 +523,18 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.reviewChanges",
-        "title": "Review Git Changes",
-        "category": "GridKit Studio",
-        "icon": "$(git-compare)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.toggleDiagramEditing",
-        "title": "Toggle Diagram Editing",
+        "command": "gridkitStudio.editDiagram",
+        "title": "Edit Diagram",
         "category": "GridKit Studio",
         "icon": "$(edit)",
-        "enablement": "gridkitStudio.editable",
-        "toggled": "gridkitStudio.diagramEditing"
+        "enablement": "gridkitStudio.editable"
+      },
+      {
+        "command": "gridkitStudio.finishDiagramEditing",
+        "title": "Finish Diagram Editing",
+        "category": "GridKit Studio",
+        "icon": "$(check)",
+        "enablement": "gridkitStudio.hasCase"
       },
       {
         "command": "gridkitStudio.arrangeDiagram",
@@ -625,21 +544,14 @@
         "enablement": "gridkitStudio.editable"
       },
       {
-        "command": "gridkitStudio.reloadView",
-        "title": "Reload Visualization",
-        "category": "GridKit Studio",
-        "icon": "$(refresh)",
-        "enablement": "gridkitStudio.editable"
-      },
-      {
         "command": "gridkitStudio.disconnectPort",
         "title": "Disconnect Port",
         "category": "GridKit Studio",
         "enablement": "gridkitStudio.editable"
       },
       {
-        "command": "gridkitStudio.deleteDiagramElement",
-        "title": "Delete Diagram Element",
+        "command": "gridkitStudio.deleteElement",
+        "title": "Delete Element",
         "category": "GridKit Studio",
         "enablement": "gridkitStudio.editable"
       },
@@ -659,59 +571,54 @@
           "group": "navigation@1"
         },
         {
-          "command": "gridkitStudio.showSource",
+          "command": "gridkitStudio.openSource",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
           "group": "navigation@2"
         },
         {
+          "command": "gridkitStudio.editDiagram",
+          "when": "activeCustomEditorId == gridkitStudio.diagram && !gridkitStudio.diagramEditing",
+          "group": "navigation@3"
+        },
+        {
+          "command": "gridkitStudio.finishDiagramEditing",
+          "when": "activeCustomEditorId == gridkitStudio.diagram && gridkitStudio.diagramEditing",
+          "group": "navigation@3"
+        },
+        {
           "command": "gridkitStudio.openCasePanel",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "view@1"
+          "group": "1_view@1"
         },
         {
           "command": "gridkitStudio.openMonitor",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "view@2"
-        },
-        {
-          "command": "gridkitStudio.colormap",
-          "when": "activeCustomEditorId == gridkitStudio.network",
-          "group": "settings@0"
-        },
-        {
-          "command": "gridkitStudio.networkSettings",
-          "when": "activeCustomEditorId == gridkitStudio.network",
-          "group": "settings@1"
-        },
-        {
-          "command": "gridkitStudio.diagramSettings",
-          "when": "activeCustomEditorId == gridkitStudio.diagram",
-          "group": "settings@1"
-        },
-        {
-          "command": "gridkitStudio.reviewChanges",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "source@1"
-        },
-        {
-          "command": "gridkitStudio.toggleDiagramEditing",
-          "when": "activeCustomEditorId == gridkitStudio.diagram",
-          "group": "navigation@3"
-        },
-        {
-          "command": "gridkitStudio.arrangeDiagram",
-          "when": "activeCustomEditorId == gridkitStudio.diagram",
-          "group": "layout@1"
-        },
-        {
-          "command": "gridkitStudio.reloadView",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "layout@1"
+          "group": "1_view@2"
         },
         {
           "command": "gridkitStudio.exportVideo",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
-          "group": "view@3"
+          "group": "1_view@3"
+        },
+        {
+          "command": "gridkitStudio.arrangeDiagram",
+          "when": "activeCustomEditorId == gridkitStudio.diagram",
+          "group": "2_layout@1"
+        },
+        {
+          "command": "gridkitStudio.reloadView",
+          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "group": "2_layout@2"
+        },
+        {
+          "command": "gridkitStudio.networkSettings",
+          "when": "activeCustomEditorId == gridkitStudio.network",
+          "group": "4_settings@1"
+        },
+        {
+          "command": "gridkitStudio.diagramSettings",
+          "when": "activeCustomEditorId == gridkitStudio.diagram",
+          "group": "4_settings@1"
         }
       ],
       "explorer/context": [
@@ -721,14 +628,9 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.runContingencies",
+          "command": "gridkitStudio.showLastResults",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@1"
-        },
-        {
-          "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@2"
         },
         {
           "command": "gridkitStudio.openNetwork",
@@ -753,14 +655,9 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.runContingencies",
+          "command": "gridkitStudio.showLastResults",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@1"
-        },
-        {
-          "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@2"
         },
         {
           "command": "gridkitStudio.openNetwork",
@@ -785,14 +682,9 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.runContingencies",
+          "command": "gridkitStudio.showLastResults",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@1"
-        },
-        {
-          "command": "gridkitStudio.showResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@2"
         }
       ],
       "view/title": [
@@ -822,17 +714,17 @@
           "group": "1_columns@1"
         },
         {
-          "command": "gridkitStudio.showSource",
+          "command": "gridkitStudio.openSource",
           "when": "view == gridkitStudio.case && gridkitStudio.hasCase",
           "group": "2_source@1"
         },
         {
-          "command": "gridkitStudio.selectAllSignals",
+          "command": "gridkitStudio.recordAllSignals",
           "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
           "group": "navigation@1"
         },
         {
-          "command": "gridkitStudio.clearSignals",
+          "command": "gridkitStudio.recordNoSignals",
           "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
           "group": "navigation@2"
         },
@@ -842,14 +734,9 @@
           "group": "navigation@0"
         },
         {
-          "command": "gridkitStudio.runAgain",
+          "command": "gridkitStudio.runSimulationAgain",
           "when": "view == gridkitStudio.monitor && gridkitStudio.fromSolver && !gridkitStudio.running",
           "group": "navigation@0"
-        },
-        {
-          "command": "gridkitStudio.chooseContingency",
-          "when": "view == gridkitStudio.monitor && gridkitStudio.contingency",
-          "group": "navigation@2"
         },
         {
           "command": "gridkitStudio.addPlot",
@@ -857,110 +744,80 @@
           "group": "navigation@1"
         },
         {
-          "command": "gridkitStudio.monitorWindow",
+          "command": "gridkitStudio.timeWindow",
           "when": "view == gridkitStudio.monitor && gridkitStudio.hasSamples",
-          "group": "time@3"
-        },
-        {
-          "command": "gridkitStudio.resetMonitorWindow",
-          "when": "view == gridkitStudio.monitor",
-          "group": "display@0"
-        },
-        {
-          "command": "gridkitStudio.signalRange",
-          "when": "view == gridkitStudio.monitor",
-          "group": "display@1"
-        },
-        {
-          "command": "gridkitStudio.monitorSettings",
-          "when": "view == gridkitStudio.monitor",
-          "group": "display@2"
+          "group": "1_time@1"
         },
         {
           "command": "gridkitStudio.openResults",
           "when": "view == gridkitStudio.monitor",
-          "group": "results@0"
+          "group": "2_results@1"
         },
         {
           "command": "gridkitStudio.exportCsv",
           "when": "view == gridkitStudio.monitor",
-          "group": "results@1"
-        },
-        {
-          "command": "gridkitStudio.clearResults",
-          "when": "view == gridkitStudio.monitor",
-          "group": "results@2"
-        },
-        {
-          "command": "gridkitStudio.retryMonitor",
-          "when": "view == gridkitStudio.monitor",
-          "group": "results@3"
+          "group": "2_results@2"
         },
         {
           "command": "gridkitStudio.exportVideo",
           "when": "view == gridkitStudio.monitor && gridkitStudio.hasSamples",
-          "group": "results@4"
+          "group": "2_results@3"
+        },
+        {
+          "command": "gridkitStudio.clearResults",
+          "when": "view == gridkitStudio.monitor",
+          "group": "2_results@4"
+        },
+        {
+          "command": "gridkitStudio.reloadView",
+          "when": "view == gridkitStudio.monitor",
+          "group": "3_view@1"
+        },
+        {
+          "command": "gridkitStudio.monitorSettings",
+          "when": "view == gridkitStudio.monitor",
+          "group": "3_view@2"
         }
       ],
       "webview/context": [
         {
-          "command": "gridkitStudio.chooseOverlapping",
+          "command": "gridkitStudio.selectOverlapping",
           "when": "gridkitOverlapping",
           "group": "navigation@0"
         },
         {
-          "command": "gridkitStudio.editField",
-          "when": "gridkitScope == value && gridkitEditable",
+          "command": "gridkitStudio.revealInSource",
+          "when": "gridkitElement",
           "group": "navigation@1"
         },
         {
-          "command": "gridkitStudio.elementSource",
-          "when": "gridkitElement",
+          "command": "gridkitStudio.goToReference",
+          "when": "gridkitElement && gridkitReference",
           "group": "navigation@2"
         },
         {
-          "command": "gridkitStudio.followReference",
-          "when": "gridkitScope == value && gridkitReference",
+          "command": "gridkitStudio.revealInNetwork",
+          "when": "gridkitElement && gridkitNetwork && gridkitOrigin != network",
           "group": "navigation@3"
         },
         {
-          "command": "gridkitStudio.reveal",
-          "when": "gridkitElement && gridkitNetwork && gridkitOrigin != network",
+          "command": "gridkitStudio.revealInDiagram",
+          "when": "gridkitElement && gridkitDiagram && gridkitOrigin != diagram",
           "group": "navigation@4"
         },
         {
-          "command": "gridkitStudio.revealDiagram",
-          "when": "gridkitElement && gridkitDiagram && gridkitOrigin != diagram",
+          "command": "gridkitStudio.revealInCase",
+          "when": "gridkitElement && gridkitOrigin != case",
           "group": "navigation@5"
         },
         {
-          "command": "gridkitStudio.showInCase",
-          "when": "gridkitElement && gridkitOrigin != case",
+          "command": "gridkitStudio.zoomToNeighborhood",
+          "when": "gridkitScope == element && gridkitElement && (gridkitNetwork || gridkitDiagram)",
           "group": "navigation@6"
         },
         {
-          "command": "gridkitStudio.fromEndpoint",
-          "when": "gridkitScope == element && gridkitEdge",
-          "group": "navigation@7"
-        },
-        {
-          "command": "gridkitStudio.toEndpoint",
-          "when": "gridkitScope == element && gridkitEdge",
-          "group": "navigation@8"
-        },
-        {
-          "command": "gridkitStudio.neighborhood",
-          "when": "gridkitScope == element && gridkitElement && (gridkitNetwork || gridkitDiagram)",
-          "group": "navigation@9"
-        },
-        {
-          "command": "gridkitStudio.signalElements",
-          "when": "gridkitScope == plot",
-          "group": "navigation@10"
-        },
-        {
           "command": "gridkitStudio.editField",
-          "when": "gridkitScope == element && gridkitEditable",
+          "when": "gridkitEditable && gridkitScope != plot",
           "group": "1_modification@1"
         },
         {
@@ -979,7 +836,7 @@
           "group": "2_view@3"
         },
         {
-          "command": "gridkitStudio.filterValue",
+          "command": "gridkitStudio.filterToValue",
           "when": "gridkitScope == value && gridkitScalar",
           "group": "2_view@4"
         },
@@ -999,29 +856,34 @@
           "group": "2_view@7"
         },
         {
-          "command": "gridkitStudio.plot",
-          "when": "gridkitScope == element && gridkitElement && gridkitSampled || gridkitScope == plot",
+          "command": "gridkitStudio.plotSignal",
+          "when": "gridkitScope == element && gridkitElement && gridkitSampled",
           "group": "3_visualize@1"
         },
         {
-          "command": "gridkitStudio.signalRange",
+          "command": "gridkitStudio.choosePlotElement",
           "when": "gridkitScope == plot",
           "group": "3_visualize@2"
         },
         {
-          "command": "gridkitStudio.bind",
-          "when": "gridkitScope != element && gridkitBindable",
+          "command": "gridkitStudio.valueRange",
+          "when": "gridkitScope == plot",
           "group": "3_visualize@3"
         },
         {
-          "command": "gridkitStudio.mapRange",
-          "when": "gridkitScope != element && gridkitBound",
+          "command": "gridkitStudio.mapTo",
+          "when": "gridkitScope != element && gridkitBindable",
           "group": "3_visualize@4"
         },
         {
-          "command": "gridkitStudio.unbind",
+          "command": "gridkitStudio.mappingRange",
           "when": "gridkitScope != element && gridkitBound",
           "group": "3_visualize@5"
+        },
+        {
+          "command": "gridkitStudio.removeMapping",
+          "when": "gridkitScope != element && gridkitBound",
+          "group": "3_visualize@6"
         },
         {
           "command": "gridkitStudio.copyValue",
@@ -1029,7 +891,7 @@
           "group": "5_cutcopypaste@1"
         },
         {
-          "command": "gridkitStudio.copyReference",
+          "command": "gridkitStudio.copyId",
           "when": "gridkitElement",
           "group": "5_cutcopypaste@2"
         },
@@ -1039,17 +901,12 @@
           "group": "5_cutcopypaste@3"
         },
         {
-          "command": "gridkitStudio.monitorSettings",
-          "when": "gridkitScope == plot",
-          "group": "6_settings@1"
-        },
-        {
           "command": "gridkitStudio.disconnectPort",
           "when": "gridkitOrigin == diagram && gridkitPort",
           "group": "7_modification@1"
         },
         {
-          "command": "gridkitStudio.deleteDiagramElement",
+          "command": "gridkitStudio.deleteElement",
           "when": "gridkitOrigin == diagram && gridkitElement && !gridkitPort",
           "group": "7_modification@2"
         },
@@ -1059,62 +916,85 @@
           "group": "7_modification@3"
         }
       ],
-      "view/item/context": [],
-      "commandPalette": [
+      "view/item/context": [
         {
-          "command": "gridkitStudio.openCase",
-          "when": "true"
+          "command": "gridkitStudio.mapTo",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\bmappable\\b/",
+          "group": "inline@1"
         },
+        {
+          "command": "gridkitStudio.plotSignal",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\brecorded\\b/",
+          "group": "1_visualize@1"
+        },
+        {
+          "command": "gridkitStudio.mapTo",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\bmappable\\b/",
+          "group": "1_visualize@2"
+        },
+        {
+          "command": "gridkitStudio.mappingRange",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\bmapped\\b/",
+          "group": "1_visualize@3"
+        },
+        {
+          "command": "gridkitStudio.removeMapping",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\bmapped\\b/",
+          "group": "1_visualize@4"
+        },
+        {
+          "command": "gridkitStudio.copyFieldPath",
+          "when": "view == gridkitStudio.signals && viewItem =~ /\\bfield\\b/",
+          "group": "9_cutcopypaste@1"
+        }
+      ],
+      "commandPalette": [
         {
           "command": "gridkitStudio.openNetwork",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.reveal",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.revealInNetwork",
+          "when": "false"
         },
         {
           "command": "gridkitStudio.openDiagram",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.revealDiagram",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.revealInDiagram",
+          "when": "false"
         },
         {
           "command": "gridkitStudio.openCasePanel",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.showInCase",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.revealInCase",
+          "when": "false"
         },
         {
           "command": "gridkitStudio.openMonitor",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.showSource",
+          "command": "gridkitStudio.openSource",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.elementSource",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.revealInSource",
+          "when": "false"
         },
         {
-          "command": "gridkitStudio.validateCase",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.followReference",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.goToReference",
+          "when": "gridkitStudio.hasSelection"
         },
         {
           "command": "gridkitStudio.editField",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.copyReference",
+          "command": "gridkitStudio.copyId",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1122,44 +1002,52 @@
           "when": "gridkitStudio.hasCase"
         },
         {
+          "command": "gridkitStudio.copyFieldPath",
+          "when": "false"
+        },
+        {
+          "command": "gridkitStudio.recordAllSignals",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.recordNoSignals",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
           "command": "gridkitStudio.runSimulation",
           "when": "false"
         },
         {
-          "command": "gridkitStudio.runContingencies",
+          "command": "gridkitStudio.showLastResults",
           "when": "false"
         },
         {
-          "command": "gridkitStudio.showResults",
-          "when": "false"
-        },
-        {
-          "command": "gridkitStudio.runAgain",
-          "when": "gridkitStudio.fromSolver"
+          "command": "gridkitStudio.runSimulationAgain",
+          "when": "gridkitStudio.fromSolver && !gridkitStudio.running"
         },
         {
           "command": "gridkitStudio.stopSimulation",
-          "when": "gridkitStudio.hasCase"
+          "when": "gridkitStudio.running"
         },
         {
           "command": "gridkitStudio.clearResults",
+          "when": "gridkitStudio.hasResults"
+        },
+        {
+          "command": "gridkitStudio.plotSignal",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.chooseContingency",
-          "when": "gridkitStudio.contingency"
-        },
-        {
-          "command": "gridkitStudio.plot",
+          "command": "gridkitStudio.addPlot",
           "when": "gridkitStudio.hasCase"
         },
         {
           "command": "gridkitStudio.removePlot",
-          "when": "gridkitStudio.hasCase"
+          "when": "gridkitStudio.hasResults"
         },
         {
-          "command": "gridkitStudio.signalElements",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.choosePlotElement",
+          "when": "gridkitStudio.hasResults"
         },
         {
           "command": "gridkitStudio.openResults",
@@ -1167,70 +1055,62 @@
         },
         {
           "command": "gridkitStudio.exportCsv",
-          "when": "gridkitStudio.hasCase"
+          "when": "gridkitStudio.hasResults"
         },
         {
-          "command": "gridkitStudio.showOutput",
-          "when": "true"
+          "command": "gridkitStudio.playPause",
+          "when": "gridkitStudio.hasSamples"
         },
         {
-          "command": "gridkitStudio.performance",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.toggleTimeline",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.seekTime",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.goToTime",
+          "when": "gridkitStudio.hasSamples"
         },
         {
           "command": "gridkitStudio.previousSample",
-          "when": "gridkitStudio.hasCase"
+          "when": "gridkitStudio.hasSamples"
         },
         {
           "command": "gridkitStudio.nextSample",
-          "when": "gridkitStudio.hasCase"
+          "when": "gridkitStudio.hasSamples"
         },
         {
-          "command": "gridkitStudio.followTime",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.goToEnd",
+          "when": "gridkitStudio.hasSamples"
         },
         {
-          "command": "gridkitStudio.loopTime",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.timeSpeed",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.playbackSpeed",
+          "when": "gridkitStudio.hasSamples"
         },
         {
           "command": "gridkitStudio.fit",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.neighborhood",
+          "command": "gridkitStudio.zoomToNeighborhood",
+          "when": "gridkitStudio.hasSelection"
+        },
+        {
+          "command": "gridkitStudio.reloadView",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.orbit",
+          "command": "gridkitStudio.timeWindow",
+          "when": "gridkitStudio.hasSamples"
+        },
+        {
+          "command": "gridkitStudio.valueRange",
+          "when": "gridkitStudio.hasSamples"
+        },
+        {
+          "command": "gridkitStudio.selectOverlapping",
+          "when": "false"
+        },
+        {
+          "command": "gridkitStudio.chooseType",
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.retryMonitor",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.resetMonitorWindow",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.monitorWindow",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.chooseOverlapping",
+          "command": "gridkitStudio.filterRows",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1239,58 +1119,6 @@
         },
         {
           "command": "gridkitStudio.resetColumns",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.fromEndpoint",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.toEndpoint",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.projection",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.bind",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.mapRange",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.unbind",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.signalRange",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.colormap",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.networkSettings",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.diagramSettings",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.monitorSettings",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.reviewChanges",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.exportVideo",
           "when": "gridkitStudio.hasCase"
         },
         {
@@ -1306,7 +1134,7 @@
           "when": "false"
         },
         {
-          "command": "gridkitStudio.filterValue",
+          "command": "gridkitStudio.filterToValue",
           "when": "false"
         },
         {
@@ -1318,19 +1146,51 @@
           "when": "false"
         },
         {
-          "command": "gridkitStudio.copyFieldPath",
+          "command": "gridkitStudio.mapTo",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.mappingRange",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.removeMapping",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.networkSettings",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.diagramSettings",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.monitorSettings",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.editDiagram",
+          "when": "gridkitStudio.hasCase && !gridkitStudio.diagramEditing"
+        },
+        {
+          "command": "gridkitStudio.finishDiagramEditing",
+          "when": "gridkitStudio.diagramEditing"
+        },
+        {
+          "command": "gridkitStudio.arrangeDiagram",
+          "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.disconnectPort",
           "when": "false"
         },
         {
-          "command": "gridkitStudio.chooseType",
-          "when": "gridkitStudio.hasCase"
+          "command": "gridkitStudio.deleteElement",
+          "when": "false"
         },
         {
-          "command": "gridkitStudio.filterRows",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.addPlot",
+          "command": "gridkitStudio.exportVideo",
           "when": "gridkitStudio.hasCase"
         }
       ]
@@ -1426,10 +1286,10 @@
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",
-            "default": "ghcr.io/lukelowry/gridkit:latest",
+            "default": "ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985",
             "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit:latest`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
+            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. The default names one GridKit build, `0.2.0-perf`, by its digest, so it stays the same when a tag moves. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
           },
           "gridkitStudio.containerCli": {
             "type": "string",
@@ -1441,46 +1301,8 @@
           "gridkitStudio.resultCacheMiB": {
             "type": "number",
             "default": 256,
-            "minimum": 32,
-            "maximum": 2048,
-            "description": "Maximum result-window cache per extension window in MiB."
-          }
-        }
-      },
-      {
-        "id": "gridkitStudio.accessibility",
-        "title": "GridKit Studio: Accessibility",
-        "order": 4,
-        "properties": {
-          "gridkitStudio.accessibility.motion": {
-            "default": "system",
-            "scope": "resource",
-            "markdownDescription": "Motion. Full enables camera animation and interface motion. Reduce disables them. System follows the device.",
-            "type": "string",
-            "enum": [
-              "system",
-              "full",
-              "reduce"
-            ],
-            "enumDescriptions": [
-              "System",
-              "Full",
-              "Reduce"
-            ]
-          },
-          "gridkitStudio.accessibility.contrast": {
-            "default": "system",
-            "scope": "resource",
-            "markdownDescription": "Contrast. Increase contrast for text, borders and controls. System follows the device.",
-            "type": "string",
-            "enum": [
-              "system",
-              "high"
-            ],
-            "enumDescriptions": [
-              "System",
-              "High"
-            ]
+            "minimum": 0,
+            "description": "Decoded results kept in memory per window, in MiB. Past it, the least recently read are let go, and read again from the file when needed."
           }
         }
       },
@@ -1498,13 +1320,7 @@
           "gridkitStudio.network.lines": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Edges. Off leaves the world’s borders drawn.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.borders": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Layers — Borders. Draw coasts and country borders under a network on Earth.",
+            "markdownDescription": "Layers — Edges. Off leaves the map drawn.",
             "type": "boolean"
           },
           "gridkitStudio.network.poles": {
@@ -1516,19 +1332,101 @@
           "gridkitStudio.network.grid": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Grid. Draw a coordinate grid under the network, latitude and longitude on the globe.",
+            "markdownDescription": "Layers — Grid. Lines of longitude and latitude under a network on Earth, and of x and y under one laid out.",
             "type": "boolean"
           },
-          "gridkitStudio.network.earthAxis": {
+          "gridkitStudio.network.map.source": {
+            "default": "borders",
+            "scope": "resource",
+            "markdownDescription": "Map — Map. What lies under a network on Earth. Coasts and borders ship with Studio and draw offline. OpenStreetMap loads vector tiles from the tiles URL.",
+            "type": "string",
+            "enum": [
+              "borders",
+              "openstreetmap",
+              "none"
+            ],
+            "enumDescriptions": [
+              "Coasts and borders",
+              "OpenStreetMap",
+              "None"
+            ]
+          },
+          "gridkitStudio.network.map.tilesUrl": {
+            "default": "https://tiles.openfreemap.org/planet",
+            "scope": "resource",
+            "markdownDescription": "Map — Tiles URL. OpenStreetMap vector tiles in the OpenMapTiles schema: a PMTiles archive, TileJSON, or a {z}/{x}/{y} template.",
+            "type": "string"
+          },
+          "gridkitStudio.network.map.earthAxis": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Layers — Earth axis. Draw the axis the globe turns on.",
+            "markdownDescription": "Map — Earth axis. Draw the axis the globe turns on.",
             "type": "boolean"
+          },
+          "gridkitStudio.network.map.daylight": {
+            "default": false,
+            "scope": "resource",
+            "markdownDescription": "Map — Daylight. Light the Earth and the network by where the sun is now.",
+            "type": "boolean"
+          },
+          "gridkitStudio.network.map.nightFloor": {
+            "default": 0.3,
+            "scope": "resource",
+            "markdownDescription": "Map — Night floor. Brightness on the night side.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "gridkitStudio.network.map.terminatorWidth": {
+            "default": 0.12,
+            "scope": "resource",
+            "markdownDescription": "Map — Terminator width. Softness of the edge between day and night.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 0.5
+          },
+          "gridkitStudio.network.map.lineWidthPx": {
+            "default": 1,
+            "scope": "resource",
+            "markdownDescription": "Map — Border width. Stroke width of coasts and borders.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "gridkitStudio.network.map.groundColor": {
+            "default": null,
+            "scope": "resource",
+            "markdownDescription": "Map — Ground. The Earth under the network. Null follows the current VS Code theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
+          },
+          "gridkitStudio.network.map.lineColor": {
+            "default": null,
+            "scope": "resource",
+            "markdownDescription": "Map — Border color. Coasts and borders. Null follows the current VS Code theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
           },
           "gridkitStudio.network.vertexRadiusPx": {
             "default": 3,
             "scope": "resource",
             "markdownDescription": "Size — Vertex radius. Marker radius before a bound size scales it.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 16
+          },
+          "gridkitStudio.network.vertexMinRadiusPx": {
+            "default": 1,
+            "scope": "resource",
+            "markdownDescription": "Size — Smallest vertex radius. Zoomed out, markers shrink toward this as edges shorten on screen, so neighbors stay apart. The vertex radius or more keeps one size.",
             "type": "number",
             "minimum": 0,
             "maximum": 16
@@ -1542,7 +1440,7 @@
             "maximum": 8
           },
           "gridkitStudio.network.zScale": {
-            "default": 3,
+            "default": 0.4,
             "scope": "resource",
             "markdownDescription": "Size — Height. Multiplies how high a bound height raises vertices.",
             "type": "number",
@@ -1564,14 +1462,6 @@
             "type": "number",
             "minimum": 0,
             "maximum": 24
-          },
-          "gridkitStudio.network.pathWidthPx": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Size — Border width. Stroke width of coasts and country borders.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4
           },
           "gridkitStudio.network.shadows": {
             "default": false,
@@ -1639,36 +1529,6 @@
             ],
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
-          },
-          "gridkitStudio.network.daylight": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Daylight. Light a network on Earth by where the sun is now.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.nightFloor": {
-            "default": 0.55,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Night floor. Brightness of the network on the night side.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "gridkitStudio.network.surfaceNightFloor": {
-            "default": 0.15,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Ground night floor. Brightness of the ground on the night side.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "gridkitStudio.network.terminatorWidth": {
-            "default": 0.12,
-            "scope": "resource",
-            "markdownDescription": "Lighting — Terminator width. Softness of the edge between day and night.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 0.5
           },
           "gridkitStudio.network.selectedEnds": {
             "default": true,
@@ -1841,17 +1701,6 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.surfaceColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Ground. The globe, and the ground under a tilted view. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
           "gridkitStudio.network.gridColor": {
             "default": null,
             "scope": "resource",
@@ -1863,21 +1712,10 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.pathColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Border color. Coasts and country borders. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
           "gridkitStudio.network.camera.projection": {
             "default": "flat",
             "scope": "resource",
-            "markdownDescription": "Camera — Projection. How a network first shows. Globe needs geography.",
+            "markdownDescription": "Camera — Projection. How a network first shows. A network on Earth lies flat as a Web Mercator map. Globe needs one on Earth.",
             "type": "string",
             "enum": [
               "flat",
@@ -2282,24 +2120,10 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.monitor.input.mode": {
-            "default": "inspect",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Mode. Navigate adds the Home key to fit the plot.",
-            "type": "string",
-            "enum": [
-              "inspect",
-              "navigate"
-            ],
-            "enumDescriptions": [
-              "Inspect",
-              "Navigate"
-            ]
-          },
           "gridkitStudio.monitor.input.keyboard": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Interaction — Keyboard. Select and clear with the keys.",
+            "markdownDescription": "Interaction — Keyboard. Select and clear with the keys, and fit the plot with Home.",
             "type": "boolean"
           },
           "gridkitStudio.monitor.pickRadiusPx": {
@@ -2897,7 +2721,7 @@
           {
             "id": "open",
             "title": "Open a case",
-            "description": "[Open Case](command:gridkitStudio.openCase). Network and Diagram are document editors; Case and Monitor use the bottom panel.",
+            "description": "[Open Case](command:gridkitStudio.openCase). Network and Diagram open as editors. Case and Monitor are in the bottom panel.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -2908,7 +2732,7 @@
           {
             "id": "inspect",
             "title": "Inspect and edit",
-            "description": "Select an element in Network or Case. Edits participate in native undo and redo.",
+            "description": "Select an element in the Network or the Case panel. Undo and redo work on edits as they do on text.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -2919,7 +2743,7 @@
           {
             "id": "simulate",
             "title": "Simulate and plot",
-            "description": "Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, the Monitor plots what it writes, and Monitored Signals chooses what the case records.\n[Choose Monitored Signals](command:gridkitStudio.chooseSignals)",
+            "description": "Monitored Signals chooses what the case records. Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, and the Monitor plots what it writes.\n[Choose Monitored Signals](command:gridkitStudio.signals.focus)",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -2931,21 +2755,6 @@
       }
     ],
     "keybindings": [
-      {
-        "command": "gridkitStudio.toggleTimeline",
-        "key": "space",
-        "when": "focusedView == gridkitStudio.monitor && !inputFocus && gridkitStudio.hasSamples"
-      },
-      {
-        "command": "gridkitStudio.previousSample",
-        "key": "left",
-        "when": "focusedView == gridkitStudio.monitor && !inputFocus && gridkitStudio.hasSamples"
-      },
-      {
-        "command": "gridkitStudio.nextSample",
-        "key": "right",
-        "when": "focusedView == gridkitStudio.monitor && !inputFocus && gridkitStudio.hasSamples"
-      },
       {
         "command": "gridkitStudio.editField",
         "key": "f2",

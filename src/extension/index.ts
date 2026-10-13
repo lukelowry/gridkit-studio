@@ -19,8 +19,8 @@ export function activate(context: ExtensionContext) {
     ...registerNavigation(studio),
     ...registerPlayback(studio),
   )
-  studio.output.info(
-    `Activated in ${(performance.now() - started).toFixed(1)} ms; data worker starts on demand.`,
+  studio.reporter.output.info(
+    `Activated in ${(performance.now() - started).toFixed(1)} ms; the workers start on demand.`,
   )
   return { studio }
 }

@@ -1,14 +1,15 @@
-/** GridKit's own programs, run as Studio runs them: on a solver file, in its folder, with the case it
- *  names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default image
- *  or GRIDKIT_IMAGE runs in Docker or Podman. */
+/** GridKit's DynamicSimulation, run as Studio runs it: on a solver file, in its folder, with the case
+ *  it names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default
+ *  image or GRIDKIT_IMAGE runs in Docker or Podman. */
 
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import { type Domain, read, rowAt, rowCount, sampleAt, type SampleWindow } from '@latkit/model'
+import { type Domain, type Query, read, rowAt, rowCount, sampleAt } from '@latkit/model'
 import { applyEdits, modify } from 'jsonc-parser'
 import { beforeAll, describe, expect, it } from 'vitest'
 
@@ -20,19 +21,16 @@ import {
   catalog,
   diagnose,
   recordingOf,
-  type Runtime,
   simulate,
 } from '../../src/gridkit/index.js'
 import { recordEdits } from '../../src/gridkit/recording.js'
-import { ResultCache, type ResultsFile } from '../../src/results/index.js'
-import type {
-  GridKit,
-  Program,
-  Run,
-  RunRequest,
-  RuntimeProcess,
-} from '../../src/shared/messages.js'
-import { contingencyFile, outputOf, readSolver } from '../../src/shared/study.js'
+import type { Runtime } from '../../src/gridkit/runtime.js'
+import { ResultCache, type ResultsFile, Stores } from '../../src/results/index.js'
+import type { GridKit, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
+import { outputOf, readSolver } from '../../src/shared/study.js'
+
+/** Room for every chunk a run reads. */
+const ROOM = 1 << 20
 
 const gridkit: GridKit = {
   path: process.env.GRIDKIT_PATH ?? '',
@@ -55,10 +53,14 @@ const FAULT = [
 describe("GridKit's programs on solver files", () => {
   let root: string
   let runtime: Runtime
+  /** Where the runs' results are kept, as a worker keeps them. */
+  let stores: Stores
+  const keeping = () => ({ cache: new ResultCache(ROOM), stores })
 
   beforeAll(async () => {
     await mkdir('output/simulation', { recursive: true })
     root = resolve(await mkdtemp('output/simulation/run-'))
+    stores = new Stores(join(root, 'stores'))
     console.log('Simulation folders:', root)
     // Without GridKit there is nothing to test, and that is a failure said once.
     runtime = await available(gridkit)
@@ -72,23 +74,22 @@ describe("GridKit's programs on solver files", () => {
       .buses
   }
 
-  /** Runs `program` on a solver file written into a folder of its own, `name`, beside a copy of
-   *  case `model` whose `mon` lists `record` writes. Reads the output where the solver file and the
-   *  case say, as Studio does, until the run ends or `signal` aborts. `progress` hears of each run
-   *  of frames read, and may stop the run. */
+  /** Runs DynamicSimulation on a solver file written into a folder of its own, `name`, beside a copy
+   *  of case `model` whose `mon` lists `record` writes. Reads the output where the solver file and
+   *  the case say, as Studio does, until the run ends or `signal` aborts. `progress` hears of each
+   *  run of frames read, and may stop the run. */
   async function run(
     name: string,
     model: string,
     solver: Record<string, unknown>,
     signal: AbortSignal,
     {
-      program = 'DynamicSimulation',
-      record = (kase: Case, text: string) => apply(text, recordEdits(kase, 'Bus', ['Vm'], [])),
+      record = (kase: Case, text: string) =>
+        apply(text, recordEdits(kase, [{ type: 'Bus', add: ['Vm'], remove: [] }])),
       progress = () => {},
       using = gridkit,
       mount = root,
     }: {
-      program?: Program
       record?: (kase: Case, text: string) => string
       progress?: (stop: (reason: Error) => void) => void
       using?: GridKit
@@ -106,28 +107,26 @@ describe("GridKit's programs on solver files", () => {
     await writeFile(solverPath, solverText)
     const kase = await Case.parse(text, catalog, `${model}.case.json`)
     const study = readSolver(`${model}.solver.json`, solverText)
-    const sink = outputOf(`${model}.solver.json`, study, recordingOf(kase).monitor)
+    const sink = outputOf(`${model}.solver.json`, study, (await recordingOf(kase)).monitor)
     const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
       fingerprint: kase.version,
       text,
-      program,
+      run: randomUUID(),
+      results: randomUUID(),
       solver: solverPath,
       output: join(folder, sink.file),
-      format: sink.format,
       tmax: study.tmax,
       root: mount,
       gridkit: using,
-      cacheBytes: 1 << 20,
     }
-    const job: Run = { id: name, uri: request.uri, command: program, state: 'running' }
     let owned: RuntimeProcess | undefined
     let released = false
     /** The results file the run reads, once it begins to. */
     let read: ResultsFile | undefined
     const controller = new AbortController()
-    const done = simulate(kase, request, job, new ResultCache(1 << 20), {
+    const done = simulate(kase, request, keeping(), {
       signal: AbortSignal.any([signal, controller.signal]),
       reading: (file) => (read = file),
       progress: async () => progress((reason) => controller.abort(reason)),
@@ -140,7 +139,7 @@ describe("GridKit's programs on solver files", () => {
     return {
       kase,
       folder,
-      job,
+      request,
       done,
       owned: () => owned,
       released: () => released,
@@ -149,14 +148,14 @@ describe("GridKit's programs on solver files", () => {
   }
 
   /** What Studio reads back of `field` for each recorded bus over `window`. */
-  async function readBack(results: ResultsFile, field: string, window: SampleWindow) {
+  async function readBack(results: ResultsFile, field: string, window: Query.Window) {
     const found: { row: number; t: number; value: number | null }[] = []
     const span: Domain =
       window.kind === 'range'
         ? window.between
         : window.kind === 'at'
           ? [window.value, window.value]
-          : results.info.domain
+          : results.progress.domain
     const data = await results.data(span, new AbortController().signal)
     for await (const block of read(data, { kind: 'samples', from: 'Bus', select: [field], window }))
       for (let frame = 0; frame < block.coordinates.length; frame++)
@@ -173,17 +172,22 @@ describe("GridKit's programs on solver files", () => {
     it(`${name}: writes where its solver file says, from the case's power flow, and every sample reads back`, async ({
       signal,
     }) => {
-      expect(diagnose(await Case.read(`cases/${name}.case.json`, catalog))).toEqual([])
+      expect(
+        await diagnose(await Case.read(`cases/${name}.case.json`, catalog), AbortSignal.any([])),
+      ).toEqual([])
       const { folder, done, released } = await run(
         name,
         name,
         // A folder GridKit would not make itself.
         { output_file: 'output/out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
         signal,
-        { record: (kase, text) => apply(text, recordEdits(kase, 'Bus', ['Vm', 'Va'], [])) },
+        {
+          record: (kase, text) =>
+            apply(text, recordEdits(kase, [{ type: 'Bus', add: ['Vm', 'Va'], remove: [] }])),
+        },
       )
       const results = await done
-      const { info } = results
+      const info = { ...results.layout, ...results.progress }
       expect(released()).toBe(true)
       await access(join(folder, 'output', 'out.csv'))
       expect(info.domain[0]).toBe(0)
@@ -219,7 +223,7 @@ describe("GridKit's programs on solver files", () => {
       },
     )
     const results = await done
-    const { info } = results
+    const info = { ...results.layout, ...results.progress }
     for (const field of ['Va', 'Vm']) {
       const samples = await readBack(results, field, { kind: 'range', between: info.domain })
       expect(new Set(samples.map(({ row }) => row))).toEqual(new Set([row]))
@@ -236,7 +240,7 @@ describe("GridKit's programs on solver files", () => {
       signal,
     )
     const results = await done
-    const { info } = results
+    const info = { ...results.layout, ...results.progress }
     expect(info.domain[1]).toBeCloseTo(0.2, 9)
     const faults = kase.table('BusFault')
     const bus = kase.cell(faults, 'ports.bus', 0) as number
@@ -250,68 +254,134 @@ describe("GridKit's programs on solver files", () => {
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
   })
 
-  it('studies each fault in turn, one file each beside the solver file, and shows the first', async ({
+  it('never reads what the last run of a solver file wrote, and keeps it when a run does not start', async ({
     signal,
   }) => {
-    const { kase, folder, done } = await run(
-      'contingencies',
-      'IEEE39',
-      { output_file: 'study.csv', tmax: 0.2, dt_monitor: 0.01, events: FAULT },
-      signal,
-      { program: 'ContingencyAnalysis' },
-    )
-    const results = await done
-    const { info } = results
-    const faults = kase.table('BusFault')
-    const buses = kase.table('Bus')
-    const faulted = Array.from(faults.records, (_, row) => kase.cell(faults, 'ports.bus', row))
-    const study = info.contingency!
-    expect(study.buses).toEqual(faulted.map((row) => kase.native(buses, row as number)))
-    expect(study.written).toEqual(faulted.map((_, n) => n))
-    expect(study.failed).toEqual([])
-    expect(study.shown).toBe(0)
-    for (const n of study.written) await access(contingencyFile(study, n))
-    expect(info.path).toBe(join(folder, 'study_0.csv'))
-    const sagged = (await readBack(results, 'Vm', { kind: 'range', between: [0.05, 0.1] })).filter(
-      (sample) => sample.row === faulted[0],
-    )
-    expect(Math.min(...sagged.map(({ value }) => value!))).toBeLessThan(0.8)
-  })
-
-  it('never reads what the last run of a solver file wrote', async ({ signal }) => {
     const solver = { output_file: 'out.csv', dt_monitor: 0.01, events: [] }
     const first = await run('again', 'IEEE39', { ...solver, tmax: 0.1 }, signal)
-    expect((await first.done).info.domain[1]).toBeCloseTo(0.1, 9)
+    expect((await first.done).progress.domain[1]).toBeCloseTo(0.1, 9)
     // The same folder and output, read again by a shorter run.
     const folder = join(root, 'again')
     await writeFile(
       join(folder, 'IEEE39.solver.json'),
       JSON.stringify({ system_model_file: 'IEEE39.case.json', ...solver, tmax: 0.05 }),
     )
-    const kase = first.kase
-    const uri = pathToFileURL(join(folder, 'IEEE39.case.json')).href
-    const again: Run = { id: 'again-2', uri, command: 'DynamicSimulation', state: 'running' }
-    const results = await simulate(
-      kase,
-      {
-        uri,
-        version: 1,
-        fingerprint: kase.version,
-        text: await readFile(join(folder, 'IEEE39.case.json'), 'utf8'),
-        program: 'DynamicSimulation',
-        solver: join(folder, 'IEEE39.solver.json'),
-        output: join(folder, 'out.csv'),
-        format: 'csv',
-        tmax: 0.05,
-        root,
-        gridkit,
-        cacheBytes: 1 << 20,
-      },
-      again,
-      new ResultCache(1 << 20),
-      { signal, reading: () => {}, progress: async () => {}, log: () => {} },
+    const request = { ...first.request, tmax: 0.05 }
+    const out = join(folder, 'out.csv')
+    const written = await readFile(out, 'utf8')
+    // A GridKit that is not there starts nothing, and the last run's file stays as it was.
+    await expect(
+      simulate(
+        first.kase,
+        {
+          ...request,
+          results: randomUUID(),
+          gridkit: { path: join(folder, 'missing'), image: '', cli: '' },
+        },
+        keeping(),
+        { signal, reading: () => {}, progress: () => {}, log: () => {} },
+      ),
+    ).rejects.toThrow(/GridKit Path/)
+    expect(await readFile(out, 'utf8')).toBe(written)
+    // Nor does one that is there but does not start, as a broken install's: Studio leaves the file
+    // to GridKit, which never wrote over it. Elsewhere than Windows an executable that is not a
+    // program runs as a shell script, so the broken one there names an interpreter that is gone.
+    const broken = join(folder, 'broken')
+    await mkdir(broken)
+    await writeFile(
+      join(broken, process.platform === 'win32' ? 'DynamicSimulation.exe' : 'DynamicSimulation'),
+      process.platform === 'win32' ? 'not a program' : '#!/nonexistent/interpreter\n',
+      { mode: 0o755 },
     )
-    expect(results.info.domain[1]).toBeCloseTo(0.05, 9)
+    await expect(
+      simulate(
+        first.kase,
+        { ...request, results: randomUUID(), gridkit: { path: broken, image: '', cli: '' } },
+        keeping(),
+        { signal, reading: () => {}, progress: () => {}, log: () => {} },
+      ),
+    ).rejects.toThrow(/did not start.*GridKit Path/)
+    expect(await readFile(out, 'utf8')).toBe(written)
+    const results = await simulate(first.kase, { ...request, results: randomUUID() }, keeping(), {
+      signal,
+      reading: () => {},
+      progress: () => {},
+      log: () => {},
+    })
+    expect(results.progress.domain[1]).toBeCloseTo(0.05, 9)
+  })
+
+  it('begins a run once the run writing its file has ended, and reads only its own frames', async ({
+    signal,
+  }) => {
+    const solver = { output_file: 'out.csv', dt_monitor: 0.01, events: [] }
+    let writing!: () => void
+    const begun = new Promise<void>((resolve) => (writing = resolve))
+    let stop!: (reason: Error) => void
+    const first = await run('turns', 'IEEE39', { ...solver, tmax: 1000 }, signal, {
+      progress: (stopFirst) => {
+        stop = stopFirst
+        writing()
+      },
+    })
+    await begun
+    // GridKit read the first run's solver file as it started; the second reads this one.
+    await writeFile(
+      join(first.folder, 'IEEE39.solver.json'),
+      JSON.stringify({ system_model_file: 'IEEE39.case.json', ...solver, tmax: 0.05 }),
+    )
+    const order: string[] = []
+    const second = simulate(
+      first.kase,
+      { ...first.request, run: randomUUID(), results: randomUUID(), tmax: 0.05 },
+      keeping(),
+      {
+        signal,
+        reading: () => order.push('second began'),
+        progress: () => {},
+        log: () => {},
+      },
+    )
+    const ended = first.done.catch(() => order.push('first ended'))
+    stop(new Error('Stopped by the test'))
+    await ended
+    const results = await second
+    expect(order).toEqual(['first ended', 'second began'])
+    expect(first.read()!.progress.frames).toBeGreaterThan(0)
+    expect(results.progress.domain[1]).toBeCloseTo(0.05, 9)
+  })
+
+  it('reads what a stopped run wrote to its end, which then exports as GridKit wrote it', async ({
+    signal,
+  }) => {
+    let writing!: () => void
+    const begun = new Promise<void>((resolve) => (writing = resolve))
+    let stop!: (reason: Error) => void
+    const stopped = await run(
+      'stopped',
+      'IEEE39',
+      { output_file: 'out.csv', dt_monitor: 0.01, tmax: 1000, events: [] },
+      signal,
+      {
+        progress: (stopRun) => {
+          stop = stopRun
+          writing()
+        },
+      },
+    )
+    await begun
+    stop(new Error('Stopped by the test'))
+    await expect(stopped.done).rejects.toThrow('Stopped by the test')
+    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
+    const results = stopped.read()!
+    expect(results.progress.growing).toBe(false)
+    expect(results.progress.error).toBeUndefined()
+    const exported = join(stopped.folder, 'exported.csv')
+    await results.exportCsv(exported)
+    const copy = await readFile(exported, 'utf8')
+    // GridKit's own file, but for a last row it may have been stopped partway through.
+    expect((await readFile(join(stopped.folder, 'out.csv'), 'utf8')).startsWith(copy)).toBe(true)
+    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
   })
 
   it('says why GridKit could not finish, and runs again', async ({ signal }) => {
@@ -334,7 +404,7 @@ describe("GridKit's programs on solver files", () => {
       { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
       signal,
     )
-    expect((await retry.done).info.domain[1]).toBeCloseTo(0.1, 9)
+    expect((await retry.done).progress.domain[1]).toBeCloseTo(0.1, 9)
   })
 
   it('refuses an image this machine does not have, and never pulls it', async ({
@@ -374,7 +444,7 @@ describe("GridKit's programs on solver files", () => {
   })
 
   it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
-    const { job, done, owned, released, read } = await run(
+    const { request, done, owned, released, read } = await run(
       'cancel',
       'IEEE39',
       { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
@@ -383,9 +453,9 @@ describe("GridKit's programs on solver files", () => {
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)
-    expect(job.results).toBe(read()!.info.id)
-    expect(read()!.info.frames).toBeGreaterThan(0)
-    expect(read()!.info.domain[1]).toBeLessThan(1000)
+    expect(read()!.layout.path).toBe(request.output)
+    expect(read()!.progress.frames).toBeGreaterThan(0)
+    expect(read()!.progress.domain[1]).toBeLessThan(1000)
     // The process is gone, not left to finish its thousand seconds, and so is its container.
     expect(() => process.kill(owned()!.pid, 0)).toThrow()
     const container = owned()!.container

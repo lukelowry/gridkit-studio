@@ -5,8 +5,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { type ColormapName, colormaps } from '@latkit/gpu'
-import { rowCount, type RowsBlock, textAt } from '@latkit/model'
+import { type Colormap, colormaps } from '@latkit/gpu'
+import { type Block, rowCount, textAt } from '@latkit/model'
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
@@ -16,13 +16,16 @@ import { recordedWhole } from '../../src/shared/bindings.js'
 import { frames, idle, type TestHost, testHost, until } from './harness.js'
 
 const VA = { type: 'Bus', field: 'Va' } as const
-/** Markers and lines wide enough that their center pixels are solid, with nothing drawn over
- *  them: no labels, borders, or highlight. */
+/** Markers and lines wide enough that their center pixels are solid, at one size whatever the zoom,
+ *  with nothing drawn over them: no labels, borders, or highlight. Heights tall enough that a bus
+ *  whose angle rises a hundredth of a radian rises by pixels. */
 const STYLE: Record<string, unknown> = {
   'network.vertexRadiusPx': 6,
+  'network.vertexMinRadiusPx': 6,
+  'network.zScale': 3,
   'network.edgeWidthPx': 6,
   'network.vertices.labels': false,
-  'network.borders': false,
+  'network.map.source': 'none',
   'network.hover': 'off',
   'network.selectedColor': '#00000000',
 }
@@ -49,7 +52,7 @@ function pixel(png: PNG, [x, y]: Point): RGB {
   return [png.data[i]!, png.data[i + 1]!, png.data[i + 2]!]
 }
 /** The colormap position nearest `rgb`, and how far from it the color is, in 8-bit units. */
-function onColormap(rgb: RGB, name: ColormapName): { t: number; off: number } {
+function onColormap(rgb: RGB, name: Colormap.Name): { t: number; off: number } {
   const { colors } = colormaps[name]
   let best = { t: 0, off: Infinity }
   colors.forEach((c, i) => {
@@ -74,7 +77,7 @@ suite('WECC240 run', function () {
   const measured: Record<string, string> = {}
   const global = vscode.ConfigurationTarget.Global
   const settings = () => vscode.workspace.getConfiguration('gridkitStudio')
-  const session = () => bench.studio.all.get(uri.toString())!
+  const session = () => bench.studio.get(uri.toString())!
   const camera = () =>
     session().cameras.network as { projection?: string; pitch?: number; fit?: boolean }
   /** Each bus's recorded angle at `t`, as the views read it. */
@@ -93,7 +96,7 @@ suite('WECC240 run', function () {
       const blocks = (await bench.studio.client.results.call('query', {
         results: session().results!.id,
         query,
-      })) as RowsBlock[]
+      })) as Block.Rows[]
       for (const block of blocks) {
         const column = block.columns.Va as unknown as { offset: number; values: ArrayLike<number> }
         for (let i = 0; i < rowCount(block.rows); i++)
@@ -165,13 +168,13 @@ suite('WECC240 run', function () {
   test('runs with Va alone, mapped to color and height on a tilted network', async () => {
     const key = uri.toString()
     // The case records bus angles alone, as Monitored Signals makes it.
-    await vscode.commands.executeCommand('gridkitStudio.clearSignals')
+    await vscode.commands.executeCommand('gridkitStudio.recordNoSignals')
     await until(
       () => !Object.keys(bench.studio.state(key).summary?.recording.listed ?? {}).length,
       'the case records nothing',
     )
     await bench.record('Bus', ['Va'], uri)
-    bench.studio.bind(key, VA, ['vertexColor', 'vertexHeight'])
+    bench.studio.get(key)!.bind(VA, ['vertexColor', 'vertexHeight'])
     await network.getByRole('button', { name: 'Tilt', exact: true }).click()
     await until(() => camera()?.projection === 'tilt' && (camera().pitch ?? 0) > 0, 'tilted')
     // Moving the view by hand stops it refitting, so a bus that rises moves on screen.
@@ -208,14 +211,15 @@ suite('WECC240 run', function () {
     shown.set('tilt 0', await at(0))
     shown.set('tilt 0.6', await at(0.6))
     await bench.capture('run-wecc240-tilt')
+    // A network on Earth lies flat on the Web Mercator map.
     await network.getByRole('button', { name: 'Flat', exact: true }).click()
-    await until(() => camera()?.projection === 'flat', 'flat')
+    await until(() => camera()?.projection === 'mercator', 'flat')
     shown.set('flat 0.6', await at(0.6))
     await bench.capture('run-wecc240-flat')
   })
 
   test('each bus is colored on the colormap in step with its recorded angle', () => {
-    const name = settings().get<ColormapName>('network.colormap', 'viridis')
+    const name = settings().get<Colormap.Name>('network.colormap', 'viridis')
     for (const [view, drawn] of shown) {
       const fit = [...alone(drawn)].map((id) => ({
         id,

@@ -27,3 +27,12 @@ it('sends a message of more buffers than VS Code counts as one buffer of views',
   expect(sent.batches[0]!.coordinates).toBe(sent.batches[299]!.coordinates)
   expect(sent.batches[7]!.at).toBe(7)
 })
+
+it('keeps what is not an array or a plain object as it is, however many buffers a message holds', () => {
+  const names = new Map([['Bus', 1]])
+  const message = {
+    names,
+    batches: Array.from({ length: 300 }, (_, i) => ({ values: Float64Array.of(i) })),
+  }
+  expect(packed(message).names).toBe(names)
+})

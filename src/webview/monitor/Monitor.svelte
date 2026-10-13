@@ -1,8 +1,8 @@
 <!-- One lane per plotted signal of the results on show, stacked over one time axis that the last
   labels. Plots are added from the view's title bar, which also names the results, and played from
-  the status bar. -->
+  the status bar. Without results or plots, it says how to get them. -->
 <script lang="ts">
-  import type { Data, Domain, FieldSelection } from '@latkit/model'
+  import type { Data, Domain, Query } from '@latkit/model'
   import { onMount } from 'svelte'
 
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
@@ -11,9 +11,9 @@
   import { createClock } from '../clock.js'
   import { CanvasGpu } from '../gpu.js'
   import { Recovery } from '../recovery.js'
-  import { ofShown, Rows, type Snapshot, staticNeeds } from '../rows.js'
-  import { plotNeeds, Samples } from '../samples.js'
-  import { appearance, theme, watchTheme } from '../theme.js'
+  import { ofShown, plotStatics, Rows, type Snapshot } from '../rows.js'
+  import { leastWants, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
+  import { theme, watchTheme } from '../theme.js'
   import { monitorWindow, sameWindow } from './plot.js'
   import Plot from './Plot.svelte'
 
@@ -26,9 +26,25 @@
   const cases = new Rows(bridge, () => (rows = cases.snapshot))
   /** Bumped as samples arrive. */
   let held = $state(0)
-  const samples = new Samples(bridge, () => held++)
-  let source = $state.raw<Data | undefined>()
-  let sampled = $state.raw<readonly FieldSelection[]>([])
+  const samples = new Samples(bridge, () => held++, plotBudget)
+  /** The case's rows with the samples of them, and the content they are of. */
+  let made = $state.raw<{ data: Data; fingerprint: string } | undefined>()
+  /** What the plots draw: only what was made of the content of the results on show, so a state that
+   *  names other results waits for rows of their own. */
+  const source = $derived(
+    made && made.fingerprint === (view.results?.fingerprint ?? view.summary?.fingerprint)
+      ? made.data
+      : undefined,
+  )
+  let sampled = $state.raw<readonly Query.Selection[]>([])
+  /** Whether the plots read their window a slice at a time, as it holds more than the budget, and
+   *  the slice they read now: null once they have drawn the window. */
+  let streaming = $state(false)
+  let slicing: Domain | null | undefined
+  /** Whether what the plots lack could not be read, which a notification said. */
+  let stuck = $state(false)
+  /** Where each plot's drawing stands, by plot. */
+  let wants = $state.raw<ReadonlyMap<string, Wants>>(new Map())
   /** The clock as of its last change. */
   let tick = $state.raw<ClockState>(IDLE)
   /** The playhead, updated every frame while playing. */
@@ -36,6 +52,8 @@
   let colors = $state.raw(theme())
   /** Bumped on GPU loss or retry; canvases remount while lane state survives. */
   let epoch = $state(0)
+  /** How many times the user asked the Monitor to try again. */
+  let retries = $state(0)
   /** Whether VS Code shows the view; a hidden view keeps its webview but stops drawing. */
   let visible = $state(true)
   let hidden = $state(document.hidden)
@@ -63,25 +81,47 @@
   const shown = $derived(monitorWindow(results, chosen ?? view.window))
   const keyOf = (plot: Plotted) => `${plot.from}\n${plot.field}\n${plot.id ?? ''}`
 
-  // The rows of the case the results were read against, which the summary then describes, or
-  // of the case on show while there are none.
+  // The rows the plots draw of the case the results were read against, which the summary then
+  // describes, or of the case on show while there are none.
   $effect(() => {
     const { summary, results } = view
     if (!summary || (view.stale && !results?.frames)) return
     cases.want(
       { summary, ...(results?.frames && { results: results.id }) },
-      staticNeeds(summary, view.bindings, false),
+      plotStatics(summary, plots),
     )
   })
   // The plots draw the samples over the times shown; those around them load after, so a pan
-  // finds them held.
+  // finds them held. A window holding more than the budget streams instead: a slice at a time from
+  // where the plots' drawing stands, the slices drawn letting go as later ones come.
   $effect(() => {
     void held
     const span = shown
-    samples.want(view.results, plotNeeds(view), span, { at: (span[0] + span[1]) / 2, travel: 0 })
-    source = rows && ofShown(rows, view) ? samples.data(rows.data) : undefined
+    const slice = samples.plot(
+      view.results,
+      plotNeeds(view),
+      span,
+      leastWants(plots.map((plot) => wants.get(keyOf(plot)))),
+      { at: (span[0] + span[1]) / 2, travel: 0 },
+    )
+    streaming = slice !== undefined
+    slicing = slice
+    made =
+      rows && ofShown(rows, view)
+        ? { data: samples.data(rows.data), fingerprint: rows.fingerprint }
+        : undefined
     sampled = samples.sampled()
+    stuck = samples.stuck
   })
+  /** Hears where `plot`'s drawing stands after each frame, and that it draws no more. */
+  function drew(plot: Plotted, stands: Wants | undefined) {
+    const key = keyOf(plot)
+    if (wants.get(key) === stands) return
+    const next = new Map(wants)
+    if (stands === undefined) next.delete(key)
+    else next.set(key, stands)
+    wants = next
+  }
   /** Whether the samples held cover `window` of `from`'s `field`. */
   const covers = (from: string, field: string, window: Domain) =>
     samples.covers(from, field, window)
@@ -102,28 +142,38 @@
         if (incoming.kind === 'state') {
           const before = view
           view = merged(view, incoming.state)
-          appearance(view.settings)
-          // Other results reset the window; one the extension set replaces the user's.
+          // Other results reset the window, and the plots draw them from the start; a window the
+          // extension set replaces the user's.
           if (view.results?.id !== before.results?.id) {
             clearTimeout(telling)
             chosen = told = undefined
-          } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told))
-            chosen = undefined
-        } else if (incoming.kind === 'action') {
-          if (incoming.command === 'shown') visible = incoming.value === true
-          else if (incoming.command === 'resetMonitorWindow') chosen = told = undefined
-          else if (incoming.command === 'retryMonitor') {
-            epoch++
-            cases.retry()
-            samples.retry()
+            wants = new Map()
+          } else if (!sameWindow(view.window, before.window) && !sameWindow(view.window, told)) {
+            clearTimeout(telling)
+            chosen = told = undefined
           }
+        } else if (incoming.kind === 'shown') visible = incoming.shown
+        else if (incoming.kind === 'action' && incoming.command === 'reloadView') {
+          recovery.reset()
+          retries++
+          epoch++
+          cases.retry()
+          samples.retry()
         }
       }),
       watchTheme(() => (colors = theme())),
     ]
     const visibility = () => (hidden = document.hidden)
     document.addEventListener('visibilitychange', visibility)
-    bridge.send({ kind: 'ready' })
+    // What the plots hold, for the tests.
+    ;(window as { gridkitMonitor?: () => unknown }).gridkitMonitor = () => ({
+      streaming,
+      slice: slicing,
+      wants: Object.fromEntries(wants),
+      budget: samples.budget,
+      ...samples.stats(),
+    })
+    bridge.ready()
     return () => {
       document.removeEventListener('visibilitychange', visibility)
       clearTimeout(telling)
@@ -139,12 +189,17 @@
 <div class="monitor">
   {#if plots.length === 0 || !results}
     <div class="c-empty monitor__empty">
-      {#if !view.summary}
+      {#if !view.uri}
+        <!-- No case is open: nothing to show. -->
+      {:else if !view.summary}
         <p class="c-empty__text">Loading case…</p>
       {:else if !results}
-        <button class="c-btn" onclick={() => bridge.command('chooseSignals')}>
-          Choose monitored signals
-        </button>
+        <p class="c-empty__text">
+          Right-click a .solver.json and choose Run Dynamic Simulation to see its results here.
+        </p>
+      {:else if results.outputs.length}
+        <!-- Until GridKit writes the header, the results hold nothing to plot yet. -->
+        <p class="c-empty__text">Add a plot from the title bar.</p>
       {/if}
     </div>
   {:else}
@@ -164,8 +219,12 @@
           {gpu}
           {paused}
           generation={epoch}
+          {retries}
           ticks={i === plots.length - 1}
+          {streaming}
+          {stuck}
           onframe={() => recovery.presented()}
+          onwants={(stands) => drew(plot, stands)}
           onwindow={turn}
         />
       {/each}

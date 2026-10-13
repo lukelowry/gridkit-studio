@@ -36,7 +36,7 @@ The original color tables by Nathaniel J. Smith, Stefan van der Walt and Eric Fi
 
 ## Geographic borders
 
-Made from Natural Earth 5.1.2 public-domain map data, and shipped as `dist/webview/borders.bin`. Terms: https://www.naturalearthdata.com/about/terms-of-use/.
+Coasts, country borders and province borders made from Natural Earth 5.1.2 public-domain map data at 1:10m, and shipped as GeoJSON in `dist/webview/maps/`. Terms: https://www.naturalearthdata.com/about/terms-of-use/.
 
 ## Studio icons
 

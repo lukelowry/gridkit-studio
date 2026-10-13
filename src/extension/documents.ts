@@ -1,17 +1,70 @@
-import type { Value } from '@latkit/model'
 import * as vscode from 'vscode'
 
-import type { Element, Mutation, SourceEdit, Summary } from '../shared/messages.js'
-import type { Client } from './client.js'
+import { defect, failedWith, superseded } from '../shared/errors.js'
+import {
+  type Element,
+  type Mutation,
+  revisionOf,
+  type SourceDelta,
+  type SourceEdit,
+  type SourceRange,
+  type Summary,
+  type Value,
+} from '../shared/messages.js'
+import { resent } from '../shared/rpc.js'
+import { type Client, CRASHES } from './client.js'
+import { diagnosed } from './report.js'
 
 /** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
 export function isWritable(document: vscode.TextDocument) {
   return vscode.workspace.fs.isWritableFileSystem(document.uri.scheme) !== false
 }
 
-interface Entry {
+/** Where `range` lies in `document`. */
+export const rangeOf = (document: vscode.TextDocument, { offset, length }: SourceRange) =>
+  new vscode.Range(document.positionAt(offset), document.positionAt(offset + length))
+
+/** How long `document`'s text is, without copying it. */
+const lengthOf = (document: vscode.TextDocument) =>
+  document.offsetAt(document.lineAt(document.lineCount - 1).range.end)
+
+/** `document`'s whole text, which must be its text at `version`: one sent under another version
+ *  would be read as that version's. */
+export function wholeAt(document: vscode.TextDocument, version: number): { text: string } {
+  if (document.version !== version) throw superseded()
+  return { text: document.getText() }
+}
+
+/** What `read` makes of `document`, read again for as long as a newer version of it takes the
+ *  place of the one read meanwhile. */
+export async function current<T>(
+  document: vscode.TextDocument,
+  read: () => Promise<T>,
+): Promise<T> {
+  for (;;)
+    try {
+      return await read()
+    } catch (error) {
+      if (!failedWith(error, 'superseded') || document.isClosed) throw error
+    }
+}
+
+/** Whether `error` says what is wrong with a case's source, rather than why Studio could not read
+ *  it. */
+const inSource = (error: unknown) =>
+  !defect(error) && (failedWith(error, 'invalid-input') || failedWith(error, 'resource-limit'))
+
+/** An open case document as Studio reads it: its last summary, and whether it is behind its
+ *  document, and why its revision does not read. */
+export interface CaseDocument {
+  readonly document: vscode.TextDocument
+  readonly summary?: Summary
+  readonly stale: boolean
+  readonly error?: string
+}
+
+interface Entry extends CaseDocument {
   attachmentId: string
-  document: vscode.TextDocument
   summary?: Summary
   pending?: Promise<Summary>
   validation?: Promise<Summary>
@@ -24,24 +77,31 @@ interface Entry {
   editing?: Promise<void>
   stale: boolean
   error?: string
-  diagnosticsVersion?: number
+  /** The version that failed to read, and why: it is not read again until it changes. */
+  failed?: { version: number; reason: Error }
 }
-/** A worker that stops this many times within `CRASH_MS` is not restarted to read the cases again
- *  until one of them changes. */
-const CRASHES = 3
-const CRASH_MS = 60_000
+/** How long typing rests before the case is read again. */
+const EDIT_MS = 150
 
-export class Documents {
-  readonly entries = new Map<string, Entry>()
+/** Why a document VS Code closed reads no more. */
+const closedDocument = () => new Error('The case document is closed.')
+
+export class Documents implements vscode.Disposable {
+  readonly #entries = new Map<string, Entry>()
   readonly changed = new vscode.EventEmitter<string>()
+  /** Fire as Studio begins to read a case document, and once VS Code closes it. */
+  readonly opened = new vscode.EventEmitter<string>()
+  readonly closed = new vscode.EventEmitter<string>()
   readonly diagnostics = vscode.languages.createDiagnosticCollection('gridkit')
-  readonly disposables: vscode.Disposable[]
-  /** When the worker last stopped. */
-  #crashes: number[] = []
-  constructor(readonly client: Client) {
-    this.disposables = [
+  readonly #disposables: vscode.Disposable[]
+  /** `report` says why a case could not be read where Problems does not. */
+  constructor(
+    readonly client: Client,
+    private readonly report: (error: unknown) => void,
+  ) {
+    this.#disposables = [
       vscode.workspace.onDidChangeTextDocument((event) => {
-        const entry = this.entries.get(event.document.uri.toString())
+        const entry = this.#entries.get(event.document.uri.toString())
         if (!entry || !event.contentChanges.length) return
         entry.changes.push(
           event.contentChanges.map((change) => ({
@@ -57,125 +117,181 @@ export class Documents {
         this.changed.fire(event.document.uri.toString())
         entry.timer = setTimeout(() => {
           void this.parse(event.document).catch(() => {})
-        }, 150)
+        }, EDIT_MS)
       }),
       vscode.workspace.onDidCloseTextDocument((document) => {
         const uri = document.uri.toString()
-        const entry = this.entries.get(uri)
+        const entry = this.#entries.get(uri)
         if (!entry || entry.document !== document) return
         entry.controller?.abort()
         clearTimeout(entry.timer)
-        this.entries.delete(uri)
-        this.changed.fire(uri)
+        this.#entries.delete(uri)
         this.diagnostics.delete(document.uri)
         void this.client.cases
           .call('release', { uri, attachmentId: entry.attachmentId })
           .catch(() => {})
-      }),
-      // A new case worker reads the open cases again, unless the reading may be what stops it.
-      this.client.cases.failure.event((error) => {
-        const now = Date.now()
-        this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
-        const retry = this.#crashes.length < CRASHES
-        for (const [uri, entry] of this.entries) {
-          entry.controller?.abort()
-          clearTimeout(entry.timer)
-          entry.stale = true
-          entry.error = retry
-            ? error.message
-            : `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads the case again once you edit or reopen it.`
-          entry.workerVersion = undefined
-          entry.changes = []
-          entry.pending = undefined
-          this.changed.fire(uri)
-          if (retry) void this.parse(entry.document).catch(() => {})
-        }
+        this.changed.fire(uri)
+        this.closed.fire(uri)
       }),
     ]
   }
-  async ensure(document: vscode.TextDocument): Promise<Summary> {
-    const entry = this.entries.get(document.uri.toString())
-    if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
-    return entry?.pending ?? this.parse(document)
+
+  /** The case document at `uri`, while Studio reads it. */
+  get(uri: string): CaseDocument | undefined {
+    return this.#entries.get(uri)
   }
-  parse(document: vscode.TextDocument): Promise<Summary> {
+
+  /** The case `document` reads as now, through every read a newer one replaces while it is read;
+   *  why it does not read, thrown. */
+  read(document: vscode.TextDocument): Promise<Summary> {
+    return current(document, () => this.ensure(document))
+  }
+
+  /** The case `document` reads as now, or undefined when it does not: Problems, or the
+   *  notification of why the case worker stopped, says why. */
+  parsed(document: vscode.TextDocument): Promise<Summary | undefined> {
+    return this.read(document).catch(() => undefined)
+  }
+
+  /** A new case worker reads the open cases again, unless the reading may be what stops it: then
+   *  each waits until it changes or opens again, and asked of meanwhile, says why. Returns why, to
+   *  say once. */
+  restart(error: Error): Error {
+    const retry = this.client.cases.steady
+    const why = new Error(
+      `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads each case ` +
+        'again once you edit or reopen it.',
+    )
+    for (const [uri, entry] of this.#entries) {
+      entry.controller?.abort()
+      clearTimeout(entry.timer)
+      entry.stale = true
+      entry.error = error.message
+      entry.failed = retry ? undefined : { version: entry.document.version, reason: why }
+      entry.workerVersion = undefined
+      entry.changes = []
+      entry.pending = undefined
+      this.changed.fire(uri)
+      if (retry) void this.parse(entry.document).catch(() => {})
+    }
+    return retry ? error : why
+  }
+
+  async ensure(document: vscode.TextDocument): Promise<Summary> {
+    const entry = this.#entries.get(document.uri.toString())
+    if (entry?.summary?.version === document.version && !entry.stale) return entry.summary
+    if (entry?.pending) return entry.pending
+    // A version that failed to read fails again without another read: Problems says why.
+    if (entry?.failed?.version === document.version) throw entry.failed.reason
+    return this.parse(document)
+  }
+
+  /** `document`'s entry, made on first use; a document VS Code closed has none. */
+  #entry(document: vscode.TextDocument): Entry {
+    if (document.isClosed) throw closedDocument()
     const uri = document.uri.toString()
-    let entry = this.entries.get(uri)
+    let entry = this.#entries.get(uri)
     if (!entry) {
       entry = { document, attachmentId: crypto.randomUUID(), stale: true, changes: [] }
-      this.entries.set(uri, entry)
+      this.#entries.set(uri, entry)
+      this.opened.fire(uri)
     }
+    return entry
+  }
+
+  /** What brings the case worker's copy of `document` to its version: the changes since the
+   *  version the worker holds, with the length of the text they make, which the worker checks; or,
+   *  before it holds one, the whole text. Unless `peek`, the worker is taken to hold it once sent. */
+  #delta(entry: Entry, document: vscode.TextDocument, peek = false): SourceDelta {
+    const delta: SourceDelta =
+      entry.workerVersion !== undefined
+        ? {
+            baseVersion: entry.workerVersion,
+            changes: [...entry.changes],
+            length: lengthOf(document),
+          }
+        : { text: document.getText() }
+    if (!peek) {
+      entry.changes = []
+      entry.workerVersion = document.version
+    }
+    return delta
+  }
+
+  /** The fields that complete at `offset` of `document`. Only what changed since the case worker's
+   *  copy crosses, the worker reads no further than the cursor, and the copy stays as it was: a
+   *  completion let go of, as one is at each keystroke, leaves the edits for the next read. */
+  complete(document: vscode.TextDocument, offset: number, signal: AbortSignal) {
+    const entry = this.#entry(document)
+    const version = document.version
+    const revision = { uri: document.uri.toString(), version, attachmentId: entry.attachmentId }
+    return resent(
+      (source: SourceDelta) =>
+        this.client.cases.call('complete', { ...revision, offset, ...source }, signal),
+      'stale-source',
+      this.#delta(entry, document, true),
+      () => wholeAt(document, version),
+      signal,
+    )
+  }
+
+  parse(document: vscode.TextDocument): Promise<Summary> {
+    const uri = document.uri.toString()
+    const entry = this.#entry(document)
     entry.controller?.abort()
     entry.validation = undefined
     clearTimeout(entry.timer)
     const controller = (entry.controller = new AbortController())
     const version = document.version
     const current = entry
-    const input =
-      entry.workerVersion !== undefined && entry.changes.length
-        ? {
-            uri,
-            version,
-            attachmentId: entry.attachmentId,
-            baseVersion: entry.workerVersion,
-            changes: entry.changes,
-          }
-        : { uri, version, attachmentId: entry.attachmentId, text: document.getText() }
-    entry.changes = []
-    entry.workerVersion = version
-    const pending = this.client.cases
-      .call('parse', input, controller.signal)
-      .catch((error) => {
-        // The worker's mirror is not at the delta's base: resend the whole text.
-        if (
-          error.message === 'Source mirror is stale.' &&
-          !controller.signal.aborted &&
-          document.version === version
-        )
-          return this.client.cases.call(
-            'parse',
-            { uri, version, attachmentId: current.attachmentId, text: document.getText() },
-            controller.signal,
-          )
-        throw error
-      })
+    const revision = { uri, version, attachmentId: entry.attachmentId }
+    const pending = resent(
+      (source: SourceDelta) =>
+        this.client.cases.call('parse', { ...revision, ...source }, controller.signal),
+      'stale-source',
+      this.#delta(entry, document),
+      () => wholeAt(document, version),
+      controller.signal,
+    )
       .then(
         (summary) => {
-          if (document.version !== version || controller.signal.aborted)
-            throw new Error('Superseded revision')
+          if (document.version !== version || controller.signal.aborted) throw superseded()
           current.summary = summary
           current.stale = false
           current.error = undefined
+          current.failed = undefined
           this.diagnostics.delete(document.uri)
           this.changed.fire(uri)
           // The view can request topology immediately. Diagnostics decode remaining columns
           // cooperatively and share this document revision's cancellation signal.
           void this.validate(document).catch((error) => {
-            if (!controller.signal.aborted && this.entries.get(uri) === current) {
+            if (!controller.signal.aborted && this.#entries.get(uri) === current) {
               current.error = error.message
               this.changed.fire(uri)
+              this.report(error)
             }
           })
           return summary
         },
         (error) => {
-          if (!controller.signal.aborted && document.version === version) {
-            current.stale = true
-            current.error = error.message
-            current.diagnosticsVersion = version
+          // A read a newer one replaced failed nothing.
+          if (controller.signal.aborted || document.version !== version) throw error
+          // What is wrong with the source Problems says, where it can; any other failure is said.
+          const wrong = inSource(error)
+          const reason = wrong ? diagnosed(error) : error
+          current.stale = true
+          current.error = error.message
+          current.failed = { version, reason }
+          if (wrong)
             this.diagnostics.set(document.uri, [
               new vscode.Diagnostic(
-                new vscode.Range(
-                  document.positionAt(error.offset ?? 0),
-                  document.positionAt((error.offset ?? 0) + (error.length ?? 1)),
-                ),
+                rangeOf(document, { offset: error.offset ?? 0, length: error.length ?? 1 }),
                 error.message,
               ),
             ])
-            this.changed.fire(uri)
-          }
-          // The diagnostic shows why; whoever awaited this need not say it again.
-          throw Object.assign(error, { diagnosed: true })
+          else this.report(reason)
+          this.changed.fire(uri)
+          throw reason
         },
       )
       .finally(() => {
@@ -184,32 +300,29 @@ export class Documents {
     entry.pending = pending
     return pending
   }
+
   async validate(document: vscode.TextDocument): Promise<Summary> {
     const summary = await this.ensure(document)
     const uri = document.uri.toString()
-    const entry = this.entries.get(uri)
+    const entry = this.#entries.get(uri)
     if (!entry || entry.stale || entry.summary !== summary || document.version !== summary.version)
-      throw new Error('Superseded revision')
+      throw superseded()
     if (summary.validation === 'complete') return summary
     if (entry.validation) return entry.validation
     const signal = entry.controller!.signal
     const pending = this.client.cases
-      .call('validate', { uri, version: summary.version, attachmentId: entry.attachmentId }, signal)
+      .call('validate', revisionOf(summary), signal)
       .then((issues) => {
         signal.throwIfAborted()
-        if (this.entries.get(uri) !== entry || document.version !== summary.version)
-          throw new Error('Superseded revision')
+        if (this.#entries.get(uri) !== entry || document.version !== summary.version)
+          throw superseded()
         const validated: Summary = { ...summary, issues, validation: 'complete' }
         entry.summary = validated
-        entry.diagnosticsVersion = summary.version
         this.diagnostics.set(
           document.uri,
           issues.map((issue) => {
             const diagnostic = new vscode.Diagnostic(
-              new vscode.Range(
-                document.positionAt(issue.offset),
-                document.positionAt(issue.offset + issue.length),
-              ),
+              rangeOf(document, issue),
               issue.message,
               issue.severity === 'error'
                 ? vscode.DiagnosticSeverity.Error
@@ -228,6 +341,7 @@ export class Documents {
     entry.validation = pending
     return pending
   }
+
   edit(uri: string, expected: number, element: Element & { field: string }, value: Value) {
     return this.transact(
       uri,
@@ -236,46 +350,49 @@ export class Documents {
       'Edit ' + element.field,
     )
   }
+
   /** Apply `mutations` as one workspace edit, queued behind the document's other edits and
-   *  checked against revision `expected`. */
+   *  checked against revision `expected`, of the document `attachmentId` names when given: or, for
+   *  mutations no revision changes the meaning of, as what the elements record, against the
+   *  latest. */
   transact(
     uri: string,
-    expected: number,
+    expected: number | 'latest',
     mutations: readonly Mutation[],
     label = 'Edit GridKit case',
+    attachmentId?: string,
   ): Promise<void> {
-    const entry = this.entries.get(uri)
-    if (!entry) return Promise.reject(new Error('The case document is closed.'))
-    const check = () => {
-      if (entry.document.isClosed || this.entries.get(uri) !== entry)
-        throw new Error('The case document is closed.')
-      if (entry.document.version !== expected || entry.stale)
+    const entry = this.#entries.get(uri)
+    if (!entry) return Promise.reject(closedDocument())
+    const check = (version: number) => {
+      if (entry.document.isClosed || this.#entries.get(uri) !== entry) throw closedDocument()
+      if (
+        entry.document.version !== version ||
+        entry.stale ||
+        (attachmentId !== undefined && entry.attachmentId !== attachmentId)
+      )
         throw new Error('The document changed. Refresh before editing.')
       if (!isWritable(entry.document)) throw new Error('This document is read-only.')
     }
     const pending = (entry.editing ?? Promise.resolve())
       .catch(() => {})
       .then(async () => {
-        check()
+        const version =
+          expected === 'latest' ? (await this.ensure(entry.document)).version : expected
+        check(version)
         const edits = await this.client.cases.call('transact', {
           uri,
-          version: expected,
+          version,
           attachmentId: entry.attachmentId,
           mutations,
         })
-        check()
+        check(version)
         if (!edits.length) return
         const workspaceEdit = new vscode.WorkspaceEdit()
         workspaceEdit.set(
           entry.document.uri,
           edits.map((change): [vscode.TextEdit, vscode.WorkspaceEditEntryMetadata] => [
-            vscode.TextEdit.replace(
-              new vscode.Range(
-                entry.document.positionAt(change.offset),
-                entry.document.positionAt(change.offset + change.length),
-              ),
-              change.text,
-            ),
+            vscode.TextEdit.replace(rangeOf(entry.document, change), change.text),
             { label, needsConfirmation: false },
           ]),
         )
@@ -288,34 +405,38 @@ export class Documents {
     entry.editing = pending
     return pending
   }
+
   async reveal(uri: string, element?: Element) {
     const document =
-      this.entries.get(uri)?.document ??
+      this.#entries.get(uri)?.document ??
       (await vscode.workspace.openTextDocument(vscode.Uri.parse(uri)))
-    const source = element
+    const read = element && (await this.read(document))
+    const source = read
       ? await this.client.cases.call('locate', {
           uri,
-          version: (await this.ensure(document)).version,
-          ...element,
+          version: read.version,
+          attachmentId: read.attachmentId,
+          ...element!,
         })
       : { offset: 0, length: 0 }
     const editor = await vscode.window.showTextDocument(document, {
       viewColumn: vscode.ViewColumn.Beside,
       preserveFocus: false,
     })
-    editor.selection = new vscode.Selection(
-      document.positionAt(source.offset),
-      document.positionAt(source.offset + source.length),
-    )
-    editor.revealRange(editor.selection, vscode.TextEditorRevealType.InCenterIfOutsideViewport)
+    const range = rangeOf(document, source)
+    editor.selection = new vscode.Selection(range.start, range.end)
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport)
   }
+
   dispose() {
-    for (const entry of this.entries.values()) {
+    for (const entry of this.#entries.values()) {
       entry.controller?.abort()
       clearTimeout(entry.timer)
     }
-    for (const disposable of this.disposables) disposable.dispose()
+    for (const disposable of this.#disposables) disposable.dispose()
     this.changed.dispose()
+    this.opened.dispose()
+    this.closed.dispose()
     this.diagnostics.dispose()
   }
 }

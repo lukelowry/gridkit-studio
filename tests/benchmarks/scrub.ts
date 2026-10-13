@@ -78,7 +78,7 @@ export async function run() {
     assert.ok(await bench.gridkit(), 'GridKit is required')
     const { uri, network } = await bench.openCase('cases/ACTIVSg10k.case.json')
     const key = uri.toString()
-    const session = bench.studio.all.get(key)!
+    const session = bench.studio.get(key)!
     await bench.record('Bus', ['Vm', 'Va'], uri)
     bench.run(
       'Run Dynamic Simulation',
@@ -103,10 +103,9 @@ export async function run() {
     const { transport } = session
     transport.pause()
     transport.seek(0)
-    session.plots = [{ from: 'Bus', field: 'Vm' }]
-    bench.studio.bind(key, { type: 'Bus', field: 'Vm' }, ['vertexColor'])
-    bench.studio.bind(key, { type: 'Bus', field: 'Va' }, ['vertexHeight'])
-    bench.studio.changed.fire(key)
+    session.setPlots([{ from: 'Bus', field: 'Vm' }])
+    session.bind({ type: 'Bus', field: 'Vm' }, ['vertexColor'])
+    session.bind({ type: 'Bus', field: 'Va' }, ['vertexHeight'])
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
@@ -169,7 +168,7 @@ export async function run() {
     transport.pause()
     report['play'] = summarize(await stop(network), 3000)
 
-    assert.deepEqual(bench.studio.errors, [], 'Studio reported no error')
+    assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')
     await mkdir(output, { recursive: true })
     await writeFile(join(output, 'scrub.json'), JSON.stringify(report, null, 2))

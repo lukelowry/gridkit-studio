@@ -1,15 +1,21 @@
 /** Monitored Signals: what the case's runs record, which is its elements' `mon` lists. A field is
  *  checked when every element of its type lists it. Checking it makes every one list it, and
- *  clearing it makes none, as one edit of the case that undo reverses. */
+ *  clearing it makes none, as one edit of the case that undo reverses. A field's menu acts on it as
+ *  a Case panel column's does: it plots and maps it. */
 
 import * as vscode from 'vscode'
 
+import { channelsOf, NUMERIC } from '../shared/bindings.js'
+import { signalContext, type Target } from '../shared/contexts.js'
+import { viewId } from '../shared/ids.js'
 import type { Mutation, Summary } from '../shared/messages.js'
-import { fieldName, typeName } from '../shared/schema.js'
+import { fieldName, networkOf, placementOf, typeName } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
 
-/** A recordable type, or one of its fields when `field` is set. */
+/** A recordable type, or one of its fields when `field` is set, which its menu's commands act on
+ *  through `gridkitTarget`. */
 class Signal extends vscode.TreeItem {
+  gridkitTarget?: Target
   constructor(
     readonly type: string,
     readonly field: string | undefined,
@@ -39,11 +45,11 @@ type Change = Extract<Mutation, { kind: 'record' }>
 
 export function registerSignals(studio: Sessions) {
   const changed = new vscode.EventEmitter<void>()
-  /** The active case and its last parsed summary. */
+  /** The active case, its last parsed summary, and what it maps. */
   const shown = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
-    return uri && summary ? { uri, summary } : undefined
+    return uri && summary ? { uri, summary, bindings: studio.get(uri)?.bindings ?? {} } : undefined
   }
 
   const provider: vscode.TreeDataProvider<Signal> = {
@@ -52,7 +58,7 @@ export function registerSignals(studio: Sessions) {
     getChildren(parent) {
       const now = shown()
       if (!now || parent?.field !== undefined) return []
-      const { uri, summary } = now
+      const { uri, summary, bindings } = now
       const types = recordable(summary)
       if (!parent)
         return types.map(({ type, fields }) => {
@@ -66,14 +72,16 @@ export function registerSignals(studio: Sessions) {
           item.accessibilityInformation = { label: `${name}, ${on} of ${fields.length} recorded` }
           return item
         })
-      const name = typeName(summary.schema, parent.type)
-      const total = summary.counts[parent.type] ?? 0
-      const definitions = summary.schema.types[parent.type]?.fields ?? {}
-      return (types.find(({ type }) => type === parent.type)?.fields ?? []).map((field) => {
-        const count = listed(summary, parent.type, field)
+      const { type } = parent
+      const name = typeName(summary.schema, type)
+      const total = summary.counts[type] ?? 0
+      const definitions = summary.schema.types[type]?.fields ?? {}
+      const drawn = !!placementOf(networkOf(summary.schema), type)
+      return (types.find((each) => each.type === type)?.fields ?? []).map((field) => {
+        const count = listed(summary, type, field)
         const label = fieldName(definitions[field], field)
-        const item = new Signal(parent.type, field, label, vscode.TreeItemCollapsibleState.None)
-        item.id = `${uri}\n${parent.type}\n${field}`
+        const item = new Signal(type, field, label, vscode.TreeItemCollapsibleState.None)
+        item.id = `${uri}\n${type}\n${field}`
         item.checkboxState = {
           state: checked(count > 0 && count === total),
           accessibilityInformation: { label: `Record ${name} ${label}` },
@@ -83,23 +91,37 @@ export function registerSignals(studio: Sessions) {
           item.description = `${count.toLocaleString()} of ${total.toLocaleString()}`
         item.tooltip = definitions[field]?.description ?? `${name} ${label}`
         item.accessibilityInformation = { label: `${name} ${label}` }
+        item.gridkitTarget = { uri, version: summary.version, origin: 'signals', type, field }
+        item.contextValue = signalContext({
+          recorded: count > 0,
+          mappable: drawn && NUMERIC.has(definitions[field]?.type),
+          mapped: channelsOf(bindings, { type, field }).length > 0,
+        })
         return item
       })
     },
   }
 
-  const view = vscode.window.createTreeView('gridkitStudio.signals', {
+  const view = vscode.window.createTreeView(viewId('signals'), {
     treeDataProvider: provider,
     manageCheckboxStateManually: true,
     showCollapseAll: true,
   })
-  /** One edit of the case: each type's elements list `add` and none of `remove`. */
+  studio.signalRow = (type, field) =>
+    (
+      provider.getChildren(
+        new Signal(type, undefined, '', vscode.TreeItemCollapsibleState.Collapsed),
+      ) as Signal[]
+    ).find((item) => item.field === field)
+  /** One edit of the case: each type's elements list `add` and none of `remove`. What they list
+   *  means the same in any revision, so the edit waits for the last and applies to it: boxes
+   *  checked quickly, each before the case is read again, all take. */
   const record = (changes: readonly Change[], label: string) => {
     const now = shown()
     if (now && changes.length)
       void studio.documents
-        .transact(now.uri, now.summary.version, changes, label)
-        .catch((error) => studio.report(error))
+        .transact(now.uri, 'latest', changes, label)
+        .catch((error) => studio.reporter.report(error))
   }
   view.onDidChangeCheckboxState(({ items }) => {
     const changes = new Map<
@@ -117,10 +139,11 @@ export function registerSignals(studio: Sessions) {
   })
 
   let revision = ''
-  /** Redraw when the active case or its revision changes. */
+  /** Redraw when the active case, its revision, or what it maps changes: a mapping changes what a
+   *  field's menu offers. */
   const refresh = () => {
     const now = shown()
-    const next = JSON.stringify([now?.uri, now?.summary.version])
+    const next = JSON.stringify([now?.uri, now?.summary.version, now?.bindings])
     if (next === revision) return
     revision = next
     view.message =
@@ -146,7 +169,7 @@ export function registerSignals(studio: Sessions) {
     changed,
     view,
     studio.changed.event(refresh),
-    studio.command('gridkitStudio.selectAllSignals', every(true)),
-    studio.command('gridkitStudio.clearSignals', every(false)),
+    studio.command('recordAllSignals', every(true)),
+    studio.command('recordNoSignals', every(false)),
   ]
 }

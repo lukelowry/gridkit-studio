@@ -1,20 +1,9 @@
 /** Column chunks and their builders; every column of a table shares one set of chunk boundaries. */
 
-import type {
-  BooleanColumn,
-  Column as Chunk,
-  DataType,
-  Index,
-  ListColumn,
-  NumericArray,
-  NumericColumn,
-  NumericType,
-  ReferenceColumn,
-  TextColumn,
-  Value,
-  VectorColumn,
-} from '@latkit/model'
+import type { Column as Chunk, Index, Schema } from '@latkit/model'
 import { failure } from '@latkit/model'
+
+import type { Value } from '../shared/messages.js'
 
 export type { Chunk }
 
@@ -34,15 +23,20 @@ export function deferred<T>(decode: () => T): () => T {
 /** Rows per parsed column chunk. */
 export const CHUNK_ROWS = 65_536
 
+/** Whether `value` is an int32 field's value: a whole number in a 32-bit signed integer's range. */
+export const isInt32 = (value: number) =>
+  Number.isInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff
+
 export interface Column {
-  readonly type: DataType
+  readonly type: Schema.FieldType
   readonly chunks: readonly Chunk[]
   /** starts[i] is chunk i's first row; the last entry is the row count. */
   readonly starts: Uint32Array
   /** A reference column's target, kept here so an empty column has it too. */
   readonly index?: Index
-  /** Present, non-null JSON, including values rejected by the typed decoder. */
-  readonly supplied?: (row: number) => boolean
+  /** The rows, ascending, that write a value, not null, the column does not read as its type, or,
+   *  of a reference, as a row of its target. A row that writes none is the field's to require. */
+  readonly wrong?: () => readonly number[]
 }
 
 const ARRAYS = {
@@ -117,7 +111,7 @@ export interface Builder {
   finish(): Chunk
 }
 
-export function builder(type: DataType, index?: Index): Builder {
+export function builder(type: Schema.FieldType, index?: Index): Builder {
   if (typeof type === 'string') {
     if (type === 'text') return new TextBuilder()
     if (type === 'boolean') return new BooleanBuilder()
@@ -133,14 +127,14 @@ export function builder(type: DataType, index?: Index): Builder {
       return build.length
     },
     push: (value) => build.push(value),
-    finish: (): ReferenceColumn => {
+    finish: (): Chunk.Reference => {
       const chunk = build.finish()
       return { ...chunk, kind: 'reference', index, values: chunk.values as Uint32Array }
     },
   }
 }
 
-export function chunkOf(type: DataType, values: readonly Value[]): Chunk {
+export function chunkOf(type: Schema.FieldType, values: readonly Value[]): Chunk {
   const build = builder(type)
   for (const value of values) build.push(value)
   return build.finish()
@@ -198,11 +192,11 @@ class Validity {
 }
 
 export class NumericBuilder implements Builder {
-  #values: NumericArray
+  #values: Chunk.NumericArray
   #length = 0
   readonly #validity = new Validity()
 
-  constructor(readonly type: NumericType) {
+  constructor(readonly type: Schema.NumericType) {
     this.#values = new ARRAYS[type](256)
   }
 
@@ -226,7 +220,7 @@ export class NumericBuilder implements Builder {
     else this.pushNull()
   }
 
-  finish(): NumericColumn {
+  finish(): Chunk.Numeric {
     const values = new ARRAYS[this.type](this.#length)
     values.set(this.#values.subarray(0, this.#length))
     const validity = this.#validity.finish(this.#length)
@@ -261,7 +255,7 @@ class BooleanBuilder implements Builder {
     this.#values.set(this.#length++, value === true)
   }
 
-  finish(): BooleanColumn {
+  finish(): Chunk.Boolean {
     const validity = this.#validity.finish(this.#length)
     const values = this.#values.finish(this.#length)
     return {
@@ -305,7 +299,7 @@ export class TextBuilder implements Builder {
     this.#close()
   }
 
-  finish(): TextColumn {
+  finish(): Chunk.Text {
     const bytes = this.#bytes.slice(0, this.#size)
     const offsets = this.#offsets.slice(0, this.#length + 1)
     const validity = this.#validity.finish(this.#length)
@@ -345,7 +339,7 @@ export class VectorBuilder implements Builder {
   #length = 0
 
   constructor(
-    items: NumericType,
+    items: Schema.NumericType,
     readonly size: number,
   ) {
     this.lanes = new NumericBuilder(items)
@@ -367,7 +361,7 @@ export class VectorBuilder implements Builder {
     this.#length++
   }
 
-  finish(): VectorColumn {
+  finish(): Chunk.Vector {
     const validity = this.#validity.finish(this.#length)
     const values = this.lanes.finish()
     return {
@@ -387,7 +381,7 @@ export class ListBuilder implements Builder {
   #length = 0
   readonly #validity = new Validity()
 
-  constructor(items: DataType) {
+  constructor(items: Schema.FieldType) {
     this.items = builder(items)
   }
 
@@ -412,7 +406,7 @@ export class ListBuilder implements Builder {
     this.commit()
   }
 
-  finish(): ListColumn {
+  finish(): Chunk.List {
     const offsets = this.#offsets.slice(0, this.#length + 1)
     const validity = this.#validity.finish(this.#length)
     const values = this.items.finish()

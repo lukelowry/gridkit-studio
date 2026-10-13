@@ -161,9 +161,16 @@ export class Sessions implements vscode.Disposable {
   /** Shows the panel `kind` without taking focus from where the user is. A panel never shown yet,
    *  and Monitored Signals, can only be shown by focusing them. */
   async showView(kind: Extract<View, 'case' | 'monitor' | 'export' | 'signals'>): Promise<void> {
-    const view = kind === 'signals' ? undefined : this.panels.get(kind)
-    if (view) view.show(true)
-    else await vscode.commands.executeCommand(viewId(kind) + '.focus')
+    const panel = kind === 'signals' ? undefined : kind
+    const view = panel && this.panels.get(panel)
+    if (panel && view)
+      try {
+        return view.show(true)
+      } catch {
+        // VS Code disposed it before it said so: its own command makes it anew.
+        this.panels.delete(panel)
+      }
+    await vscode.commands.executeCommand(viewId(kind) + '.focus')
   }
 
   /** The case the views follow. */

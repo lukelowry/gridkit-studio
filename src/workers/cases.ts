@@ -12,6 +12,7 @@ import {
   sourceContext,
   sourceRange,
   transaction,
+  unchangedBy,
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
 import { detail, problem, superseded } from '../shared/errors.js'
@@ -84,15 +85,23 @@ serve<CaseApi>(
         'text' in input && !known && !reread && opened.fits(text)
           ? TextCases.key(text, catalog, name)
           : undefined
-      // An edit of a case read before reads again only the records it changed.
+      // An edit of a case read before reads again only the records it changed: when its changes are
+      // of the text that case was read from, what they leave of it is known without a comparison.
+      const unchanged =
+        'changes' in input && read?.text === known?.source.text
+          ? unchangedBy(read!.text.length, input.changes)
+          : undefined
       const kase = reread
         ? read!.kase
         : ((key === undefined ? undefined : opened.find(key)) ??
           (read
-            ? await Case.revise(read.kase, text, name, signal, (error) =>
+            ? await Case.revise(read.kase, text, {
+                name,
+                signal,
                 // A defect in reading the edit alone is said in the log; the case reads whole.
-                send({ kind: 'log', level: 'error', message: detail(error) }),
-              )
+                defects: (error) => send({ kind: 'log', level: 'error', message: detail(error) }),
+                ...(unchanged && { unchanged }),
+              })
             : await Case.parse(text, catalog, name, signal)))
       if (key) opened.keep(kase, () => key)
       signal.throwIfAborted()

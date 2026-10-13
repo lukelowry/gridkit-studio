@@ -1,4 +1,5 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -54,7 +55,16 @@ async function stored(stores: Stores, path: string, frames: number, modified = 1
   return store
 }
 
-const folders = async () => (await readdir(root)).length
+/** How many stores the window `owner` keeps, this one's unless said. */
+const folders = async (owner = process.pid) =>
+  (await readdir(join(root, String(owner))).catch(() => [])).length
+
+/** The id of a process that has exited, as a window gone leaves its extension host's. */
+async function exited(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
+  await new Promise((resolve) => child.once('exit', resolve))
+  return child.pid!
+}
 
 describe('the stores of the results files a worker reads', () => {
   it('reads back each row of a chunk as one run of its frames, and only the rows asked for', async () => {
@@ -127,5 +137,26 @@ describe('the stores of the results files a worker reads', () => {
     await after.sweep([a])
     expect(await folders()).toBe(1)
     expect((await after.find(a, stamp(4, 2), 'case'))?.manifest?.stamp.modified).toBe('2')
+  })
+
+  it('never sweeps away the stores of a window still open, and takes those of one gone', async () => {
+    const [a, b] = [join(root, 'a.csv'), join(root, 'b.csv')]
+    // Another window, still open, writes a store of a file this one's sessions never name.
+    const open = process.ppid
+    const writing = await new Stores(root, open).create(b)
+    // A window gone left a store read through of a file this one's sessions name.
+    const gone = await exited()
+    await (await stored(new Stores(root, gone), a, 4)).close()
+    // What is no window's folder is no store of Studio's now.
+    await mkdir(join(root, 'stray'))
+    const mine = new Stores(root)
+    await mine.sweep([a])
+    expect(await folders(open)).toBe(1)
+    expect((await mine.find(a, stamp(4), 'case'))?.manifest?.frames).toBe(4)
+    expect((await readdir(root)).sort()).toEqual([String(open), String(process.pid)].sort())
+    // The other window's store takes its frames still.
+    writing.shape([2], 2)
+    await writing.write(0, 2, [Float64Array.of(1, 2, 3, 4)])
+    await writing.close()
   })
 })

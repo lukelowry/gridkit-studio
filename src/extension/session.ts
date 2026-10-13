@@ -433,6 +433,18 @@ export class Session {
     // request.
     if (this.#running?.began && this.#run)
       this.ran({ ...this.#run, state: 'interrupted', message: error.message })
+    this.#readAgain(steady)
+  }
+
+  /** The results worker lost the results `id`, as what it kept of their file does not read: those
+   *  on show are read again from their file at once, under an id the views start over with. */
+  dropped(id: string): void {
+    if (this.#results?.id === id) this.#readAgain(true)
+  }
+
+  /** Reads again from its file what was on show, or due to be read again: at once while the views
+   *  follow the session, when `now`, else once they follow it again. */
+  #readAgain(now: boolean): void {
     const shown = this.#results
     if (shown) {
       // The worker holds them no more, so there is nothing to let go of.
@@ -444,7 +456,7 @@ export class Session {
     }
     if (!this.#pending) return
     this.#due = 'following'
-    if (steady) this.restore('following')
+    if (now) this.restore('following')
   }
 
   /** Steps one frame through the results on show, then pauses. */

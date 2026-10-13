@@ -33,7 +33,7 @@ import {
   selectionsOf,
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
-import { same, type Stamp, stampOf } from './stamp.js'
+import { same, type Stamp, stampAt, stampOf } from './stamp.js'
 import { fileKey, type Store } from './store.js'
 
 /** While a playhead plays, time behind it counts this many times over: views load ahead of it. */
@@ -191,6 +191,10 @@ function joined(decoded: readonly Decoded[], coordinates: Float64Array): Decoded
 /** Why results that were closed read nothing more: whoever asks of them stops, and says nothing. */
 export const closed = () => problem('results-closed', 'These results are closed.')
 
+/** Why results whose store does not read read nothing more: their owner reads their file again. */
+export const lost = (name: string, cause: unknown) =>
+  problem('results-lost', `What Studio kept of ${name} could not be read.`, { cause })
+
 /** What a reading of a results file is, besides the file: the case revision it is read against,
  *  and the solver file whose run writes it and the times that run covers. */
 export interface Reading {
@@ -246,7 +250,8 @@ export class ResultsFile {
     this.#progress = { frames: 0, domain: [0, 0], domains: {}, growing: false }
   }
 
-  /** The results file `store`, read through, holds: read from the store alone. */
+  /** The results file `store`, read through, holds: read from the store alone, all it says it
+   *  holds there, else not at all. */
   static async stored(
     kase: Case,
     cache: ResultCache,
@@ -257,6 +262,8 @@ export class ResultsFile {
     const file = new ResultsFile(kase, cache, store, reading)
     Object.assign(file.#decode, layoutFrom(manifest.header, kase))
     file.#learned(manifest.chunk)
+    if (!(await store.intact()))
+      throw new Error(`What Studio kept of ${manifest.path} is cut short.`)
     file.#times!.push(await store.times())
     Object.assign(file.#progress, {
       frames: manifest.frames,
@@ -299,19 +306,31 @@ export class ResultsFile {
     return this.kase.bytes + (this.#times?.bytes ?? 0)
   }
 
-  /** Reads the file with `read` until it settles. Retiring the file stops it, and waits for it. */
-  async use<R>(signal: AbortSignal, read: (signal: AbortSignal) => Promise<R>): Promise<R> {
-    signal.throwIfAborted()
+  /** Reads the file with `read` until it settles, or `signal` lets go of it. Retiring the file
+   *  stops it, and waits for it. */
+  async use<R>(
+    signal: AbortSignal | undefined,
+    read: (signal: AbortSignal) => Promise<R>,
+  ): Promise<R> {
+    signal?.throwIfAborted()
     if (this.#retired) throw closed()
     const reader = new AbortController()
     let done!: () => void
     this.#readers.set(reader, new Promise<void>((resolve) => (done = resolve)))
     try {
-      return await read(AbortSignal.any([signal, reader.signal]))
+      return await read(signal ? AbortSignal.any([signal, reader.signal]) : reader.signal)
     } finally {
       this.#readers.delete(reader)
       done()
     }
+  }
+
+  /** Once nothing writes the file any more, stamps it as it stands, when reading it stopped short of
+   *  its end and it is still the file opened: what was read of it then exports, while it stays so. */
+  async settle(): Promise<void> {
+    if (this.#stamp || this.#progress.growing || !this.#opened) return
+    const now = await stampAt(this.#layout.path).catch(() => undefined)
+    if (now?.file === this.#opened.file) this.#stamp = now
   }
 
   /** Stops whoever reads the file, waits for them, and lets go of its chunks. The file stays, and
@@ -502,8 +521,18 @@ export class ResultsFile {
     await this.#writing.get(k)
     signal.throwIfAborted()
     const count = this.#countOf(k)
-    const values = await this.store.read(k, f, count, places)
+    const values = await this.#kept(k, f, count, places)
     return { batch: this.#stored(k, f, count, values, places), chosen: true }
+  }
+
+  /** What the store keeps of field `f` of chunk `k`, of `count` frames, of the rows at `places` when
+   *  given. A store that does not read is lost, and the results with it. */
+  async #kept(k: number, f: number, count: number, places?: Uint32Array): Promise<Float64Array> {
+    try {
+      return await this.store.read(k, f, count, places)
+    } catch (error) {
+      throw lost(this.#layout.name, error)
+    }
   }
 
   /** Reads the file's header alone, which gives the layout every segment is read with. */
@@ -636,8 +665,7 @@ export class ResultsFile {
         // Asked for meanwhile, as the Network and the Monitor do at once, it is read once.
         let read = this.#reading.get(key)
         if (!read) {
-          read = this.store
-            .read(k, f, count)
+          read = this.#kept(k, f, count)
             .then((values) => {
               const batch = this.#stored(k, f, count, values)
               this.cache.put(this, key, [batch], true)

@@ -35,7 +35,7 @@ import {
   SIGNAL,
   withFound,
 } from './definition.js'
-import { carryOffsets, charsAt } from './offsets.js'
+import { bytesAt, carryOffsets, charsAt } from './offsets.js'
 import {
   ARRAYS,
   type Coding,
@@ -78,6 +78,17 @@ interface FoundField {
 /** An array's records, and each one's `mon` value as a start and end; 0, 0 where it has none. */
 interface RecordArray extends Records {
   readonly mons: Uint32Array
+}
+
+/** How a case is read again from an earlier one: as `name` names it when its header gives none, until
+ *  `signal` lets go, `defects` hearing of a defect in reading the edit alone; and, when the changes
+ *  that made the text say so, how much of the earlier text they left `unchanged`: its first `prefix`
+ *  and last `suffix` UTF-16 units. */
+export interface Revising {
+  readonly name?: string
+  readonly signal?: AbortSignal
+  readonly defects?: (error: unknown) => void
+  readonly unchanged?: { readonly prefix: number; readonly suffix: number }
 }
 
 const RANGE_BYTES = 256 << 10
@@ -136,20 +147,20 @@ export class Case {
   /** The case `text` holds, read from `previous`, a case of an earlier text, as `name` names it when
    *  its header gives none. When the text differs only among the records of one array, those records
    *  alone are read again, and the ranges the edit leaves alone are kept, moved as it moved them:
-   *  what they decoded stays decoded. Where those records are not JSON, it says so as a whole read
-   *  would, from them alone. Otherwise, and wherever else the text does not read, it is read whole,
-   *  which says why. A defect in reading the records alone, `defects` hears of; the text is read
-   *  whole all the same. */
+   *  what they decoded stays decoded, and the tables it leaves alone keep their indexes. Where those
+   *  records are not JSON, it says so as a whole read would, from them alone. Otherwise, and
+   *  wherever else the text does not read, it is read whole, which says why. A defect in reading the
+   *  records alone, `defects` hears of; the text is read whole all the same. What the edit left
+   *  `unchanged` of the earlier text, when said, is never encoded again nor compared. */
   static async revise(
     previous: Case,
     text: string,
-    name = 'Case',
-    signal?: AbortSignal,
-    defects: (error: unknown) => void = () => {},
+    { name = 'Case', signal, defects = () => {}, unchanged }: Revising = {},
   ): Promise<Case> {
     signal?.throwIfAborted()
-    const file = UTF8.encode(text)
-    const edit = changed(previous.file, file)
+    const made = unchanged ? spliced(previous.file, text, unchanged) : { file: UTF8.encode(text) }
+    const { file } = made
+    const edit = 'edit' in made ? made.edit : changed(previous.file, file)
     if (edit && !stale(previous))
       try {
         const revised = await revisionOf(previous, text, file, edit, name, signal)
@@ -384,7 +395,8 @@ function hashOf(
 
 /** The case of `file`, as `layout` lays it out and `parts`, coded as `coding` says, read its
  *  records, of the version `hashed` says; `name` names it when its header gives none. Its identity
- *  indexes are built, so an id two rows share fails it. */
+ *  indexes are built, so an id two rows share fails it; those of the tables a revision of
+ *  `previous` leaves alone are its own. */
 function assembled(
   file: Uint8Array,
   layout: Layout,
@@ -393,6 +405,7 @@ function assembled(
   catalog: Catalog,
   name: string,
   hashed: ReturnType<typeof hashOf>,
+  previous?: Case,
 ): Case {
   // What each range has yet to decode is read from this file, where its bytes lie now.
   for (const { parsed, shift } of parts) {
@@ -400,7 +413,7 @@ function assembled(
     parsed.source.shift = shift
   }
   const { version, hashes } = hashed
-  const kase = joined(parts, coding, file, layout, catalog, version, name, hashes)
+  const kase = joined(parts, coding, file, layout, catalog, version, name, hashes, previous)
   for (const table of kase.tables.values())
     if (table.shape.identity.type === 'text') textIds(table)
     else numberIds(table)
@@ -430,6 +443,7 @@ function joined(
   version: Index['version'],
   fallback: string,
   hashes: readonly Hash[],
+  previous?: Case,
 ): Case {
   const { shapes } = coding
   const chunks = shapes.map((shape) => ({
@@ -474,7 +488,12 @@ function joined(
     const shape = shapes[code]!
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
-    const starts = startsOf(ids)
+    // A table whose ranges were all kept has the ids of the case before, and with them the indexes
+    // built of them.
+    const before = previous?.tables.get(shape.type)?.ids
+    const kept =
+      before?.chunks.length === ids.length && before.chunks.every((chunk, i) => chunk === ids[i])
+    const starts = kept ? before!.starts : startsOf(ids)
     const column = (type: Schema.FieldType, list: readonly Chunk[]): Column => ({
       type,
       chunks: list,
@@ -484,7 +503,7 @@ function joined(
       shape,
       index: index(shape.type),
       starts,
-      ids: column(shape.identity.type, ids),
+      ids: kept ? before! : column(shape.identity.type, ids),
       fields: new Map(
         shape.fields.map((field, i) => [
           field.name,
@@ -543,6 +562,34 @@ function joined(
     hashes,
   )
 }
+
+/** The bytes of `text`, made from `before`, the bytes of a text it shares but for what lies past
+ *  its first `prefix` and before its last `suffix` UTF-16 units: only what lies between is
+ *  encoded, and that is all the two differ by. Each side ends on a whole character. */
+function spliced(
+  before: Uint8Array,
+  text: string,
+  { prefix, suffix }: { readonly prefix: number; readonly suffix: number },
+): { file: Uint8Array; edit: { start: number; before: number; after: number } } {
+  const length = charsAt(before, before.length)
+  let head = Math.min(prefix, length, text.length)
+  let tail = Math.min(suffix, length - head, text.length - head)
+  // A pair of surrogates is never split: what starts or ends one goes with the rest of it.
+  if (head > 0 && isLead(text.charCodeAt(head - 1))) head--
+  if (tail > 0 && isTrail(text.charCodeAt(text.length - tail))) tail--
+  const start = bytesAt(before, head)
+  const end = bytesAt(before, length - tail)
+  const middle = UTF8.encode(text.slice(head, text.length - tail))
+  const file = new Uint8Array(start + middle.length + before.length - end)
+  file.set(before.subarray(0, start))
+  file.set(middle, start)
+  file.set(before.subarray(end), start + middle.length)
+  return { file, edit: { start, before: end, after: start + middle.length } }
+}
+
+/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
+const isLead = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
+const isTrail = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
 
 /** How many bytes are compared at once, natively, as two files are told apart. */
 const COMPARED_BYTES = 1 << 16
@@ -724,6 +771,7 @@ async function revisionOf(
     previous.catalog,
     name,
     hashOf(previous.catalog, file, previous.hashes, edit.start),
+    previous,
   )
 }
 
@@ -996,37 +1044,28 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
   return out
 }
 
+/** Each port chunk as rows of the target it was resolved against, while that target's ids are the
+ *  same: a range a revision keeps, of a target it leaves alone, is never resolved again. */
+const resolved = new WeakMap<IndexedChunk, ReturnType<typeof resolve>>()
+
 /** A port's native numbers as rows of `target`; a number no row holds is null. Its wrong rows are
- *  those that write what is no number, and those whose number names no row: found again each
- *  revision, as the target's ids are read again. */
+ *  those that write what is no number, and those whose number names no row: found again as the
+ *  target's ids change. */
 function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
-  const ids = native.length === 0 ? undefined : numberIds(target)
   const decode = deferred(() => {
     const wrong: number[] = []
     const chunks = native.map((source, c): Chunk.Reference => {
-      const port = source.read() as Chunk.Numeric
-      const values = new Uint32Array(port.length)
-      let validity: Uint8Array | undefined
-      const dangling: number[] = []
-      for (let at = 0; at < port.length; at++) {
-        const written = isValid(port, at)
-        const row = written ? ids!.row(port.values[port.offset + at]!) : -1
-        if (row >= 0) values[at] = row
-        else {
-          validity ??= new Uint8Array(Math.ceil(port.length / 8)).fill(0xff)
-          validity[at >>> 3]! &= ~(1 << (at & 7))
-          if (written) dangling.push(at)
-        }
-      }
-      for (const at of [...source.wrong(), ...dangling].sort((a, b) => a - b))
-        wrong.push(starts[c]! + at)
+      let found = resolved.get(source)
+      if (found?.ids !== target.ids) resolved.set(source, (found = resolve(source, target)))
+      for (const at of found.wrong) wrong.push(starts[c]! + at)
+      // Of this revision's target, whose index names the version of the case it is of.
       return {
         kind: 'reference',
         index: target.index,
-        values,
+        values: found.values,
         offset: 0,
-        length: port.length,
-        ...(validity && { validity }),
+        length: found.values.length,
+        ...(found.validity && { validity: found.validity }),
       }
     })
     return { chunks, wrong }
@@ -1040,6 +1079,29 @@ function references(native: readonly IndexedChunk[], starts: Uint32Array, target
     },
     wrong: () => decode().wrong,
   }
+}
+
+/** The port chunk `source` as rows of `target`, which the target's `ids` say: where none, null in
+ *  `validity`; and its wrong rows, those that write what is no number, and those whose number
+ *  names no row. */
+function resolve(source: IndexedChunk, target: Table) {
+  const port = source.read() as Chunk.Numeric
+  const ids = numberIds(target)
+  const values = new Uint32Array(port.length)
+  let validity: Uint8Array | undefined
+  const dangling: number[] = []
+  for (let at = 0; at < port.length; at++) {
+    const written = isValid(port, at)
+    const row = written ? ids.row(port.values[port.offset + at]!) : -1
+    if (row >= 0) values[at] = row
+    else {
+      validity ??= new Uint8Array(Math.ceil(port.length / 8)).fill(0xff)
+      validity[at >>> 3]! &= ~(1 << (at & 7))
+      if (written) dangling.push(at)
+    }
+  }
+  const wrong = [...source.wrong(), ...dangling].sort((a, b) => a - b)
+  return { ids: target.ids, values, validity, wrong }
 }
 
 /** Every table's static fields as one Data, sharing the parsed chunks; an empty table keeps its

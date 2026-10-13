@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, truncate, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -56,6 +56,13 @@ async function read(rig: Rig, results: Results): Promise<Results> {
     },
     { timeout: 5000 },
   )
+}
+
+/** The one store this window keeps under the worker folder `folder`. */
+async function storeOf(folder: string): Promise<string> {
+  const own = join(folder, 'store', String(process.pid))
+  const [store] = await readdir(own)
+  return join(own, store!)
 }
 
 /** A CSV file of `frames` frames of bus `one`'s voltage, each `value(i)` at time `i`. */
@@ -316,6 +323,56 @@ describe('the results worker', () => {
       await rig.call('export', { results: again.id, path: exported })
       expect(await readFile(exported, 'utf8')).toEqual(measured)
       expect(await rig.call('step', { results: again.id, at: 0, direction: 1 })).toBe(1)
+    } finally {
+      await rig.stop()
+      await rm(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a file from its CSV again where what it kept of it was cut short', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'gridkit-cut-'))
+    const csv = join(folder, 'results.csv')
+    await waveform(csv, 40)
+    let rig = await start<ResultsApi>(script, { folder })
+    try {
+      const first = await read(rig, await open(rig, caseOf('cut'), csv))
+      const values = await everything(rig, first, { from: 'Bus', select: ['Vm'] })
+      await rig.stop()
+      // What was kept of the file ends partway, as a store a crash left would.
+      await truncate(join(await storeOf(folder), 'frames.bin'), 8)
+      rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
+      const again = await read(rig, await open(rig, caseOf('cut'), csv))
+      expect(again.frames).toBe(first.frames)
+      expect(await everything(rig, again, { from: 'Bus', select: ['Vm'] })).toEqual(values)
+    } finally {
+      await rig.stop()
+      await rm(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('lets go of results whose store no longer reads, and says they are lost', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'gridkit-lost-'))
+    const csv = join(folder, 'results.csv')
+    await waveform(csv, 40)
+    // Nothing kept in memory, so every read is of the store.
+    const rig = await start<ResultsApi>(script, { folder, options: { cacheBytes: 0 } })
+    try {
+      const results = await read(rig, await open(rig, caseOf('lost'), csv))
+      await truncate(join(await storeOf(folder), 'frames.bin'), 0)
+      await expect(everything(rig, results, { from: 'Bus', select: ['Vm'] })).rejects.toMatchObject(
+        {
+          code: 'results-lost',
+        },
+      )
+      expect(rig.events).toContainEqual({
+        kind: 'lost',
+        uri: caseOf('lost').uri,
+        results: results.id,
+      })
+      // The worker holds them no more: the extension reads the file again under results of its own.
+      await expect(
+        rig.call('step', { results: results.id, at: 0, direction: 1 }),
+      ).rejects.toMatchObject({ code: 'results-closed' })
     } finally {
       await rig.stop()
       await rm(folder, { recursive: true, force: true })

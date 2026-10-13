@@ -18,6 +18,9 @@ export type Code =
   | 'stale-source'
   /** The results asked of were closed: nothing failed, and nothing more is asked of them. */
   | 'results-closed'
+  /** What Studio kept of the results asked of does not read: their owner reads their file again,
+   *  under results of their own. */
+  | 'results-lost'
   /** A failure with no code of its own. */
   | 'operation-failed'
   | Failure.Code
@@ -53,8 +56,16 @@ export function failedWith(error: unknown, code: Code): boolean {
 export const superseded = () =>
   problem('superseded', 'The document changed. Wait for the current revision.')
 
-/** The codes of failures that are none: whoever asked let go, or another took its place. */
-const NONE: readonly Code[] = ['cancelled', 'aborted', 'closed', 'superseded', 'results-closed']
+/** The codes of failures that are none: whoever asked let go, or another took its place, as results
+ *  read again take the place of those lost. */
+const NONE: readonly Code[] = [
+  'cancelled',
+  'aborted',
+  'closed',
+  'superseded',
+  'results-closed',
+  'results-lost',
+]
 /** The codes of failures a view outlives by starting again: its device or connection came back. */
 const PASSING: readonly Code[] = ['device-lost', 'timeout', 'unavailable']
 

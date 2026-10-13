@@ -1,8 +1,9 @@
 /** The frames of a results file, decoded once into files of Studio's own: what every read of them
  *  after reads, exactly, whatever has become of the CSV since. Chunk `k` of field `f` is one block,
  *  each of its rows a run of the chunk's frames, so a view reads only the rows it draws. A store
- *  read through says what it holds, so a window opened again reads the results from it rather than
- *  from the CSV. One store is kept of each results file a saved session names. */
+ *  read through says what it holds, once all it holds is on disk, so a window opened again reads
+ *  the results from it rather than from the CSV. One store is kept of each results file a saved
+ *  session names, in the folder of the window that keeps it. */
 
 import { randomUUID } from 'node:crypto'
 import {
@@ -13,12 +14,14 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import type { Domain } from '@latkit/model'
 
+import { alive } from '../shared/processes.js'
 import { same, type Stamp } from './stamp.js'
 
 /** What a store holds: the results file it read, as that file was, and how its frames are cut. */
@@ -163,14 +166,29 @@ export class Store {
 
   /** Says what it holds, read through, with every frame's `times`: it reads alone from here on. */
   async finish(manifest: Omit<Manifest, 'format'>, times: Float64Array): Promise<void> {
-    await writeFile(join(this.folder, TIMES), times)
+    // All it holds is on disk before anything says it holds it.
+    await (await this.#handle()).sync()
+    await writeFile(join(this.folder, TIMES), times, { flush: true })
     const written: Manifest = { format: FORMAT, ...manifest }
     // Written whole, then named, so a store says what it holds or nothing.
     const draft = join(this.folder, MANIFEST + '.draft')
-    await writeFile(draft, JSON.stringify(written))
+    await writeFile(draft, JSON.stringify(written), { flush: true })
     await rename(draft, join(this.folder, MANIFEST))
     this.#manifest = written
     await this.owner?.finished(this)
+  }
+
+  /** Whether all a store read through says it holds is there: every frame of every chunk, as its
+   *  shape cuts them, and every frame's time. */
+  async intact(): Promise<boolean> {
+    const { frames } = this.#manifest!
+    const size = (name: string) =>
+      stat(join(this.folder, name)).then(
+        ({ size }) => size,
+        () => -1,
+      )
+    const [held, timed] = await Promise.all([size(FRAMES), size(TIMES)])
+    return held === frames * this.#width * BYTES && timed === frames * BYTES
   }
 
   /** Every frame's time, of a store read through. */
@@ -194,7 +212,9 @@ export class Store {
   }
 }
 
-/** The stores of the results files a worker reads, in one folder. */
+/** The stores of the results files a worker reads. Every window that shares `root`, as empty
+ *  windows share one, keeps its own in a folder named for its extension host, `owner`: no window
+ *  ever removes a store another window still open reads or writes. */
 export class Stores {
   /** The latest store read through of each results file, by its key. */
   readonly #latest = new Map<string, Store>()
@@ -202,21 +222,42 @@ export class Stores {
   readonly #using = new Map<Store, number>()
   /** The sweep the stores wait for before any is made or found. */
   #swept: Promise<void> = Promise.resolve()
+  /** This window's own stores. */
+  readonly #own: string
 
-  constructor(readonly root: string) {}
+  constructor(
+    readonly root: string,
+    owner = process.pid,
+  ) {
+    this.#own = join(root, String(owner))
+  }
 
-  /** Keeps the latest store read through of each results file `kept` names, and removes the rest:
+  /** Keeps the latest store read through of each results file `kept` names, of this window's and
+   *  of the windows since gone, whose stores it takes as its own, and removes the rest of those:
    *  stores never read through, those of files no saved session names, and those a later store
-   *  took the place of. Asked as the worker starts, before it reads anything. */
+   *  took the place of. A window still open keeps its own, whatever they hold. Asked as the worker
+   *  starts, before it reads anything. */
   sweep(kept: readonly string[]): Promise<void> {
     return (this.#swept = this.#sweep(new Set(kept.map(fileKey))))
   }
 
   async #sweep(named: ReadonlySet<string>): Promise<void> {
-    const names = await readdir(this.root).catch(() => [])
+    await mkdir(this.#own, { recursive: true })
+    for (const name of await readdir(this.root).catch(() => [])) {
+      const folder = join(this.root, name)
+      const window = /^\d+$/.test(name) ? Number(name) : undefined
+      if (folder === this.#own || (window !== undefined && alive(window))) continue
+      // A window gone leaves its stores to the next, moved within one folder, never copied; what
+      // is no window's folder is no store of Studio's now.
+      if (window !== undefined)
+        for (const store of await readdir(folder).catch(() => []))
+          await rename(join(folder, store), join(this.#own, store)).catch(() => {})
+      await rm(folder, { recursive: true, force: true })
+    }
+    const names = await readdir(this.#own).catch(() => [])
     const found = await Promise.all(
       names.map(async (name) => {
-        const folder = join(this.root, name)
+        const folder = join(this.#own, name)
         return { folder, manifest: await manifestOf(folder) }
       }),
     )
@@ -246,7 +287,7 @@ export class Stores {
   /** A new store of the results file at `path`, to keep its frames as they are read. */
   async create(path: string): Promise<Store> {
     await this.#swept
-    const folder = join(this.root, randomUUID())
+    const folder = join(this.#own, randomUUID())
     await mkdir(folder, { recursive: true })
     return this.#use(new Store(folder, fileKey(path), undefined, this))
   }

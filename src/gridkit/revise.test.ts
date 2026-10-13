@@ -66,6 +66,21 @@ const stale = (kase: Case) =>
   kase.coding.unknown.size >
   [...kase.tables.keys()].filter((type) => !catalog.shapes.has(type)).length
 
+/** How much of `before` the edit that made `after` left as it was, its first and last UTF-16 units,
+ *  as the changes the editor sends say. */
+function unchangedOf(before: string, after: string) {
+  const shorter = Math.min(before.length, after.length)
+  let prefix = 0
+  while (prefix < shorter && before[prefix] === after[prefix]) prefix++
+  let suffix = 0
+  while (
+    suffix < shorter - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  )
+    suffix++
+  return { prefix, suffix }
+}
+
 /** Numbers that seem random, the same each run. */
 function numbers(seed: number) {
   let state = seed
@@ -200,7 +215,13 @@ describe('a case read again from the one before it', () => {
       const edit = edits[step % edits.length]!
       const next = edit(kase, text)
       if (next === text) continue
-      const revised = await Case.revise(kase, next)
+      // As the case worker reads an edit: its bytes made from the case before's, but for what the
+      // edit changed; every other edit, from the whole text, compared byte by byte.
+      const revised = await Case.revise(
+        kase,
+        next,
+        step % 2 ? {} : { unchanged: unchangedOf(text, next) },
+      )
       // An edit among the records keeps what it leaves alone; one of the header reads it all, as
       // does one after a class the case no longer has, which codes its classes anew.
       const kept = revised.parts.filter((part) =>
@@ -218,6 +239,42 @@ describe('a case read again from the one before it', () => {
       kase = revised
     }
   }, 60_000)
+
+  it('makes the bytes of text past ASCII from the case before, as encoding it whole would', async () => {
+    let text = `{
+ "header": {"case_name": "東京 ⚡"},
+ "buses": [
+  {"class":"Bus","number":42,"name":"東京 😀","params":{"kv":230.000}},
+  {"class":"Bus","number":7,"name":"Seven","params":{"kv":115.0}}
+ ],
+ "devices":[
+  {"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7}}
+ ]
+}`
+    let kase = await Case.parse(text, catalog)
+    for (const edit of [
+      // One unit of a surrogate pair, the other left as it was.
+      (text: string) => text.replace('😀', '😁'),
+      // Characters of two, three and four bytes where there were ASCII ones.
+      (text: string) => text.replace('Seven', 'Sév€n 🌍'),
+      // A number after them all.
+      (text: string) => text.replace('230.000', '231.000'),
+      // The surrogate pair taken away whole.
+      (text: string) => text.replace(' 😁', ''),
+    ]) {
+      const next = edit(text)
+      const revised = await Case.revise(kase, next, { unchanged: unchangedOf(text, next) })
+      const fresh = await Case.parse(next, catalog)
+      expect(revised.version).toBe(fresh.version)
+      expect(readAll(revised)).toEqual(readAll(fresh))
+      // The devices the edit left alone were kept.
+      expect(
+        revised.parts.some((part) => kase.parts.some((old) => old.parsed === part.parsed)),
+      ).toBe(true)
+      text = next
+      kase = revised
+    }
+  })
 
   it('says what is wrong with an edit as reading the whole text says it', async () => {
     const text = await readFile('cases/WECC240.case.json', 'utf8')

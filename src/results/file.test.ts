@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   stat,
+  truncate,
   utimes,
   writeFile,
 } from 'node:fs/promises'
@@ -344,6 +345,34 @@ describe('native results and ownership', () => {
     await expect(results.exportCsv(join(out, 'refused.csv'))).rejects.toThrow('written again')
     // A copy refused leaves nothing behind.
     expect((await readdir(out)).sort()).toEqual(['again.csv', 'copy.csv'])
+  })
+
+  it('exports what it read of a file it stopped reading partway, once nothing writes it', async () => {
+    const path = join(directory, 'partway.csv')
+    await writeFile(path, HEADER + '0,1\n0.01,1.5\n')
+    const results = await file(path)
+    const reader = following(results)
+    await reader.reach(2)
+    await appendFile(path, '0.02,x\n')
+    await expect(reader.end()).rejects.toThrow(/not a number/)
+    // Settled once its writer is done, it is the file it read, and what it read of it exports.
+    await results.settle()
+    const out = join(directory, 'exports', 'partway.csv')
+    await results.exportCsv(out)
+    expect(await readFile(out, 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
+    // A file put in its place since is not.
+    await writeFile(path, HEADER + '0,9\n')
+    await expect(results.exportCsv(out)).rejects.toThrow('written again')
+  })
+
+  it('reads nothing from a store whose frames are cut short, as a crash leaves one', async () => {
+    const path = join(directory, 'crashed.csv')
+    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,1.25\n')
+    const first = await readThrough(await file(path))
+    await truncate(join(first.store.folder, 'frames.bin'), 8)
+    await expect(
+      ResultsFile.stored(kase, new ResultCache(0), first.store, { ...READING, path }),
+    ).rejects.toThrow('cut short')
   })
 
   it('sends a growing chunk only the frames the view lacks of it', async () => {

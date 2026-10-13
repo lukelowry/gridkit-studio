@@ -75,14 +75,33 @@ function fileOf(id: string): ResultsFile {
   return file
 }
 
-/** `read` of the file the results `id` hold, which letting go of the file stops. */
-function using<R>(
+/** `read` of the file the results `id` hold, which letting go of the file stops. A file whose store
+ *  does not read is lost, with every results holding it. */
+async function using<R>(
   id: string,
   signal: AbortSignal,
   read: (file: ResultsFile, signal: AbortSignal) => Promise<R>,
 ): Promise<R> {
   const file = fileOf(id)
-  return file.use(signal, (s) => read(file, s))
+  try {
+    return await file.use(signal, (s) => read(file, s))
+  } catch (error) {
+    if (failedWith(error, 'results-lost')) await lose(file)
+    throw error
+  }
+}
+
+/** Lets go of `file`, whose store does not read, and of its store: the results holding it are
+ *  lost, which the extension hears, and reads their file again by its path. */
+async function lose(file: ResultsFile): Promise<void> {
+  if (!files.has(file)) return
+  for (const [id, holder] of held) {
+    if (holder !== file) continue
+    held.delete(id)
+    told.delete(id)
+    send({ kind: 'lost', uri: file.layout.revision.uri, results: id })
+  }
+  await retire(file, true)
 }
 
 /** `file` as the results `id` hold it. */
@@ -113,12 +132,13 @@ async function release(id: string): Promise<void> {
   cache.rest(file, file.bytes, () => void retire(file))
 }
 
-/** Lets go of `file` for good, and its store, which stays only while a saved session may name it. */
-async function retire(file: ResultsFile): Promise<void> {
+/** Lets go of `file` for good, and of its store, which stays only while a saved session may name
+ *  it; one that does not read, `discarded`, goes. */
+async function retire(file: ResultsFile, discarded = false): Promise<void> {
   files.delete(file)
   cache.wake(file)
   await file.retire()
-  await stores.release(file.store)
+  await (discarded ? stores.discard(file.store) : stores.release(file.store))
 }
 
 /** What tells the extension how far `file` has been read, at most every PROGRESS_MS unless `now`:
@@ -310,9 +330,10 @@ async function openResults(
   } finally {
     signal.removeEventListener('abort', abandon)
   }
+  // Reading that stops short of the file's end leaves what it read, which exports as it stands.
   void read.then(
     () => tell(true),
-    () => tell(true),
+    () => file.settle().then(() => tell(true)),
   )
   return hold(results, file)
 }

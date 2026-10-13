@@ -63,11 +63,12 @@ export class Sessions implements vscode.Disposable {
       globalStorageUri.scheme === 'file'
         ? vscode.Uri.joinPath(globalStorageUri, 'runs').fsPath
         : undefined
-    // The results read are kept with the workspace, where its sessions are saved.
+    // The results read are kept with the workspace, where its sessions are saved; each window's
+    // in a folder of its own, wherever windows share one, as empty windows do.
     const kept = [storageUri, globalStorageUri].find((uri) => uri?.scheme === 'file')
     const store = kept
       ? vscode.Uri.joinPath(kept, 'results').fsPath
-      : join(tmpdir(), `gridkit-studio-results-${process.pid}`)
+      : join(tmpdir(), 'gridkit-studio-results')
     this.client = new Client(
       vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
       () => ({
@@ -342,6 +343,7 @@ export class Sessions implements vscode.Disposable {
     if (event.kind === 'results')
       return this.#all.get(event.uri)?.reading(event.results, event.progress, event.layout)
     if (event.kind === 'run') return this.#all.get(event.run.uri)?.ran(event.run)
+    if (event.kind === 'lost') return this.#all.get(event.uri)?.dropped(event.results)
     const { output } = this.reporter
     // A line of a case's run at its own level, and as GridKit printed it only at Trace.
     if (event.uri) {

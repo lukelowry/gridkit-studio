@@ -88,7 +88,9 @@ export async function simulate(
     context.reading(file)
     const process = launch(runtime, place, context)
     try {
-      await file.use(context.signal, (signal) =>
+      // Stopping the run stops GridKit: what it wrote is read to its end, as any stopped writer's
+      // file is, and only letting go of the results stops the reading.
+      await file.use(undefined, (signal) =>
         file.ingest(signal, process.writer, context.progress, last),
       )
       await process.done
@@ -105,6 +107,8 @@ export async function simulate(
     } finally {
       await process.stop()
       await process.done.catch(() => {})
+      // GridKit has stopped writing: what was read of its file exports, however the reading ended.
+      await file.settle()
     }
   } finally {
     end()

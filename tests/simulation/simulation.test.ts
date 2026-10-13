@@ -350,6 +350,39 @@ describe("GridKit's programs on solver files", () => {
     expect(results.progress.domain[1]).toBeCloseTo(0.05, 9)
   })
 
+  it('reads what a stopped run wrote to its end, which then exports as GridKit wrote it', async ({
+    signal,
+  }) => {
+    let writing!: () => void
+    const begun = new Promise<void>((resolve) => (writing = resolve))
+    let stop!: (reason: Error) => void
+    const stopped = await run(
+      'stopped',
+      'IEEE39',
+      { output_file: 'out.csv', dt_monitor: 0.01, tmax: 1000, events: [] },
+      signal,
+      {
+        progress: (stopRun) => {
+          stop = stopRun
+          writing()
+        },
+      },
+    )
+    await begun
+    stop(new Error('Stopped by the test'))
+    await expect(stopped.done).rejects.toThrow('Stopped by the test')
+    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
+    const results = stopped.read()!
+    expect(results.progress.growing).toBe(false)
+    expect(results.progress.error).toBeUndefined()
+    const exported = join(stopped.folder, 'exported.csv')
+    await results.exportCsv(exported)
+    const copy = await readFile(exported, 'utf8')
+    // GridKit's own file, but for a last row it may have been stopped partway through.
+    expect((await readFile(join(stopped.folder, 'out.csv'), 'utf8')).startsWith(copy)).toBe(true)
+    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
+  })
+
   it('says why GridKit could not finish, and runs again', async ({ signal }) => {
     const failed = await run(
       'failure',

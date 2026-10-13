@@ -23,6 +23,7 @@ import { stripVTControlCharacters } from 'node:util'
 
 import { message } from '../shared/errors.js'
 import type { GridKit, RuntimeProcess } from '../shared/messages.js'
+import { alive } from '../shared/processes.js'
 import { clipped, readSolverLine, type SolverLine } from './solver.js'
 
 /** The GridKit program Studio runs on a solver file. */
@@ -44,17 +45,6 @@ export interface Place {
 }
 /** The label that names the machine a run's container was started from. */
 const MACHINE = 'gridkit-studio.machine=' + hostname()
-
-/** Whether process `pid` is running. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // It runs, as another user's.
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
 
 /** A run's container name: the extension host that started it, then a part of its own. */
 const containerName = () => `gridkit-studio-${process.pid}-${randomUUID().slice(0, 8)}`

@@ -244,6 +244,9 @@ export type WorkerEvent =
   | { kind: 'process'; run: string; process?: RuntimeProcess }
   /** A run started, or ended. */
   | { kind: 'run'; run: Run }
+  /** The results `results` of the case at `uri` are lost: what was kept of their file does not
+   *  read, and the worker holds them no more. */
+  | { kind: 'lost'; uri: string; results: string }
   /** How far the results `results` have been read: a run's as it writes them, or ones opened;
    *  and their layout, the first time, and again once their header is read. */
   | {

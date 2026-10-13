@@ -82,3 +82,23 @@ export function applyChanges(text: string, changes: readonly (readonly SourceEdi
   for (const group of changes) text = apply(text, group)
   return text
 }
+
+/** How much of a text `length` UTF-16 units long `changes` leave as it was, each group of them made
+ *  against the text the one before made: its first `prefix` units, and its last `suffix`. Known from
+ *  the changes alone, without comparing a text to another. */
+export function unchangedBy(
+  length: number,
+  changes: readonly (readonly SourceEdit[])[],
+): { readonly prefix: number; readonly suffix: number } {
+  let prefix = length
+  let suffix = length
+  let current = length
+  for (const group of changes) {
+    for (const edit of group) {
+      prefix = Math.min(prefix, edit.offset)
+      suffix = Math.min(suffix, current - edit.offset - edit.length)
+    }
+    current += group.reduce((grown, edit) => grown + edit.text.length - edit.length, 0)
+  }
+  return { prefix, suffix }
+}

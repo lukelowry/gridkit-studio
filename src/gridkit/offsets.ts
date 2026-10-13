@@ -62,6 +62,27 @@ export function charsAt(file: Uint8Array, byte: number): number {
   return map.chars[low]! + decoder.decode(file.subarray(map.bytes[low]!, byte)).length
 }
 
+/** The byte of `file` its UTF-16 offset `chars` is at: where the character there starts, or the
+ *  next character, should the offset land between the two units of one. */
+export function bytesAt(file: Uint8Array, chars: number): number {
+  const map = checkpointsOf(file)
+  if (!map) return chars
+  let low = 0
+  let high = map.chars.length
+  while (low + 1 < high) {
+    const middle = (low + high) >>> 1
+    if (map.chars[middle]! <= chars) low = middle
+    else high = middle
+  }
+  let byte = map.bytes[low]!
+  for (let count = map.chars[low]!; count < chars && byte < file.length;) {
+    const width = widthOf(file[byte]!)
+    byte += width
+    count += width === 4 ? 2 : 1
+  }
+  return byte
+}
+
 /** The UTF-16 offsets of ascending byte offsets of `file`: each counted on from the last, near, or
  *  found from a checkpoint, far; so a walk through the file is linear however many it asks for. */
 export function charsWalk(file: Uint8Array): (byte: number) => number {
@@ -84,14 +105,19 @@ export function charsWalk(file: Uint8Array): (byte: number) => number {
 
 /** Gives `after`, which differs from `before` only from byte `start`, up to `ended` there and `ends`
  *  here, the checkpoints `before` has: those before the edit kept, those past it moved, so the
- *  first offset asked of `after` never walks it whole. */
+ *  first offset asked of `after` never walks it whole, nor looks again whether it is all ASCII. */
 export function carryOffsets(
   before: Uint8Array,
   after: Uint8Array,
   { start, ended, ends }: { readonly start: number; readonly ended: number; readonly ends: number },
 ): void {
   const old = known.get(before)
-  if (!old || known.has(after)) return
+  if (old === undefined || known.has(after)) return
+  // A file all ASCII stays so where the edit wrote ASCII alone.
+  if (old === null) {
+    if (isAscii(after.subarray(start, ends))) known.set(after, null)
+    return
+  }
   const kept = old.bytes.findLastIndex((byte) => byte <= start)
   const bytes = old.bytes.slice(0, kept + 1)
   const chars = old.chars.slice(0, kept + 1)

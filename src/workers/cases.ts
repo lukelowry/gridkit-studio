@@ -7,6 +7,7 @@ import {
   applyChanges,
   catalog,
   completionsAt,
+  delivered,
   outline,
   presentation,
   sourceContext,
@@ -138,7 +139,11 @@ serve<CaseApi>(
     symbols: async ({ limit, ...revision }, signal) =>
       outline(latest(revision).kase, signal, limit),
     locate: async (input) => sourceRange(latest(input).kase, input.id, input.field),
-    transact: async (input) => transaction(latest(input).kase, input.mutations),
+    // As VS Code takes them in least time, from the text they are of.
+    transact: async (input) => {
+      const { kase, text } = latest(input)
+      return delivered(text, transaction(kase, input.mutations))
+    },
     presentation: (revision, signal) => presentation(latest(revision).kase, signal),
     query: ({ query, ...revision }, signal) => queried(latest(revision).kase.data, query, signal),
     rows: ({ fields, ...revision }, signal) => rowsOf(latest(revision).kase, fields, signal),

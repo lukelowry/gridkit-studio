@@ -80,6 +80,15 @@ describe('the case worker', () => {
         ...revision,
         mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'Delta Ω' }],
       })
+      // A change to what every bus records rewrites lists of several lines: one edit to the end.
+      const recorded = await call('transact', {
+        ...revision,
+        mutations: [{ kind: 'record', type: 'Bus', add: ['Va'], remove: [] }],
+      })
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]!.offset + recorded[0]!.length).toBe(text.length)
+      const buses = JSON.parse(applyChanges(text, [recorded])).buses as { mon: string[] }[]
+      expect(buses.every(({ mon }) => mon.includes('Va'))).toBe(true)
       const length = applyChanges(text, [edits]).length
       // Changes that make a text of another length than the extension's were made to another text.
       await expect(

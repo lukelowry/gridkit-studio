@@ -1085,9 +1085,9 @@ export async function testHost(): Promise<TestHost> {
 
 /** What VS Code says of the test profile itself, which `--disable-extensions` causes. */
 const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
-/** A run's own progress, which says how far it has come rather than that anything failed. A
- *  notice that a run failed names it the same way. */
-const PROGRESS = /^DynamicSimulation (?!.*\bfailed\b)/
+/** A run's own progress, titled by its program and solver file, which says how far it has come
+ *  rather than that anything failed. A notice that a run failed names it the same way. */
+const PROGRESS = /^\S+ .+?\.solver\.json\b(?!.*\bfailed\b)/i
 
 /** The notifications VS Code shows, which are then cleared. Studio shows one only when something
  *  the user asked for fails, so a test that sees one expected it or found a fault. */

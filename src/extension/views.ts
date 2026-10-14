@@ -234,8 +234,8 @@ class View {
       }),
       ('onDidChangeViewState' in panel ? panel.onDidChangeViewState : panel.onDidChangeVisibility)(
         () => {
-          if (hidden === 'idle') void this.send({ kind: 'shown', shown: panel.visible })
-          if (panel.visible) {
+          if (hidden === 'idle') void this.send({ kind: 'shown', shown: this.#visible })
+          if (this.#visible) {
             // The canvas the user brings to the front is the case the views follow.
             const { uri } = this.#of
             if ('active' in panel && panel.active && uri && followed(uri)) studio.activate(uri)
@@ -278,6 +278,12 @@ class View {
     this.#answer()
   }
 
+  /** Whether its page is on show: never once the view is disposed, as VS Code then refuses to say
+   *  of an editor's panel, which a view's work may outlast. */
+  get #visible(): boolean {
+    return !this.#disposed && this.panel.visible
+  }
+
   send(message: ToView): Thenable<boolean> {
     // A disposed view's late messages would reach a page that took its place.
     return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(packed(message))
@@ -287,7 +293,7 @@ class View {
   tick() {
     const { uri } = this.#of
     const session = uri ? this.studio.get(uri) : undefined
-    if (!session || !this.#ready || !this.panel.visible || !CLOCKED.has(this.kind)) return
+    if (!session || !this.#ready || !this.#visible || !CLOCKED.has(this.kind)) return
     void this.send({
       kind: 'clock',
       of: this.#of,
@@ -320,7 +326,7 @@ class View {
       this.#ready = true
       this.#show(this.#of.uri)
       // A page kept while hidden starts as though shown.
-      if (this.hidden === 'idle') void this.send({ kind: 'shown', shown: this.panel.visible })
+      if (this.hidden === 'idle') void this.send({ kind: 'shown', shown: this.#visible })
       return this.update()
     }
     // Why something failed is said whatever showing it is of.
@@ -511,7 +517,7 @@ class View {
    *  is told at once of the case, and of the results once they are known. */
   async #once() {
     // A hidden view catches up when it shows; one kept working works on while hidden.
-    if (!this.#ready || (!this.panel.visible && !(this.hidden === 'working' && this.busy))) return
+    if (!this.#ready || (!this.#visible && !(this.hidden === 'working' && this.busy))) return
     const { uri } = this.#of
     const session = uri ? this.studio.get(uri) : undefined
     const state: ViewState = uri ? this.studio.state(uri) : {}

@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
@@ -350,5 +350,29 @@ suite('Run', function () {
     )
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
+  })
+
+  test('starts the program GridKit Program names', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const global = vscode.ConfigurationTarget.Global
+    // A program no install or image has: the run, under its name, fails wherever GridKit runs.
+    await settings.update('gridkitProgram', 'NoSuchSimulation', global)
+    try {
+      const previous = bench.session.run!.id
+      bench.run()
+      const run = await until(() => {
+        const { run } = bench.session
+        return run?.id !== previous && run?.state === 'failed' ? run : undefined
+      }, 'the run of a program that is not there fails')
+      assert.equal(run.command, `NoSuchSimulation ${basename(bench.solver.fsPath)}`)
+      const shown = await notified('why the run failed')
+      assert.ok(
+        shown.some((said) => said.includes(run.message!)),
+        shown.join(' | '),
+      )
+      bench.studio.reporter.errors.splice(0)
+    } finally {
+      await settings.update('gridkitProgram', undefined, global)
+    }
   })
 })

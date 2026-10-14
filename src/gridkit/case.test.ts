@@ -447,6 +447,9 @@ describe('single catalog and source ownership', () => {
       bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
     })
     expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/SignalVoltageIn/)
+    // What is no catalog says so, as plainly as GridKit Studio can.
+    for (const json of [null, {}, { bus: {}, classes: [] }, { bus: { name: 'Bus' } }])
+      expect(() => catalogOf(json)).toThrow('A catalog has a bus and a list of classes.')
   })
 
   it('numbers a table’s rows by its ids, alike in any revision that keeps them', async () => {

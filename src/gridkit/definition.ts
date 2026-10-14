@@ -120,12 +120,15 @@ interface CatalogSpec {
 }
 
 export function catalogOf(json: unknown): Catalog {
+  const raw = json as Partial<CatalogSpec> | null
+  if (typeof raw?.bus?.name !== 'string' || !Array.isArray(raw.classes))
+    throw failure('invalid-input', 'A catalog has a bus and a list of classes.')
+  const { bus, classes } = raw as CatalogSpec
   const text = JSON.stringify(json)
-  const raw = json as CatalogSpec
   const codes = [
-    shapeOf(raw.bus, 'bus', raw.bus.name),
+    shapeOf(bus, 'bus', bus.name),
     signalShape(),
-    ...raw.classes.map((spec) => shapeOf(spec, 'device', raw.bus.name)),
+    ...classes.map((spec) => shapeOf(spec, 'device', bus.name)),
   ]
   const shapes = new Map<string, Shape>()
   for (const shape of [...codes, caseShape()]) {
@@ -140,7 +143,7 @@ export function catalogOf(json: unknown): Catalog {
     types,
   }
   const version = createHash('sha256').update(text).digest('hex').slice(0, 32)
-  return { text, version, bus: raw.bus.name, shapes, codes, schema }
+  return { text, version, bus: bus.name, shapes, codes, schema }
 }
 
 function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {

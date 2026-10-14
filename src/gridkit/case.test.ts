@@ -14,7 +14,7 @@ import { rowsOf } from '../shared/cells.js'
 import type { Value } from '../shared/messages.js'
 import { diagramOf, networkOf, positionOf } from '../shared/schema.js'
 import { Case } from './case.js'
-import { catalog } from './definition.js'
+import { catalog, catalogOf } from './definition.js'
 import { diagnose, editCase, editField, minimal, sourceRange } from './edits.js'
 import { completionsAt, outline, sourceContext } from './navigation.js'
 
@@ -424,6 +424,58 @@ describe('single catalog and source ownership', () => {
     const next = apply(text, editField(kase, 'Bus/7', 'params.kz', 4))
     expect(JSON.parse(next).buses[1].params.kz).toBe(4)
   })
+  it('reads a bus’s class as a field of it, one of the classes its catalog gives', async () => {
+    const text = source.replace('"class":"Bus","number":7', '"class":"SignalVoltageIn","number":7')
+    const issues = async (kase: Case) =>
+      (await diagnose(kase, AbortSignal.any([]))).map(({ message }) => message)
+    const kase = await Case.parse(text, catalog)
+    const buses = kase.table('Bus')
+    expect([kase.cell(buses, 'class', 0), kase.cell(buses, 'class', 1)]).toEqual([
+      'Bus',
+      'SignalVoltageIn',
+    ])
+    expect(await issues(kase)).toContain(
+      'SignalVoltageIn is not a Bus class GridKit Studio knows; it is kept as written.',
+    )
+    expect(JSON.parse(apply(text, editField(kase, 'Bus/7', 'class', 'Bus'))).buses[1].class).toBe(
+      'Bus',
+    )
+    // A catalog that gives the class, as one for a later GridKit would, reads it as any other.
+    const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
+    const later = catalogOf({
+      ...bundled,
+      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
+    })
+    expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/SignalVoltageIn/)
+  })
+
+  it('numbers a table’s rows by its ids, alike in any revision that keeps them', async () => {
+    const indexes = async (text: string) => {
+      const kase = await Case.parse(text, catalog)
+      return (type: string) => kase.table(type).index
+    }
+    const before = await indexes(source)
+    const edited = await indexes(source.replace('"kv":115.0}', '"kv":138.0},"mon":["Vm"]'))
+    expect(edited('Bus')).toEqual(before('Bus'))
+    expect(edited('Branch')).toEqual(before('Branch'))
+    // A table whose ids change, or change order, numbers its rows anew. Another keeps its numbers.
+    const [first, second] = [/\{"class":"Bus","number":42.*\},/, /\{"class":"Bus","number":7.*\}/]
+    const [one, two] = [source.match(first)![0], source.match(second)![0]]
+    const swapped = source
+      .replace(first, '@')
+      .replace(second, one.slice(0, -1))
+      .replace('@', two + ',')
+    expect(JSON.parse(swapped).buses.map(({ number }: { number: number }) => number)).toEqual([
+      7, 42,
+    ])
+    const reordered = await indexes(swapped)
+    expect(reordered('Bus')).not.toEqual(before('Bus'))
+    expect(reordered('Branch')).toEqual(before('Branch'))
+    const renamed = await indexes(source.replace('"id":"line"', '"id":"tie"'))
+    expect(renamed('Branch')).not.toEqual(before('Branch'))
+    expect(renamed('Bus')).toEqual(before('Bus'))
+  })
+
   it('keeps an unknown key that takes a known name, or a point, or holds a null', async () => {
     const text = source
       .replace('"name":"Seven"', '"name":"Seven","Vm":1.0,"spare":null')

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { fileKey, type ResultCache, ResultsFile, stampAt, type Stores } from '../results/index.js'
 import type { RunRequest } from '../shared/simulation.js'
 import type { Case } from './case.js'
-import { type Launch, launch, placed, PROGRAM } from './runtime.js'
+import { type Launch, launch, placed } from './runtime.js'
 
 export interface RunContext extends Launch {
   /** Hears of the results file the run reads as soon as it reads it, so views can ask it for
@@ -95,14 +95,14 @@ export async function simulate(
       )
       await process.done
       if (!file.progress.frames)
-        throw new Error(`${PROGRAM} wrote no samples to ${basename(output)}.`)
+        throw new Error(`${runtime.program} wrote no samples to ${basename(output)}.`)
       return file
     } catch (error) {
       context.signal.throwIfAborted()
       // A native error is more useful than the missing file it caused.
       if (process.writer() !== 'writing') await process.done
       if ((error as NodeJS.ErrnoException).code === 'ENOENT')
-        throw new Error(`${PROGRAM} wrote no ${basename(output)}.`)
+        throw new Error(`${runtime.program} wrote no ${basename(output)}.`)
       throw error
     } finally {
       await process.stop()

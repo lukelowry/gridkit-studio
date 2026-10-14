@@ -6,7 +6,6 @@
 
 import * as vscode from 'vscode'
 
-import { PROGRAM } from '../gridkit/index.js'
 import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
 import type { Results } from '../shared/messages.js'
@@ -64,18 +63,20 @@ export function registerRuns(studio: Sessions) {
     // The Monitor reads the output against the case, so Studio must read the case. Whether
     // GridKit accepts it is GridKit's to say.
     const summary = await readable(document, 'it can run')
-    if (!Object.keys(summary.recording.listed).length)
+    if (!summary.recording.anything)
       throw notice(`${nameOf(model)} records nothing.`, CHOOSE_SIGNALS)
     const output = writtenBy(solver, study, summary)
     // GridKit writes over the file it writes to, so that file must not be one the run reads.
     if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
+    // As the settings of the folder it mounts say.
+    const gridkit = gridkitOf(solver)
     const session = await studio.open(document)
     await studio.showView('monitor')
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `${PROGRAM} ${nameOf(solver)}`,
+        title: `${gridkit.program} ${nameOf(solver)}`,
         cancellable: true,
       },
       async (progress, token) => {
@@ -93,8 +94,7 @@ export function registerRuns(studio: Sessions) {
                 vscode.workspace.getWorkspaceFolder(solver)?.uri ??
                 vscode.Uri.joinPath(solver, '..')
               ).fsPath,
-              // As the settings of the folder it mounts say.
-              gridkit: gridkitOf(solver),
+              gridkit,
             },
             signal,
             (written) => {

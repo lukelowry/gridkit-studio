@@ -20,6 +20,7 @@ import {
   Case,
   catalog,
   diagnose,
+  PROGRAM,
   recordingOf,
   simulate,
 } from '../../src/gridkit/index.js'
@@ -33,6 +34,7 @@ import { outputOf, readSolver } from '../../src/shared/study.js'
 const ROOM = 1 << 20
 
 const gridkit: GridKit = {
+  program: PROGRAM,
   path: process.env.GRIDKIT_PATH ?? '',
   image:
     process.env.GRIDKIT_IMAGE ??
@@ -276,7 +278,7 @@ describe("GridKit's programs on solver files", () => {
         {
           ...request,
           results: randomUUID(),
-          gridkit: { path: join(folder, 'missing'), image: '', cli: '' },
+          gridkit: { ...gridkit, path: join(folder, 'missing'), image: '' },
         },
         keeping(),
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
@@ -296,7 +298,7 @@ describe("GridKit's programs on solver files", () => {
     await expect(
       simulate(
         first.kase,
-        { ...request, results: randomUUID(), gridkit: { path: broken, image: '', cli: '' } },
+        { ...request, results: randomUUID(), gridkit: { ...gridkit, path: broken, image: '' } },
         keeping(),
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),

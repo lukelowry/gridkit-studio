@@ -11,6 +11,7 @@ import type {
   ResultsOptions,
   RuntimeProcess,
   WorkerEvent,
+  WorkerOptions,
 } from '../shared/messages.js'
 import { type Api, Caller } from '../shared/rpc.js'
 
@@ -163,9 +164,9 @@ class Thread<A extends Api<A>> {
   }
 }
 
-/** The extension's two workers: the case worker, which reads open cases as they are edited, and the
- *  results worker, which runs GridKit and reads results files, started with `results`. Their
- *  bundles are in `folder`. What fails as it hears of them is said by `failed`. */
+/** The extension's two workers: the case worker, which reads open cases as they are edited, started
+ *  with `cases`, and the results worker, which runs GridKit and reads results files, started with
+ *  `results`. Their bundles are in `folder`. What fails as it hears of them is said by `failed`. */
 export class Client {
   readonly event: Emitter<Exclude<WorkerEvent, { kind: 'process' }>>
   /** The GridKit process of each run the results worker has under way, by the run's id, ended here
@@ -174,7 +175,12 @@ export class Client {
   readonly cases: Thread<CaseApi>
   readonly results: Thread<ResultsApi>
 
-  constructor(folder: string, results: () => ResultsOptions, failed: (error: unknown) => void) {
+  constructor(
+    folder: string,
+    cases: WorkerOptions,
+    results: () => ResultsOptions,
+    failed: (error: unknown) => void,
+  ) {
     this.event = new Emitter(failed)
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
@@ -189,6 +195,7 @@ export class Client {
       join(folder, 'cases.cjs'),
       owner(async () => {}),
       failed,
+      () => cases,
     )
     this.results = new Thread(
       'results',

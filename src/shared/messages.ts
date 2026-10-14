@@ -1,7 +1,7 @@
 /** The messages between the extension, its two workers, and its webviews. */
 
 import type { Layout } from '@latkit/gpu'
-import type { Block, Data, Domain, Query, Schema } from '@latkit/model'
+import type { Block, Data, Domain, Index, Query, Schema } from '@latkit/model'
 
 import type { Bindings } from './bindings.js'
 import type { Problem } from './errors.js'
@@ -77,9 +77,17 @@ export interface Summary extends Revision {
   /** The field each type's elements are known by: a bus's `number`, a device's `id`. */
   identities: Record<string, string>
   counts: Record<string, number>
+  /** How each type's rows are numbered: what was read against a revision numbering them alike, as
+   *  results are, fits them. */
+  indexes: Record<string, Index>
   /** What the case records: how many of each type's elements list each output, and the monitor
    *  GridKit writes to, if the case has one. */
-  recording: { listed: Record<string, Record<string, number>>; monitor?: Sink }
+  recording: {
+    listed: Record<string, Record<string, number>>
+    /** Whether any element lists an output, its class one Studio knows or not. */
+    anything: boolean
+    monitor?: Sink
+  }
   issues: Issue[]
   /** Pending diagnostics never mean that the model has passed validation. */
   validation: 'pending' | 'complete'
@@ -174,8 +182,14 @@ export interface CaseApi {
   stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
 }
 
+/** What the extension starts both workers with. */
+export interface WorkerOptions {
+  /** The catalog of GridKit's classes the user's file holds, read in place of the bundled one. */
+  readonly catalog?: unknown
+}
+
 /** What the extension starts the results worker with. */
-export interface ResultsOptions {
+export interface ResultsOptions extends WorkerOptions {
   /** How many bytes of decoded frames, and of results files nothing holds, stay read past what
    *  views read now. */
   readonly cacheBytes: number

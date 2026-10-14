@@ -615,7 +615,9 @@ class Rows {
   readonly paramField: Int32Array
   readonly initField: Int32Array
   readonly extensionField: Int32Array
+  /** The fields a record's name and, for a bus, its class fill; -1 where it has none. */
   readonly named: number
+  readonly classed: number
   ids!: Builder
   #spans!: Int32Array
   readonly #width: number
@@ -643,9 +645,10 @@ class Rows {
     this.paramField = Int32Array.from(fields.parameter)
     this.initField = Int32Array.from(fields.initial)
     this.extensionField = Int32Array.from(fields.extension)
-    this.named = shape.fields.findIndex(
-      ({ source }) => source.kind === 'record' && source.name === 'name',
-    )
+    const own = (name: string) =>
+      shape.fields.findIndex(({ source }) => source.kind === 'record' && source.name === name)
+    this.named = own('name')
+    this.classed = own('class')
     this.#chunks = { ids: [], fields: shape.fields.map(() => []), ports: shape.ports.map(() => []) }
     this.#fresh()
   }
@@ -715,7 +718,6 @@ export interface Coding {
 
 export class Parser {
   readonly #classes: Keys
-  readonly #bus: Keys
   /** Every table's shape by code: the catalog's, then each class it does not know, as found. */
   readonly #shapes: Shape[]
   readonly #unknown: Map<string, number>
@@ -740,7 +742,6 @@ export class Parser {
    *  those another parser read with it. */
   constructor(catalog: Catalog, coding?: Coding) {
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
-    this.#bus = new Keys([catalog.bus, 'BusInfinite'])
     this.#shapes = [...(coding?.shapes ?? catalog.codes)]
     this.#unknown = new Map(coding?.unknown)
   }
@@ -800,15 +801,11 @@ export class Parser {
       if (key === 'identity') {
         this.#id = value
         this.#idEnd = end
-      } else if (key === 'class') {
-        // A bus class GridKit may add is kept, as its own column, rather than refused.
-        if (
-          this.#array === 'buses' &&
-          !(bytes[value] === QUOTE && this.#bus.find(bytes, value + 1, end - 1) >= 0)
-        )
-          this.#find(code, record, ['class'], value, end)
-      } else if (key === 'name') stage(this.#fields, rows.named, value, end)
-      else if (key === 'mon') {
+      } else if (key === 'name' || key === 'class') {
+        // A bus's class is a field of it, as its name is. A device's class is its table.
+        const field = key === 'name' ? rows.named : rows.classed
+        if (field >= 0) stage(this.#fields, field, value, end)
+      } else if (key === 'mon') {
         this.#mon = value
         this.#monEnd = end
       } else if (key !== undefined && bytes[value] === OPEN_OBJECT)

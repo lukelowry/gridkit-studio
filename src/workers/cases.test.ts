@@ -21,7 +21,7 @@ describe('the case worker', () => {
         text: '{"buses":[{"class":"Bus","number":1,"name":"one","mon":["Vm"]}]}',
       })
       expect(summary.validation).toBe('pending')
-      expect(summary.recording).toEqual({ listed: { Bus: { Vm: 1 } } })
+      expect(summary.recording).toEqual({ listed: { Bus: { Vm: 1 } }, anything: true })
       const rows = await rig.call('rows', {
         ...revision,
         fields: [{ from: 'Bus', select: ['name'] }],

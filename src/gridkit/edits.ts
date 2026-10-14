@@ -5,7 +5,7 @@ import { message } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
-import { type Column, isInt32, isValid } from './columns.js'
+import { type Column, isInt32, isValid, valueAt } from './columns.js'
 import { CASE, type FieldPlan } from './definition.js'
 import { charsAt, charsWalk } from './offsets.js'
 import { STEP_RECORDS, Turns } from './turns.js'
@@ -321,7 +321,8 @@ function membersMade(kase: Case, made: readonly string[]): SourceEdit {
 }
 
 /** Each value present but invalid or required but missing, any signal with two drivers, and, as
- *  warnings, each class and field the catalog does not know. */
+ *  warnings, each class and field the catalog does not know, and each value outside the choices
+ *  it gives. */
 const diagnoses = new WeakMap<Case, Issue[]>()
 
 /** The case's issues, which every caller shares of the same immutable source. Found a slice at a
@@ -365,6 +366,23 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
       message: `${field} is not a ${type} field GridKit Studio knows; it is kept as written.`,
     })
   }
+  for (const table of kase.tables.values())
+    for (const plan of table.shape.plan.values()) {
+      const column = plan.choices && table.fields.get(plan.name)
+      if (!column) continue
+      yield
+      for (const [n, row] of outside(column, plan.choices!).entries()) {
+        if ((n & STEP_RECORDS) === 0) yield
+        const id = kase.id(table, row)
+        issues.push({
+          ...sourceRange(kase, id, plan.name),
+          id,
+          field: plan.name,
+          severity: 'warning',
+          message: `${kase.cell(table, plan.name, row)} is not a ${table.shape.type} ${plan.name} GridKit Studio knows; it is kept as written.`,
+        })
+      }
+    }
   for (const table of kase.tables.values()) {
     // Each field's own wrong rows, which each column found as it decoded: a range a revision kept
     // is never checked again. A required field's are those that hold no value at all.
@@ -425,6 +443,18 @@ function empty(column: Column): number[] {
     if (chunk.validity === undefined) return
     for (let at = 0; at < chunk.length; at++)
       if (!isValid(chunk, at)) rows.push(column.starts[c]! + at)
+  })
+  return rows
+}
+
+/** The rows of `column` that hold a value other than one of `choices`. */
+function outside(column: Column, choices: readonly string[]): number[] {
+  const rows: number[] = []
+  column.chunks.forEach((chunk, c) => {
+    for (let at = 0; at < chunk.length; at++) {
+      const value = valueAt(chunk, at)
+      if (value !== null && !choices.includes(String(value))) rows.push(column.starts[c]! + at)
+    }
   })
   return rows
 }

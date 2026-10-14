@@ -20,6 +20,7 @@ import {
 } from '../shared/ids.js'
 import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
+import { catalogFile } from './catalog.js'
 import { Client, CRASHES } from './client.js'
 import { current, Documents, isWritable, wholeAt } from './documents.js'
 import { noCase, Reporter } from './report.js'
@@ -69,9 +70,13 @@ export class Sessions implements vscode.Disposable {
     const store = kept
       ? vscode.Uri.joinPath(kept, 'results').fsPath
       : join(tmpdir(), 'gridkit-studio-results')
+    // Both workers start with the catalog of GridKit's classes the user's file holds, if any.
+    const workers = { catalog: catalogFile((error) => this.reporter.report(error)) }
     this.client = new Client(
       vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
+      workers,
       () => ({
+        ...workers,
         cacheBytes: cacheBytes(),
         store,
         saved: savedResults(workspaceState),

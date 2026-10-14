@@ -95,6 +95,7 @@ export async function summarize(
     counts: Object.fromEntries(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
+    indexes: Object.fromEntries([...kase.tables].map(([type, { index }]) => [type, index])),
     recording: await recordingOf(kase, signal),
     issues: issues ?? [],
     validation: issues ? 'complete' : 'pending',

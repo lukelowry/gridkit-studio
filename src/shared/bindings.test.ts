@@ -35,7 +35,8 @@ describe('bindings', () => {
   })
 
   it('counts a signal as recorded for mapping only when a run has it for every row', () => {
-    const index = { type: 'Bus' } as never
+    const index = { source: 'case', type: 'Bus', version: 'one' }
+    const summary = { counts: { Bus: 2 }, indexes: { Bus: index } }
     const all = [{ from: 'Bus', select: ['Vm', 'Va'] }]
     const some = [
       { from: 'Bus', select: ['Vm'], rows: { kind: 'indices', index, values: Uint32Array.of(0) } },
@@ -47,11 +48,14 @@ describe('bindings', () => {
         rows: { kind: 'indices', index, values: Uint32Array.of(0, 1) },
       },
     ] as never
-    expect(recordedWhole(all, 2, vm)).toBe(true)
-    expect(recordedWhole(some, 2, vm)).toBe(false)
-    expect(recordedWhole(every, 2, vm)).toBe(true)
-    expect(recordedWhole(all, 2, kv)).toBe(false)
-    expect(recordedWhole([{ from: 'Branch', select: ['Vm'] }], 2, vm)).toBe(false)
+    expect(recordedWhole(all, summary, vm)).toBe(true)
+    expect(recordedWhole(some, summary, vm)).toBe(false)
+    expect(recordedWhole(every, summary, vm)).toBe(true)
+    expect(recordedWhole(all, summary, kv)).toBe(false)
+    expect(recordedWhole([{ from: 'Branch', select: ['Vm'] }], summary, vm)).toBe(false)
+    // Rows numbered otherwise, as a case edited since numbers them, are not the case's rows.
+    const renumbered = { ...summary, indexes: { Bus: { ...index, version: 'two' } } }
+    expect(recordedWhole(every, renumbered, vm)).toBe(false)
   })
 
   it('names channels by one word each', () => {

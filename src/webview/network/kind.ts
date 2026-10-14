@@ -94,10 +94,11 @@ export function network(host: Host): Kind {
   function covered(t: number): boolean {
     const state = host.state()
     if (!drawable(host.rows(), state)) return false
-    const { results, summary } = state
-    if (!results?.frames || results.fingerprint !== summary?.fingerprint) return true
+    const { results } = state
+    const needs = networkNeeds(state)
+    if (!results || !needs.length) return true
     if (t < results.domain[0] || t > results.domain[1]) return false
-    return networkNeeds(state).every(({ selection }) =>
+    return needs.every(({ selection }) =>
       samples.covers(selection.from, selection.select[0]!, [t, t]),
     )
   }

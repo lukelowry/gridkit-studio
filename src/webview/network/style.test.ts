@@ -36,18 +36,25 @@ it('uses the same global normalization in Network and Monitor whatever pages are
   )
   const kase = { data, version: 'one' }
   const field = { type: 'Bus', field: 'Vm' }
+  const index = kase.data.tables.Bus!.index
   for (const growing of [true, false]) {
     const results = {
       growing,
       fingerprint: kase.version,
-      outputs: [{ from: 'Bus', select: ['Vm'] }],
+      outputs: [
+        { from: 'Bus', select: ['Vm'], rows: { kind: 'range', offset: 0, count: 1, index } },
+      ],
       domain: [0, 10],
       span: [0, 10],
       domains: { Bus: { Vm: [0.5, 2] } },
     } as unknown as Results
     const view: ViewState = {
       results,
-      summary: { fingerprint: kase.version, counts: { Bus: 1 } } as unknown as Summary,
+      summary: {
+        fingerprint: kase.version,
+        counts: { Bus: 1 },
+        indexes: { Bus: index },
+      } as unknown as Summary,
       bindings: { vertexColor: field, vertexHeight: field, vertexSize: field },
     }
     for (const at of [0, 4, 10]) {
@@ -92,6 +99,13 @@ it('uses the same global normalization in Network and Monitor whatever pages are
         null,
       )
       expect(fixed.vertices.Bus!.color).toMatchObject({ domain: [0, 3] })
+      // Results map onto the rows the case still numbers alike, edited since or not, and no others.
+      const edited = { ...view.summary, fingerprint: 'edited' } as Summary
+      const after = networkConfig(kase.data, samples, { ...view, summary: edited }, null)
+      expect(after.vertices.Bus!.color).toMatchObject({ domain: [0.5, 2] })
+      const renumbered = { ...edited, indexes: { Bus: { ...index, version: 'two' } } }
+      const apart = networkConfig(kase.data, samples, { ...view, summary: renumbered }, null)
+      expect(apart.vertices.Bus?.color).not.toMatchObject({ domain: [0.5, 2] })
     }
   }
 })

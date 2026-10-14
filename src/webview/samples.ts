@@ -39,15 +39,15 @@ function memo(make: (state: ViewState) => Need[]): (state: ViewState) => Need[] 
   }
 }
 
-/** The fields the Network maps from its results: each sampled field a mapping reads, of results of
- *  this revision that hold it for every row, as a mapping draws every row. */
+/** The fields the Network maps from its results: each sampled field a mapping reads, of results
+ *  that hold it for every row of this revision, as a mapping draws every row. */
 export const networkNeeds = memo(({ results, summary, bindings }) => {
-  if (!results?.frames || !summary || results.fingerprint !== summary.fingerprint) return []
+  if (!results?.frames || !summary) return []
   const needs = new Map<string, Need>()
   for (const { type, field } of Object.values(bindings ?? {}))
     if (
       summary.schema.types[type]?.fields[field]?.sampled &&
-      recordedWhole(results.outputs, summary.counts[type] ?? 0, { type, field })
+      recordedWhole(results.outputs, summary, { type, field })
     )
       needs.set(type + '\n' + field, {
         selection: { from: type, select: [field] },

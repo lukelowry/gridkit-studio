@@ -96,8 +96,8 @@ function sampledFrom(
       return held(source) ? undefined : null
     if (
       !results ||
-      results.fingerprint !== summary?.fingerprint ||
-      !recordedWhole(results.outputs, summary.counts[type] ?? 0, { type, field }) ||
+      !summary ||
+      !recordedWhole(results.outputs, summary, { type, field }) ||
       !held(source)
     )
       return null

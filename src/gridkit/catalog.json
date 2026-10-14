@@ -1,6 +1,7 @@
 {
   "bus": {
     "name": "Bus",
+    "classes": ["Bus", "BusInfinite"],
     "label": "Bus",
     "family": "Bus",
     "params": [

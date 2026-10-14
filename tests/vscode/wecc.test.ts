@@ -204,7 +204,10 @@ suite('WECC240 run', function () {
       results!.outputs.map(({ from, select }) => [from, select]),
       [['Bus', ['Va']]],
     )
-    assert.ok(recordedWhole(results!.outputs, buses.length, VA), 'a binding draws every bus')
+    assert.ok(
+      recordedWhole(results!.outputs, bench.studio.state(key).summary!, VA),
+      'a binding draws every bus',
+    )
     assert.ok(Math.abs(results!.domain[1] - 1) < 1e-9, `the run ends at ${results!.domain[1]}`)
     // Run shows the Monitor; the network is read at full height, the same for every frame.
     await vscode.commands.executeCommand('workbench.action.closePanel')

@@ -1,6 +1,8 @@
 /** The catalog as a Schema, with each table's plan for the parser. A field is named by its path in
  *  the record, `params.kv` or `init.Vr`; a sampled output by GridKit's name for it, `Vm`. */
 
+import { createHash } from 'node:crypto'
+
 import type { Schema } from '@latkit/model'
 import { failure } from '@latkit/model'
 
@@ -9,6 +11,8 @@ import models from './catalog.json'
 export interface Catalog {
   /** As read; part of every case's version. */
   readonly text: string
+  /** Identifies it, and with it the row space of every case read with it. */
+  readonly version: string
   readonly bus: string
   /** Every table by type. */
   readonly shapes: ReadonlyMap<string, Shape>
@@ -19,6 +23,8 @@ export interface Catalog {
 
 interface ClassSpec {
   readonly name: string
+  /** The bus's: every class its records may have, all of them buses. Its name alone if absent. */
+  readonly classes?: readonly string[]
   readonly label: string
   readonly family: string
   readonly params: readonly ParamSpec[]
@@ -64,6 +70,8 @@ type FieldSource =
 
 export interface FieldPlan {
   readonly required?: boolean
+  /** The values GridKit takes for it, where it takes only some. */
+  readonly choices?: readonly string[]
   readonly name: string
   readonly definition: Schema.Field
   readonly source: FieldSource
@@ -105,12 +113,15 @@ export const CASE_ROW = 'case'
 const POINT: Schema.FieldType = { kind: 'vector', items: 'float64', size: 2 }
 const ROUTE: Schema.FieldType = { kind: 'list', items: POINT }
 
+/** A catalog as its file writes it. */
+interface CatalogSpec {
+  readonly bus: ClassSpec
+  readonly classes: readonly ClassSpec[]
+}
+
 export function catalogOf(json: unknown): Catalog {
   const text = JSON.stringify(json)
-  const raw = json as {
-    bus: ClassSpec
-    classes: readonly ClassSpec[]
-  }
+  const raw = json as CatalogSpec
   const codes = [
     shapeOf(raw.bus, 'bus', raw.bus.name),
     signalShape(),
@@ -128,7 +139,8 @@ export function catalogOf(json: unknown): Catalog {
     axis: { name: 'time', unit: 's' },
     types,
   }
-  return { text, bus: raw.bus.name, shapes, codes, schema }
+  const version = createHash('sha256').update(text).digest('hex').slice(0, 32)
+  return { text, version, bus: raw.bus.name, shapes, codes, schema }
 }
 
 function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
@@ -175,7 +187,16 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
       ...(kind === 'device' && { description: spec.family }),
     },
     [
-      ...(kind === 'bus' ? [field('name', 'text', { kind: 'record', name: 'name' })] : []),
+      // A bus's class is a field of it, as its name is: GridKit reads every bus class as one bus.
+      ...(kind === 'bus'
+        ? [
+            field('name', 'text', { kind: 'record', name: 'name' }),
+            {
+              ...field('class', 'text', { kind: 'record', name: 'class' }),
+              choices: spec.classes ?? [spec.name],
+            },
+          ]
+        : []),
       ...spec.params.map((param) =>
         field(
           `params.${param.id}`,

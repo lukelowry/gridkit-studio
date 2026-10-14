@@ -53,9 +53,9 @@ function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, 
   return counts
 }
 
-/** What the case records: how many of each type's elements list each output, and the monitor
- *  GridKit writes to, its last CSV one as GridKit takes it. Read a range at a time, until `signal`
- *  lets go. */
+/** What the case records: how many of each type's elements list each output, whether any element
+ *  of any class lists one, and the monitor GridKit writes to. Read a range at a time, until
+ *  `signal` lets go. */
 export async function recordingOf(
   kase: Case,
   signal = AbortSignal.any([]),
@@ -63,9 +63,11 @@ export async function recordingOf(
   const work = new Turns(signal)
   /** By table, how many of its records list each name. */
   const named = new Map<Table, Map<string, number>>()
+  let anything = false
   for (const part of kase.parts) {
     await work.step()
     for (const [code, counts] of countsOf(kase, part)) {
+      anything ||= counts.size > 0
       const table = kase.tables.get(kase.coding.shapes[code]!.type)
       if (!table?.shape.outputOrder.size) continue
       let into = named.get(table)
@@ -84,9 +86,11 @@ export async function recordingOf(
     }
   }
   const monitor = monitorOf(kase)
-  return { listed, ...(monitor && { monitor }) }
+  return { listed, anything, ...(monitor && { monitor }) }
 }
 
+/** The CSV file GridKit writes the case's samples to, by its own rule in parseStudyData: the last
+ *  CSV monitor that separates with commas. One that names no file leaves it to the solver file. */
 function monitorOf(kase: Case): Sink | undefined {
   const monitors = kase.member('monitors')
   if (!monitors) return undefined
@@ -94,11 +98,12 @@ function monitorOf(kase: Case): Sink | undefined {
     decoder.decode(kase.file.subarray(monitors.value, monitors.end)),
   ) as unknown
   if (!Array.isArray(sinks)) return undefined
-  for (const sink of sinks.toReversed()) {
-    const { file_name: file, format } = (sink ?? {}) as Record<string, unknown>
-    if (typeof file === 'string' && file && /^csv$/i.test(String(format))) return { file }
+  let file = ''
+  for (const sink of sinks) {
+    const { file_name: name, format, delim = ',' } = (sink ?? {}) as Record<string, unknown>
+    if (/^csv$/i.test(String(format)) && delim === ',') file = typeof name === 'string' ? name : ''
   }
-  return undefined
+  return file ? { file } : undefined
 }
 
 /** What one type of a case is to record: the outputs each of its elements is to list, and those

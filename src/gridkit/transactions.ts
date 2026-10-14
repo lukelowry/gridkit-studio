@@ -102,3 +102,26 @@ export function unchangedBy(
   }
   return { prefix, suffix }
 }
+
+/** A line break, as VS Code counts one. */
+const BREAK = /[\r\n]/
+/** How many edits of a document VS Code makes one by one: from this many on, it makes them one
+ *  edit, from the first to the last, that writes every line between. */
+const ONE_BY_ONE = 1000
+
+/** `edits` of `text` as VS Code takes them in least time. VS Code's copy of a document in the
+ *  extension host moves every line below an edit for each line the edit writes, and once more if
+ *  it takes lines away, so a case of a million lines rewritten in many places stalls every
+ *  extension for minutes. Such edits go as one instead, from the first edit to the end of the
+ *  text, below which there is nothing to move: two or more that write or take away lines, or as
+ *  many as VS Code would make one. Fewer, within lines, go as they are. */
+export function delivered(text: string, edits: readonly SourceEdit[]): SourceEdit[] {
+  const sorted = [...edits].sort((a, b) => a.offset - b.offset)
+  const lines = sorted.filter(
+    (edit) =>
+      BREAK.test(edit.text) || BREAK.test(text.slice(edit.offset, edit.offset + edit.length)),
+  )
+  if (lines.length < 2 && sorted.length < ONE_BY_ONE) return sorted
+  const from = sorted[0]!.offset
+  return [{ offset: from, length: text.length - from, text: apply(text, sorted).slice(from) }]
+}

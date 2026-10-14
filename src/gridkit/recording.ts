@@ -110,9 +110,9 @@ export interface Recording {
 }
 
 /** The edits that make every element of each type `recordings` name list the outputs in its `add`
- *  and none in its `remove`. A list keeps its order, and what it gains goes last. A record with no
- *  list gains one. Edits of records near one another, of whatever type, are one edit, with what lies
- *  between them: listing a field on every element is then a few edits, not one per element. */
+ *  and none in its `remove`, one for each element whose list changes, of its list alone. A list
+ *  keeps its order, and what it gains goes last. A record with no list gains one, before its
+ *  closing brace. How they reach the editor is `delivered`'s to say. */
 export function recordEdits(kase: Case, recordings: readonly Recording[]): SourceEdit[] {
   /** Each record's change, by where it is in the file. */
   const changes: { start: number; end: number; text: string }[] = []
@@ -139,24 +139,8 @@ export function recordEdits(kase: Case, recordings: readonly Recording[]): Sourc
   }
   changes.sort((a, b) => a.start - b.start)
   const offsetOf = textOffsets(kase)
-  const edits: SourceEdit[] = []
-  /** The edit being made, and where it ends in the file, which the next change joins when near. */
-  let last: { offset: number; length: number; text: string; end: number } | undefined
-  for (const { start, end, text } of changes) {
+  return changes.map(({ start, end, text }) => {
     const offset = offsetOf(start)
-    const length = offsetOf(end) - offset
-    if (last && offset - (last.offset + last.length) <= JOIN_CHARS) {
-      last.text += decoder.decode(kase.file.subarray(last.end, start)) + text
-      last.length = offset + length - last.offset
-      last.end = end
-      continue
-    }
-    if (last) edits.push({ offset: last.offset, length: last.length, text: last.text })
-    last = { offset, length, text, end }
-  }
-  if (last) edits.push({ offset: last.offset, length: last.length, text: last.text })
-  return edits
+    return { offset, length: offsetOf(end) - offset, text }
+  })
 }
-
-/** How near one record's change must be to the last for the two to be one edit, in characters. */
-const JOIN_CHARS = 4096

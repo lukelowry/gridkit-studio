@@ -64,6 +64,8 @@ const RUN = { tmax: 1, dt_monitor: 0.01, events: [] }
 const PLAYBACK_MS = 3000
 /** Where seeks land, as parts of the run. */
 const SEEKS = [0.9, 0.1, 0.6, 0.3, 0.75]
+/** How often the extension host's loop is looked at, in milliseconds, while a case changes. */
+const BEAT_MS = 10
 
 const timings: Record<string, number[]> = {}
 const work: Record<string, Record<string, number>> = {}
@@ -338,7 +340,116 @@ export async function run() {
         done: (i) => table.locator(rows(i % 2 ? counts.Bus! : 0)).waitFor({ timeout: 60_000 }),
       })
 
-      if (!gridkit) continue
+      // ── Monitored Signals ──
+      // Checking an output in Monitored Signals rewrites the list of each element of its type. A
+      // release case writes each list over lines, and Studio writes it on one. Buses, and the type
+      // with the most elements besides them that records anything, are checked first on lists as
+      // the case writes them, then checked and unchecked on lists Studio wrote. Each change is
+      // timed until the case reads it, beside the longest the extension host went between two
+      // beats meanwhile, as every extension waited as long. Its work is the edits VS Code made.
+      // These are timed last in each case, so that what such large edits leave behind slows
+      // nothing else timed. The case as its file writes it is kept from here, before any run.
+      const written = await readFile(uri.fsPath, 'utf8')
+      const recording = JSON.stringify(summary().recording)
+      /** Monitored Signals, timed, the case left as found and saved. */
+      const recordings = async () => {
+        const document = bench.studio.documents.get(key)!.document
+        const { types } = summary().schema
+        const outputs = (type: string) =>
+          Object.keys(types[type]!.fields).filter((field) => types[type]!.fields[field]!.sampled)
+        const listed = (type: string, field: string) =>
+          summary().recording.listed[type]?.[field] ?? 0
+        /** The case as its file writes it, once read. */
+        const asWritten = async () => {
+          if (document.getText() === written) return
+          const all = new vscode.WorkspaceEdit()
+          all.replace(
+            uri,
+            document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)),
+            written,
+          )
+          await vscode.workspace.applyEdit(all)
+          await settle(
+            () =>
+              !bench.studio.state(key).stale && JSON.stringify(summary().recording) === recording,
+            path + ' reads as written',
+          )
+        }
+        let edits = 0
+        let beat = performance.now()
+        let stall = 0
+        const listening = vscode.workspace.onDidChangeTextDocument((event) => {
+          if (event.document === document) edits += event.contentChanges.length
+        })
+        const beating = setInterval(() => {
+          const now = performance.now()
+          stall = Math.max(stall, now - beat)
+          beat = now
+        }, BEAT_MS)
+        try {
+          // What a run had the case record is no longer what its file writes.
+          await asWritten()
+          const [busiest] = Object.entries(counts)
+            .filter(([type]) => type !== 'Bus' && outputs(type).length)
+            .sort((a, b) => b[1] - a[1])
+          for (const type of ['Bus', ...(busiest ? [busiest[0]] : [])]) {
+            const field = outputs(type).find((name) => !listed(type, name))
+            if (!field) continue
+            for (const [lists, runs, ready, on] of [
+              ['as written', RUNS, asWritten, () => true],
+              ['as Studio writes it', 2 * RUNS, async () => {}, (i: number) => i % 2 === 1],
+            ] as const) {
+              const name = `signals ${size} > ${type} ${lists}`
+              const stalls: number[] = []
+              let made = 0
+              await time(name, runs, {
+                ready: async () => {
+                  await ready()
+                  edits = 0
+                  stall = 0
+                  beat = performance.now()
+                },
+                act: (i) =>
+                  bench.studio.documents.transact(
+                    key,
+                    'latest',
+                    [
+                      {
+                        kind: 'record',
+                        type,
+                        add: on(i) ? [field] : [],
+                        remove: on(i) ? [] : [field],
+                      },
+                    ],
+                    'Change recorded signals',
+                  ),
+                done: async (i) => {
+                  await settle(
+                    () =>
+                      !bench.studio.state(key).stale &&
+                      listed(type, field) === (on(i) ? counts[type] : 0),
+                    `${type} ${on(i) ? 'records' : 'stops recording'} ${field}`,
+                  )
+                  stalls.push(Math.max(stall, performance.now() - beat))
+                  made += edits
+                },
+              })
+              timings[`${name}, host stall`] = stalls
+              work[name] = { edits: Math.round(made / runs) }
+            }
+          }
+        } finally {
+          clearInterval(beating)
+          listening.dispose()
+        }
+        await asWritten()
+        await document.save()
+      }
+
+      if (!gridkit) {
+        await recordings()
+        continue
+      }
 
       // ── A second of simulation, followed live ──
       await bench.record('Bus', ['Vm'], uri)
@@ -567,6 +678,7 @@ export async function run() {
         bytes: (await stat(video(EXPORTS - 1).fsPath)).size,
       }
       bench.studio.get(key)!.select()
+      await recordings()
     }
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')
     await mkdir(output, { recursive: true })

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { Case } from './case.js'
 import { catalog } from './definition.js'
-import { applyChanges, presentation, transaction } from './transactions.js'
+import { applyChanges, delivered, presentation, transaction } from './transactions.js'
 const text =
   '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"BusFault","id":"load","ports":{"bus":7}},{"class":"BusFault","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)
@@ -182,5 +182,42 @@ describe('document transactions', () => {
       [{ offset: 0, length: 2, text: 'NY' }],
     ])
     expect(result).toBe('NY 😀 115.0')
+  })
+
+  it('delivers edits within lines as they are, and several of lines as one to the end', () => {
+    const lines = 'one\ntwo\r\nthree\nfour'
+    const within = [
+      { offset: 9, length: 5, text: 'THREE' },
+      { offset: 0, length: 3, text: 'ONE' },
+    ]
+    expect(delivered(lines, within)).toEqual([within[1], within[0]])
+    // One edit that takes a line away moves the lines below it once.
+    const one = [{ offset: 4, length: 5, text: 'two ' }]
+    expect(delivered(lines, one)).toEqual(one)
+    // A line break the edit takes away counts as one it writes, a CRLF as much as an LF.
+    const several = [
+      { offset: 15, length: 0, text: 'and\n' },
+      { offset: 7, length: 2, text: ' ' },
+      { offset: 1, length: 2, text: 'NE' },
+    ]
+    const after = applyChanges(lines, [several])
+    expect(after).toBe('oNE\ntwo three\nand\nfour')
+    expect(delivered(lines, several)).toEqual([
+      { offset: 1, length: lines.length - 1, text: after.slice(1) },
+    ])
+  })
+
+  it('delivers edits within lines as one to the end once VS Code would make them one', () => {
+    const list = Array.from({ length: 2000 }, (_, n) => `{"n":${n}}`).join(',\n')
+    const marks = [...list.matchAll(/}/g)].map(({ index }) => ({
+      offset: index,
+      length: 0,
+      text: ',"mon":[]',
+    }))
+    const [one] = delivered(list, marks)
+    expect(one).toMatchObject({ offset: marks[0]!.offset, length: list.length - marks[0]!.offset })
+    expect(applyChanges(list, [[one!]])).toBe(applyChanges(list, [marks]))
+    // Fewer go as they are.
+    expect(delivered(list, marks.slice(0, 10))).toEqual(marks.slice(0, 10))
   })
 })

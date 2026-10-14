@@ -60,6 +60,14 @@ describe("a case's recording", () => {
     expect(JSON.parse(off).buses.map((bus: { mon?: string[] }) => bus.mon)).toEqual([[], ['Va']])
   })
 
+  it('edits each element whose list changes, its list alone', async () => {
+    const kase = await Case.parse(source, catalog)
+    expect(recordEdits(kase, [{ type: 'Bus', add: ['Vm'], remove: [] }])).toEqual([
+      { offset: source.indexOf('230.000}') + 8, length: 0, text: ', "mon": ["Vm"]' },
+      { offset: source.indexOf('["Va"]'), length: 6, text: '["Va","Vm"]' },
+    ])
+  })
+
   it('records several types at once, their elements interleaved, in edits that never overlap', async () => {
     const text = source.replace(
       '{"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"mon":["P1"]}',

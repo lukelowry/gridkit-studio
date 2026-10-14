@@ -29,6 +29,30 @@ describe("a case's recording", () => {
     expect((await recordingOf(bare)).monitor).toBeUndefined()
   })
 
+  it('counts what any class lists as recorded, as GridKit records it', async () => {
+    const listless = source.replace(/,"mon":\["(Va|P1)"\]/g, '')
+    expect((await recordingOf(await Case.parse(listless, catalog))).anything).toBe(false)
+    const future = listless.replace(
+      '"devices":[',
+      '"devices":[{"class":"Future","id":"next","mon":["out"]},',
+    )
+    expect(await recordingOf(await Case.parse(future, catalog))).toMatchObject({
+      listed: {},
+      anything: true,
+    })
+  })
+
+  it('finds the file GridKit writes as it does: the last CSV monitor that uses commas', async () => {
+    const monitor = async (sinks: string) =>
+      (await recordingOf(await Case.parse(source.replace(/"monitors":\[.*\]/, sinks), catalog)))
+        .monitor
+    const csv = '{"file_name":"out.csv","format":"csv"}'
+    const semi = '{"file_name":"semi.csv","format":"csv","delim":";"}'
+    expect(await monitor(`"monitors":[${csv},${semi}]`)).toEqual({ file: 'out.csv' })
+    // One that names no file leaves it to the solver file's output_file.
+    expect(await monitor(`"monitors":[${csv},{"format":"csv"}]`)).toBeUndefined()
+  })
+
   it('counts an element once for an output its list names twice', async () => {
     const twice = source.replace('"mon":["Va"]', '"mon":["Va","Va"]')
     expect((await recordingOf(await Case.parse(twice, catalog))).listed.Bus).toEqual({ Va: 1 })

@@ -4,6 +4,8 @@ import type { CaseSource, Revision } from './messages.js'
 
 /** Where GridKit runs: installed here, else in a container of an image. */
 export interface GridKit {
+  /** The program a run starts, with the solver file as its one argument. */
+  readonly program: string
   /** Its install folder, or its program; empty finds GridKit on PATH. */
   readonly path: string
   /** An image with GridKit's programs on its PATH, used when GridKit is not installed here; the

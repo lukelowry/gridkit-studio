@@ -20,6 +20,7 @@ import {
 } from '../shared/ids.js'
 import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
+import { catalogFile } from './catalog.js'
 import { Client, CRASHES } from './client.js'
 import { current, Documents, isWritable, wholeAt } from './documents.js'
 import { noCase, Reporter } from './report.js'
@@ -69,9 +70,13 @@ export class Sessions implements vscode.Disposable {
     const store = kept
       ? vscode.Uri.joinPath(kept, 'results').fsPath
       : join(tmpdir(), 'gridkit-studio-results')
+    // Both workers start with the catalog of GridKit's classes the user's file holds, if any.
+    const workers = { catalog: catalogFile((error) => this.reporter.report(error)) }
     this.client = new Client(
       vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
+      workers,
       () => ({
+        ...workers,
         cacheBytes: cacheBytes(),
         store,
         saved: savedResults(workspaceState),
@@ -126,7 +131,12 @@ export class Sessions implements vscode.Disposable {
             .catch((error) => this.reporter.report(error))
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => this.#followText(editor)),
-      vscode.window.tabGroups.onDidChangeTabs(() => this.#followCanvas()),
+      // A tab that comes to the front, opened or chosen, says which canvas is there. One that opens
+      // or changes behind it does not, as the tab VS Code opens for a file an edit left unsaved.
+      vscode.window.tabGroups.onDidChangeTabs(({ opened, changed }) => {
+        if ([...opened, ...changed].some((tab) => tab.isActive && tab.group.isActive))
+          this.#followCanvas()
+      }),
     ]
     void this.prune()
     // A case in front as Studio starts, as VS Code restores its editors, is the one the views follow.

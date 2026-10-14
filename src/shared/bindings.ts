@@ -1,8 +1,9 @@
 /** The network's display channels, and which numeric field drives each. */
 
-import type { Query } from '@latkit/model'
+import { type Query, sameIndex } from '@latkit/model'
 
 import { coversRows } from './coverage.js'
+import type { Summary } from './messages.js'
 
 /** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
 export const CHANNELS = {
@@ -36,20 +37,27 @@ export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int
 const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.type === b.type && a.field === b.field
 
-/** Whether a run with `outputs` records `field` for all `count` rows of its type, as a channel
- *  requires: the network draws every row. */
+/** Whether a run with `outputs` records `field` for every row of its type as `summary` numbers
+ *  them, as a channel requires: the network draws every row. Rows it holds by number are of the
+ *  case's rows only where numbered alike, as their index says. */
 export function recordedWhole(
   outputs: readonly Query.Selection[],
-  count: number,
+  summary: Pick<Summary, 'counts' | 'indexes'>,
   field: FieldRef,
 ): boolean {
+  const count = summary.counts[field.type] ?? 0
+  const index = summary.indexes[field.type]
   const matching = outputs.filter(
     ({ from, select }) => from === field.type && select.includes(field.field),
   )
   if (matching.some(({ rows }) => rows === undefined)) return true
   const ids = new Set(matching.flatMap(({ rows }) => (rows?.kind === 'ids' ? [...rows.ids] : [])))
   if (ids.size === count && count > 0) return true
-  const axes = matching.flatMap(({ rows }) => (rows && rows.kind !== 'ids' ? [rows] : []))
+  const axes = matching.flatMap(({ rows }) =>
+    rows && rows.kind !== 'ids' && rows.index && index && sameIndex(rows.index, index)
+      ? [rows]
+      : [],
+  )
   return axes.length > 0 && coversRows(axes, { kind: 'range', offset: 0, count })
 }
 

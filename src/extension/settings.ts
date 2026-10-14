@@ -1,10 +1,12 @@
-/** What Studio reads of VS Code's settings: where GridKit runs, how much of its results stay read,
- *  and how each view looks. package.json declares each setting and holds its one default. */
+/** What Studio reads of VS Code's settings: how GridKit runs and the classes it has, how much of its
+ *  results stay read, and how each view looks. package.json declares each setting and holds its
+ *  one default. */
 
 import { dirname, resolve } from 'node:path'
 
 import * as vscode from 'vscode'
 
+import { PROGRAM } from '../gridkit/index.js'
 import { PREFIX } from '../shared/ids.js'
 import type { GridKit } from '../shared/messages.js'
 import {
@@ -16,16 +18,18 @@ import {
 
 /** The settings Studio reads besides how its views look, by id. */
 interface Runtime {
+  readonly gridkitProgram: string
   readonly gridkitPath: string
   readonly gridkitImage: string
   readonly containerCli: string
+  readonly catalog: string
   readonly resultCacheMiB: number
 }
 
 const MIB = 1 << 20
 
 /** The setting `id` for `scope`, or its default. */
-const setting = <K extends keyof Runtime>(id: K, scope?: vscode.Uri): Runtime[K] =>
+export const setting = <K extends keyof Runtime>(id: K, scope?: vscode.Uri): Runtime[K] =>
   vscode.workspace.getConfiguration(PREFIX, scope).get<Runtime[K]>(id)!
 
 /** Whether `event` changes Studio's setting `id`, or any of them, for `scope`. */
@@ -40,6 +44,7 @@ export const affects = (
 export function gridkitOf(uri: vscode.Uri): GridKit {
   const path = setting('gridkitPath', uri).trim()
   return {
+    program: setting('gridkitProgram', uri).trim() || PROGRAM,
     path: path
       ? resolve(vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath), path)
       : '',

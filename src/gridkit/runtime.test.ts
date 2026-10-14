@@ -6,9 +6,29 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { abandoned, containerArgs, runtimeOf, sweepOrphans, writeDown } from './runtime.js'
+import type { GridKit } from '../shared/simulation.js'
+import {
+  abandoned,
+  containerArgs,
+  launch,
+  PROGRAM,
+  runtimeOf,
+  sweepOrphans,
+  writeDown,
+} from './runtime.js'
 
 const exe = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
+/** GridKit as the settings name it, run as an image unless they say otherwise. */
+const settings = (named: Partial<GridKit>): GridKit => ({
+  program: PROGRAM,
+  path: '',
+  image: 'gridkit:latest',
+  cli: '',
+  ...named,
+})
+
+/** A solver file in a workspace's folder. */
+const place = { root: '/work', solver: '/work/studies/IEEE39.solver.json' }
 
 describe('where GridKit runs', () => {
   let root: string
@@ -36,67 +56,87 @@ describe('where GridKit runs', () => {
     const installed = await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
     await program(join(root, 'path'), 'DynamicSimulation')
     await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: join(root, 'opt'), image: 'gridkit:latest', cli: '' })).toEqual({
+    expect(await runtimeOf(settings({ path: join(root, 'opt') }))).toEqual({
       kind: 'installed',
-      program: installed,
+      program: PROGRAM,
+      path: installed,
     })
   })
 
   it('runs the program GridKit Path names', async () => {
     const simulation = await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
-    const gridkit = { path: simulation, image: '', cli: '' }
-    expect(await runtimeOf(gridkit)).toEqual({ kind: 'installed', program: simulation })
+    expect(await runtimeOf(settings({ path: simulation, image: '' }))).toEqual({
+      kind: 'installed',
+      program: PROGRAM,
+      path: simulation,
+    })
   })
 
   it('refuses a path with no GridKit rather than falling back to the image', async () => {
     await program(join(root, 'path'), 'docker')
-    await expect(
-      runtimeOf({ path: join(root, 'missing'), image: 'gridkit:latest', cli: '' }),
-    ).rejects.toThrow(/GridKit Path/)
+    await expect(runtimeOf(settings({ path: join(root, 'missing') }))).rejects.toThrow(
+      /GridKit Path/,
+    )
   })
 
   it('runs DynamicSimulation on PATH, as a dev container has it, before the image', async () => {
     const installed = await program(join(root, 'path'), 'DynamicSimulation')
     await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toEqual({
+    expect(await runtimeOf(settings({}))).toEqual({
       kind: 'installed',
-      program: installed,
+      program: PROGRAM,
+      path: installed,
     })
   })
 
   it('runs the image where GridKit is not installed, in Docker, else Podman', async () => {
     const podman = await program(join(root, 'path'), 'podman')
-    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toEqual({
+    expect(await runtimeOf(settings({}))).toEqual({
       kind: 'container',
+      program: PROGRAM,
       cli: podman,
       podman: true,
       image: 'gridkit:latest',
     })
     const docker = await program(join(root, 'path'), 'docker')
-    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).toMatchObject({
+    expect(await runtimeOf(settings({}))).toMatchObject({
       cli: docker,
     })
-    expect(await runtimeOf({ path: '', image: 'gridkit:latest', cli: 'podman' })).toMatchObject({
+    expect(await runtimeOf(settings({ cli: 'podman' }))).toMatchObject({
       cli: podman,
       podman: true,
     })
   })
 
+  it('runs the program its settings name, installed or in the image', async () => {
+    const named = await program(join(root, 'path'), 'Simulate')
+    expect(await runtimeOf(settings({ program: 'Simulate' }))).toEqual({
+      kind: 'installed',
+      program: 'Simulate',
+      path: named,
+    })
+    await program(join(root, 'opt', 'bin'), 'DynamicSimulation')
+    await expect(
+      runtimeOf(settings({ program: 'Simulate', path: join(root, 'opt') })),
+    ).rejects.toThrow(/Simulate was not found/)
+    expect(
+      containerArgs({ image: 'gridkit:latest', program: 'Simulate' }, place, 'n', {
+        platform: 'win32',
+        podman: false,
+      }).slice(-2),
+    ).toEqual(['Simulate', 'IEEE39.solver.json'])
+  })
+
   it('says how to run GridKit when it has nowhere to', async () => {
-    await expect(runtimeOf({ path: '', image: '', cli: '' })).rejects.toThrow(/GridKit Image/)
-    await expect(runtimeOf({ path: '', image: 'gridkit:latest', cli: '' })).rejects.toThrow(
-      /Docker or Podman/,
-    )
-    await expect(runtimeOf({ path: '', image: 'gridkit:latest', cli: 'nerdctl' })).rejects.toThrow(
-      /Container CLI/,
-    )
+    await expect(runtimeOf(settings({ image: '' }))).rejects.toThrow(/GridKit Image/)
+    await expect(runtimeOf(settings({}))).rejects.toThrow(/Docker or Podman/)
+    await expect(runtimeOf(settings({ cli: 'nerdctl' }))).rejects.toThrow(/Container CLI/)
   })
 })
 
 describe('a container run', () => {
-  const place = { root: '/work', solver: '/work/studies/IEEE39.solver.json' }
   const run = (platform: NodeJS.Platform, podman: boolean) =>
-    containerArgs('gridkit:latest', place, 'gridkit-studio-1', {
+    containerArgs({ image: 'gridkit:latest', program: PROGRAM }, place, 'gridkit-studio-1', {
       platform,
       podman,
       uid: 1000,
@@ -124,10 +164,12 @@ describe('a container run', () => {
     expect(args.join(' ')).toContain('--volume /work:/workspace --workdir /workspace/studies')
     expect(args.slice(-3)).toEqual(['gridkit:latest', 'DynamicSimulation', 'IEEE39.solver.json'])
     expect(
-      containerArgs('gridkit:latest', { root: '/work', solver: '/work/IEEE39.solver.json' }, 'n', {
-        platform: 'win32',
-        podman: false,
-      }),
+      containerArgs(
+        { image: 'gridkit:latest', program: PROGRAM },
+        { root: '/work', solver: '/work/IEEE39.solver.json' },
+        'n',
+        { platform: 'win32', podman: false },
+      ),
     ).toEqual(expect.arrayContaining(['--workdir', '/workspace']))
     expect(args).not.toContain('--user')
   })
@@ -211,4 +253,35 @@ describe('runs a window that died left running', () => {
       }
     },
   )
+})
+
+describe('how a run ends', () => {
+  let root: string
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'gridkit-launch-'))
+  })
+  afterEach(() => rm(root, { recursive: true, force: true }))
+
+  /** How a GridKit that does what `script` does ends: Node runs in its place, the script as its
+   *  solver file. */
+  async function ends(script: string): Promise<void> {
+    const solver = join(root, 'run.cjs')
+    await writeFile(solver, script)
+    const runtime = { kind: 'installed', program: PROGRAM, path: process.execPath } as const
+    const log = () => {}
+    return launch(runtime, { root, solver, touches: [] }, { signal: AbortSignal.any([]), log }).done
+  }
+
+  it('fails only as GridKit exits, saying the error it printed, on its line or the next', async () => {
+    // GridKit prints errors it goes on from.
+    await expect(ends(`console.log('[ERROR] Bus parameter "x" has no value.')`)).resolves.toBe(
+      undefined,
+    )
+    await expect(
+      ends(`console.log('[ERROR] ')
+console.log('\tInvalid device class: "BusFault".')
+process.exitCode = 1`),
+    ).rejects.toThrow('Invalid device class: "BusFault".')
+    await expect(ends('process.exitCode = 3')).rejects.toThrow(`${PROGRAM} exited with code 3.`)
+  })
 })

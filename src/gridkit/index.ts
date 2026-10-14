@@ -2,7 +2,7 @@
  *  files. */
 
 export { Case, type Table } from './case.js'
-export { catalog } from './definition.js'
+export { catalog, catalogOf } from './definition.js'
 export { diagnose, editable, sourceRange } from './edits.js'
 export { completionsAt, outline, sourceContext } from './navigation.js'
 export { outputName, recordingOf } from './recording.js'

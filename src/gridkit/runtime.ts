@@ -1,4 +1,4 @@
-/** Runs GridKit's DynamicSimulation where GridKit is installed or in a container, and stops all it
+/** Runs GridKit's simulation program where GridKit is installed or in a container, and stops all it
  *  started. */
 
 import { type ChildProcess, type ChildProcessByStdio, execFile, spawn } from 'node:child_process'
@@ -26,7 +26,7 @@ import type { GridKit, RuntimeProcess } from '../shared/messages.js'
 import { alive } from '../shared/processes.js'
 import { clipped, readSolverLine, type SolverLine } from './solver.js'
 
-/** The GridKit program Studio runs on a solver file. */
+/** The GridKit program a run starts on a solver file, unless the settings name another. */
 export const PROGRAM = 'DynamicSimulation'
 /** Where a container sees the workspace folder. */
 const MOUNT = '/workspace'
@@ -155,15 +155,16 @@ export async function sweepOrphans(folder: string): Promise<void> {
   )
 }
 
-/** How a run starts GridKit: installed here, or in a container of `image`. */
-export type Runtime =
-  | { readonly kind: 'installed'; readonly program: string }
+/** How a run starts GridKit's `program`: installed here at `path`, or in a container of `image`. */
+export type Runtime = { readonly program: string } & (
+  | { readonly kind: 'installed'; readonly path: string }
   | {
       readonly kind: 'container'
       readonly cli: string
       readonly podman: boolean
       readonly image: string
     }
+)
 
 const executable = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
 
@@ -228,24 +229,24 @@ async function containerCli(cli: string): Promise<string> {
 
 /** Where `gridkit` runs: the install its path names, or beside the program it names; else the one
  *  on PATH, as a dev container or remote host with GridKit has it; else a container of its image. */
-export async function runtimeOf({ path, image, cli }: GridKit): Promise<Runtime> {
-  const name = executable(PROGRAM)
+export async function runtimeOf({ program, path, image, cli }: GridKit): Promise<Runtime> {
+  const name = executable(program)
   if (path) {
     for (const found of [
       join(path, 'bin', name),
       join(path, name),
       ...((await runs(path)) ? [join(dirname(path), name)] : []),
     ])
-      if (await runs(found)) return { kind: 'installed', program: found }
+      if (await runs(found)) return { kind: 'installed', program, path: found }
     throw new Error(
-      `GridKit's ${PROGRAM} was not found under ${path}. Check GridKit Studio: GridKit Path.`,
+      `GridKit's ${program} was not found under ${path}. Check GridKit Studio: GridKit Path.`,
     )
   }
-  const found = await onPath(PROGRAM)
-  if (found) return { kind: 'installed', program: found }
+  const found = await onPath(program)
+  if (found) return { kind: 'installed', program, path: found }
   if (image) {
     const found = await containerCli(cli)
-    return { kind: 'container', cli: found, podman: await isPodman(found), image }
+    return { kind: 'container', program, cli: found, podman: await isPodman(found), image }
   }
   throw new Error(
     'GridKit is not installed here. Set GridKit Studio: GridKit Path to its install folder, or GridKit Image to run it in Docker or Podman.',
@@ -314,11 +315,11 @@ function threads(env: NodeJS.ProcessEnv) {
   }
 }
 
-/** The container CLI's arguments that run GridKit in `image` on the solver file `place` names: a
- *  container named `name` and labelled with this machine, removed when it ends, with no network,
- *  from the local image only. */
+/** The container CLI's arguments that run GridKit's `program` in `image` on the solver file `place`
+ *  names: a container named `name` and labelled with this machine, removed when it ends, with no
+ *  network, from the local image only. */
 export function containerArgs(
-  image: string,
+  { image, program }: { readonly image: string; readonly program: string },
   place: Pick<Place, 'root' | 'solver'>,
   name: string,
   host: {
@@ -359,7 +360,7 @@ export function containerArgs(
       `${name}=${value}`,
     ]),
     image,
-    PROGRAM,
+    program,
     basename(place.solver),
   ]
 }
@@ -401,12 +402,12 @@ export function launch(
   if (container) void sweepContainers(container.cli)
   const [command, args] =
     runtime.kind === 'installed'
-      ? [runtime.program, [basename(place.solver)]]
+      ? [runtime.path, [basename(place.solver)]]
       : [
           runtime.cli,
           // A relative source would name a volume, not the folder.
           containerArgs(
-            runtime.image,
+            runtime,
             { root: resolve(place.root), solver: resolve(place.solver) },
             container!.name,
             {
@@ -454,7 +455,8 @@ export function launch(
   let writer: 'writing' | 'done' | 'stopped' = 'writing'
   /** The last lines printed, which say why a container that never ran stopped. */
   const tail: string[] = []
-  /** What stopped the run: the first error GridKit printed. */
+  /** Why the run failed, should it: the first error GridKit printed, said on its line or the next.
+   *  GridKit also prints errors it goes on from, so only how it exits says whether it failed. */
   let nativeError: SolverLine | undefined
   let cleanup: Promise<void> | undefined
   const stop = () => (cleanup ??= stopProcess(child, owned))
@@ -468,7 +470,11 @@ export function launch(
       const text = stripVTControlCharacters(line)
       tail.push(clipped(text))
       if (tail.length > TAIL_LINES) tail.shift()
-      if (/\[ERROR\]/i.test(text)) nativeError ??= readSolverLine(text)
+      if (!nativeError) {
+        if (/\[ERROR\]/i.test(text)) nativeError = readSolverLine(text)
+      } else if (!nativeError.text && text.trim())
+        // GridKit often says an error on the line after its [ERROR], as "\n\tInvalid device class".
+        nativeError = { level: 'error', text: text.trim() }
       log(text)
     })
   const done = new Promise<void>((resolve, reject) => {
@@ -480,9 +486,13 @@ export function launch(
       // A container that never ran says why last: no engine, no image, no access.
       const said = container ? tail.findLast((line) => line.trim()) : undefined
       if (signal.aborted) reject(signal.reason)
-      else if (nativeError) reject(new Error(nativeError.text))
       else if (code !== 0)
-        reject(new Error(`${PROGRAM} exited with code ${code}.${said ? ' ' + said : ''}`))
+        reject(
+          new Error(
+            nativeError?.text ||
+              `${runtime.program} exited with code ${code}.${said ? ' ' + said : ''}`,
+          ),
+        )
       else resolve()
     })
   }).finally(async () => {

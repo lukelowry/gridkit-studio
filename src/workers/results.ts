@@ -11,7 +11,14 @@ import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { workerData } from 'node:worker_threads'
 
-import { Case, catalog, presentation, PROGRAM, simulate, sweepOrphans } from '../gridkit/index.js'
+import {
+  Case,
+  catalog as bundled,
+  catalogOf,
+  presentation,
+  simulate,
+  sweepOrphans,
+} from '../gridkit/index.js'
 import { solverLine } from '../gridkit/solver.js'
 import { closed, PROGRESS_MS, ResultCache, ResultsFile, stampOf, Stores } from '../results/index.js'
 import { defect, detail, failedWith, message, problem, quiet } from '../shared/errors.js'
@@ -34,6 +41,7 @@ const LOG_CHARS = 64 << 10
 const LOG_MS = 1000
 
 const options = workerData as ResultsOptions
+const catalog = options.catalog === undefined ? bundled : catalogOf(options.catalog)
 const cache = new ResultCache(options.cacheBytes)
 const stores = new Stores(options.store)
 // What windows before left behind: stores no saved session names, and runs a window died during.
@@ -212,7 +220,7 @@ async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): 
   const run: Run = {
     id: input.run,
     uri: input.uri,
-    command: `${PROGRAM} ${basename(input.solver)}`,
+    command: `${input.gridkit.program} ${basename(input.solver)}`,
     state: 'running',
   }
   const reader = { uri: input.uri, kase }

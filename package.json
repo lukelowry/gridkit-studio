@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -116,6 +116,8 @@
         "gridkitStudio.gridkitPath",
         "gridkitStudio.gridkitImage",
         "gridkitStudio.containerCli",
+        "gridkitStudio.gridkitProgram",
+        "gridkitStudio.catalog",
         "gridkitStudio.network.map.tilesUrl"
       ]
     },
@@ -1286,10 +1288,10 @@
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",
-            "default": "ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985",
+            "default": "ghcr.io/lukelowry/gridkit:0.2.0-perf",
             "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. The default names one GridKit build, `0.2.0-perf`, by its digest, so it stays the same when a tag moves. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit@sha256:640bfc0d630de5f0a919338005a99967a8cfdeda90849d5f5290814daade8985`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
+            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit:0.2.0-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
           },
           "gridkitStudio.containerCli": {
             "type": "string",
@@ -1297,6 +1299,20 @@
             "scope": "machine-overridable",
             "order": 2,
             "markdownDescription": "The container CLI that runs **GridKit Image**: `docker`, `podman`, or a path to either. Empty uses `docker`, else `podman`, on `PATH`."
+          },
+          "gridkitStudio.gridkitProgram": {
+            "type": "string",
+            "default": "DynamicSimulation",
+            "scope": "machine-overridable",
+            "order": 3,
+            "markdownDescription": "The GridKit program a run starts, with the solver file as its one argument. It is found under **GridKit Path**, on `PATH`, or in **GridKit Image**."
+          },
+          "gridkitStudio.catalog": {
+            "type": "string",
+            "default": "",
+            "scope": "machine-overridable",
+            "order": 4,
+            "markdownDescription": "A catalog of GridKit's classes to use in place of GridKit Studio's own, in the same form, for a GridKit build whose classes differ. A relative path starts at the first workspace folder. It is read when the window opens."
           },
           "gridkitStudio.resultCacheMiB": {
             "type": "number",

@@ -1,11 +1,14 @@
 /** The case worker: each open case's source, parsed as the user edits it, and what the views and the
  *  editor read of it. Results files and runs have a worker of their own, so neither slows editing. */
 
+import { workerData } from 'node:worker_threads'
+
 import { Case } from '../gridkit/case.js'
 import { diagnose } from '../gridkit/edits.js'
 import {
   applyChanges,
-  catalog,
+  catalog as bundled,
+  catalogOf,
   completionsAt,
   delivered,
   outline,
@@ -17,7 +20,7 @@ import {
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
 import { detail, problem, superseded } from '../shared/errors.js'
-import type { CaseApi, Revision, SourceDelta, Summary } from '../shared/messages.js'
+import type { CaseApi, Revision, SourceDelta, Summary, WorkerOptions } from '../shared/messages.js'
 import { nameOf, summarize, TextCases } from './parsed.js'
 import { queried, rowsOf } from './reads.js'
 import { memory, send, serve } from './serve.js'
@@ -33,6 +36,8 @@ interface Document {
   read?: { kase: Case; summary: Summary; text: string }
 }
 
+const chosen = (workerData as WorkerOptions | null)?.catalog
+const catalog = chosen === undefined ? bundled : catalogOf(chosen)
 const documents = new Map<string, Document>()
 /** Cases read from whole texts, found again when a document opens again. */
 const opened = new TextCases()

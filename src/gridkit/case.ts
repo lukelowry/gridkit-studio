@@ -475,7 +475,6 @@ function joined(
     mons.set(range.array, [...(mons.get(range.array) ?? []), shifted(parsed.mons, shift)])
   }
   const tables = new Map<string, Table>()
-  const index = (type: string): Index => ({ source: version, type, version })
   // One order of tables for any read, however its ranges were coded: the catalog's in its order,
   // then each class it does not know in the order its first record has in its array. A class no
   // record has any more has no table.
@@ -488,11 +487,12 @@ function joined(
     const shape = shapes[code]!
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
-    // A table whose ranges were all kept has the ids of the case before, and with them the indexes
-    // built of them.
-    const before = previous?.tables.get(shape.type)?.ids
+    // A table whose ranges were all kept has the ids of the case before, and with them its index
+    // and the indexes built of them.
+    const before = previous?.tables.get(shape.type)
     const kept =
-      before?.chunks.length === ids.length && before.chunks.every((chunk, i) => chunk === ids[i])
+      before?.ids.chunks.length === ids.length &&
+      before.ids.chunks.every((chunk, i) => chunk === ids[i])
     const starts = kept ? before!.starts : startsOf(ids)
     const column = (type: Schema.FieldType, list: readonly Chunk[]): Column => ({
       type,
@@ -501,9 +501,9 @@ function joined(
     })
     tables.set(shape.type, {
       shape,
-      index: index(shape.type),
+      index: kept ? before!.index : indexOf(catalog, shape.type, ids),
       starts,
-      ids: kept ? before! : column(shape.identity.type, ids),
+      ids: kept ? before!.ids : column(shape.identity.type, ids),
       fields: new Map(
         shape.fields.map((field, i) => [
           field.name,
@@ -536,7 +536,7 @@ function joined(
     })
   }
   const fields = foundColumns(file, found, records, shapes, tables)
-  const header = caseTable(file, layout, catalog.shapes.get(CASE)!, version)
+  const header = caseTable(file, layout, catalog.shapes.get(CASE)!, catalog.version)
   tables.set(CASE, header)
   const types: Record<string, Schema.Type> = Object.create(null)
   for (const [type, table] of tables) types[type] = table.shape.definition
@@ -965,13 +965,32 @@ function foundColumns(
   return firsts
 }
 
-/** The Case table's one row: the header's and system parameters' members. */
-function caseTable(
-  file: Uint8Array,
-  layout: Layout,
-  shape: Shape,
-  version: Index['version'],
-): Table {
+/** `type`'s rows as latkit numbers them: by their ids, in order. Any revision whose ids are these
+ *  numbers its rows alike, so what was read against one, as results are, fits the others. Hashed
+ *  as every id's length, then every id, however they were cut into chunks. */
+function indexOf(catalog: Catalog, type: string, ids: readonly Chunk[]): Index {
+  const hash = createHash('sha256').update(type)
+  if (ids[0]?.kind === 'text') {
+    const texts = ids as readonly Chunk.Text[]
+    const lengths = new Int32Array(texts.reduce((count, chunk) => count + chunk.length, 0))
+    let row = 0
+    for (const { offsets, offset, length } of texts)
+      for (let i = offset; i < offset + length; i++) lengths[row++] = offsets[i + 1]! - offsets[i]!
+    hash.update(new Uint8Array(lengths.buffer))
+    for (const { bytes, offsets, offset, length } of texts)
+      hash.update(bytes.subarray(offsets[offset], offsets[offset + length]))
+  } else
+    for (const chunk of ids) {
+      const { values, offset, length } = chunk as Chunk.Numeric
+      const width = values.BYTES_PER_ELEMENT
+      hash.update(new Uint8Array(values.buffer, values.byteOffset + offset * width, length * width))
+    }
+  return { source: catalog.version, type, version: hash.digest('hex').slice(0, 32) }
+}
+
+/** The Case table's one row: the header's and system parameters' members. Its one row is always
+ *  numbered alike, in the row space of `source`, its catalog's. */
+function caseTable(file: Uint8Array, layout: Layout, shape: Shape, source: string): Table {
   const values = new Map<string, Value>()
   /** The fields the file writes a value for, whether or not it reads as one. */
   const supplied = new Set<string>()
@@ -1015,7 +1034,7 @@ function caseTable(
   })
   return {
     shape,
-    index: { source: version, type: CASE, version },
+    index: { source, type: CASE, version: CASE },
     starts,
     ids: column('text', CASE_ROW),
     fields: new Map(

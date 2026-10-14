@@ -1,4 +1,5 @@
-/** The case's JSON source: invalid edits, minimal Git diffs, native review, parse errors. */
+/** The case's JSON source: invalid edits, minimal Git diffs, native review, parse errors, and the
+ *  catalog of GridKit's classes it is read with. */
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -8,7 +9,9 @@ import { promisify } from 'node:util'
 import { suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import { type TestHost, testHost, until, visible } from './harness.js'
+import { catalogFile } from '../../src/extension/catalog.js'
+import { catalog } from '../../src/gridkit/index.js'
+import { folder, type TestHost, testHost, until, visible } from './harness.js'
 
 suite('Case source', () => {
   let bench: TestHost
@@ -107,5 +110,43 @@ suite('Case source', () => {
     await until(() => !bench.studio.state(uri.toString()).error, 'the parse error clears')
     await document.save()
     await bench.open('network')
+  })
+
+  test('reads the catalog the Catalog setting names, and says why one does not read', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const global = vscode.ConfigurationTarget.Global
+    const file = vscode.Uri.joinPath(folder(), 'studio.catalog.json')
+    const write = (text: string) =>
+      vscode.workspace.fs.writeFile(file, new TextEncoder().encode(text))
+    const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
+    const later = {
+      ...bundled,
+      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
+    }
+    const said: unknown[] = []
+    const read = () => catalogFile((error) => said.push(error))
+    try {
+      assert.equal(read(), undefined, 'none named, the bundled catalog is read')
+      // A relative path is in the first workspace folder.
+      await settings.update('catalog', 'studio.catalog.json', global)
+      await write(JSON.stringify(later))
+      assert.deepEqual(read(), later)
+      assert.deepEqual(said, [])
+      // A file that is no catalog is said, and the bundled catalog read in its place.
+      for (const text of ['{', '{}']) {
+        await write(text)
+        assert.equal(read(), undefined)
+      }
+      assert.equal(said.length, 2)
+      for (const error of said)
+        assert.match(
+          String(error),
+          /studio\.catalog\.json is not a catalog GridKit Studio can read/,
+        )
+      assert.match(String(said[1]), /a bus and a list of classes/)
+    } finally {
+      await settings.update('catalog', undefined, global)
+      await vscode.workspace.fs.delete(file).then(undefined, () => {})
+    }
   })
 })

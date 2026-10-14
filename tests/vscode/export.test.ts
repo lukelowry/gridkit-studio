@@ -105,6 +105,9 @@ suite('Export', () => {
     const results = await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
     assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
     const budget = Math.floor((results.frames * (bench.source.buses.length + 1) * 8) / 4)
+    // The Case panel takes the Monitor's place, which would draw the same plots beside the export:
+    // on a software GPU that holds up every frame the window draws, for tens of seconds.
+    await bench.show('case')
     bench.session.setPlots([{ from: VM.type, field: VM.field }])
     const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 streamed.webm')
     const exporter = await bench.show('export')

@@ -11,6 +11,7 @@ import {
   fills,
   frames,
   idle,
+  pause,
   replaying,
   stats,
   type TestHost,
@@ -229,5 +230,33 @@ suite('Network', () => {
       60_000,
     )
     await bench.capture('network-borders')
+  })
+
+  test('says nothing when its editor closes as it updates', async () => {
+    // VS Code closes an editor before its extension host hears so: a change made meanwhile still
+    // updates the view, which must not ask the panel gone by then whether it shows. The close and
+    // the change race, so they are tried as often as a few seconds allow.
+    const deadline = performance.now() + 20_000
+    for (let cycle = 0; cycle < 30 && performance.now() < deadline; cycle++) {
+      await vscode.commands.executeCommand('vscode.openWith', bench.uri, 'gridkitStudio.network')
+      // The page's own hooks are in place once it has said it is ready, before it draws.
+      const page = await bench.view('network')
+      await page.waitForFunction('typeof gridkitStats === "function"', undefined, {
+        timeout: 30_000,
+      })
+      const closing = vscode.commands.executeCommand('workbench.action.closeAllEditors')
+      await pause(cycle % 4)
+      try {
+        bench.studio
+          .get(bench.key)
+          ?.bind({ type: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
+      } catch {
+        // The case closed first: nothing to map.
+      }
+      await closing
+    }
+    // What an update outlasting its editor says, it says once that update ends.
+    await pause(500)
+    assert.deepEqual(bench.studio.reporter.errors, [])
   })
 })

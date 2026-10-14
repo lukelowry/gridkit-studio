@@ -45,7 +45,7 @@ const failed = vi.fn()
 
 describe('the workers the extension asks', () => {
   it('asks each worker its own methods, and only those running what they hold', async () => {
-    const client = new Client(shipped, options, failed)
+    const client = new Client(shipped, {}, options, failed)
     try {
       expect(await client.stats()).toEqual({})
       const summary = await client.cases.call('parse', {
@@ -74,7 +74,7 @@ describe('the workers the extension asks', () => {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-    const client = new Client(crashing, options, failed)
+    const client = new Client(crashing, {}, options, failed)
     const stopped = vi.fn()
     const casesStopped = vi.fn()
     client.results.failure.event(stopped)

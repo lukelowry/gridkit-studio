@@ -1,13 +1,14 @@
 /** The Case panel: its place in the panel, its type picker, mapping a column onto the network from
- *  its menu, and edits through the document. */
+ *  its menu, edits through the document, and the case it follows. */
 
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame, Locator } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { frames, type TestHost, testHost, until, visible } from './harness.js'
+import { folder, frames, type TestHost, testHost, until, visible } from './harness.js'
 
 suite('Case', () => {
   let bench: TestHost
@@ -115,6 +116,31 @@ suite('Case', () => {
       ),
       /changed/,
     )
+  })
+
+  test('keeps to the case a command chose while VS Code opens a tab behind the canvas in front', async () => {
+    // A copy of the case the Case panel is told to show, with the Network of the first in front.
+    const uri = vscode.Uri.joinPath(folder(), `behind-${randomUUID()}.case.json`)
+    await vscode.workspace.fs.copy(bench.uri, uri)
+    await bench.open('network')
+    await vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri)
+    await until(() => bench.studio.documents.get(uri.toString())?.summary, 'the copy read')
+    const tab = () =>
+      vscode.window.tabGroups.all
+        .flatMap((group) => group.tabs)
+        .find(
+          ({ input }) =>
+            input instanceof vscode.TabInputCustom && input.uri.toString() === uri.toString(),
+        )
+    try {
+      // An edit leaves the copy unsaved, and VS Code opens a canvas of its own for it, behind the
+      // one in front. The views stay with the copy.
+      await bench.record('Bus', ['Vm'], uri)
+      await until(tab, 'a tab for the unsaved copy')
+      assert.equal(bench.studio.active, uri.toString())
+    } finally {
+      await (await vscode.workspace.openTextDocument(uri)).save()
+    }
   })
 
   test('follows the active case, and only its rows reach the panel', async () => {

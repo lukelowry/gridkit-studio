@@ -131,7 +131,12 @@ export class Sessions implements vscode.Disposable {
             .catch((error) => this.reporter.report(error))
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => this.#followText(editor)),
-      vscode.window.tabGroups.onDidChangeTabs(() => this.#followCanvas()),
+      // A tab that comes to the front, opened or chosen, says which canvas is there. One that opens
+      // or changes behind it does not, as the tab VS Code opens for a file an edit left unsaved.
+      vscode.window.tabGroups.onDidChangeTabs(({ opened, changed }) => {
+        if ([...opened, ...changed].some((tab) => tab.isActive && tab.group.isActive))
+          this.#followCanvas()
+      }),
     ]
     void this.prune()
     // A case in front as Studio starts, as VS Code restores its editors, is the one the views follow.

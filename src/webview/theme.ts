@@ -81,7 +81,9 @@ export function nativeTheme(
     text: { color: palette.text1 },
     focus: { selected: palette.focus, hover: palette.primaryText },
     vertex: { color: palette.network },
-    edge: { color: palette.text2 },
+    // Native endpoint blending follows static and sampled vertex colors. A mark's explicit
+    // edge-color binding still takes precedence, including in exported network scenes.
+    edge: { color: kind === 'network' ? null : palette.text2 },
     line: { color: palette.primaryText },
     earth: {
       ground: settings.get('network.map.ground') ?? palette.editor,

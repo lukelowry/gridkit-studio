@@ -96,7 +96,12 @@ suite('Sessions', () => {
   })
 
   test('a new run keeps the plots it recorded, else plots its first signal', () => {
-    const results = { outputs: [{ from: 'Bus', select: ['Va', 'Vm'] }] } as unknown as Results
+    const results = {
+      outputs: [
+        { table: 'Bus', field: 'Va', ids: [1] },
+        { table: 'Bus', field: 'Vm', ids: [1] },
+      ],
+    } as unknown as Results
     const vm = { from: 'Bus', field: 'Vm' }
     assert.deepEqual(plotsFor(results, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
     assert.deepEqual(plotsFor(results, [{ from: 'Gen', field: 'Pg' }]), [

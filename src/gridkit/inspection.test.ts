@@ -23,11 +23,17 @@ describe('case inspection', () => {
     )
     const drawn = ['Bus', 'Branch']
     // A drawn element stands for itself.
-    expect(await anchors(kase, { id: 'Bus/1', drawn }, signal)).toEqual([])
-    expect(await anchors(kase, { id: 'BusFault/fault', drawn }, signal)).toEqual(['Bus/2'])
+    expect(await anchors(kase, { entity: { table: 'Bus', id: 1 }, drawn }, signal)).toEqual([])
+    expect(
+      await anchors(kase, { entity: { table: 'BusFault', id: 'fault' }, drawn }, signal),
+    ).toEqual([{ table: 'Bus', id: 2 }])
     // A source reaches its bus through the fault its signal drives.
-    expect(await anchors(kase, { id: 'ConstantSignalSource/source', drawn }, signal)).toEqual([
-      'Bus/2',
-    ])
+    expect(
+      await anchors(
+        kase,
+        { entity: { table: 'ConstantSignalSource', id: 'source' }, drawn },
+        signal,
+      ),
+    ).toEqual([{ table: 'Bus', id: 2 }])
   })
 })

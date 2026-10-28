@@ -13,8 +13,8 @@ import {
 } from '../shared/bindings.js'
 import { leaf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
+import { fieldDefinition, networkRole } from '../shared/document.js'
 import { settingsOf, viewOf } from '../shared/ids.js'
-import { fieldOf, networkOf, placementOf } from '../shared/schema.js'
 import { askRange, type Commands, type Context } from './context.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
@@ -39,7 +39,7 @@ export function registerCanvases({ command, action, focus }: Commands) {
     action(
       context,
       'neighborhood',
-      context.element.id,
+      context.element,
       context.target?.origin === 'diagram' ? 'diagram' : 'network',
     )
   })
@@ -57,16 +57,16 @@ export function registerCanvases({ command, action, focus }: Commands) {
 
   /** The numeric field in context, which a network channel can show. */
   const mappable = ({ summary, type, field }: Context): FieldRef => {
-    if (!type || !field || !NUMERIC.has(fieldOf(summary.schema, type, field)?.type))
+    if (!type || !field || !NUMERIC.has(fieldDefinition(summary.definition, type, field)?.kind))
       throw new Error('Choose a numeric field to map.')
-    return { type, field }
+    return { table: type, field }
   }
   command('mapTo', async (context) => {
     const field = mappable(context)
     const { bindings } = context.session
     const current = channelsOf(bindings, field)
     const picked = await vscode.window.showQuickPick(
-      channelsFor(placementOf(networkOf(context.summary.schema), field.type)).map((channel) => ({
+      channelsFor(networkRole(context.summary.definition, field.table)).map((channel) => ({
         label: CHANNELS[channel].label,
         channel,
         picked: current.includes(channel),

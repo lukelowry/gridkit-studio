@@ -1,7 +1,5 @@
+import { problem } from '../shared/errors.js'
 /** GridKit's numeric CSV results, under a header of quoted UTF-8 names. */
-
-import { failure } from '@latkit/model'
-
 import { BATCH_BYTES } from './limits.js'
 
 type CsvMessage =
@@ -83,10 +81,10 @@ export async function* csvMessages(
       // one cut short, or cut after its last comma, it never finished.
       if (closing && (column !== width - 1 || carried === '')) break
       if (column >= width || (last && column !== width - 1))
-        throw failure('io', `CSV frame ${received + rows + 1} does not match its header.`)
+        throw problem('io', `CSV frame ${received + rows + 1} does not match its header.`)
       const value = read ? numberOf(token, received + rows + 1, column + 1) : NaN
       if (column === 0) {
-        if (!Number.isFinite(value)) throw failure('io', 'A CSV frame must have a finite time.')
+        if (!Number.isFinite(value)) throw problem('io', 'A CSV frame must have a finite time.')
         // A batch's buffer grows as its rows arrive, so a page of a few rows allocates little.
         if (rows * width === values.length) {
           const more = new Float64Array(width * Math.min(capacity, Math.max(64, 2 * rows)))
@@ -105,7 +103,7 @@ export async function* csvMessages(
       }
     }
   }
-  if (!headed) throw failure('io', 'The CSV results do not have a complete header.')
+  if (!headed) throw problem('io', 'The CSV results do not have a complete header.')
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
 }
 
@@ -125,11 +123,11 @@ async function* textChunks(
     try {
       text = decoder.decode(bytes.subarray(0, end))
     } catch {
-      throw failure('io', 'The CSV results are not valid UTF-8.')
+      throw problem('io', 'The CSV results are not valid UTF-8.')
     }
     yield [text, false]
   }
-  if (carried.length) throw failure('io', 'The CSV results end inside a UTF-8 character.')
+  if (carried.length) throw problem('io', 'The CSV results end inside a UTF-8 character.')
   yield ['\n', true]
 }
 
@@ -168,21 +166,21 @@ function headerOf(text: string): string[] {
         break
       }
       if (!closed || (start < text.length && text[start] !== ','))
-        throw failure('io', 'The CSV header has an invalid quoted name.')
+        throw problem('io', 'The CSV header has an invalid quoted name.')
     } else {
       const end = text.indexOf(',', start)
       const stop = end < 0 ? text.length : end
       name = text.slice(start, stop)
       if (name.includes('"'))
-        throw failure('io', 'The CSV header has a quote inside an unquoted name.')
+        throw problem('io', 'The CSV header has a quote inside an unquoted name.')
       start = stop
     }
-    if (name.length === 0) throw failure('io', 'The CSV header has an empty column name.')
+    if (name.length === 0) throw problem('io', 'The CSV header has an empty column name.')
     names.push(name)
     if (start === text.length) break
     start++
   }
-  if (!/^(t|time)$/i.test(names[0]!)) throw failure('io', 'The first CSV column must be t or time.')
+  if (!/^(t|time)$/i.test(names[0]!)) throw problem('io', 'The first CSV column must be t or time.')
   return names
 }
 
@@ -207,7 +205,7 @@ function numberOf(text: string, frame: number, column: number): number {
     if (NAN.test(token)) return NaN
     if (INFINITY.test(token)) return token[0] === '-' ? -Infinity : Infinity
   }
-  throw failure('io', `CSV frame ${frame}, column ${column} is not a number.`)
+  throw problem('io', `CSV frame ${frame}, column ${column} is not a number.`)
 }
 
 /** Whether `code` is a digit, a point or a sign: neither space nor quote. */

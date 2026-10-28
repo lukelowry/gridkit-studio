@@ -4,42 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-patchedDependencies:
-  '@latkit/monitor@0.18.0':
-    hash: b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f
-    path: patches/@latkit__monitor@0.18.0.patch
-  '@latkit/network@0.22.0':
-    hash: aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd
-    path: patches/@latkit__network@0.22.0.patch
-
 importers:
 
   .:
     dependencies:
-      '@latkit/diagram':
-        specifier: 0.12.0
-        version: 0.12.0
-      '@latkit/geography':
-        specifier: 0.1.0
-        version: 0.1.0
-      '@latkit/gpu':
-        specifier: 0.19.0
-        version: 0.19.0
-      '@latkit/model':
-        specifier: 4.2.0
-        version: 4.2.0
-      '@latkit/monitor':
-        specifier: 0.18.0
-        version: 0.18.0(patch_hash=b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f)
-      '@latkit/network':
-        specifier: 0.22.0
-        version: 0.22.0(patch_hash=aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd)
-      '@latkit/video':
-        specifier: 0.7.0
-        version: 0.7.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
+      latkit:
+        specifier: 0.3.1
+        version: 0.3.1
     devDependencies:
       '@types/mocha':
         specifier: 10.0.10
@@ -419,27 +393,6 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@latkit/diagram@0.12.0':
-    resolution: {integrity: sha512-6yZE23Eehdcb23vgvVz7fJnE7GWIf0fWBkcBMTFiY1gx2lQu7nZdzP+2d0yxflQNC4S+DNtOogc4+I4TcKw3bA==}
-
-  '@latkit/geography@0.1.0':
-    resolution: {integrity: sha512-51z1LfJkx1SVJLt2PySicl9q40mwrhCiKSy2m/ZqJf9JYbDtXaGp6R+gGaxdJhf2lqWusV19pdj6RhCy/z0PyQ==}
-
-  '@latkit/gpu@0.19.0':
-    resolution: {integrity: sha512-Pd0/wr/YHMg7zI2tchqkB8L4FdehI5LvHbD3C8RXxrYMLG3qQkuqjyLP9ekBjDCdnKeS3K2gGpsMMcAauTZ5AA==}
-
-  '@latkit/model@4.2.0':
-    resolution: {integrity: sha512-Y82HYWnwI+fyGCyh9111t8GecPlEBPHwGmFTjgj1eFLkUv3ycObLCgfjgXgBfBuBYmpqnobIOocuwpkZIHBE8Q==}
-
-  '@latkit/monitor@0.18.0':
-    resolution: {integrity: sha512-VfiN21MQOSPbm8eJa1S2+ZApIx//uWzoSJCxHSyzpAPg3kVqGIgy69b36J/DSRZ+W6Tdr0xs8Dj76DdeIZey4Q==}
-
-  '@latkit/network@0.22.0':
-    resolution: {integrity: sha512-J55+gnXMmFaq8LUHKVulviyFj/8pmvB3kLc88Q3jB4zilPRcvDnEFiYdtfaZWJp/wX3nzTYCbNW+CbT0b3eOEQ==}
-
-  '@latkit/video@0.7.0':
-    resolution: {integrity: sha512-K4bidhKmK71JMxHSr+Pc1RE2Ft9GrA1unetPr+/wl/SyMhqEvDSKj3f6be9kl2GxVJoOGZMWlBWN1j5n5HSnCA==}
-
   '@napi-rs/keyring-darwin-arm64@1.3.0':
     resolution: {integrity: sha512-pl76hJvdYUBn6I24bXiOBMA9nbDapo3I5B+f3OorjDU4dUMSypXeKbOVehJe8fhgTiH24flMyTS3aAIy43xegQ==}
     engines: {node: '>= 10'}
@@ -703,12 +656,6 @@ packages:
 
   '@types/deep-eql@4.0.2':
     resolution: {integrity: sha512-c9h9dVVMigMPc4bwTvC5dxqtqJZwQPePsWjPlpSOnojbor6pGqdk541lfA7AqFQr5pB1BRdq0juY9db81BwyFw==}
-
-  '@types/dom-mediacapture-transform@0.1.12':
-    resolution: {integrity: sha512-d7/QsLRwF864A5mgIM/YrfiglHoYn7zgCcAoJgW404r+2DwnNr7EBbLnCWpmOMgH8y0te73L1AV6H1bmauaWFw==}
-
-  '@types/dom-webcodecs@0.1.13':
-    resolution: {integrity: sha512-O5hkiFIcjjszPIYyUSyvScyvrBoV3NOEEZx/pMlsu44TKzWNkLVBBxnxJz42in5n3QIolYOcBYFCPZZ0h8SkwQ==}
 
   '@types/esrecurse@4.3.1':
     resolution: {integrity: sha512-xJBAbDifo5hpffDBuHl0Y8ywswbiAp/Wi7Y/GtAgSlZyIABppyurxVueOPE8LUQOxdlgi6Zqce7uoEpqNTeiUw==}
@@ -992,10 +939,6 @@ packages:
     engines: {node: '>=4'}
     hasBin: true
 
-  culori@4.0.2:
-    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
-    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
-
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
     engines: {node: '>=6.0'}
@@ -1030,9 +973,6 @@ packages:
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
     engines: {node: '>= 0.4'}
-
-  earcut@3.2.4:
-    resolution: {integrity: sha512-FHc6yNpnTORB0tM5kmZ03iD2mDuNakDE2lvf4Hw1XkfxtEHIGVi01B/GqUSwx+NcC1WGjidAfpTXzeALtPtfpg==}
 
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
@@ -1361,6 +1301,9 @@ packages:
   keyv@5.6.0:
     resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
 
+  latkit@0.3.1:
+    resolution: {integrity: sha512-TcQ9GTYr5K5BeeWSeGKqpnT+cZ0G8UJTr2OGtEMBQluN0+zqUw1xc2v+HrImrUm6Zjtz0nwD2O2xjXHwG33/IQ==}
+
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
     engines: {node: '>= 0.8.0'}
@@ -1425,9 +1368,6 @@ packages:
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
-
-  mediabunny@1.61.3:
-    resolution: {integrity: sha512-kUqLKVXQVwHR62GkOJxYosAmXERJbqnXBgJDTtRlxHEYviVkMg/Evhl9XN6kedqS5LP1tV4kFKyzY/V4a4ofow==}
 
   mime@1.6.0:
     resolution: {integrity: sha512-x0Vn8spI+wuJ1O6S7gnbaQg8Pxh4NNHb7KSINmEWKiPE4RKOplvijn+NkmYmmRgP68mc70j2EbeTFRsrswaQeg==}
@@ -2185,46 +2125,6 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@latkit/diagram@0.12.0':
-    dependencies:
-      '@latkit/gpu': 0.19.0
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/geography@0.1.0':
-    dependencies:
-      '@latkit/gpu': 0.19.0
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-      earcut: 3.2.4
-
-  '@latkit/gpu@0.19.0':
-    dependencies:
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-      culori: 4.0.2
-
-  '@latkit/model@4.2.0': {}
-
-  '@latkit/monitor@0.18.0(patch_hash=b507a6beef25213daae59c75af21b9e47e3717db11e411adccf67afd1f7ecf4f)':
-    dependencies:
-      '@latkit/gpu': 0.19.0
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/network@0.22.0(patch_hash=aacc95dea7e17b17d70c70760b4b3cfaf6f27928fbf9a2c5ad9d1c647c7329dd)':
-    dependencies:
-      '@latkit/gpu': 0.19.0
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-
-  '@latkit/video@0.7.0':
-    dependencies:
-      '@latkit/gpu': 0.19.0
-      '@latkit/model': 4.2.0
-      '@webgpu/types': 0.1.74
-      mediabunny: 1.61.3
-
   '@napi-rs/keyring-darwin-arm64@1.3.0':
     optional: true
 
@@ -2390,12 +2290,6 @@ snapshots:
       assertion-error: 2.0.1
 
   '@types/deep-eql@4.0.2': {}
-
-  '@types/dom-mediacapture-transform@0.1.12':
-    dependencies:
-      '@types/dom-webcodecs': 0.1.13
-
-  '@types/dom-webcodecs@0.1.13': {}
 
   '@types/esrecurse@4.3.1': {}
 
@@ -2696,8 +2590,6 @@ snapshots:
 
   cssesc@3.0.0: {}
 
-  culori@4.0.2: {}
-
   debug@4.4.3(supports-color@8.1.1):
     dependencies:
       ms: 2.1.3
@@ -2724,8 +2616,6 @@ snapshots:
       call-bind-apply-helpers: 1.0.2
       es-errors: 1.3.0
       gopd: 1.2.0
-
-  earcut@3.2.4: {}
 
   ecdsa-sig-formatter@1.0.11:
     dependencies:
@@ -3078,6 +2968,8 @@ snapshots:
     dependencies:
       '@keyv/serialize': 1.1.1
 
+  latkit@0.3.1: {}
+
   levn@0.4.1:
     dependencies:
       prelude-ls: 1.2.1
@@ -3135,11 +3027,6 @@ snapshots:
   marked@18.1.0: {}
 
   math-intrinsics@1.1.0: {}
-
-  mediabunny@1.61.3:
-    dependencies:
-      '@types/dom-mediacapture-transform': 0.1.12
-      '@types/dom-webcodecs': 0.1.13
 
   mime@1.6.0: {}
 

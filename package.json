@@ -42,7 +42,7 @@
   "scripts": {
     "build": "pnpm typecheck && node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit && svelte-check --tsconfig tsconfig.webview.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.webview.json --noEmit && tsc -p tsconfig.tests.json --noEmit && svelte-check --tsconfig tsconfig.webview.json",
     "quality": "pnpm format:check && pnpm lint && pnpm settings:check && pnpm typecheck && pnpm test",
     "format": "prettier --write src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
     "format:check": "prettier --check src tests scripts *.mjs *.ts *.json .github/workflows .vscode",
@@ -65,14 +65,8 @@
     "vscode:prepublish": "node esbuild.mjs"
   },
   "dependencies": {
-    "@latkit/diagram": "0.12.0",
-    "@latkit/geography": "0.1.0",
-    "@latkit/gpu": "0.19.0",
-    "@latkit/model": "4.2.0",
-    "@latkit/monitor": "0.18.0",
-    "@latkit/network": "0.22.0",
-    "@latkit/video": "0.7.0",
-    "jsonc-parser": "3.3.1"
+    "jsonc-parser": "3.3.1",
+    "latkit": "0.3.1"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",
@@ -102,11 +96,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ],
-    "patchedDependencies": {
-      "@latkit/network@0.22.0": "patches/@latkit__network@0.22.0.patch",
-      "@latkit/monitor@0.18.0": "patches/@latkit__monitor@0.18.0.patch"
-    }
+    ]
   },
   "capabilities": {
     "untrustedWorkspaces": {
@@ -1327,866 +1317,190 @@
         "title": "GridKit Studio: Network",
         "order": 1,
         "properties": {
-          "gridkitStudio.network.markers": {
-            "default": true,
+          "gridkitStudio.network.projection": {
+            "default": "mercator",
             "scope": "resource",
-            "markdownDescription": "Layers — Vertices. Off hides vertex labels too.",
-            "type": "boolean"
+            "markdownDescription": "View — Projection",
+            "type": "string",
+            "enum": [
+              "mercator",
+              "globe"
+            ],
+            "enumDescriptions": [
+              "Mercator",
+              "Globe"
+            ]
           },
-          "gridkitStudio.network.lines": {
-            "default": true,
+          "gridkitStudio.network.tilt": {
+            "default": 0,
             "scope": "resource",
-            "markdownDescription": "Layers — Edges. Off leaves the map drawn.",
-            "type": "boolean"
+            "markdownDescription": "View — Tilt",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 75
           },
-          "gridkitStudio.network.poles": {
+          "gridkitStudio.network.orbit": {
+            "default": 0,
+            "scope": "resource",
+            "markdownDescription": "View — Orbit. Degrees per second.",
+            "type": "integer",
+            "minimum": -90,
+            "maximum": 90
+          },
+          "gridkitStudio.network.labels": {
             "default": false,
             "scope": "resource",
-            "markdownDescription": "Layers — Height poles. Draw stems from the ground up to raised vertices.",
+            "markdownDescription": "View — Labels",
             "type": "boolean"
           },
-          "gridkitStudio.network.grid": {
-            "default": true,
+          "gridkitStudio.network.vertexRadius": {
+            "default": 2.5,
             "scope": "resource",
-            "markdownDescription": "Layers — Grid. Lines of longitude and latitude under a network on Earth, and of x and y under one laid out.",
-            "type": "boolean"
+            "markdownDescription": "View — Vertex radius. Radius in CSS pixels for sparse networks. Dense networks scale down automatically; size bindings scale with this value.",
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 12
+          },
+          "gridkitStudio.network.edgeWidth": {
+            "default": 0.75,
+            "scope": "resource",
+            "markdownDescription": "View — Edge width. Width in CSS pixels for sparse networks. Dense networks scale down automatically; width bindings scale with this value.",
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 6
+          },
+          "gridkitStudio.network.colormap": {
+            "default": "viridis",
+            "scope": "resource",
+            "markdownDescription": "View — Colormap",
+            "type": "string",
+            "enum": [
+              "viridis",
+              "cividis",
+              "plasma",
+              "magma",
+              "inferno",
+              "coolwarm",
+              "turbo"
+            ],
+            "enumDescriptions": [
+              "Viridis",
+              "Cividis",
+              "Plasma",
+              "Magma",
+              "Inferno",
+              "Coolwarm",
+              "Turbo"
+            ]
+          },
+          "gridkitStudio.network.ease": {
+            "default": 0.3,
+            "scope": "resource",
+            "markdownDescription": "View — Transition duration. Seconds.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "gridkitStudio.network.heightMeters": {
+            "default": 40000,
+            "scope": "resource",
+            "markdownDescription": "View — Maximum elevation. Geographic elevations are measured in meters.",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "gridkitStudio.network.zoom": {
+            "default": "wheel",
+            "scope": "resource",
+            "markdownDescription": "Interaction — Wheel behavior",
+            "type": "string",
+            "enum": [
+              "wheel",
+              "modifier",
+              "off"
+            ],
+            "enumDescriptions": [
+              "Wheel",
+              "Modifier + wheel",
+              "Off"
+            ]
+          },
+          "gridkitStudio.network.motion": {
+            "default": "system",
+            "scope": "resource",
+            "markdownDescription": "Interaction — Motion",
+            "type": "string",
+            "enum": [
+              "system",
+              "full",
+              "reduced"
+            ],
+            "enumDescriptions": [
+              "System",
+              "Full",
+              "Reduced"
+            ]
+          },
+          "gridkitStudio.network.pickRadius": {
+            "default": 8,
+            "scope": "resource",
+            "markdownDescription": "Interaction — Picking distance",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
           },
           "gridkitStudio.network.map.source": {
             "default": "borders",
             "scope": "resource",
-            "markdownDescription": "Map — Map. What lies under a network on Earth. Coasts and borders ship with Studio and draw offline. OpenStreetMap loads vector tiles from the tiles URL.",
+            "markdownDescription": "Map — Map",
             "type": "string",
             "enum": [
               "borders",
-              "openstreetmap",
+              "streets",
               "none"
             ],
             "enumDescriptions": [
-              "Coasts and borders",
-              "OpenStreetMap",
+              "Bundled borders",
+              "Street map",
               "None"
             ]
           },
           "gridkitStudio.network.map.tilesUrl": {
             "default": "https://tiles.openfreemap.org/planet",
             "scope": "resource",
-            "markdownDescription": "Map — Tiles URL. OpenStreetMap vector tiles in the OpenMapTiles schema: a PMTiles archive, TileJSON, or a {z}/{x}/{y} template.",
+            "markdownDescription": "Map — Tiles URL",
             "type": "string"
           },
-          "gridkitStudio.network.map.earthAxis": {
-            "default": true,
+          "gridkitStudio.network.map.attribution": {
+            "default": "© OpenStreetMap contributors · OpenFreeMap",
             "scope": "resource",
-            "markdownDescription": "Map — Earth axis. Draw the axis the globe turns on.",
-            "type": "boolean"
+            "markdownDescription": "Map — Attribution",
+            "type": "string"
           },
           "gridkitStudio.network.map.daylight": {
             "default": false,
             "scope": "resource",
-            "markdownDescription": "Map — Daylight. Light the Earth and the network by where the sun is now.",
+            "markdownDescription": "Map — Daylight",
             "type": "boolean"
           },
-          "gridkitStudio.network.map.nightFloor": {
+          "gridkitStudio.network.map.ground": {
+            "default": null,
+            "scope": "resource",
+            "markdownDescription": "Map — Ground color. Null follows the current VS Code theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
+          },
+          "gridkitStudio.network.map.night": {
             "default": 0.3,
             "scope": "resource",
-            "markdownDescription": "Map — Night floor. Brightness on the night side.",
+            "markdownDescription": "Map — Night brightness",
             "type": "number",
             "minimum": 0,
             "maximum": 1
-          },
-          "gridkitStudio.network.map.terminatorWidth": {
-            "default": 0.12,
-            "scope": "resource",
-            "markdownDescription": "Map — Terminator width. Softness of the edge between day and night.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 0.5
-          },
-          "gridkitStudio.network.map.lineWidthPx": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Map — Border width. Stroke width of coasts and borders.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 4
-          },
-          "gridkitStudio.network.map.groundColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Map — Ground. The Earth under the network. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.map.lineColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Map — Border color. Coasts and borders. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.vertexRadiusPx": {
-            "default": 3,
-            "scope": "resource",
-            "markdownDescription": "Size — Vertex radius. Marker radius before a bound size scales it.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.network.vertexMinRadiusPx": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Size — Smallest vertex radius. Zoomed out, markers shrink toward this as edges shorten on screen, so neighbors stay apart. The vertex radius or more keeps one size.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.network.edgeWidthPx": {
-            "default": 1.4,
-            "scope": "resource",
-            "markdownDescription": "Size — Edge width",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 8
-          },
-          "gridkitStudio.network.zScale": {
-            "default": 0.4,
-            "scope": "resource",
-            "markdownDescription": "Size — Height. Multiplies how high a bound height raises vertices.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 8
-          },
-          "gridkitStudio.network.dashPeriodPx": {
-            "default": 12,
-            "scope": "resource",
-            "markdownDescription": "Size — Dash period. Length of one dash on edges a field dashes.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 48
-          },
-          "gridkitStudio.network.edgeSpacingPx": {
-            "default": 0,
-            "scope": "resource",
-            "markdownDescription": "Size — Parallel spacing. Draw edges joining the same two vertices this far apart. 0 draws them over each other.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 24
-          },
-          "gridkitStudio.network.shadows": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Size — Shadows. Lift markers off the lines with a soft shadow.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.vertices.labels": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Labels — Vertex labels. Name each vertex beside its marker.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.edges.labels": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Labels — Edge labels. Name each edge along its line.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.fontSizePx": {
-            "default": 10,
-            "scope": "resource",
-            "markdownDescription": "Labels — Size",
-            "type": "integer",
-            "minimum": 6,
-            "maximum": 32
-          },
-          "gridkitStudio.network.labels.maxCount": {
-            "default": 200,
-            "scope": "resource",
-            "markdownDescription": "Labels — Most labels. Labels drawn per type before the rest are thinned.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 8192
-          },
-          "gridkitStudio.network.labels.repeatSpacingPx": {
-            "default": 0,
-            "scope": "resource",
-            "markdownDescription": "Labels — Repeat spacing. Leave out a label repeating one placed this close, as for buses of one substation. 0 labels each.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 512
-          },
-          "gridkitStudio.network.labelHaloPx": {
-            "default": 2,
-            "scope": "resource",
-            "markdownDescription": "Labels — Halo. How far the ground’s color reaches around label text.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 8
-          },
-          "gridkitStudio.network.font": {
-            "default": "",
-            "scope": "resource",
-            "markdownDescription": "Labels — Font",
-            "type": "string"
-          },
-          "gridkitStudio.network.textColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Labels — Color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.selectedEnds": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selected edge ends. Draw the vertices a selected edge joins over the rest.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.hoverEnds": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hovered edge ends. Draw the vertices a hovered edge joins over the rest.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.hoverScale": {
-            "default": 1.25,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover growth. How much a hovered vertex’s marker grows. 1 keeps its size.",
-            "type": "number",
-            "minimum": 1,
-            "maximum": 3
-          },
-          "gridkitStudio.network.hoverWidthPx": {
-            "default": 6,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover glow. How far the glow around a hovered item reaches.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.network.selectedWidthPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selection glow. How far the glow around a selected item reaches.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.network.hoverColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover color. Its alpha is the glow’s strength. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.selectedColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selection color. Its alpha is the glow’s strength. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.colormap": {
-            "default": "viridis",
-            "scope": "resource",
-            "markdownDescription": "Color — Colormap. Ramp for fields bound to color.",
-            "type": "string",
-            "enum": [
-              "amber",
-              "amp",
-              "batlow",
-              "cividis",
-              "crest",
-              "deep",
-              "devon",
-              "flare",
-              "grays",
-              "haline",
-              "inferno",
-              "lajolla",
-              "magma",
-              "mako",
-              "oslo",
-              "plasma",
-              "rocket",
-              "thermal",
-              "turku",
-              "viridis",
-              "balance",
-              "berlin",
-              "brbg",
-              "broc",
-              "coolwarm",
-              "cork",
-              "icefire",
-              "managua",
-              "piyg",
-              "puor",
-              "rdbu",
-              "spectral",
-              "vanimo",
-              "vik",
-              "vlag"
-            ],
-            "enumDescriptions": [
-              "Amber",
-              "Amp",
-              "Batlow",
-              "Cividis",
-              "Crest",
-              "Deep",
-              "Devon",
-              "Flare",
-              "Grays",
-              "Haline",
-              "Inferno",
-              "Lajolla",
-              "Magma",
-              "Mako",
-              "Oslo",
-              "Plasma",
-              "Rocket",
-              "Thermal",
-              "Turku",
-              "Viridis",
-              "Balance",
-              "Berlin",
-              "Brown / Green",
-              "Broc",
-              "Cool / Warm",
-              "Cork",
-              "Icefire",
-              "Managua",
-              "Pink / Green",
-              "Purple / Orange",
-              "Red / Blue",
-              "Spectral",
-              "Vanimo",
-              "Vik",
-              "Vlag"
-            ]
-          },
-          "gridkitStudio.network.vertexColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Vertex color. Vertices while no field drives their color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.edgeColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Edge color. Edges while no field drives their color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.background": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Background. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.gridColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Color — Grid color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.network.camera.projection": {
-            "default": "flat",
-            "scope": "resource",
-            "markdownDescription": "Camera — Projection. How a network first shows. A network on Earth lies flat as a Web Mercator map. Globe needs one on Earth.",
-            "type": "string",
-            "enum": [
-              "flat",
-              "tilt",
-              "globe"
-            ],
-            "enumDescriptions": [
-              "Flat",
-              "Tilt",
-              "Globe"
-            ]
-          },
-          "gridkitStudio.network.fitPitch": {
-            "default": 55,
-            "scope": "resource",
-            "markdownDescription": "Camera — Tilt. How far a tilted view leans from straight down.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 80
-          },
-          "gridkitStudio.network.fitBearing": {
-            "default": 0,
-            "scope": "resource",
-            "markdownDescription": "Camera — Bearing. Rotation a fitted view settles at.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 359
-          },
-          "gridkitStudio.network.orbitRate": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Camera — Rotation speed. Multiplies the auto-rotation of 12° a second.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 10
-          },
-          "gridkitStudio.network.animationMs": {
-            "default": 300,
-            "scope": "resource",
-            "markdownDescription": "Camera — Easing. Duration of camera moves.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2000
-          },
-          "gridkitStudio.network.fitPaddingPx": {
-            "default": 32,
-            "scope": "resource",
-            "markdownDescription": "Camera — Fit padding. Space kept around the network when it is fitted.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 200
-          },
-          "gridkitStudio.network.revealPaddingPx": {
-            "default": 48,
-            "scope": "resource",
-            "markdownDescription": "Camera — Reveal margin. How far inside the edge a located element must sit.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 200
-          },
-          "gridkitStudio.network.input.mode": {
-            "default": "navigate",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Mode. Navigate moves the view; Inspect only selects.",
-            "type": "string",
-            "enum": [
-              "navigate",
-              "inspect"
-            ],
-            "enumDescriptions": [
-              "Navigate",
-              "Inspect"
-            ]
-          },
-          "gridkitStudio.network.input.wheel": {
-            "default": "zoom",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Wheel zoom. When the wheel zooms the view.",
-            "type": "string",
-            "enum": [
-              "zoom",
-              "modifier"
-            ],
-            "enumDescriptions": [
-              "Always",
-              "With Ctrl or Cmd"
-            ]
-          },
-          "gridkitStudio.network.input.keyboard": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Keyboard. Pan, zoom and step through elements with the keys.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.pickRadiusPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Pick radius. How near the pointer must be to hover or select.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          },
-          "gridkitStudio.network.msaa": {
-            "default": 4,
-            "scope": "resource",
-            "markdownDescription": "Quality — Antialiasing. Smooths edges at some cost.",
-            "type": "number",
-            "enum": [
-              4,
-              1
-            ],
-            "enumDescriptions": [
-              "4× multisample",
-              "Off"
-            ]
-          },
-          "gridkitStudio.network.hover": {
-            "default": "auto",
-            "scope": "resource",
-            "markdownDescription": "Quality — Hover search. Auto pauses it while the view moves or runs slow.",
-            "type": "string",
-            "enum": [
-              "auto",
-              "on",
-              "off"
-            ],
-            "enumDescriptions": [
-              "Auto",
-              "Always",
-              "Off"
-            ]
-          },
-          "gridkitStudio.network.hoverBudgetMs": {
-            "default": 2,
-            "scope": "resource",
-            "markdownDescription": "Quality — Hover budget. Time a hover search may take per frame.",
-            "type": "number",
-            "minimum": 0.5,
-            "maximum": 16
-          }
-        }
-      },
-      {
-        "id": "gridkitStudio.monitor",
-        "title": "GridKit Studio: Monitor",
-        "order": 3,
-        "properties": {
-          "gridkitStudio.monitor.xAxis.visible": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Plot — Time axis",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.yAxis.visible": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Plot — Value axis",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.yAxis.label": {
-            "default": false,
-            "scope": "resource",
-            "markdownDescription": "Plot — Value caption. Name the plotted field above the value axis.",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.xAxis.grid": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Plot — Time grid",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.yAxis.grid": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Plot — Value grid",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.background": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Plot — Background. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.axisColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Plot — Axis color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.gridColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Plot — Grid color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.xAxis.minSpacingPx": {
-            "default": 80,
-            "scope": "resource",
-            "markdownDescription": "Ticks — Time spacing. Least gap between time ticks.",
-            "type": "integer",
-            "minimum": 8,
-            "maximum": 400
-          },
-          "gridkitStudio.monitor.xAxis.format": {
-            "default": "auto",
-            "scope": "resource",
-            "markdownDescription": "Ticks — Time format",
-            "type": "string",
-            "enum": [
-              "auto",
-              "fixed",
-              "scientific",
-              "engineering"
-            ],
-            "enumDescriptions": [
-              "Auto",
-              "Fixed",
-              "Scientific",
-              "Engineering"
-            ]
-          },
-          "gridkitStudio.monitor.xAxis.precision": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Ticks — Time decimals",
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0,
-            "maximum": 15
-          },
-          "gridkitStudio.monitor.yAxis.minSpacingPx": {
-            "default": 24,
-            "scope": "resource",
-            "markdownDescription": "Ticks — Value spacing. Least gap between value ticks.",
-            "type": "integer",
-            "minimum": 8,
-            "maximum": 400
-          },
-          "gridkitStudio.monitor.yAxis.format": {
-            "default": "auto",
-            "scope": "resource",
-            "markdownDescription": "Ticks — Value format. Auto writes very large and small values with exponents.",
-            "type": "string",
-            "enum": [
-              "auto",
-              "fixed",
-              "scientific",
-              "engineering"
-            ],
-            "enumDescriptions": [
-              "Auto",
-              "Fixed",
-              "Scientific",
-              "Engineering"
-            ]
-          },
-          "gridkitStudio.monitor.yAxis.precision": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Ticks — Value decimals",
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0,
-            "maximum": 15
-          },
-          "gridkitStudio.monitor.fontSizePx": {
-            "default": 12,
-            "scope": "resource",
-            "markdownDescription": "Text — Size. Axis text size. The margins around the plot grow with it.",
-            "type": "integer",
-            "minimum": 8,
-            "maximum": 24
-          },
-          "gridkitStudio.monitor.font": {
-            "default": "",
-            "scope": "resource",
-            "markdownDescription": "Text — Font",
-            "type": "string"
-          },
-          "gridkitStudio.monitor.textColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Text — Color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.traceWidthPx": {
-            "default": 1.25,
-            "scope": "resource",
-            "markdownDescription": "Lines — Width",
-            "type": "number",
-            "minimum": 0.1,
-            "maximum": 8
-          },
-          "gridkitStudio.monitor.interpolation": {
-            "default": "linear",
-            "scope": "resource",
-            "markdownDescription": "Lines — Interpolation. How a line joins one sample to the next.",
-            "type": "string",
-            "enum": [
-              "linear",
-              "step-before",
-              "step-after"
-            ],
-            "enumDescriptions": [
-              "Linear",
-              "Step before",
-              "Step after"
-            ]
-          },
-          "gridkitStudio.monitor.traceColor": {
-            "default": "#238b83",
-            "scope": "resource",
-            "markdownDescription": "Lines — Color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.camera.fit": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Scale — Fit values. Keep the value axis fitted to the data in view.",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.animationMs": {
-            "default": 0,
-            "scope": "resource",
-            "markdownDescription": "Scale — Easing. Duration of axis moves.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2000
-          },
-          "gridkitStudio.monitor.fitPaddingPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Scale — Fit padding. Space kept around the values when they are fitted.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 200
-          },
-          "gridkitStudio.monitor.selectedWidthPx": {
-            "default": 3,
-            "scope": "resource",
-            "markdownDescription": "Selection — Selection glow. How far the glow around a selected line reaches.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.monitor.unselectedAlpha": {
-            "default": 0.35,
-            "scope": "resource",
-            "markdownDescription": "Selection — Others’ opacity. Opacity of the other lines while one is selected.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          },
-          "gridkitStudio.monitor.selectedColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Selection — Selection color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.cursorColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Selection — Playhead color. The line at the time on show. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.monitor.input.keyboard": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Keyboard. Select and clear with the keys, and fit the plot with Home.",
-            "type": "boolean"
-          },
-          "gridkitStudio.monitor.pickRadiusPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Pick radius. How near the pointer must be to select a line.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          },
-          "gridkitStudio.monitor.msaa": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Quality — Antialiasing. Smooths lines. Changing it draws the history again.",
-            "type": "number",
-            "enum": [
-              4,
-              1
-            ],
-            "enumDescriptions": [
-              "4× multisample",
-              "Off"
-            ]
-          },
-          "gridkitStudio.monitor.hover": {
-            "default": "off",
-            "scope": "resource",
-            "markdownDescription": "Quality — Hover search. Looks for the reading under the pointer.",
-            "type": "string",
-            "enum": [
-              "auto",
-              "on",
-              "off"
-            ],
-            "enumDescriptions": [
-              "Auto",
-              "Always",
-              "Off"
-            ]
-          },
-          "gridkitStudio.monitor.hoverBudgetMs": {
-            "default": 2,
-            "scope": "resource",
-            "markdownDescription": "Quality — Hover budget. Time a hover search may take per frame.",
-            "type": "number",
-            "minimum": 0.5,
-            "maximum": 16
           }
         }
       },
@@ -2195,326 +1509,10 @@
         "title": "GridKit Studio: Diagram",
         "order": 2,
         "properties": {
-          "gridkitStudio.diagram.background": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Canvas — Background. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.grid": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Canvas — Dot grid",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.gridPitch": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Canvas — Grid pitch. Grid spacing, which is also the snap and nudge step.",
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 64
-          },
-          "gridkitStudio.diagram.gridMinSpacingPx": {
-            "default": 12,
-            "scope": "resource",
-            "markdownDescription": "Canvas — Dot spacing. Dots thin out when closer than this on screen.",
-            "type": "integer",
-            "minimum": 4,
-            "maximum": 64
-          },
-          "gridkitStudio.diagram.gridColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Canvas — Grid color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.shape": {
-            "default": "rounded",
-            "scope": "resource",
-            "markdownDescription": "Blocks — Shape",
-            "type": "string",
-            "enum": [
-              "rectangle",
-              "rounded",
-              "ellipse",
-              "diamond"
-            ],
-            "enumDescriptions": [
-              "Rectangle",
-              "Rounded",
-              "Ellipse",
-              "Diamond"
-            ]
-          },
-          "gridkitStudio.diagram.cornerRadius": {
-            "default": 6,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Corner radius. Rounding of rounded blocks, groups, and wire bends.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          },
-          "gridkitStudio.diagram.vertexPadding": {
-            "default": 10,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Padding. Space inside a block, and around a group.",
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 48
-          },
-          "gridkitStudio.diagram.labelPosition": {
-            "default": "header",
-            "scope": "resource",
-            "markdownDescription": "Blocks — Title. Header gives the title a band of its own.",
-            "type": "string",
-            "enum": [
-              "header",
-              "center"
-            ],
-            "enumDescriptions": [
-              "Header",
-              "Center"
-            ]
-          },
-          "gridkitStudio.diagram.outlineWidthPx": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Outline width",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 8
-          },
-          "gridkitStudio.diagram.vertexColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Fill. Blocks while no field drives their color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.outlineColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Outline color. Block and group outlines. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.groupColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Blocks — Group fill. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.portLabels": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Ports — Port names",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.portMarker": {
-            "default": "directional",
-            "scope": "resource",
-            "markdownDescription": "Ports — Marker",
-            "type": "string",
-            "enum": [
-              "directional",
-              "circle",
-              "diamond"
-            ],
-            "enumDescriptions": [
-              "Directional",
-              "Circle",
-              "Diamond"
-            ]
-          },
-          "gridkitStudio.diagram.portSize": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Ports — Marker size. Port markers, arrowheads, and junctions. They scale with zoom.",
-            "type": "integer",
-            "minimum": 2,
-            "maximum": 24
-          },
-          "gridkitStudio.diagram.portFontSize": {
-            "default": 11,
-            "scope": "resource",
-            "markdownDescription": "Ports — Name size. Port name size. It scales with zoom.",
-            "type": "integer",
-            "minimum": 6,
-            "maximum": 24
-          },
-          "gridkitStudio.diagram.portSpacing": {
-            "default": 22,
-            "scope": "resource",
-            "markdownDescription": "Ports — Spacing. Distance between ports along a side.",
-            "type": "integer",
-            "minimum": 8,
-            "maximum": 64
-          },
-          "gridkitStudio.diagram.edges.route": {
-            "default": "orthogonal",
-            "scope": "resource",
-            "markdownDescription": "Wires — Routing",
-            "type": "string",
-            "enum": [
-              "orthogonal",
-              "straight"
-            ],
-            "enumDescriptions": [
-              "Right angles",
-              "Straight"
-            ]
-          },
-          "gridkitStudio.diagram.edges.appearance": {
-            "default": "wire",
-            "scope": "resource",
-            "markdownDescription": "Wires — Style. Tag draws named tags at the ends instead of a line.",
-            "type": "string",
-            "enum": [
-              "wire",
-              "tag"
-            ],
-            "enumDescriptions": [
-              "Wire",
-              "Tag"
-            ]
-          },
-          "gridkitStudio.diagram.edges.arrows": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Wires — Arrowheads. Mark where each signal arrives.",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.junctions": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Wires — Junctions. Dot where three or more wire segments meet.",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.edgeWidthPx": {
-            "default": 1.5,
-            "scope": "resource",
-            "markdownDescription": "Wires — Width. Wire width while no field drives it.",
-            "type": "number",
-            "minimum": 0.25,
-            "maximum": 8
-          },
-          "gridkitStudio.diagram.routeClearance": {
-            "default": 16,
-            "scope": "resource",
-            "markdownDescription": "Wires — Clearance. Gap wires keep from blocks.",
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 64
-          },
-          "gridkitStudio.diagram.edgeColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Wires — Color. Wires and ports while no field drives their color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.labels.visible": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "Labels — Titles. Show block, wire and group titles.",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.fontSizePx": {
-            "default": 12,
-            "scope": "resource",
-            "markdownDescription": "Labels — Size. Title size. It scales with zoom.",
-            "type": "integer",
-            "minimum": 6,
-            "maximum": 32
-          },
-          "gridkitStudio.diagram.labels.maxWidth": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Labels — Width. Widest a title runs before it wraps or ends.",
-            "type": [
-              "number",
-              "null"
-            ],
-            "minimum": 16,
-            "maximum": 1024
-          },
-          "gridkitStudio.diagram.labels.overflow": {
-            "default": "ellipsis",
-            "scope": "resource",
-            "markdownDescription": "Labels — Overflow",
-            "type": "string",
-            "enum": [
-              "ellipsis",
-              "wrap"
-            ],
-            "enumDescriptions": [
-              "Ellipsis",
-              "Wrap"
-            ]
-          },
-          "gridkitStudio.diagram.font": {
-            "default": "",
-            "scope": "resource",
-            "markdownDescription": "Labels — Font",
-            "type": "string"
-          },
-          "gridkitStudio.diagram.textColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Labels — Color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.layout.algorithm": {
-            "default": "layered",
-            "scope": "resource",
-            "markdownDescription": "Layout — Layout. Arrange blocks without saved positions. Saved positions are always preserved.",
-            "type": "string",
-            "enum": [
-              "layered",
-              "stress"
-            ],
-            "enumDescriptions": [
-              "Layered",
-              "Stress"
-            ]
-          },
-          "gridkitStudio.diagram.layout.direction": {
+          "gridkitStudio.diagram.direction": {
             "default": "right",
             "scope": "resource",
-            "markdownDescription": "Layout — Direction. Where signals flow, rank to rank.",
+            "markdownDescription": "Layout — Direction",
             "type": "string",
             "enum": [
               "right",
@@ -2529,201 +1527,160 @@
               "Up"
             ]
           },
-          "gridkitStudio.diagram.layout.vertexGap": {
-            "default": 24,
+          "gridkitStudio.diagram.gap": {
+            "default": 30,
             "scope": "resource",
-            "markdownDescription": "Layout — Block gap. Space between blocks in a rank.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 128
-          },
-          "gridkitStudio.diagram.layout.rankGap": {
-            "default": 64,
-            "scope": "resource",
-            "markdownDescription": "Layout — Rank gap. Space between ranks. It grows to fit wire titles.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 256
-          },
-          "gridkitStudio.diagram.layout.sweeps": {
-            "default": 4,
-            "scope": "resource",
-            "markdownDescription": "Layout — Crossing passes. Passes spent untangling wires.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 12
-          },
-          "gridkitStudio.diagram.hoverWidthPx": {
-            "default": 6,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover glow. How far the glow around a hovered item reaches.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.diagram.selectedWidthPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selection glow. How far the glow around a selected item reaches.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 16
-          },
-          "gridkitStudio.diagram.hoverColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Hover color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.selectedColor": {
-            "default": null,
-            "scope": "resource",
-            "markdownDescription": "Highlight — Selection color. Null follows the current VS Code theme.",
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-            "format": "color-hex"
-          },
-          "gridkitStudio.diagram.animationMs": {
-            "default": 300,
-            "scope": "resource",
-            "markdownDescription": "Camera — Easing. Duration of camera and block moves.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2000
-          },
-          "gridkitStudio.diagram.fitPaddingPx": {
-            "default": 32,
-            "scope": "resource",
-            "markdownDescription": "Camera — Fit padding. Space kept around the diagram when it is fitted.",
+            "markdownDescription": "Layout — Block gap",
             "type": "integer",
             "minimum": 0,
             "maximum": 200
           },
-          "gridkitStudio.diagram.revealPaddingPx": {
-            "default": 48,
+          "gridkitStudio.diagram.rankGap": {
+            "default": 70,
             "scope": "resource",
-            "markdownDescription": "Camera — Reveal margin. How far inside the edge a located element must sit.",
+            "markdownDescription": "Layout — Rank gap",
             "type": "integer",
             "minimum": 0,
-            "maximum": 200
+            "maximum": 300
           },
-          "gridkitStudio.diagram.input.mode": {
-            "default": "navigate",
+          "gridkitStudio.diagram.grid": {
+            "default": "dots",
             "scope": "resource",
-            "markdownDescription": "Interaction — Mode. Navigate moves the camera. Inspect only selects and opens menus.",
+            "markdownDescription": "Layout — Grid",
             "type": "string",
             "enum": [
-              "navigate",
-              "inspect"
+              "dots",
+              "lines",
+              "none"
             ],
             "enumDescriptions": [
-              "Navigate",
-              "Inspect"
+              "Dots",
+              "Lines",
+              "None"
             ]
           },
-          "gridkitStudio.diagram.input.wheel": {
-            "default": "zoom",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Wheel zoom. When the wheel zooms the view.",
-            "type": "string",
-            "enum": [
-              "zoom",
-              "modifier"
-            ],
-            "enumDescriptions": [
-              "Always",
-              "With Ctrl or Cmd"
-            ]
-          },
-          "gridkitStudio.diagram.input.keyboard": {
+          "gridkitStudio.diagram.labels": {
             "default": true,
             "scope": "resource",
-            "markdownDescription": "Interaction — Keyboard. Pan, zoom, fit and step with the keys.",
+            "markdownDescription": "View — Labels",
             "type": "boolean"
           },
-          "gridkitStudio.diagram.pickRadiusPx": {
-            "default": 8,
+          "gridkitStudio.diagram.ease": {
+            "default": 0.3,
             "scope": "resource",
-            "markdownDescription": "Interaction — Pick radius. How near the pointer must be to hover or select.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          },
-          "gridkitStudio.diagram.input.dragThresholdPx": {
-            "default": 4,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Drag threshold. How far the mouse moves before a press becomes a drag.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          },
-          "gridkitStudio.diagram.input.touchDragThresholdPx": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Touch drag threshold. How far a touch moves before it becomes a drag.",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 48
-          },
-          "gridkitStudio.diagram.msaa": {
-            "default": 1,
-            "scope": "resource",
-            "markdownDescription": "Quality — Antialiasing. Every shape already smooths its own edges; multisampling adds only cost.",
+            "markdownDescription": "View — Transition duration. Seconds.",
             "type": "number",
-            "enum": [
-              4,
-              1
-            ],
-            "enumDescriptions": [
-              "4× multisample",
-              "Off"
-            ]
+            "minimum": 0,
+            "maximum": 2
           },
-          "gridkitStudio.diagram.detail": {
-            "default": "auto",
+          "gridkitStudio.diagram.zoom": {
+            "default": "wheel",
             "scope": "resource",
-            "markdownDescription": "Quality — Detail. Auto fades ports and arrowheads out as the view zooms out.",
+            "markdownDescription": "Interaction — Wheel behavior",
             "type": "string",
             "enum": [
-              "auto",
-              "full"
-            ],
-            "enumDescriptions": [
-              "Auto",
-              "Full"
-            ]
-          },
-          "gridkitStudio.diagram.hover": {
-            "default": "auto",
-            "scope": "resource",
-            "markdownDescription": "Quality — Hover search. Auto pauses it while the view moves or runs slow.",
-            "type": "string",
-            "enum": [
-              "auto",
-              "on",
+              "wheel",
+              "modifier",
               "off"
             ],
             "enumDescriptions": [
-              "Auto",
-              "Always",
+              "Wheel",
+              "Modifier + wheel",
               "Off"
             ]
           },
-          "gridkitStudio.diagram.hoverBudgetMs": {
-            "default": 2,
+          "gridkitStudio.diagram.motion": {
+            "default": "system",
             "scope": "resource",
-            "markdownDescription": "Quality — Hover budget. Time a hover search may take per frame.",
+            "markdownDescription": "Interaction — Motion",
+            "type": "string",
+            "enum": [
+              "system",
+              "full",
+              "reduced"
+            ],
+            "enumDescriptions": [
+              "System",
+              "Full",
+              "Reduced"
+            ]
+          },
+          "gridkitStudio.diagram.pickRadius": {
+            "default": 8,
+            "scope": "resource",
+            "markdownDescription": "Interaction — Picking distance",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
+          }
+        }
+      },
+      {
+        "id": "gridkitStudio.monitor",
+        "title": "GridKit Studio: Monitor",
+        "order": 3,
+        "properties": {
+          "gridkitStudio.monitor.interpolation": {
+            "default": "linear",
+            "scope": "resource",
+            "markdownDescription": "Lines — Interpolation",
+            "type": "string",
+            "enum": [
+              "linear",
+              "step"
+            ],
+            "enumDescriptions": [
+              "Linear",
+              "Step"
+            ]
+          },
+          "gridkitStudio.monitor.lineWidth": {
+            "default": 1,
+            "scope": "resource",
+            "markdownDescription": "Lines — Line width",
             "type": "number",
-            "minimum": 0.5,
-            "maximum": 16
+            "minimum": 0.25,
+            "maximum": 8
+          },
+          "gridkitStudio.monitor.zoom": {
+            "default": "wheel",
+            "scope": "resource",
+            "markdownDescription": "Interaction — Wheel behavior",
+            "type": "string",
+            "enum": [
+              "wheel",
+              "modifier",
+              "off"
+            ],
+            "enumDescriptions": [
+              "Wheel",
+              "Modifier + wheel",
+              "Off"
+            ]
+          },
+          "gridkitStudio.monitor.motion": {
+            "default": "system",
+            "scope": "resource",
+            "markdownDescription": "Interaction — Motion",
+            "type": "string",
+            "enum": [
+              "system",
+              "full",
+              "reduced"
+            ],
+            "enumDescriptions": [
+              "System",
+              "Full",
+              "Reduced"
+            ]
+          },
+          "gridkitStudio.monitor.pickRadius": {
+            "default": 8,
+            "scope": "resource",
+            "markdownDescription": "Interaction — Picking distance",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
           }
         }
       }

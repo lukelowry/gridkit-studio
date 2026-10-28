@@ -11,14 +11,8 @@ import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { workerData } from 'node:worker_threads'
 
-import {
-  Case,
-  catalog as bundled,
-  catalogOf,
-  presentation,
-  simulate,
-  sweepOrphans,
-} from '../gridkit/index.js'
+import { Case, catalog as bundled, catalogOf, simulate, sweepOrphans } from '../gridkit/index.js'
+import { projectionPage } from '../gridkit/projection.js'
 import { solverLine } from '../gridkit/solver.js'
 import { closed, PROGRESS_MS, ResultCache, ResultsFile, stampOf, Stores } from '../results/index.js'
 import { defect, detail, failedWith, message, problem, quiet } from '../shared/errors.js'
@@ -30,8 +24,8 @@ import type {
   ResultsOptions,
   Run,
 } from '../shared/messages.js'
+import { loadNative } from './native.js'
 import { nameOf, summarize } from './parsed.js'
-import { queried, rowsOf } from './reads.js'
 import { memory, send, serve } from './serve.js'
 
 /** How many lines, and characters, of a run the log hears each LOG_MS, besides the errors that say
@@ -41,6 +35,7 @@ const LOG_CHARS = 64 << 10
 const LOG_MS = 1000
 
 const options = workerData as ResultsOptions
+await loadNative(options.wasmPath)
 const catalog = options.catalog === undefined ? bundled : catalogOf(options.catalog)
 const cache = new ResultCache(options.cacheBytes)
 const stores = new Stores(options.store)
@@ -137,6 +132,7 @@ async function release(id: string): Promise<void> {
   told.delete(id)
   if (!file || [...held.values()].includes(file)) return
   if (file.progress.growing) return retire(file)
+  file.idle()
   cache.rest(file, file.bytes, () => void retire(file))
 }
 
@@ -291,6 +287,7 @@ async function openResults(
   if (known) return hold(results, known)
   const reading = { revision: source, path, ...(solver && { solver }) }
   const stored = await stores.find(path, now, kase.version)
+  let restored: ResultsFile | undefined
   if (stored) {
     let file: ResultsFile | undefined
     try {
@@ -304,10 +301,11 @@ async function openResults(
         await stores.release(stored)
         signal.throwIfAborted()
       }
-      return hold(results, file)
+      if (stored.manifest!.complete) return hold(results, file)
+      restored = file
     }
   }
-  const file = new ResultsFile(kase, cache, await stores.create(path), reading)
+  const file = restored ?? new ResultsFile(kase, cache, await stores.create(path), reading)
   const tell = teller(file)
   // Until it answers, letting go of the request stops the reading; after, letting go of the
   // results does.
@@ -365,17 +363,16 @@ serve<ResultsApi>(
       const file = fileOf(results)
       return summarize(file.kase, file.layout.revision, { signal })
     },
-    query: ({ results, query }, signal) =>
-      using(results, signal, async (file, s) => {
-        // Rows at a time read the samples of their own type alone.
-        if (query.kind !== 'rows' || query.at === undefined)
-          return queried(file.kase.data, query, s)
-        return queried(await file.data([query.at, query.at], s, query.from), query, s)
-      }),
-    rows: ({ results, fields }, signal) => rowsOf(fileOf(results).kase, fields, signal),
-    presentation: ({ results }, signal) => presentation(fileOf(results).kase, signal),
-    samples: (input, signal) => using(input.results, signal, (file, s) => file.samples(input, s)),
-    step: async ({ results, at, direction }) => fileOf(results).step(at, direction),
+    project: (input, signal) =>
+      using(input.results, signal, (file, s) =>
+        projectionPage(file.kase.projected(), input.fields, input.cursor, s),
+      ),
+    page: (input, signal) =>
+      using(input.results, signal, (file, s) => file.queries.page(input.request, s)),
+    frames: (input, signal) => using(input.results, signal, (file, s) => file.frames(input, s)),
+    sample: (input, signal) => using(input.results, signal, (file, s) => file.sample(input, s)),
+    step: ({ results, at, direction }, signal) =>
+      using(results, signal, (file) => file.step(at, direction)),
     export: ({ results, path }, signal) =>
       using(results, signal, async (file) => {
         await file.exportCsv(path)
@@ -394,5 +391,9 @@ serve<ResultsApi>(
       }
     },
   },
-  ['query', 'rows', 'samples'],
+  ['project', 'page', 'frames'],
 )
+
+process.once('exit', () => {
+  for (const file of files) file.idle()
+})

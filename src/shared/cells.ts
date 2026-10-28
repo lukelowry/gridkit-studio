@@ -1,93 +1,49 @@
-/** Decoding and displaying the cells of query results. */
+﻿import type { Id, QueryResult } from 'latkit'
 
-import {
-  bitAt,
-  type Block,
-  type Column,
-  type Index,
-  numberAt,
-  type Query,
-  textAt,
-} from '@latkit/model'
-
+import { type Entity, entityLabel } from './document.js'
 import type { Summary, TableState } from './messages.js'
 
-/** The most rows one rows query may return. */
-const PAGE = 100
-
-interface Row {
-  id: string | null
-  row: number
-  values: Record<string, unknown>
+export interface CellRow {
+  readonly id: Id
+  readonly entity: Entity
+  readonly values: Record<string, unknown>
 }
-
-const referenceKey = (index: Index, row: number): string => JSON.stringify([index, row])
-
-/** The value at `row`, null when missing; a reference carries its target's id when `references`
- *  names it. */
-function cell(column: Column, row: number, references?: ReadonlyMap<string, string>): unknown {
-  if (column.validity && !bitAt(column.validity, column.offset + row)) return null
-  switch (column.kind) {
-    case 'numeric':
-      return numberAt(column, row)
-    case 'boolean':
-      return bitAt(column.values, column.offset + row)
-    case 'text':
-      return textAt(column, row)
-    case 'reference': {
-      const n = column.values[column.offset + row]!
-      return { index: column.index, row: n, id: references?.get(referenceKey(column.index, n)) }
-    }
-    case 'vector':
-      return Array.from({ length: column.size }, (_, n) =>
-        cell(column.values, (column.offset + row) * column.size + n, references),
-      )
-    case 'list': {
-      const start = column.offsets[column.offset + row]!
-      const end = column.offsets[column.offset + row + 1]!
-      return Array.from({ length: end - start }, (_, n) =>
-        cell(column.values, start + n, references),
-      )
-    }
+export function cell(page: QueryResult, field: string, row: number): unknown {
+  const values = page.fields[field]
+  if (!values) return null
+  if ('reference' in values) {
+    const id = values.ids[row]
+    return id === null || id === undefined ? null : { table: values.reference, id }
   }
+  const value = values[row]
+  return typeof value === 'number' && !Number.isFinite(value) ? null : (value ?? null)
 }
-
-export function rowsOf(
-  blocks: readonly Block.Rows[],
-  references?: ReadonlyMap<string, string>,
-): Row[] {
-  return blocks.flatMap((block) => {
-    const length = block.rows.kind === 'range' ? block.rows.count : block.rows.values.length
-    return Array.from({ length }, (_, row) => ({
-      id: block.ids ? textAt(block.ids, row) : '',
-      row: block.rows.kind === 'range' ? block.rows.offset + row : block.rows.values[row]!,
-      values: Object.fromEntries(
-        Object.entries(block.columns).map(([name, column]) => [
-          name,
-          cell(column, row, references),
-        ]),
-      ),
-    }))
-  })
+export function rowsOf(page: QueryResult): CellRow[] {
+  return page.ids.map((id, row) => ({
+    id,
+    entity: { table: page.table, id },
+    values: Object.fromEntries(
+      Object.keys(page.fields).map((name) => [name, cell(page, name, row)]),
+    ),
+  }))
 }
-
-/** How many columns the Case panel shows of a type until the user picks them. */
 export const COLUMNS = 12
-
-/** The fields the Case panel can show of `type`: its static ones besides its identity, which heads
- *  each row. Its sampled ones belong to the Monitor. */
 export function tableFields(
-  { schema, identities }: Pick<Summary, 'schema' | 'identities'>,
-  type: string,
+  { definition, identities }: Pick<Summary, 'definition' | 'identities'>,
+  table: string,
 ): string[] {
-  const fields = schema.types[type]?.fields ?? {}
-  return Object.keys(fields).filter(
-    (field) => !fields[field]!.sampled && field !== identities[type],
+  return (
+    definition.tables
+      .find((item) => item.name === table)
+      ?.fields.filter(
+        (field) =>
+          field.kind !== 'sampled' &&
+          field.name !== identities[table] &&
+          !field.name.startsWith('@studio.'),
+      )
+      .map((field) => field.name) ?? []
   )
 }
-
-/** The type the Case panel shows of a case: the one `table` names while the case has elements of
- *  it, else the first it has any of. */
 export function shownType(
   { counts }: Pick<Summary, 'counts'>,
   table: TableState | undefined,
@@ -95,11 +51,8 @@ export function shownType(
   const named = table?.type
   return named && counts[named] ? named : Object.keys(counts).find((type) => counts[type]! > 0)
 }
-
-/** The columns the Case panel shows of `type`: those `table` chose for it that it can show, else
- *  its first COLUMNS. */
 export function shownColumns(
-  summary: Pick<Summary, 'schema' | 'identities'>,
+  summary: Pick<Summary, 'definition' | 'identities'>,
   table: TableState | undefined,
   type: string,
 ): string[] {
@@ -108,9 +61,6 @@ export function shownColumns(
     table?.columns?.[type]?.filter((field) => fields.includes(field)) ?? fields.slice(0, COLUMNS)
   )
 }
-
-/** `table` as `change` leaves it: another type than the one shown starts unfiltered, in file
- *  order. A part changed to nothing is left out, so two tables alike say so alike. */
 export function changedTable(
   summary: Pick<Summary, 'counts'> | undefined,
   table: TableState,
@@ -127,77 +77,13 @@ export function changedTable(
     if (next[key] === undefined || next[key] === '') delete next[key]
   return next as TableState
 }
-
-/** An element's id without its type: `7` of `Bus/7`. */
-export const native = (id: string): string => id.slice(id.indexOf('/') + 1)
-
-/** A field's name within its record key: `Vr` of `init.Vr`. */
 export const leaf = (field: string): string => field.slice(field.indexOf('.') + 1)
-
-/** A cell as text: a reference by its target's id, or its native id alone where the column
- *  already says the type; a missing value as a dash. */
 export function display(value: unknown, { native: short = false } = {}): string {
-  if (value && typeof value === 'object' && 'index' in value && 'row' in value)
-    return 'id' in value && typeof value.id === 'string'
-      ? short
-        ? native(value.id)
-        : value.id
-      : (value.index as { type: string }).type + ' (connected)'
+  if (value && typeof value === 'object' && 'table' in value && 'id' in value)
+    return short ? String(value.id) : entityLabel(value as Entity)
   return value === null || value === undefined
     ? '—'
     : typeof value === 'object'
       ? JSON.stringify(value)
       : String(value)
-}
-
-/** The ids of the rows the reference columns of `blocks` point at, for `rowsOf`; physical row
- *  numbers are never shown. */
-export async function referenceNames(
-  blocks: readonly Block.Rows[],
-  query: (query: Query.Rows) => Promise<Block.Rows[]>,
-): Promise<Map<string, string>> {
-  const groups = new Map<string, { index: Index; rows: Set<number> }>()
-  const visit = (column: Column, row: number) => {
-    if (column.validity && !bitAt(column.validity, column.offset + row)) return
-    if (column.kind === 'reference') {
-      const key = JSON.stringify(column.index)
-      let group = groups.get(key)
-      if (!group) {
-        group = { index: column.index, rows: new Set() }
-        groups.set(key, group)
-      }
-      const value = numberAt(column, row)
-      if (value !== null) group.rows.add(value)
-    } else if (
-      column.kind === 'list' &&
-      (column.values.kind === 'reference' || column.values.kind === 'list')
-    ) {
-      for (
-        let n = column.offsets[column.offset + row]!;
-        n < column.offsets[column.offset + row + 1]!;
-        n++
-      )
-        visit(column.values, n)
-    }
-  }
-  for (const block of blocks)
-    for (const column of Object.values(block.columns))
-      if (column.kind === 'reference' || column.kind === 'list')
-        for (let row = 0; row < column.length; row++) visit(column, row)
-  const names = new Map<string, string>()
-  for (const { index, rows } of groups.values()) {
-    const values = Uint32Array.from(rows)
-    for (let start = 0; start < values.length; start += PAGE) {
-      const found = await query({
-        kind: 'rows',
-        from: index.type,
-        select: [],
-        ids: true,
-        limit: PAGE,
-        rows: { kind: 'indices', index, values: values.slice(start, start + PAGE) },
-      })
-      for (const row of rowsOf(found)) if (row.id) names.set(referenceKey(index, row.row), row.id)
-    }
-  }
-  return names
 }

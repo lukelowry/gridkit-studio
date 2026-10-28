@@ -14,17 +14,16 @@ describe('indexed case opening', () => {
     const kv = kase.table('Bus').fields.get('params.kv')!
     const decoding = vi.spyOn(kv, 'chunks', 'get')
     expect((await summarize(kase, { uri: 'file:///one', version: 1 })).validation).toBe('pending')
-    const data = kase.data
-    const names = data.tables.Bus!.fields.name!
-    expect(names.length).toBeGreaterThan(0)
+    const data = kase.projected().tables.get('Bus')!
+    const names = data.read('name', 0, 1)
+    expect(names).toEqual(['one'])
     expect(decoding).not.toHaveBeenCalled()
-    const values = data.tables.Bus!.fields['params.kv']!
-    expect(values).toBe(data.tables.Bus!.fields['params.kv'])
+    const values = data.read('params.kv', 0, 1)
+    expect(values).toEqual(Float64Array.of(230))
     expect(decoding).toHaveBeenCalled()
     const issues = await diagnose(kase, signal())
     expect(await diagnose(kase, signal())).toBe(issues)
-    expect(kase.data).toBe(data)
-    expect(data.tables.Bus!.fields.name).toBe(names)
+    expect(data.read('name', 0, 1)).toEqual(names)
   })
 
   it('names content apart: an edit, or another catalog, reads as other content', async () => {

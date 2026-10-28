@@ -3,6 +3,7 @@
 
 import './run.test.js'
 import './wecc.test.js'
+import './runtime.test.js'
 import './network.test.js'
 import './diagram.test.js'
 import './case.test.js'

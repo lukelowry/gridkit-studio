@@ -65,7 +65,7 @@ it('reports contract failures once without remounting and ignores cancelled read
   recovery.fail(invalid)
   recovery.fail(invalid)
   recovery.fail(new DOMException('The read was let go of.', 'AbortError'))
-  recovery.fail(Object.assign(new Error('Closed'), { code: 'closed' }))
+  recovery.fail(Object.assign(new Error('Closed'), { code: 'results-closed' }))
   vi.advanceTimersByTime(60_000)
   expect(restart).not.toHaveBeenCalled()
   expect(report).toHaveBeenCalledOnce()

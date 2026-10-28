@@ -13,6 +13,7 @@ import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
+import type { Entity } from '../../src/shared/document.js'
 import { contextKey } from '../../src/shared/ids.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
@@ -42,7 +43,7 @@ export const solverText = (name: string, solver: Solver) =>
 /** What a right-click on a canvas view aims at: the element `on`, where the view draws it now. That
  *  is found again before each try, as a view may move between finding it and the click. */
 export interface Aim {
-  readonly on: string
+  readonly on: Entity
   readonly at: () => Promise<{ x: number; y: number }>
 }
 
@@ -111,7 +112,7 @@ const probe = (node: Probed) => {
 export const VIEWPORT = { width: 1600, height: 1000 }
 
 /** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
-export const VM = { type: 'Bus', field: 'Vm' } as const
+export const VM = { table: 'Bus', field: 'Vm' } as const
 
 /** The text on the clipboard. */
 export const clipboard = () => vscode.env.clipboard.readText()
@@ -370,16 +371,17 @@ export class TestHost {
   }
 
   /** The webview showing `kind`. */
-  view(kind: ViewKind): Promise<Frame> {
+  view(kind: ViewKind, uri?: string): Promise<Frame> {
     return until(async () => {
       for (const candidate of this.#frames())
         if (
           await candidate
-            .locator('body[data-kind="' + kind + '"]')
+            .locator('body[data-kind="' + kind + '"]:not([data-shown="false"])')
             .isVisible()
             .catch(() => false)
         )
-          return candidate
+          if (!uri || (await candidate.evaluate<string>('document.body.dataset.uri')) === uri)
+            return candidate
     }, kind + ' webview')
   }
 
@@ -391,7 +393,7 @@ export class TestHost {
       'gridkitStudio.' + kind,
       column,
     )
-    const frame = await this.view(kind)
+    const frame = await this.view(kind, this.uri.toString())
     await visible(frame, 'canvas[data-rendered=true]')
     return frame
   }
@@ -429,8 +431,10 @@ export class TestHost {
   async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
     const key = uri.toString()
     const summary = await this.studio.documents.ensure(this.studio.documents.get(key)!.document)
-    const definitions = summary.schema.types[type]!.fields
-    const sampled = Object.keys(definitions).filter((field) => definitions[field]!.sampled)
+    const definitions = summary.definition.tables.find((table) => table.name === type)!.fields
+    const sampled = definitions
+      .filter((field) => field.kind === 'sampled')
+      .map((field) => field.name)
     await this.studio.documents.transact(
       key,
       summary.version,
@@ -559,8 +563,8 @@ export class TestHost {
     // On what it aimed at: among what lies under the pointer, as overlapping elements all are.
     const aimed = (context: Record<string, unknown>) =>
       !aim ||
-      !!(context.gridkitTarget as { items?: { id: string }[] }).items?.some(
-        (item) => item.id === aim.on,
+      !!(context.gridkitTarget as { items?: Entity[] }).items?.some(
+        (item) => item.id === aim.on.id && item.table === aim.on.table,
       )
     await target.evaluate(probe)
     await again(
@@ -571,7 +575,7 @@ export class TestHost {
       async () => (await caught()).some(aimed),
       async () => {
         const got = (await caught()).map((context) =>
-          ((context.gridkitTarget as { items?: { id: string }[] }).items ?? [])
+          ((context.gridkitTarget as { items?: Entity[] }).items ?? [])
             .map((item) => item.id)
             .join(' and '),
         )
@@ -635,14 +639,17 @@ export class TestHost {
   /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
    *  there and enabled. */
   async title(where: TitleBar, item: string): Promise<void> {
-    const editor = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+    const editor = () => vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const place = where === 'editor' ? 'editor/title' : 'view/title'
-    const keys = () => ({
-      ...this.keys(),
-      ...(where === 'editor'
-        ? { activeCustomEditorId: editor instanceof vscode.TabInputCustom ? editor.viewType : '' }
-        : { view: 'gridkitStudio.' + where }),
-    })
+    const keys = () => {
+      const active = editor()
+      return {
+        ...this.keys(),
+        ...(where === 'editor'
+          ? { activeCustomEditorId: active instanceof vscode.TabInputCustom ? active.viewType : '' }
+          : { view: 'gridkitStudio.' + where }),
+      }
+    }
     const find = () => this.menus.find(place, item, keys())
     const { command } = await until(
       () => {
@@ -662,7 +669,7 @@ export class TestHost {
       },
     )
     // An editor's title bar gives its command the editor's file; a view's gives nothing.
-    if (where === 'editor') this.#run(command, (editor as vscode.TabInputCustom).uri)
+    if (where === 'editor') this.#run(command, (editor() as vscode.TabInputCustom).uri)
     else this.#run(command)
   }
 
@@ -961,9 +968,7 @@ export class TestHost {
 
   /** Plot the first bus's voltage in the Monitor. */
   plot(): void {
-    this.session.setPlots([
-      { from: VM.type, field: VM.field, id: 'Bus/' + this.source.buses[0]!.number },
-    ])
+    this.session.setPlots([{ from: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
   }
 
   /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
@@ -1020,7 +1025,8 @@ export class TestHost {
     const { session } = this
     session.select()
     session.setPlots([])
-    for (const { type, field } of Object.values(session.bindings)) session.bind({ type, field }, [])
+    for (const { table, field } of Object.values(session.bindings))
+      session.bind({ table, field }, [])
     session.setEditing(false)
     session.setCamera('network', undefined)
     session.setCamera('diagram', undefined)
@@ -1037,6 +1043,16 @@ export class TestHost {
 
   /** Keep what every view showed when `test` failed, with the files of its results. */
   async failed(test: string): Promise<void> {
+    for (const frame of this.#frames())
+      console.error(
+        'View lifecycle:',
+        await frame
+          .evaluate("typeof gridkitLifecycle === 'function' ? gridkitLifecycle() : null")
+          .catch(() => null),
+      )
+    console.error('Page errors:', this.errors)
+    console.error('Studio failures:', this.studio.reporter.errors)
+    console.error('Case state:', JSON.stringify(this.studio.state(this.key)).slice(0, 2000))
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
     const { run, results } = this.session ?? {}
@@ -1060,6 +1076,7 @@ export class TestHost {
   async finish(): Promise<void> {
     try {
       this.report.worker = await this.studio.client.stats()
+      this.report.studioErrors = [...this.studio.reporter.errors]
       this.report.pageErrors = this.errors
       this.report.vscodeErrors = this.vscodeErrors
       await writeFile(

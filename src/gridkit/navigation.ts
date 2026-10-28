@@ -1,7 +1,7 @@
 import { findNodeAtLocation, getLocation, visit } from 'jsonc-parser'
 
+import { type Entity, entityLabel, withUnit } from '../shared/document.js'
 import type { CaseSymbol, SourceContext } from '../shared/messages.js'
-import { withUnit } from '../shared/schema.js'
 import type { Case, Table } from './case.js'
 import { CASE, type Catalog, type FieldPlan, SIGNAL } from './definition.js'
 import {
@@ -50,7 +50,7 @@ export async function outline(
       if (children.length >= room) continue
       const offset = at(array.starts[record]!)
       children.push({
-        name: kase.id(found.table, found.row),
+        name: entityLabel(kase.entity(found.table, found.row)),
         detail: found.table.shape.definition.label ?? found.table.shape.type,
         offset,
         length: at(array.ends[record]!) - offset,
@@ -85,7 +85,7 @@ export function sourceContext(kase: Case, offset: number): SourceContext {
     }
     const row = low - 1
     if (row < 0 || offset > textOffset(kase, records.ends[indexes[row]!]!)) continue
-    const id = kase.id(table, row)
+    const id = kase.entity(table, row)
     const record = recordAt(kase, table, row)
     const location = nested(() => getLocation(record.text, offset - record.offset))
     const path = location.path.filter((key): key is string => typeof key === 'string')
@@ -105,24 +105,21 @@ export function sourceContext(kase: Case, offset: number): SourceContext {
       : plan
         ? sourceRange(kase, id, plan.name)
         : { offset: record.offset, length: record.text.length }
-    let reference: string | undefined
-    if (
-      plan &&
-      typeof plan.definition.type === 'object' &&
-      plan.definition.type.kind === 'reference'
-    ) {
+    let reference: Entity | undefined
+    if (plan && plan.definition.kind === 'reference') {
       const node = findNodeAtLocation(treeOf(record.text), path)
-      if (typeof node?.value === 'number') reference = plan.definition.type.to + '/' + node.value
+      if (typeof node?.value === 'number')
+        reference = { table: plan.definition.target!, id: node.value }
     }
     return {
-      element: { id, ...(plan ? { field: plan.name } : {}) },
+      element: { ...id, ...(plan ? { field: plan.name } : {}) },
       type: table.shape.type,
       range,
       reference,
       completions: plans
         .filter(
           (plan) =>
-            !plan.definition.sampled &&
+            plan.definition.kind !== 'sampled' &&
             JSON.stringify(nativePath(plan).slice(0, -1)) === JSON.stringify(group),
         )
         .map((plan) => completion(nativePath(plan).at(-1)!, plan)),
@@ -224,7 +221,7 @@ export function completionsAt(
   if (!shape) return []
   const group = path.slice(row === undefined ? 0 : 2, -1)
   const fields = [...shape.plan.values()]
-    .filter((plan) => !plan.definition.sampled)
+    .filter((plan) => plan.definition.kind !== 'sampled')
     .map((plan) => [nativePath(plan), plan] as const)
     .filter(([path]) => JSON.stringify(path.slice(0, -1)) === JSON.stringify(group))
     .map(([path, plan]) => completion(path.at(-1)!, plan))
@@ -275,10 +272,9 @@ function classOf(text: string, array: string, row: number): string | undefined {
 
 /** The completion `name` offers for `plan`: its type and unit, and its description. */
 function completion(name: string, plan: FieldPlan): SourceContext['completions'][number] {
-  const { type, unit, description } = plan.definition
+  const { kind, unit } = plan.definition
   return {
     name,
-    detail: withUnit(typeof type === 'string' ? type : type.kind, unit),
-    description,
+    detail: withUnit(kind, unit),
   }
 }

@@ -12,7 +12,7 @@ import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM }
 const ROOT = process.env.GRIDKIT_TEST_ROOT!
 const MEDIA = join(ROOT, 'docs/media')
 const WINDOW = { width: 1280, height: 800 }
-const KV = { type: 'Bus', field: 'params.kv' } as const
+const KV = { table: 'Bus', field: 'params.kv' } as const
 /** How ACTIVSg25k closes in on its fault: mouse wheel notches toward a point this many pixels
  *  above the faulted bus, which so settles low in the frame. */
 const FRAMING = { notches: 4, above: 180 }
@@ -36,7 +36,7 @@ async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promi
 async function faultAt(
   bench: TestHost,
   uri: vscode.Uri,
-  bus: string,
+  bus: number,
   [from, to]: readonly [number, number],
   X: number,
 ) {
@@ -80,7 +80,7 @@ async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> 
 
 /** A bus of the case at `path`, from the repository root, to fault: of the highest voltage, the one
  *  with the most branches. */
-async function hub(path: string): Promise<string> {
+async function hub(path: string): Promise<number> {
   const source = JSON.parse(await readFile(join(ROOT, path), 'utf8')) as {
     buses: { number: number; params: { kv: number } }[]
     devices: { class: string; ports: Record<string, number> }[]
@@ -92,7 +92,7 @@ async function hub(path: string): Promise<string> {
   const [best] = source.buses
     .filter((bus) => bus.params.kv === top)
     .sort((a, b) => (degree.get(b.number) ?? 0) - (degree.get(a.number) ?? 0))
-  return 'Bus/' + best!.number
+  return best!.number
 }
 
 /** Show the case at `path` alone, full window, with `map` driving `channels`. */
@@ -135,7 +135,7 @@ export async function run() {
 
     // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, low over the
     // map, its height.
-    await set('network.vertices.labels', false)
+    await set('network.labels', false)
     const large = await show(bench, 'cases/ACTIVSg70k.case.json', KV, [
       'vertexColor',
       'vertexHeight',
@@ -146,7 +146,7 @@ export async function run() {
     await bench.page.mouse.wheel(0, -240)
     await bench.page.mouse.move(0, WINDOW.height / 2)
     await shoot(bench, 'activsg70k', large.network)
-    await set('network.vertices.labels', undefined)
+    await set('network.labels', undefined)
 
     // ACTIVSg25k mid-fault on its busiest highest-voltage bus, framed on it: voltage magnitude as
     // color and height, so the buses the fault pulls down sink below the rest.
@@ -174,9 +174,11 @@ export async function run() {
     const canvas = (await wide.network.locator('canvas').boundingBox())!
     const [x, y] = await wide.network.evaluate(
       (id) =>
-        (globalThis as unknown as { gridkitLocate(id: string): [number, number] }).gridkitLocate(
-          id,
-        ),
+        (
+          globalThis as unknown as {
+            gridkitLocate(id: { table: string; id: number }): Promise<[number, number]>
+          }
+        ).gridkitLocate({ table: 'Bus', id }),
       fault,
     )
     await bench.page.mouse.move(canvas.x + x, canvas.y + y - FRAMING.above)
@@ -191,7 +193,7 @@ export async function run() {
     await vscode.commands.executeCommand('workbench.action.closePanel')
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     // The generator's own menu frames it, as the user does: the command alone frames the Network.
-    const generator = 'Genrou/30_1_genrou'
+    const generator = { table: 'Genrou', id: '30_1_genrou' }
     await bench.menu(diagram.locator('canvas'), 'Zoom to Neighborhood', {
       on: generator,
       at: async () => {
@@ -226,7 +228,7 @@ export async function run() {
         { time: 0.6, type: 'fault_off', element_id: 0 },
       ],
     })
-    bench.session.setPlots([{ from: VM.type, field: VM.field }])
+    bench.session.setPlots([{ from: VM.table, field: VM.field }])
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     const monitor = await bench.show('monitor')
     bench.session.transport.seek(0.55)
@@ -234,7 +236,7 @@ export async function run() {
     await shoot(bench, 'monitor', ieee)
     console.log('Screenshots written to ' + MEDIA)
   } finally {
-    for (const key of [...Object.keys(SHOWN), 'network.vertices.labels']) await set(key, undefined)
+    for (const key of [...Object.keys(SHOWN), 'network.labels']) await set(key, undefined)
     await bench.browser.close()
   }
 }

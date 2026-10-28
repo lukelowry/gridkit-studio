@@ -75,7 +75,7 @@ suite('Case source', () => {
     await bench.studio.documents.edit(
       bench.key,
       (await bench.current()).version,
-      { id: 'Bus/' + bus!.number, field: 'params.kv' },
+      { table: 'Bus', id: bus!.number, field: 'params.kv' },
       bus!.params.kv + 1,
     )
     await bench.settled()

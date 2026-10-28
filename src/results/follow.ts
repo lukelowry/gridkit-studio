@@ -1,11 +1,9 @@
 /** A results file followed as GridKit writes it: its header, then runs of whole frames. */
-
 import { type FileHandle, open } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 
-import { failure } from '@latkit/model'
-
+import { problem } from '../shared/errors.js'
 import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
 import { same, type Stamp, stampOf } from './stamp.js'
 
@@ -39,6 +37,7 @@ export async function* follow(
   signal: AbortSignal,
   writer: () => Writer,
   last?: Stamp,
+  resume?: { readonly offset: number; readonly stamp: Stamp },
 ): AsyncGenerator<Piece> {
   let file: FileHandle | undefined
   let opened!: Stamp
@@ -70,8 +69,10 @@ export async function* follow(
     let from = 0
     let to = 0
     /** How far the file has been read. */
-    let at = 0
-    let header = false
+    if (resume && (opened.file !== resume.stamp.file || opened.size < resume.offset))
+      throw new Error('The results file changed before its committed watermark.')
+    let at = resume?.offset ?? 0
+    let header = !!resume
     /** Where the search for the header's end, or a segment's, resumes in `buffer`. */
     let scan = 0
     let quoted = false
@@ -112,7 +113,7 @@ export async function* follow(
       for (; !header && scan < to; scan++) {
         const byte = buffer[scan]!
         if (closing && byte !== QUOTE && byte !== COMMA && byte !== RETURN && byte !== NEWLINE)
-          throw failure('io', 'The CSV header has an invalid quoted name.')
+          throw problem('io', 'The CSV header has an invalid quoted name.')
         closing = false
         if (byte === QUOTE) {
           quoted = !quoted

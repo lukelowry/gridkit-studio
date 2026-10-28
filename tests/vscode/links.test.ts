@@ -8,10 +8,11 @@ import { suite, suiteSetup, test } from 'mocha'
 import type { Frame, Locator } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import type { Entity } from '../../src/shared/document.js'
 import { again, idle, type TestHost, testHost, until, visible } from './harness.js'
 
 /** What the Network shows selected, and its camera, as `gridkitSelection()` reports them. */
-type Shown = { ids: string[]; camera: unknown }
+type Shown = { entities: Entity[]; camera: unknown }
 
 suite('Links', () => {
   let bench: TestHost
@@ -21,7 +22,7 @@ suite('Links', () => {
   const header = (field: string): Locator => table.locator(`thead th[data-field="${field}"]`)
   const cells = (field: string): Locator => table.locator(`td[data-field="${field}"] .cell`)
   /** Where the Network drew `id` in its latest frame. */
-  const point = (id: string) =>
+  const point = (id: Entity) =>
     until(
       () => network.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(id)})`),
       id + ' drawn',
@@ -36,8 +37,11 @@ suite('Links', () => {
   })
 
   test('shows a device the Network does not draw by the bus it joins', async () => {
-    bench.session.select({ id: 'Genrou/30_1_genrou' })
-    await until(async () => (await shown())?.ids.join() === 'Bus/30', 'its bus selected')
+    bench.session.select({ table: 'Genrou', id: '30_1_genrou' })
+    await until(
+      async () => (await shown())?.entities.some((item) => item.table === 'Bus' && item.id === 30),
+      'its bus selected',
+    )
     // The table follows to the generators, with the generator's row selected.
     await until(
       async () =>
@@ -52,7 +56,7 @@ suite('Links', () => {
   })
 
   test('brings a bus picked in the Network into view in the table', async () => {
-    const id = 'Bus/' + bench.source.buses.at(-1)!.number
+    const id: Entity = { table: 'Bus', id: bench.source.buses.at(-1)!.number }
     // Where the Network draws it as the click is made: a view still moving moves it.
     await again(
       async () => {
@@ -60,7 +64,7 @@ suite('Links', () => {
         const [x, y] = await point(id)
         await network.locator('canvas').click({ position: { x, y } })
       },
-      () => bench.session.selection?.id === id,
+      () => bench.session.selection?.id === id.id,
       'the pick selects the bus',
     )
     await until(async () => {
@@ -87,7 +91,10 @@ suite('Links', () => {
       'the next row selected',
     )
     const id = bench.session.selection!.id
-    await until(async () => (await shown())?.ids.includes(id), 'the Network selects it too')
+    await until(
+      async () => (await shown())?.entities.some((item) => item.table === 'Bus' && item.id === id),
+      'the Network selects it too',
+    )
   })
 
   test('zooms the Network to the neighborhood of a row', async () => {
@@ -102,7 +109,7 @@ suite('Links', () => {
   test('offers each thing its own menu', async () => {
     // A bus in the Network, the one just framed: where else it shows, and what to do with the
     // whole element. The camera rests first, so the bus is where it was found.
-    const id = bench.session.selection!.id
+    const id = bench.session.selection!
     const bus = await bench.offered(network.locator('canvas'), {
       on: id,
       at: async () => {

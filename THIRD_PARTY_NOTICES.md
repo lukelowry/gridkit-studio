@@ -2,9 +2,12 @@
 
 GridKit Studio bundles the software below, and its repository holds GridKit's example cases. The full text of each license follows the list.
 
-## @latkit/diagram, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network, @latkit/video
+## latkit 0.3.1
 
 Copyright (c) 2026 Luke Lowery. MIT License.
+
+The bundled native runtime and standalone worker include the notices in
+`dist/licenses/latkit-NOTICES.md` and `dist/licenses/latkit-THIRD_PARTY.md`.
 
 ## GridKit Server
 
@@ -21,14 +24,6 @@ Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte
 ## esm-env
 
 Copyright 2022 Benjamin McCann. MIT License.
-
-## culori
-
-Copyright (c) 2018 Dan Burzo. MIT License.
-
-## mediabunny
-
-Copyright (c) 2026-present, Vanilagy and contributors. Bundled unmodified for video export, from https://github.com/Vanilagy/mediabunny, under the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/.
 
 ## Color tables
 

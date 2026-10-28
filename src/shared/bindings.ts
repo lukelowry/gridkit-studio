@@ -1,17 +1,21 @@
 /** The network's display channels, and which numeric field drives each. */
 
-import { type Query, sameIndex } from '@latkit/model'
+import type { Id } from 'latkit'
 
-import { coversRows } from './coverage.js'
-import type { Summary } from './messages.js'
+import type { RecordedField } from './data.js'
 
 /** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
-  vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radiusPx' },
-  vertexHeight: { label: 'Vertex Height', placement: 'vertex', style: 'height', option: 'z' },
+  vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radius' },
+  vertexHeight: {
+    label: 'Vertex Height',
+    placement: 'vertex',
+    style: 'height',
+    option: 'elevation',
+  },
   edgeColor: { label: 'Edge Color', placement: 'edge', style: 'color', option: 'color' },
-  edgeWidth: { label: 'Edge Width', placement: 'edge', style: 'width', option: 'widthPx' },
+  edgeWidth: { label: 'Edge Width', placement: 'edge', style: 'width', option: 'width' },
   edgeDash: { label: 'Edge Dash', placement: 'edge', style: 'dash', option: 'dash' },
 } as const
 
@@ -20,7 +24,7 @@ export type Channel = keyof typeof CHANNELS
 const ALL = Object.keys(CHANNELS) as Channel[]
 
 export interface FieldRef {
-  readonly type: string
+  readonly table: string
   readonly field: string
 }
 
@@ -32,33 +36,22 @@ interface Binding extends FieldRef {
 export type Bindings = Readonly<Partial<Record<Channel, Binding>>>
 
 /** The field data types that can drive a channel. */
-export const NUMERIC: ReadonlySet<unknown> = new Set(['float32', 'float64', 'int32', 'uint32'])
+export const NUMERIC: ReadonlySet<unknown> = new Set(['number', 'sampled'])
 
 const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
-  a !== undefined && a.type === b.type && a.field === b.field
+  a !== undefined && a.table === b.table && a.field === b.field
 
-/** Whether a run with `outputs` records `field` for every row of its type as `summary` numbers
- *  them, as a channel requires: the network draws every row. Rows it holds by number are of the
- *  case's rows only where numbered alike, as their index says. */
-export function recordedWhole(
-  outputs: readonly Query.Selection[],
-  summary: Pick<Summary, 'counts' | 'indexes'>,
+/** Stable-ID coverage of a recorded field, independent of case row order. */
+export function recordedRows(
+  outputs: readonly RecordedField[],
   field: FieldRef,
+  ids?: readonly Id[],
 ): boolean {
-  const count = summary.counts[field.type] ?? 0
-  const index = summary.indexes[field.type]
   const matching = outputs.filter(
-    ({ from, select }) => from === field.type && select.includes(field.field),
+    (output) => output.table === field.table && output.field === field.field,
   )
-  if (matching.some(({ rows }) => rows === undefined)) return true
-  const ids = new Set(matching.flatMap(({ rows }) => (rows?.kind === 'ids' ? [...rows.ids] : [])))
-  if (ids.size === count && count > 0) return true
-  const axes = matching.flatMap(({ rows }) =>
-    rows && rows.kind !== 'ids' && rows.index && index && sameIndex(rows.index, index)
-      ? [rows]
-      : [],
-  )
-  return axes.length > 0 && coversRows(axes, { kind: 'range', offset: 0, count })
+  const held = new Set(matching.flatMap((output) => [...output.ids]))
+  return ids ? ids.every((id) => held.has(id)) : held.size > 0
 }
 
 /** The channels a type drawn as `placement` offers. */
@@ -95,7 +88,7 @@ export function bound(
   const next: Partial<Record<Channel, Binding>> = { ...bindings }
   for (const channel of allowed) {
     if (channels.includes(channel))
-      next[channel] = { type: field.type, field: field.field, ...(domain && { domain }) }
+      next[channel] = { table: field.table, field: field.field, ...(domain && { domain }) }
     else if (sameField(next[channel], field)) delete next[channel]
   }
   return next

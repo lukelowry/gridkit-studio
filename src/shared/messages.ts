@@ -1,9 +1,22 @@
 /** The messages between the extension, its two workers, and its webviews. */
 
-import type { Layout } from '@latkit/gpu'
-import type { Block, Data, Domain, Index, Query, Schema } from '@latkit/model'
+import type { Camera, Id } from 'latkit'
 
+import type { CaseDefinition, Element, Entity } from './document.js'
+export type { Element, Entity } from './document.js'
 import type { Bindings } from './bindings.js'
+import type {
+  ExactSample,
+  ExactSampleRequest,
+  FramePage,
+  FrameRequest,
+  ProjectionCursor,
+  ProjectionPage,
+  ProjectionSelection,
+  TablePage,
+  TableRequest,
+  TimeRange,
+} from './data.js'
 import type { Problem } from './errors.js'
 import type { ViewCommandName } from './ids.js'
 import type { SettingsValues } from './preferences.js'
@@ -57,13 +70,7 @@ export interface SourceEdit extends SourceRange {
 export interface Issue extends SourceRange {
   message: string
   severity: 'info' | 'warning' | 'error'
-  id?: string
-  field?: string
-}
-
-/** A case element by its `Type/key` id, and optionally one of its fields. */
-export interface Element {
-  id: string
+  entity?: Entity
   field?: string
 }
 
@@ -73,13 +80,10 @@ export interface Summary extends Revision {
   name: string
   /** Identifies the case content; a run carries the one it ran on. */
   fingerprint: string
-  schema: Schema
+  definition: CaseDefinition
   /** The field each type's elements are known by: a bus's `number`, a device's `id`. */
   identities: Record<string, string>
   counts: Record<string, number>
-  /** How each type's rows are numbered: what was read against a revision numbering them alike, as
-   *  results are, fits them. */
-  indexes: Record<string, Index>
   /** What the case records: how many of each type's elements list each output, and the monitor
    *  GridKit writes to, if the case has one. */
   recording: {
@@ -99,33 +103,17 @@ export interface SourceContext {
   range?: SourceRange
   type?: string
   completions: { name: string; detail: string; description?: string }[]
-  reference?: string
+  reference?: Entity
 }
 
 export type Mutation =
   | { kind: 'add'; type: string; key: string | number; fields: Record<string, Value> }
-  | { kind: 'remove'; ids: readonly string[] }
-  | { kind: 'set'; id: string; field: string; value: Value }
-  | { kind: 'move'; id: string; position: readonly [number, number] | null }
+  | { kind: 'remove'; entities: readonly Entity[] }
+  | { kind: 'set'; entity: Entity; field: string; value: Value }
+  | { kind: 'move'; entity: Entity; position: readonly [number, number] | null }
   | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
   /** Every element of `type` lists the outputs in `add` and none in `remove`. */
   | { kind: 'record'; type: string; add: readonly string[]; remove: readonly string[] }
-
-/** Frames of one field of a results file that a view asks for: those over `window` it lacks. */
-export interface SamplesInput {
-  results: string
-  /** One field, of the rows a view draws; without rows, of every row the file holds. */
-  field: Query.Selection
-  /** The times wanted, with the frames either side that reach them. */
-  window: Domain
-  /** The frames of each chunk the view holds: chunk `k`'s first `held[k]`. */
-  held: Readonly<Record<number, number>>
-  /** The chunks nearest `at` come first. While a playhead plays at `travel`, the time behind it
-   *  counts several times over. */
-  near?: { at: number; travel: number }
-  /** About the most bytes the reply holds; it holds one chunk's frames at least. */
-  bytes: number
-}
 
 /** How much memory a worker holds. */
 export interface Memory {
@@ -161,7 +149,7 @@ export interface CaseApi {
   }
   validate: { input: Revision; output: Issue[] }
   /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
-  anchors: { input: Revision & { id: string; drawn: readonly string[] }; output: string[] }
+  anchors: { input: Revision & { entity: Entity; drawn: readonly string[] }; output: Entity[] }
   complete: {
     input: Revision & SourceDelta & { offset: number }
     output: SourceContext['completions']
@@ -171,12 +159,15 @@ export interface CaseApi {
   symbols: { input: Revision & { limit: number }; output: CaseSymbol[] }
   locate: { input: Revision & Element; output: SourceRange }
   transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
-  /** Where the diagram's blocks are arranged. */
-  presentation: { input: Revision; output: Record<string, Layout.Positions> }
-  /** Rows of the case. */
-  query: { input: Revision & { query: Query }; output: Block[] }
-  /** The case's static `fields`. */
-  rows: { input: Revision & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
+  project: {
+    input: Revision & {
+      fields: readonly ProjectionSelection[]
+      cursor?: ProjectionCursor
+      base?: string
+    }
+    output: ProjectionPage
+  }
+  page: { input: Revision & { request: TableRequest }; output: TablePage }
   /** Drops the case. */
   release: { input: { uri: string; attachmentId?: string }; output: null }
   stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
@@ -184,6 +175,7 @@ export interface CaseApi {
 
 /** What the extension starts both workers with. */
 export interface WorkerOptions {
+  readonly wasmPath: string
   /** The catalog of GridKit's classes the user's file holds, read in place of the bundled one. */
   readonly catalog?: unknown
 }
@@ -225,14 +217,17 @@ export interface ResultsApi {
   configure: { input: { cacheBytes: number }; output: null }
   /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
-  /** Rows of the case the results were read against, at a time of theirs when the query has an
-   *  `at`. */
-  query: { input: OfResults & { query: Query }; output: Block[] }
-  /** The static `fields` of the case the results were read against. */
-  rows: { input: OfResults & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
-  /** Where the diagram's blocks are arranged in the case the results were read against. */
-  presentation: { input: OfResults; output: Record<string, Layout.Positions> }
-  samples: { input: SamplesInput; output: Data.SampleBatch[] }
+  project: {
+    input: OfResults & {
+      fields: readonly ProjectionSelection[]
+      cursor?: ProjectionCursor
+      base?: string
+    }
+    output: ProjectionPage
+  }
+  page: { input: OfResults & { request: TableRequest }; output: TablePage }
+  frames: { input: FrameRequest & { next?: string }; output: FramePage }
+  sample: { input: ExactSampleRequest; output: ExactSample }
   /** The next sample time from `at` in `direction`; the first or last time when none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
@@ -290,7 +285,7 @@ export type VideoView = 'network' | 'diagram' | 'monitor'
 export interface Plot {
   from: string
   field: string
-  id?: string
+  id?: Id
 }
 
 /** What the Case panel shows: a type, the columns chosen for each type, the order of its rows, and
@@ -320,17 +315,17 @@ export interface ViewState {
   error?: string
   selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
-  anchors?: readonly string[]
+  anchors?: readonly Entity[]
   results?: Results
   plots?: readonly Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
-  window?: Domain
+  window?: TimeRange
 }
 
 /** How Network and Diagram were last framed, for a video export to keep. */
 export interface Cameras {
-  network?: unknown
-  diagram?: unknown
+  network?: Camera
+  diagram?: Camera
 }
 
 /** What a command asks of a view. */
@@ -385,13 +380,17 @@ export const revisionOf = ({ uri, version, attachmentId }: Revision): Revision =
 /** What a view asks of the extension. Each request names what it is of: a revision of a case, or
  *  results by their id. */
 export interface ViewApi {
-  /** Rows of a revision of the case, or, `at` a time, of results. */
-  query: { input: Source & { query: Query.Rows }; output: Block.Rows[] }
-  /** The static fields a view draws. */
-  rows: { input: Source & { fields: readonly Query.Selection[] }; output: Data.RowBatch[] }
-  /** Where the diagram's blocks are arranged. */
-  presentation: { input: Source; output: Record<string, Layout.Positions> }
-  samples: { input: SamplesInput; output: Data.SampleBatch[] }
+  project: {
+    input: Source & {
+      fields: readonly ProjectionSelection[]
+      cursor?: ProjectionCursor
+      base?: string
+    }
+    output: ProjectionPage
+  }
+  page: { input: Source & { request: TableRequest }; output: TablePage }
+  frames: { input: FrameRequest & { next?: string }; output: FramePage }
+  sample: { input: ExactSampleRequest; output: ExactSample }
   /** Edits the revision of the case the view made `mutations` against. */
   transact: {
     input: { revision: Revision; mutations: readonly Mutation[]; label?: string }
@@ -399,10 +398,10 @@ export interface ViewApi {
   }
   /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
    *  cancel. */
-  videoOpen: { input: { uri: string; name: string; format: 'mp4' | 'webm' }; output: number | null }
+  videoOpen: { input: { uri: string; name: string }; output: number | null }
   /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
   cameras: { input: { uri: string }; output: Cameras }
-  videoWrite: { input: { file: number; position: number; bytes: Uint8Array }; output: void }
+  videoWrite: { input: { file: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished video's path. */
   videoClose: { input: { file: number; abort?: boolean }; output: string | null }
   /** Holds results under an id of the view's own, while it reads them for an export: whatever
@@ -417,8 +416,9 @@ export type ViewMessage =
   | { kind: 'command'; command: ViewCommandName; value?: unknown }
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */
-  | { kind: 'window'; bounds: Domain }
+  | { kind: 'window'; bounds: TimeRange }
   | { kind: 'camera'; camera: unknown }
+  | { kind: 'display'; values: Partial<SettingsValues> }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   /** A change the user made in the Case panel to what it shows, which the session takes. */
   | { kind: 'table'; change: Partial<TableState> }

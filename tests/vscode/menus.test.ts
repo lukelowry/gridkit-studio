@@ -8,6 +8,7 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame, Locator } from 'playwright-core'
 import * as vscode from 'vscode'
 
+import type { Entity } from '../../src/shared/document.js'
 import {
   clipboard,
   custom,
@@ -54,7 +55,7 @@ suite('Case panel menus', () => {
   test("copies a row's id, a value, and a column's path", async () => {
     const [bus] = bench.source.buses
     await bench.menu(row(String(bus!.number)), 'Copy ID')
-    await until(async () => (await clipboard()) === 'Bus/' + bus!.number, 'the id copied')
+    await until(async () => (await clipboard()) === String(bus!.number), 'the id copied')
     await bench.menu(cells('params.kv').first(), 'Copy Value')
     await until(async () => (await clipboard()) === String(bus!.params.kv), 'the value copied')
     await bench.menu(header('params.kv'), 'Copy Field Path')
@@ -98,11 +99,11 @@ suite('Case panel menus', () => {
   test('goes to the bus of a branch the user picks, and to the bus a reference names', async () => {
     const branch = source().devices.find((device) => device.class === 'Branch')!
     for (const end of ['bus1', 'bus2'] as const) {
-      const bus = 'Bus/' + branch.ports[end]
+      const bus = branch.ports[end]
       await bench.caseType('Branch')
       await bench.menu(row(branch.id), 'Go to Referenced Element')
       // Each reference is offered by its field, with the element it names beside it.
-      await bench.pick(new RegExp(bus + '(?!\\d)'))
+      await bench.pick(new RegExp(String(bus) + '(?!\\d)'))
       await until(() => selected() === bus, end)
     }
     // Its second end, among the columns the title bar offers.
@@ -115,7 +116,7 @@ suite('Case panel menus', () => {
       })
       .locator(`td[data-field="ports.bus2"] .cell`)
     await bench.menu(reference, 'Go to Referenced Element')
-    await until(() => selected() === 'Bus/' + branch.ports.bus2, 'the bus it names')
+    await until(() => selected() === branch.ports.bus2, 'the bus it names')
   })
 
   test('reveals a row in the Diagram and in the source, and opens the source from its menu', async () => {
@@ -126,9 +127,9 @@ suite('Case panel menus', () => {
     const diagram = await bench.view('diagram')
     await until(
       async () =>
-        (await diagram.evaluate<{ ids: string[] } | null>('gridkitSelection()'))?.ids.includes(
-          'Genrou/' + generator.id,
-        ),
+        (
+          await diagram.evaluate<{ entities: Entity[] } | null>('gridkitSelection()')
+        )?.entities.some((item) => item.table === 'Genrou' && item.id === generator.id),
       'the Diagram selects it',
     )
     table = await bench.show('case')
@@ -159,7 +160,7 @@ suite('Network menus', () => {
     (await network.evaluate<{ camera: Record<string, unknown> } | null>('gridkitSelection()'))
       ?.camera
   /** Where the Network drew `id` in its latest frame, once the camera rests. */
-  async function point(id: string) {
+  async function point(id: Entity) {
     await idle(network)
     const [x, y] = await until(
       () => network.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(id)})`),
@@ -168,7 +169,9 @@ suite('Network menus', () => {
     return { x, y }
   }
   /** Right-click `id` where the Network draws it, and choose `item`. */
-  async function menu(id: string, item: string) {
+  async function menu(id: Entity, item: string) {
+    await bench.title('editor', 'Fit All')
+    await idle(network)
     await bench.menu(network.locator('canvas'), item, { on: id, at: () => point(id) })
   }
 
@@ -179,7 +182,7 @@ suite('Network menus', () => {
 
   test('reveals a bus in the Case panel from its menu', async () => {
     const { number } = bench.source.buses[3]!
-    await menu('Bus/' + number, 'Reveal in Case Panel')
+    await menu({ table: 'Bus', id: number }, 'Reveal in Case Panel')
     const table = await bench.view('case')
     await until(
       async () =>
@@ -202,12 +205,9 @@ suite('Network menus', () => {
     await bench.settled()
     try {
       network = await bench.open('network')
-      await menu('Branch/' + line.id, 'Select Overlapping')
-      await bench.pick('Branch/' + second.id)
-      await until(
-        () => bench.session.selection?.id === 'Branch/' + second.id,
-        'the second circuit selected',
-      )
+      await menu({ table: 'Branch', id: line.id }, 'Select Overlapping')
+      await bench.pick('Branch ' + second.id, second.id)
+      await until(() => bench.session.selection?.id === second.id, 'the second circuit selected')
       // The Case panel follows it to its row.
       const table = await bench.view('case')
       await until(
@@ -255,7 +255,7 @@ suite('Network menus', () => {
 
   test('edits the selected element from F2, which undo takes back', async () => {
     const [bus] = bench.source.buses
-    bench.session.select({ id: 'Bus/' + bus!.number })
+    bench.session.select({ table: 'Bus', id: bus!.number })
     await until(() => bench.keys()['gridkitStudio.hasSelection'] === true, 'a bus selected')
     await network.locator('canvas').press('F2')
     await bench.pick('name')
@@ -268,9 +268,9 @@ suite('Network menus', () => {
 
   test('changes projection from its own toolbar', async () => {
     await network.getByRole('button', { name: 'Tilt', exact: true }).click()
-    await until(async () => (await camera())?.projection === 'tilt', 'tilted')
+    await until(async () => (await camera())?.pitch === 45, 'tilted')
     await network.getByRole('button', { name: 'Flat', exact: true }).click()
-    await until(async () => (await camera())?.projection === 'flat', 'flat again')
+    await until(async () => (await camera())?.pitch === 0, 'flat again')
   })
 
   test('opens its settings from the title bar', async () => {
@@ -309,13 +309,26 @@ suite('Diagram menus', () => {
       const [x, y] = await until(
         () =>
           diagram.evaluate<[number, number] | null>(
-            `gridkitLocate(${JSON.stringify('Ieeest/' + id)}, ${JSON.stringify(field ?? null)})`,
+            `gridkitLocate(${JSON.stringify({ table: 'Ieeest', id, ...(field ? { field } : {}) })}, ${JSON.stringify(field ?? null)})`,
           ),
         id + ' drawn',
       )
-      return { x, y }
+      if (!field) return { x, y }
+      const point = await diagram.evaluate<[number, number] | null>(`(async () => {
+        const center = [${x}, ${y}]
+        for (let dx = 10; dx <= 200; dx += 8) {
+          const probes = []
+          for (const side of [-1, 1]) for (let dy = -100; dy <= 100; dy += 8)
+            probes.push(gridkitPick([center[0] + side * dx, center[1] + dy], 5))
+          const hit = (await Promise.all(probes)).flat().find(hit => hit.row.table === 'Ieeest' && hit.row.id === ${JSON.stringify(id)} && hit.port === ${JSON.stringify(field)})
+          if (hit) return hit.point
+        }
+        return null
+      })()`)
+      assert.ok(point, 'The native picker locates the signal port')
+      return { x: point[0], y: point[1] }
     }
-    await bench.menu(diagram.locator('canvas'), item, { on: 'Ieeest/' + id, at })
+    await bench.menu(diagram.locator('canvas'), item, { on: { table: 'Ieeest', id }, at })
   }
 
   suiteSetup(async () => {
@@ -355,7 +368,7 @@ suite('Monitor menus', () => {
   let bench: TestHost
   let monitor: Frame
   const plotted = () =>
-    monitor.evaluate<{ x: number[]; y: number[]; fit: boolean }>(
+    monitor.evaluate<{ x: number[]; y: number[] | null }>(
       'document.querySelector("canvas").gridkitPlot().camera',
     )
   /** Choose `item` from the menu of the plot `n`. */
@@ -373,10 +386,10 @@ suite('Monitor menus', () => {
   suiteTeardown(() => simpleDialog(undefined))
 
   test('narrows a plot to another element from its menu, and widens it to every element again', async () => {
-    const id = 'Bus/' + bench.source.buses[4]!.number
+    const id = bench.source.buses[4]!.number
     await menu('Choose Plot Element')
     // The picker names each bus, its id beside the name; typing an exact id finds that one.
-    await bench.pick(new RegExp(id), id)
+    await bench.pick(new RegExp(String(id)), String(id))
     await until(() => bench.session.plots[0]?.id === id, 'the plot narrowed')
     await menu('Choose Plot Element')
     await bench.pick('Every element')
@@ -386,13 +399,13 @@ suite('Monitor menus', () => {
   test("sets a plot's value range from its menu, and fits its values again", async () => {
     await menu('Value Range')
     await bench.answer('0.5, 1.5')
-    await until(async () => (await plotted()).y.join() === '0.5,1.5', 'the range set')
+    await until(async () => (await plotted()).y?.join() === '0.5,1.5', 'the range set')
     await menu('Value Range')
     await bench.answer('')
     // The plot fits its values again, which the next frame frames.
     await until(async () => {
-      const { fit, y } = await plotted()
-      return fit && y.join() !== '0.5,1.5'
+      const { y } = await plotted()
+      return y === null
     }, 'the values fitted')
   })
 
@@ -425,9 +438,7 @@ suite('Monitor menus', () => {
 
   test('adds a plot from the title bar, and removes plots from their menu and close button', async () => {
     // One bus's voltage, beside which the voltage of every bus is another plot.
-    bench.session.setPlots([
-      { from: 'Bus', field: 'Vm', id: 'Bus/' + bench.source.buses[4]!.number },
-    ])
+    bench.session.setPlots([{ from: 'Bus', field: 'Vm', id: bench.source.buses[4]!.number }])
     await bench.title('monitor', 'Add Plot')
     await bench.pick(/Vm/, 'Vm')
     await until(() => bench.session.plots.length === 2, 'a second plot')
@@ -506,10 +517,13 @@ suite('Monitored Signals menus', () => {
 
   suiteSetup(async () => {
     bench = await testHost()
+    await bench.record('Bus', [])
     await bench.signals()
   })
+  suiteTeardown(() => bench.reset())
 
   test('records every signal from its title bar, and no signal again', async () => {
+    const before = bench.document.getText()
     await bench.title('signals', 'Record All Signals')
     await until(() => bench.recorded('Bus', 'Vm'), 'every bus records its voltage')
     await bench.title('signals', 'Record No Signals')
@@ -517,7 +531,9 @@ suite('Monitored Signals menus', () => {
     // Each was one edit, which undo takes back.
     await vscode.window.showTextDocument(bench.document)
     await vscode.commands.executeCommand('undo')
-    await bench.undo('the case records as it did')
+    await vscode.commands.executeCommand('undo')
+    await until(() => bench.document.getText() === before, 'the case records as it did')
+    await bench.settled()
   })
 
   test("maps a field from the action at its row's right, and changes it from its menu", async () => {
@@ -526,7 +542,7 @@ suite('Monitored Signals menus', () => {
     bench.signalMenu('Bus', 'Vm', 'Map To', true)
     await bench.check(['Vertex Color'])
     await until(
-      () => vertexColor()?.type === 'Bus' && vertexColor()?.field === 'Vm',
+      () => vertexColor()?.table === 'Bus' && vertexColor()?.field === 'Vm',
       'the voltage colors the buses',
     )
     // Its menu offers what a mapped field's does, once the row hears of the mapping.
@@ -556,7 +572,10 @@ suite('Monitored Signals menus', () => {
     await vscode.env.clipboard.writeText('')
     bench.signalMenu('Bus', 'Vm', 'Copy Field Path')
     await until(async () => (await clipboard()) === 'Vm', 'the path copied')
-    await bench.undo('the case records as it did')
+    await vscode.window.showTextDocument(bench.document)
+    await vscode.commands.executeCommand('undo')
+    await until(() => !bench.recorded('Bus', 'Vm'), 'the case records as it did')
+    await bench.settled()
   })
 })
 

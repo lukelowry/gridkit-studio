@@ -24,12 +24,9 @@ import {
 /** Markers large enough that their center pixels are solid, at one size whatever the zoom, with
  *  nothing drawn over them. */
 const SOLID: Record<string, unknown> = {
-  'network.vertexRadiusPx': 8,
-  'network.vertexMinRadiusPx': 8,
-  'network.vertices.labels': false,
+  'network.labels': false,
   'network.map.source': 'none',
-  'network.hover': 'off',
-  'network.selectedColor': '#00000000',
+  'network.ease': 0,
 }
 type RGB = readonly [number, number, number]
 /** Whether two colors differ by more than antialiasing does. */
@@ -66,29 +63,25 @@ suite('Network', () => {
     )
   })
 
-  test('shrinks its markers as the view zooms out, so neighbors stay apart, and grows them back', async () => {
-    /** How much markers shrink at the drawn zoom: 1 while they have room for their radius. */
-    const fit = () => network.evaluate<number>('gridkitStats().markerFit')
-    const wheel = async (deltaY: number) => {
-      await network.locator('canvas').hover()
-      await bench.page.mouse.wheel(0, deltaY)
-      await idle(network)
-      return fit()
-    }
-    try {
-      await until(async () => (await wheel(-240)) === 1, 'markers at their own size, zoomed in')
-      await until(async () => (await wheel(240)) < 1, 'markers shrink as the view zooms out')
-      const out = await fit()
-      assert.ok(out > 0, 'a shrunken marker still draws')
-      await until(async () => (await wheel(-240)) === 1, 'markers grow back as the view zooms in')
-    } finally {
-      await vscode.commands.executeCommand('gridkitStudio.fit')
-    }
+  test('changes the native camera without reloading the dataset', async () => {
+    const before = await network.evaluate<{ camera: unknown }>('gridkitSelection()')
+    const received = await network.evaluate<number>('gridkitStats().received')
+    await network.locator('canvas').hover()
+    await bench.page.mouse.wheel(0, -240)
+    await until(
+      async () =>
+        JSON.stringify(
+          (await network.evaluate<{ camera: unknown }>('gridkitSelection()')).camera,
+        ) !== JSON.stringify(before.camera),
+      'the camera zooms',
+    )
+    assert.equal(await network.evaluate('gridkitStats().received'), received)
+    await vscode.commands.executeCommand('gridkitStudio.fit')
   })
 
   test('clearing the canvas selection clears the shared selection', async () => {
     const drawn = await frames(network)
-    bench.session.select({ id: 'Bus/' + bench.source.buses[0]!.number })
+    bench.session.select({ table: 'Bus', id: bench.source.buses[0]!.number })
     await until(async () => (await frames(network)) > drawn, 'the selected bus is drawn')
     await network.locator('canvas').focus()
     await network.locator('canvas').press('Escape')
@@ -130,7 +123,10 @@ suite('Network', () => {
   test('draws nothing while hidden, though the clock plays on', async () => {
     const { transport } = bench.session
     await bench.open('diagram')
-    const hidden = (await idle(network)).frames
+    await until(
+      () => network.evaluate('gridkitStats() === undefined'),
+      'the hidden View is destroyed',
+    )
     // From the start, so the clock has the run before it to play on rather than wrap.
     transport.seek(0)
     const from = transport.currentT()
@@ -138,7 +134,7 @@ suite('Network', () => {
     // Time enough for the visible view to have drawn many frames.
     await until(() => transport.currentT() > from + 0.2, 'the clock plays on')
     assert.equal(transport.state.status, 'playing')
-    assert.equal(await frames(network), hidden)
+    assert.equal(await network.evaluate('gridkitStats()'), undefined)
     transport.pause()
   })
 
@@ -150,17 +146,25 @@ suite('Network', () => {
       // The case alone, nothing mapped and its clock at rest, as the others left it otherwise.
       await bench.reset()
       network = await bench.open('network')
-      const ids = bench.source.buses.slice(0, 8).map((bus) => 'Bus/' + bus.number)
+      await vscode.commands.executeCommand('gridkitStudio.fit', bench.uri)
+      const ids = bench.source.buses.slice(0, 8).map((bus) => ({ table: 'Bus', id: bus.number }))
       /** The color each bus's marker is drawn in at its center. */
       const colors = async (): Promise<RGB[]> => {
         await idle(network)
         const png = PNG.sync.read(await network.locator('canvas').screenshot())
         const points = await network.evaluate(
           (ids) =>
-            ids.map((id) =>
-              (
-                globalThis as unknown as { gridkitLocate(id: string): [number, number] | null }
-              ).gridkitLocate(id),
+            Promise.all(
+              ids.map((id) =>
+                (
+                  globalThis as unknown as {
+                    gridkitLocate(id: {
+                      table: string
+                      id: number
+                    }): Promise<[number, number] | null>
+                  }
+                ).gridkitLocate(id),
+              ),
             ),
           ids,
         )
@@ -173,11 +177,17 @@ suite('Network', () => {
       const redraw = async (change: () => unknown) => {
         const drawn = await frames(network)
         await change()
+        await until(
+          async () =>
+            JSON.stringify(await network.evaluate('gridkitStats().bindings')) ===
+            JSON.stringify(bench.session.bindings),
+          'the complete mapping projection is displayed',
+        )
         await until(async () => (await frames(network)) > drawn, 'drawn again')
         return colors()
       }
       const plain = await colors()
-      const given = { type: 'Bus', field: 'init.Vr' }
+      const given = { table: 'Bus', field: 'init.Vr' }
       const mapped = await redraw(() => bench.session.bind(given, ['vertexColor']))
       assert.ok(
         mapped.some((color, i) => apart(color, plain[i]!)),
@@ -216,8 +226,7 @@ suite('Network', () => {
     await globe().click()
     await until(
       async () =>
-        (await network.evaluate<{ camera: { projection?: string } } | null>('gridkitSelection()'))
-          ?.camera.projection === 'globe',
+        await network.evaluate<boolean>("gridkitStats().space.earth.projection === 'globe'"),
       'the network on the globe',
     )
     await bench.capture('network-globe')
@@ -225,7 +234,9 @@ suite('Network', () => {
 
   test("lays Natural Earth's borders beneath a case on Earth, once it is on screen", async () => {
     await until(
-      async () => (await network.evaluate<number>('gridkitStats().map?.vertices ?? 0')) > 0,
+      async () =>
+        (await network.evaluate<number>('gridkitStats().rows')) >
+        bench.source.buses.length + bench.source.devices.length,
       'the borders drawn',
       60_000,
     )
@@ -249,7 +260,7 @@ suite('Network', () => {
       try {
         bench.studio
           .get(bench.key)
-          ?.bind({ type: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
+          ?.bind({ table: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
       } catch {
         // The case closed first: nothing to map.
       }

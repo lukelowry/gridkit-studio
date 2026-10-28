@@ -1,9 +1,11 @@
 # Ship only the bundles, their assets, and the notices; vsce adds package.json.
 **
 !assets/{gridkit.png,gridkit.svg,monitor.svg,walkthrough.md}
-!dist/{extension,cases,results}.cjs
-!dist/webview/*.{js,css}
+!dist/extension.cjs
+!dist/{cases,results}.mjs
+!dist/webview/*.{js,css,wasm}
 !dist/webview/maps/*.geojson.gz
+!dist/licenses/*.md
 !LICENSE
 !README.md
 !THIRD_PARTY_NOTICES.md

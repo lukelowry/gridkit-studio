@@ -22,7 +22,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 2,
@@ -35,7 +35,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 3,
@@ -48,7 +48,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 4,
@@ -61,7 +61,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 5,
@@ -74,7 +74,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 6,
@@ -87,7 +87,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 7,
@@ -100,7 +100,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 8,
@@ -113,7 +113,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 9,
@@ -126,7 +126,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 10,
@@ -139,7 +139,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 11,
@@ -152,7 +152,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 12,
@@ -165,7 +165,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 13,
@@ -178,7 +178,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 14,
@@ -191,7 +191,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 15,
@@ -204,7 +204,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 16,
@@ -217,7 +217,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 17,
@@ -230,7 +230,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 18,
@@ -243,7 +243,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 19,
@@ -256,7 +256,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 20,
@@ -269,7 +269,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 21,
@@ -282,7 +282,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 22,
@@ -295,7 +295,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 23,
@@ -308,7 +308,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 24,
@@ -321,7 +321,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 25,
@@ -334,7 +334,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 26,
@@ -347,7 +347,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 27,
@@ -360,7 +360,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 28,
@@ -373,7 +373,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 29,
@@ -386,7 +386,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 30,
@@ -399,7 +399,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 31,
@@ -412,7 +412,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 32,
@@ -425,7 +425,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 33,
@@ -438,7 +438,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 34,
@@ -451,7 +451,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 35,
@@ -464,7 +464,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 36,
@@ -477,7 +477,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 37,
@@ -490,7 +490,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 38,
@@ -503,7 +503,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     },
     {
       "number": 39,
@@ -516,7 +516,7 @@
       "params": {
         "kv": 1.0
       },
-      "mon": []
+      "mon": ["Vm","Va"]
     }
   ],
   "signals": [

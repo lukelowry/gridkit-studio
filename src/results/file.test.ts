@@ -1,159 +1,110 @@
-import {
-  appendFile,
-  mkdtemp,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  truncate,
-  utimes,
-  writeFile,
-} from 'node:fs/promises'
+﻿import { appendFile, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { setTimeout } from 'node:timers/promises'
 
-import { blockBuffers, type Data, read, rowCount, selectBatches, staticFields } from '@latkit/model'
+import { Data } from 'latkit'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
-import type { SamplesInput } from '../shared/messages.js'
+import type { FrameRequest } from '../shared/data.js'
+import { loadNative } from '../workers/native.js'
 import { ResultCache } from './cache.js'
-import { chunkFrames, type Layout, readResults } from './decode.js'
+import { type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
 import type { Writer } from './follow.js'
-import { CHUNK_BYTES, PROGRESS_MS } from './limits.js'
-import { type Store, Stores } from './store.js'
+import { PROGRESS_MS } from './limits.js'
+import { Store, Stores } from './store.js'
 
+const signal = AbortSignal.any([])
 const HEADER = 'time,Bus_A_Vm\n'
-/** Room for every chunk a test reads. */
-const ROOM = 256 << 20
-const signal = new AbortController().signal
-let kase: Case
 let directory: string
 let stores: Stores
-/** A finished file of a few chunks, with a blank row partway and no newline after its last. */
-const large = { path: '', rows: 700_000 }
-
+let kase: Case
+const made: ResultsFile[] = []
 beforeAll(async () => {
+  await loadNative(createRequire(import.meta.url).resolve('latkit/wasm'))
+  directory = await mkdtemp(join(tmpdir(), 'native-results-file-'))
+  stores = new Stores(join(directory, 'cache'))
   kase = await Case.parse('{"buses":[{"class":"Bus","number":1,"name":"A"}]}', catalog)
-  directory = await mkdtemp(join(tmpdir(), 'gridkit-results-test-'))
-  stores = new Stores(join(directory, 'stores'))
-  large.path = join(directory, 'large.csv')
-  const rows = Array.from({ length: large.rows }, (_, i) => `${i / 1000},${1 + (i % 1000) / 1e4}`)
-  rows[1000] = '\n' + rows[1000]
-  await writeFile(large.path, HEADER + rows.join('\n'))
 })
-/** Every store a test made, each closed once the tests are done. */
-const made: Store[] = []
 afterAll(async () => {
-  await Promise.all(made.map((store) => store.close()))
+  for (const file of made) {
+    await file.retire()
+    await file.store.close()
+  }
   await rm(directory, { recursive: true, force: true })
 })
-
-/** What a reading of results is of: the case revision. */
-const READING = { revision: { uri: 'file:///case', version: 1 } }
-
-/** A reading of the CSV results at `path` for `of`, kept in a store of its own. */
-async function file(path: string, cache = new ResultCache(ROOM), of = kase): Promise<ResultsFile> {
-  const store = await stores.create(path)
-  made.push(store)
-  return new ResultsFile(of, cache, store, { ...READING, path })
+const reading = (path: string) => ({ path, revision: { uri: 'file:///case', version: 1 } })
+async function create(name: string, csv: string, of = kase) {
+  const path = join(directory, name + '.csv')
+  await writeFile(path, csv)
+  const file = new ResultsFile(of, new ResultCache(0), await stores.create(path), reading(path))
+  made.push(file)
+  return file
 }
-
-/** `results` read to the end of their file, as one opened alone is. */
-async function readThrough(results: ResultsFile, writer: Writer = 'done'): Promise<ResultsFile> {
-  await results.ingest(
+async function through(file: ResultsFile, writer: Writer = 'done') {
+  await file.ingest(
     signal,
     () => writer,
     () => {},
   )
-  return results
+  return file
 }
-
-/** Reads `results` while its file grows, until `end` says the writer is done. */
-function following(results: ResultsFile, progress = () => {}) {
+function following(file: ResultsFile, progress = () => {}) {
   let writer: Writer = 'writing'
-  const reading = results.ingest(signal, () => writer, progress)
+  const done = file.ingest(signal, () => writer, progress)
   return {
-    /** Waits until the reader holds `frames` frames. */
-    reach: (frames: number) =>
-      vi.waitFor(() => expect(results.progress.frames).toBe(frames), { timeout: 5000 }),
+    reach: (frames: number) => vi.waitFor(() => expect(file.progress.frames).toBe(frames)),
     end: () => {
       writer = 'done'
-      return reading
+      return done
     },
   }
 }
-
-/** What a view lacking `held` of the bus's Vm over `window` is sent. */
-function asked(
-  results: ResultsFile,
-  window: [number, number],
-  held: Record<number, number> = {},
-  bytes = Infinity,
-) {
-  const input: SamplesInput = {
-    results: 'results',
-    field: { from: 'Bus', select: ['Vm'] },
-    window,
-    held,
-    bytes,
+function request(file: ResultsFile, more: Partial<FrameRequest> = {}): FrameRequest {
+  return {
+    results: 'test',
+    table: 'Bus',
+    field: 'Vm',
+    range: file.progress.domain,
+    purpose: 'playhead',
+    pixels: 1000,
+    bytes: 8 << 20,
+    ...more,
   }
-  return results.samples(input, signal)
 }
-
-/** `value` with each typed array as its bytes, which compare exactly and at once: equality walks a
- *  typed array one index at a time. */
-function exact(value: unknown): unknown {
-  if (ArrayBuffer.isView(value))
-    return `${value.constructor.name} ${Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('base64')}`
-  if (Array.isArray(value)) return value.map(exact)
-  if (value && Object.getPrototypeOf(value) === Object.prototype)
-    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, exact(inner)]))
-  return value
-}
-
-/** Each batch's frames, as `[first frame, count]`, and the values of the first row. */
-const framesOf = (batches: readonly Data.SampleBatch[]) =>
-  batches.map((batch) => [batch.firstFrame, batch.coordinates.length])
-function valuesOf(batches: readonly Data.SampleBatch[]) {
-  const values: number[] = []
-  for (const batch of batches) {
-    const column = batch.columns.Vm!
-    for (let t = 0; t < batch.coordinates.length; t++)
-      values.push(column.values[column.offset + t * column.frameStride]!)
-    expect(rowCount(batch.rows)).toBe(1)
+async function capture(file: ResultsFile, input = request(file)) {
+  let next: string | undefined
+  let data: Data | undefined
+  let bytes = 0
+  try {
+    do {
+      const page = await file.frames({ ...input, next }, signal)
+      data ??= new Data(page.source)
+      data.apply(page.bytes)
+      expect(page.bytes.byteLength).toBeLessThanOrEqual(4 << 20)
+      bytes += page.bytes.byteLength
+      next = page.next
+    } while (next)
+    return { data: data!, bytes }
+  } catch (error) {
+    data?.destroy()
+    throw error
   }
-  return values
 }
+const exact = (file: ResultsFile, at: number, id = 1, field = 'Vm') =>
+  file.sample({ results: 'test', table: 'Bus', field, id, at }, signal)
 
-describe('native results and ownership', () => {
-  it('owned query buffers can transfer without detaching retained case data', async () => {
-    for await (const batch of selectBatches(kase.data, staticFields(kase.schema), {
-      buffers: 'owned',
-      maxBlockBytes: 4096,
-    })) {
-      const moved = structuredClone(batch, { transfer: blockBuffers(batch) as ArrayBuffer[] })
-      expect(moved.kind).toBe('rows')
-    }
-    expect(kase.cell(kase.table('Bus'), 'name', 0)).toBe('A')
-    for await (const block of read(kase.data, {
-      kind: 'rows',
-      from: 'Bus',
-      select: ['number'],
-      limit: 1,
-    }))
-      expect(block.columns.number!.kind).toBe('numeric')
-  })
-
-  it('reads every segment of a file with the layout its header gave the first', async () => {
+describe('indexed scientific results', () => {
+  it('learns the CSV layout once across segments', async () => {
     const layout: Layout = {}
-    const segment = async (text: string) => {
+    const segment = async (csv: string) => {
       const values: number[] = []
       await readResults(
-        Readable.from([Buffer.from(text)]),
+        Readable.from([Buffer.from(csv)]),
         kase,
         {
           signal,
@@ -165,369 +116,190 @@ describe('native results and ownership', () => {
       )
       return values
     }
-    expect(await segment('time,Bus_A_Vm\n0,1.5\n')).toEqual([1.5])
+    expect(await segment(HEADER + '0,1.5\n')).toEqual([1.5])
     const learned = layout.read
-    // A later segment is rows alone: the header is not read, or matched name by name, again.
     expect(await segment('0.01,1.25\n')).toEqual([1.25])
     expect(layout.read).toBe(learned)
   })
-
-  it('learns what a file holds from its header, whatever order GridKit wrote it in', async () => {
-    const two = await Case.parse(
-      '{"buses":[{"class":"Bus","number":1,"name":"A"},{"class":"Bus","number":2,"name":"B"}]}',
-      catalog,
-    )
-    const path = join(directory, 'header.csv')
-    await writeFile(path, 'time,Bus_B_Vm,Bus_A_Va,"Other_x_y",bus_a_vm\n0,1.2,0.5,9,1.1\n')
-    const results = await readThrough(await file(path, new ResultCache(ROOM), two))
-    // Each output in catalog and row order, matched by name whatever its case, and a column the
-    // case has no output for left unread. Each names its rows as the case numbers them.
-    expect(results.layout.outputs).toMatchObject([
-      { from: 'Bus', select: ['Vm'], rows: { kind: 'range', offset: 0, count: 2 } },
-      { from: 'Bus', select: ['Va'], rows: { kind: 'range', offset: 0, count: 1 } },
-    ])
-    expect(results.progress.domains).toEqual({ Bus: { Vm: [1.1, 1.2], Va: [0.5, 0.5] } })
-    const unknown = join(directory, 'unknown.csv')
-    await writeFile(unknown, 'time,Other_x_y\n0,1\n')
-    await expect(readThrough(await file(unknown, new ResultCache(ROOM), two))).rejects.toThrow(
-      'No result columns match this case',
-    )
-  })
-
-  it('sends the rows a view names, of those the file holds, reading only those of its store', async () => {
+  it('matches unordered sparse columns to stable numeric IDs', async () => {
     const three = await Case.parse(
       JSON.stringify({
         buses: ['A', 'B', 'C'].map((name, i) => ({ class: 'Bus', number: i + 1, name })),
       }),
       catalog,
     )
-    const path = join(directory, 'rows.csv')
-    await writeFile(path, 'time,Bus_A_Vm,Bus_C_Vm\n0,1.1,1.3\n0.01,1.2,1.4\n')
-    // With nothing kept, every read is of the store.
-    const results = await readThrough(await file(path, new ResultCache(0), three))
-    const reads = vi.spyOn(results.store, 'read')
-    const named = async (ids?: string[]) =>
-      results.samples(
-        {
-          results: 'results',
-          field: { from: 'Bus', select: ['Vm'], ...(ids && { rows: { kind: 'ids', ids } }) },
-          window: [0, 0.01],
-          held: {},
-          bytes: Infinity,
-        },
-        signal,
-      )
-    const [all] = await named()
-    expect(all!.rows).toEqual({ kind: 'indices', values: Uint32Array.of(0, 2) })
-    expect(Array.from(all!.columns.Vm!.values)).toEqual([1.1, 1.3, 1.2, 1.4])
-    // Bus B is not in the file: of the rows named, only Bus C comes, and only its row is read.
-    const [some] = await named(['Bus/2', 'Bus/3'])
-    expect(some!.rows).toEqual({ kind: 'range', offset: 2, count: 1 })
-    expect(Array.from(some!.columns.Vm!.values)).toEqual([1.3, 1.4])
-    expect(reads).toHaveBeenLastCalledWith(0, 0, 2, Uint32Array.of(1))
-    expect(await named(['Bus/2'])).toEqual([])
-  })
-
-  it('cuts a file into chunks of a size its header sets, which a view asks for whole', async () => {
-    const results = await readThrough(await file(large.path))
-    const { chunk } = results.layout
-    const { frames } = results.progress
-    expect(frames).toBe(large.rows)
-    expect(chunk).toBeGreaterThan(1)
-    expect(frames).toBeGreaterThan(2 * chunk)
-    expect(results.progress.domains).toEqual({ Bus: { Vm: [1, 1.0999] } })
-    // A moment inside the first chunk brings that chunk, all of it.
-    expect(framesOf(await asked(results, [0.5, 0.5]))).toEqual([[0, chunk]])
-    // A window across chunks brings each, less what the view holds of them.
-    const across = (2 * chunk - 10) / 1000
-    expect(framesOf(await asked(results, [0, across], { 0: chunk, 1: chunk - 5 }))).toEqual([
-      [2 * chunk - 5, 5],
+    const file = await through(
+      await create(
+        'sparse',
+        'time,Bus_C_Vm,Bus_A_Va,Other_x_y,bus_a_vm\n0,1.3,0.5,9,1.1\n1,1.4,0.6,9,1.2\n',
+        three,
+      ),
+    )
+    expect(file.layout.outputs).toEqual([
+      { table: 'Bus', field: 'Vm', ids: [1, 3] },
+      { table: 'Bus', field: 'Va', ids: [1] },
     ])
-    // The last chunk ends with the file.
-    const last = await asked(results, [frames / 1000, frames / 1000])
-    expect(framesOf(last)).toEqual([[2 * chunk, frames - 2 * chunk]])
-    expect(valuesOf(last).at(-1)).toBe(1 + ((frames - 1) % 1000) / 1e4)
+    const read = vi.spyOn(file.store, 'readRaw')
+    const { data } = await capture(file, request(file, { ids: [3] }))
+    using held = data
+    expect(held.name).toBeTruthy()
+    expect(held.name).toBe(data.name)
+    expect(data.query({ of: 'Bus' }).ids).toEqual([3])
+    expect(data.get('Bus', 3, 'Vm', { at: 0 })).toBe(Math.fround(1.3))
+    expect(read.mock.calls.every(([, , rows]) => JSON.stringify(rows) === '[1]')).toBe(true)
+    expect((await exact(file, 0, 3)).value).toBe(1.3)
+    expect((await exact(file, 0, 2)).value).toBeNull()
+    await expect(capture(file, request(file, { ids: [2] }))).rejects.toThrow('not recorded')
+    await expect(through(await create('unmatched', 'time,Other_x_y\n0,1\n'))).rejects.toThrow(
+      'No result columns match',
+    )
   })
-
-  it('reads the whole rows of a file whose writer stopped partway through its last', async () => {
-    const path = join(directory, 'stopped.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,')
-    const results = await readThrough(await file(path))
-    expect(results.progress.frames).toBe(2)
-    expect(valuesOf(await asked(results, [0, 0.01]))).toEqual([1, 1.5])
+  it('reads bracketing frames by timestamps instead of sending a whole disk block', async () => {
+    const count = 600_000
+    const file = await through(
+      await create(
+        'long',
+        HEADER + Array.from({ length: count }, (_, i) => `${i / 1000},${i % 20}\n`).join(''),
+      ),
+    )
+    expect(file.progress.frames).toBe(count)
+    expect(file.store.raw.length).toBeGreaterThan(1)
+    const read = vi.spyOn(file.store, 'readRaw')
+    const { data, bytes } = await capture(
+      file,
+      request(file, { range: [500.0005, 500.0005], bytes: 4096 }),
+    )
+    using held = data
+    expect(held.name).toBeTruthy()
+    expect(data.describe().span).toEqual([500, 500.001])
+    expect(bytes).toBeLessThan(4096)
+    expect(read.mock.calls.every(([, , , , frames]) => frames! <= 2)).toBe(true)
+    expect(file.cache.bytes).toBe(0)
+    const plot = await capture(
+      file,
+      request(file, { purpose: 'plot', pixels: 600, bytes: 32 << 10 }),
+    )
+    using overview = plot.data
+    expect(plot.bytes).toBeLessThan(32 << 10)
+    expect(
+      overview.envelope({ table: 'Bus', field: 'Vm', range: [...file.progress.domain], spans: 1 })
+        .greatest[0],
+    ).toBe(19)
   })
-
-  it('leaves out a value its writer was stopped partway through, which would read as a number', async () => {
-    const path = join(directory, 'cut.csv')
-    // The writer stopped inside `1.25e-01`, leaving what reads as 1.25.
-    await writeFile(path, HEADER + '0,1\n0.01,1.25')
-    const stopped = await readThrough(await file(path), 'stopped')
+  it('reads only complete rows after a stopped writer, and accepts an unterminated final row after success', async () => {
+    const stopped = await through(await create('stopped', HEADER + '0,1\n1,1.25'), 'stopped')
     expect(stopped.progress.frames).toBe(1)
-    expect(stopped.progress.domains).toEqual({ Bus: { Vm: [1, 1] } })
-    // A writer that finished wrote its last row whole, newline or not.
-    expect((await readThrough(await file(path), 'done')).progress.frames).toBe(2)
+    const finished = await through(await create('finished', HEADER + '0,1\n1,1.25'))
+    expect(finished.progress.frames).toBe(2)
+    expect((await exact(finished, 1)).value).toBe(1.25)
+    const partial = await through(await create('partial', HEADER + '0,1\n1,'))
+    expect(partial.progress.frames).toBe(1)
   })
-
-  it('counts the bytes each chunk keeps of its own against the cache', async () => {
-    const cache = new ResultCache(ROOM)
-    const results = await readThrough(await file(large.path, cache))
-    // One value per frame, of every chunk once the file is read through: their times are the
-    // file's, which every chunk shares.
-    const { chunk } = results.layout
-    const { frames } = results.progress
-    expect(cache.bytes).toBe(frames * 8)
-    // A lower limit lets go of what is past it at once, the least recently used first: the last
-    // chunk, read last, stays.
-    cache.limit = chunk * 8
-    expect(cache.bytes).toBe((frames % chunk) * 8)
-    cache.limit = 0
-    expect(cache.bytes).toBe(0)
+  it('keeps authoritative values and CSV after the original is replaced or deleted', async () => {
+    const csv = HEADER + `0,${Math.PI}\n1,1.2345678901234567\n`
+    const file = await through(await create('original', csv))
+    await writeFile(file.layout.path, HEADER + '0,9\n')
+    expect((await exact(file, 0)).value).toBe(Math.PI)
+    await rm(file.layout.path)
+    expect((await exact(file, 1)).value).toBe(1.2345678901234567)
+    const out = join(directory, 'exact-export.csv')
+    await file.exportCsv(out)
+    expect(await readFile(out, 'utf8')).toBe(csv)
+    await expect(file.exportCsv(file.layout.path)).rejects.toThrow('different file')
   })
-
-  it('reads what it read from its store, with its file gone or written again', async () => {
-    const path = join(directory, 'kept.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,1.25\n')
-    // Nothing kept in the cache, so every read is of the store.
-    const results = await readThrough(await file(path, new ResultCache(0)))
-    // Another run writes the same file, as long, with other values.
-    await writeFile(path, HEADER + '0,9\n0.01,9\n0.02,9\n')
-    expect(valuesOf(await asked(results, [0, 0.02]))).toEqual([1, 1.5, 1.25])
-    await rm(path)
-    expect(valuesOf(await asked(results, [0, 0.02]))).toEqual([1, 1.5, 1.25])
+  it('restores only committed blocks and rejects a truncated committed store', async () => {
+    const file = await through(await create('restore', HEADER + '0,1\n1,2\n'))
+    const { folder, key, manifest } = file.store
+    await file.store.close()
+    const store = new Store(folder, key, manifest)
+    const reopened = await ResultsFile.stored(
+      kase,
+      new ResultCache(0),
+      store,
+      reading(file.layout.path),
+    )
+    made.push(reopened)
+    expect(reopened.progress).toEqual(file.progress)
+    expect((await exact(reopened, 1)).value).toBe(2)
+    await store.close()
+    await truncate(join(folder, 'raw.bin'), 8)
+    const broken = new Store(folder, key, manifest)
+    try {
+      await expect(
+        ResultsFile.stored(kase, new ResultCache(0), broken, reading(file.layout.path)),
+      ).rejects.toThrow('truncated')
+    } finally {
+      await broken.close()
+    }
   })
-
-  it('reads a store read through alone, as a window opened again does', async () => {
-    const path = join(directory, 'stored.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,1.25\n')
-    const first = await readThrough(await file(path))
-    const manifest = first.store.manifest
-    expect(manifest).toMatchObject({ path, frames: 3, header: ['time', 'Bus_A_Vm'] })
-    const again = await ResultsFile.stored(kase, new ResultCache(0), first.store, {
-      ...READING,
-      path,
-    })
-    expect(again.layout).toEqual(first.layout)
-    expect(again.progress).toEqual(first.progress)
-    expect(valuesOf(await asked(again, [0, 0.02]))).toEqual([1, 1.5, 1.25])
-    expect(again.step(0, 1)).toBe(0.01)
-    // A file written to after it was read through is read again whole when opened again.
-    const growing = join(directory, 'written.csv')
-    await writeFile(growing, HEADER + '0,1\n')
-    const results = await file(growing)
-    const reader = following(results)
-    await reader.reach(1)
-    await appendFile(growing, '0.01,1.5\n')
-    await reader.reach(2)
-    await reader.end()
-    expect(results.store.manifest).toMatchObject({ frames: 2 })
+  it('stages fresh native windows as a live tail grows, without duplicate frame ingestion', async () => {
+    const file = await create('live', HEADER + '0,1\n1,1.1\n2,1.2\n')
+    const reader = following(file)
+    try {
+      await reader.reach(3)
+      const first = await capture(file)
+      using old = first.data
+      await appendFile(file.layout.path, '3,1.3\n4,1.')
+      await reader.reach(4)
+      await appendFile(file.layout.path, '4\n')
+      await reader.reach(5)
+      const next = await capture(file)
+      using current = next.data
+      expect(old.describe().span).toEqual([0, 2])
+      expect(current.describe().span).toEqual([0, 4])
+      expect(current.get('Bus', 1, 'Vm', { at: 4 })).toBe(Math.fround(1.4))
+    } finally {
+      await reader.end()
+    }
   })
-
-  it('exports what it read, byte for byte, and never a file written again since', async () => {
-    const path = join(directory, 'exported.csv')
-    // A writer stopped partway through its last row: the export holds the whole rows read.
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,')
-    const results = await readThrough(await file(path), 'stopped')
-    const out = join(directory, 'exports')
-    await results.exportCsv(join(out, 'copy.csv'))
-    expect(await readFile(join(out, 'copy.csv'), 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
-    // Read again from its store alone, as a window opened again reads it, it exports the same.
-    const again = await ResultsFile.stored(kase, new ResultCache(0), results.store, {
-      ...READING,
-      path,
-    })
-    await again.exportCsv(join(out, 'again.csv'))
-    expect(await readFile(join(out, 'again.csv'), 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
-    // Written again as long, its time set back: what it holds now was never read.
-    await setTimeout(20)
-    const { mtime } = await stat(path)
-    await writeFile(path, HEADER + '0,9\n0.01,9.5\n0.02,')
-    await utimes(path, mtime, mtime)
-    await expect(results.exportCsv(join(out, 'refused.csv'))).rejects.toThrow('written again')
-    // A copy refused leaves nothing behind.
-    expect((await readdir(out)).sort()).toEqual(['again.csv', 'copy.csv'])
+  it('steps across duplicate and irregular timestamps using bounded disk reads', async () => {
+    const times = [0, 0.01, 0.01, 12, 12, 100000]
+    const file = await through(
+      await create('irregular', HEADER + times.map((at, i) => `${at},${i}\n`).join('')),
+    )
+    await rm(file.layout.path)
+    for (const at of [-1, ...times, 5, 20, 100001]) {
+      expect(await file.step(at, 1)).toBe(times.find((time) => time > at) ?? times.at(-1))
+      expect(await file.step(at, -1)).toBe(times.findLast((time) => time < at) ?? 0)
+    }
+    expect(await exact(file, 12)).toEqual({ at: 12, value: 4 })
   })
-
-  it('exports what it read of a file it stopped reading partway, once nothing writes it', async () => {
-    const path = join(directory, 'partway.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n')
-    const results = await file(path)
-    const reader = following(results)
-    await reader.reach(2)
-    await appendFile(path, '0.02,x\n')
-    await expect(reader.end()).rejects.toThrow(/not a number/)
-    // Settled once its writer is done, it is the file it read, and what it read of it exports.
-    await results.settle()
-    const out = join(directory, 'exports', 'partway.csv')
-    await results.exportCsv(out)
-    expect(await readFile(out, 'utf8')).toBe(HEADER + '0,1\n0.01,1.5\n')
-    // A file put in its place since is not.
-    await writeFile(path, HEADER + '0,9\n')
-    await expect(results.exportCsv(out)).rejects.toThrow('written again')
-  })
-
-  it('reads nothing from a store whose frames are cut short, as a crash leaves one', async () => {
-    const path = join(directory, 'crashed.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.5\n0.02,1.25\n')
-    const first = await readThrough(await file(path))
-    await truncate(join(first.store.folder, 'frames.bin'), 8)
+  it('checks cancellation before reads and rejects continuation tokens for another request', async () => {
+    const file = await through(await create('cancel', HEADER + '0,1\n1,2\n'))
+    const controller = new AbortController()
+    controller.abort()
+    const read = vi.spyOn(file.store, 'readRaw')
+    await expect(file.frames(request(file), controller.signal)).rejects.toThrow()
+    expect(read).not.toHaveBeenCalled()
     await expect(
-      ResultsFile.stored(kase, new ResultCache(0), first.store, { ...READING, path }),
-    ).rejects.toThrow('cut short')
+      file.frames(
+        { ...request(file), next: JSON.stringify({ key: 'other', frames: 2, part: 0, offset: 0 }) },
+        signal,
+      ),
+    ).rejects.toThrow('window changed')
+    await expect(file.frames(request(file, { bytes: 1 }), signal)).rejects.toThrow('Invalid')
   })
-
-  it('sends a growing chunk only the frames the view lacks of it', async () => {
-    const path = join(directory, 'growing.csv')
-    await writeFile(path, HEADER + '0,1\n0.01,1.1\n0.02,1.2\n')
-    const results = await file(path)
-    const reader = following(results)
-    await reader.reach(3)
-    expect(valuesOf(await asked(results, [0, 0.02]))).toEqual([1, 1.1, 1.2])
-    // A row the writer is partway through waits for its end.
-    await appendFile(path, '0.03,1.3\n0.04,1.')
-    await reader.reach(4)
-    await appendFile(path, '4\n')
-    await reader.end()
-    expect(results.progress.frames).toBe(5)
-    const more = await asked(results, [0, 0.04], { 0: 3 })
-    expect(framesOf(more)).toEqual([[3, 2]])
-    expect(valuesOf(more)).toEqual([1.3, 1.4])
-    const data = await results.data([0.04, 0.04], signal)
-    const values = []
-    for await (const block of read(data, {
-      kind: 'samples',
-      from: 'Bus',
-      select: ['Vm'],
-      window: { kind: 'range', between: [0, 0.04] },
-    }))
-      values.push(...block.columns.Vm!.values)
-    expect(values).toEqual([1, 1.1, 1.2, 1.3, 1.4])
-  })
-
-  it('tells of a run that writes on and on no oftener than the views hear of it', async () => {
-    const path = join(directory, 'busy.csv')
-    await writeFile(path, HEADER)
-    const results = await file(path)
+  it('throttles live progress and exports the last complete rows after a decoding error', async () => {
+    const file = await create('progress', HEADER)
     let told = 0
-    const reader = following(results, () => {
+    let count = 0
+    const reader = following(file, () => {
       told++
     })
     const started = performance.now()
-    let frames = 0
-    while (performance.now() - started < 500) {
-      await appendFile(path, `${frames / 1000},1\n`)
-      frames++
+    while (performance.now() - started < 350) {
+      await appendFile(file.layout.path, `${count++},1\n`)
       await setTimeout(5)
     }
-    await reader.reach(frames)
+    await reader.reach(count)
     const elapsed = performance.now() - started
-    await reader.end()
-    // The first rows at once, then each time the views would hear, however often GridKit writes.
-    expect(told).toBeGreaterThan(1)
+    await appendFile(file.layout.path, `${count},bad\n`)
+    await expect(reader.end()).rejects.toThrow('not a number')
     expect(told).toBeLessThanOrEqual(Math.ceil(elapsed / PROGRESS_MS) + 1)
-  })
-
-  it('steps between frames from the times it read, with the file gone', async () => {
-    const path = join(directory, 'steps.csv')
-    await writeFile(path, HEADER)
-    const results = await file(path)
-    const reader = following(results)
-    // A fault's boundaries repeat their times, here across reads.
-    let frames = 0
-    for (const rows of ['0,1\n0.01,1\n0.02,1\n', '0.02,0.5\n0.03,0.5\n', '0.03,1\n0.04,1\n']) {
-      await appendFile(path, rows)
-      await reader.reach((frames += rows.split('\n').length - 1))
-    }
-    await reader.end()
-    await rm(path)
-    const times = [0, 0.01, 0.02, 0.02, 0.03, 0.03, 0.04]
-    for (const at of [-1, ...times, 0.005, 0.025, 0.035, 1]) {
-      expect(results.step(at, 1)).toBe(times.find((time) => time > at) ?? 0.04)
-      expect(results.step(at, -1)).toBe(times.findLast((time) => time < at) ?? 0)
-    }
-  })
-
-  it('reads a chunk its cache let go of again from its store, exactly', async () => {
-    const cache = new ResultCache(1 << 20)
-    const results = await readThrough(await file(large.path, cache))
-    // Too large for the cache, the whole chunks are read again from the store when a view asks.
-    expect(cache.bytes).toBeLessThanOrEqual(1 << 20)
-    const { chunk } = results.layout
-    const values = valuesOf(await asked(results, [chunk / 1000, chunk / 1000]))
-    expect(values).toHaveLength(chunk)
-    expect(values.slice(0, 3)).toEqual([0, 1, 2].map((i) => 1 + ((chunk + i) % 1000) / 1e4))
-    // Reading an early window again never shrinks the whole file's ranges.
-    expect(results.progress.domains).toEqual({ Bus: { Vm: [1, 1.0999] } })
-  })
-
-  it('reads a chunk once for views that ask for it at once', async () => {
-    const results = await readThrough(await file(large.path, new ResultCache(0)))
-    const reads = vi.spyOn(results.store, 'read')
-    const { chunk } = results.layout
-    const [a, b] = await Promise.all([
-      asked(results, [chunk / 1000, chunk / 1000]),
-      results.data([chunk / 1000, chunk / 1000], signal),
-    ])
-    expect(reads).toHaveBeenCalledOnce()
-    expect(framesOf(a)).toEqual([[chunk, chunk]])
-    expect(b).toBeDefined()
-  })
-
-  it('reads a field again alone exactly as it read it beside the others', async () => {
-    const two = await Case.parse(
-      '{"buses":[{"class":"Bus","number":1,"name":"A"},{"class":"Bus","number":2,"name":"B"}]}',
-      catalog,
+    const out = join(directory, 'partial-export.csv')
+    await file.exportCsv(out)
+    expect(await readFile(out, 'utf8')).toBe(
+      HEADER + Array.from({ length: count }, (_, i) => `${i},1\n`).join(''),
     )
-    const path = join(directory, 'wide.csv')
-    // A chunk and a half of frames, each the time and four values.
-    const frames = Math.ceil((1.5 * CHUNK_BYTES) / (8 * 5))
-    const rows = Array.from(
-      { length: frames },
-      (_, i) => `${i / 1000},${1 + i / 1e6},${i / 1e5},${0.9 + i / 1e6},${-i / 1e5}`,
-    )
-    await writeFile(path, 'time,Bus_A_Vm,Bus_A_Va,Bus_B_Vm,Bus_B_Va\n' + rows.join('\n'))
-    const both = async (cache: ResultCache) => {
-      const results = await readThrough(await file(path, cache, two))
-      expect(Math.ceil(frames / results.layout.chunk)).toBeGreaterThan(1)
-      return Promise.all(
-        ['Vm', 'Va'].map((field) =>
-          results.samples(
-            {
-              results: 'results',
-              field: { from: 'Bus', select: [field] },
-              window: [0, frames / 1000],
-              held: {},
-              bytes: Infinity,
-            },
-            signal,
-          ),
-        ),
-      )
-    }
-    // Every chunk kept as the file was read, against each field read again alone from the store.
-    const [kept, again] = await Promise.all([both(new ResultCache(ROOM)), both(new ResultCache(0))])
-    expect(exact(again)).toEqual(exact(kept))
-    expect(kept[1]![0]!.columns.Va).toBeDefined()
-  })
-
-  it('sends about as many bytes as asked, a chunk at least, nearest first', async () => {
-    const results = await readThrough(await file(large.path))
-    const { chunk } = results.layout
-    const { frames } = results.progress
-    const end = (frames - 1) / 1000
-    const one = await asked(results, [0, end], {}, 1)
-    expect(framesOf(one)).toEqual([[0, chunk]])
-    const near = await results.samples(
-      {
-        results: 'results',
-        field: { from: 'Bus', select: ['Vm'] },
-        window: [0, end],
-        held: {},
-        near: { at: end, travel: 0 },
-        bytes: 1,
-      },
-      signal,
-    )
-    expect(near[0]!.firstFrame).toBe(2 * chunk)
-    expect(chunk).toBe(chunkFrames(results.fields))
   })
 })

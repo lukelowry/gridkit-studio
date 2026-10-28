@@ -1,22 +1,20 @@
 /** Decodes GridKit's CSV results a batch of frames at a time, never a whole run at once. */
-
 import { addAbortSignal, type Readable } from 'node:stream'
 import { setImmediate } from 'node:timers/promises'
 
-import { type Data, failure, type Index, type Query } from '@latkit/model'
+import type { Id } from 'latkit'
 
 import { type Case, outputName, type Table } from '../gridkit/index.js'
+import type { FrameBlock, RecordedField } from '../shared/data.js'
+import { problem } from '../shared/errors.js'
 import { csvMessages } from './csv.js'
 import { CHUNK_BYTES } from './limits.js'
 
 /** One output a results file holds: a field of some rows of a table. */
 export interface Field {
-  readonly name: string
-  /** The physical row numbering `rows` belong to. */
-  readonly index: Index
-  /** Ascending and distinct. */
-  readonly rows: Uint32Array
-  readonly axis: Index.Rows
+  readonly table: string
+  readonly field: string
+  readonly ids: readonly Id[]
 }
 
 /** Decoded frames, in arrays of their own that nothing writes again. */
@@ -59,38 +57,22 @@ export interface Layout {
 
 /** Frames per chunk of a file holding `fields`: as many as CHUNK_BYTES of decoded frames hold. */
 export function chunkFrames(fields: readonly Field[]): number {
-  const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.rows.length, 0))
+  const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.ids.length, 0))
   return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
 }
 
-/** One sample batch per output decoded, all over the same frames: of `only`, by their place among
- *  `fields`, else of every one. */
-export function samplesOf(
+/** Owned float64 blocks in the same field order as the decode plan. */
+export function framesOf(
   fields: readonly Field[],
   frames: Decoded,
   only?: readonly number[],
-): Data.SampleBatch[] {
-  return (only ?? fields.map((_, f) => f)).map((f, i) => {
-    const field = fields[f]!
-    const values = frames.values[i]!
-    return {
-      kind: 'samples',
-      index: field.index,
-      rows: field.axis,
-      firstFrame: frames.firstFrame,
-      coordinates: frames.coordinates,
-      columns: {
-        [field.name]: {
-          kind: 'numeric',
-          values,
-          offset: 0,
-          length: values.length,
-          frameStride: field.rows.length,
-          rowStride: 1,
-        },
-      },
-    }
-  })
+): FrameBlock[] {
+  return (only ?? fields.map((_, index) => index)).map((field, index) => ({
+    first: frames.firstFrame,
+    at: frames.coordinates,
+    values: frames.values[index]!,
+    rows: fields[field]!.ids.length,
+  }))
 }
 
 /** Reads the results in `source`, publishing each batch of frames as it decodes. The header says
@@ -122,7 +104,7 @@ export async function readResults(
     for await (const message of csvMessages(chunks, layout.header, parse, first)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
-        if (plan) throw failure('io', 'The results repeat their header.')
+        if (plan) throw problem('io', 'The results repeat their header.')
         layout.header ??= message.names
         layout.read ??= layoutOf(message.names, kase)
         plan = layout.read.plan
@@ -131,10 +113,10 @@ export async function readResults(
         chunk = chunkFrames(outputs)
         continue
       }
-      if (!plan) throw failure('io', 'The results hold rows before their header.')
+      if (!plan) throw problem('io', 'The results hold rows before their header.')
       const { length, values: cells, width } = message
       if (!Number.isSafeInteger(received + length))
-        throw failure('resource-limit', 'The results contain too many frames.')
+        throw problem('limit', 'The results contain too many frames.')
       for (let from = 0, count = 0; from < length; from += count) {
         reading.signal.throwIfAborted()
         // Up to the next chunk's first frame.
@@ -142,14 +124,14 @@ export async function readResults(
         for (let t = from; t < from + count; t++) {
           const value = cells[t * width]!
           if (!Number.isFinite(value) || value < lastTime)
-            throw failure('io', 'Result times must be finite and nondecreasing.')
+            throw problem('io', 'Result times must be finite and nondecreasing.')
           lastTime = value
         }
         // With no outputs to decode, only the times are checked.
         if (!decoding.length) continue
         // The copy kernel writes every cell, so fresh arrays need no clearing.
         const coordinates = new Float64Array(count)
-        const values = decoding.map((f) => new Float64Array(count * outputs[f]!.rows.length))
+        const values = decoding.map((f) => new Float64Array(count * outputs[f]!.ids.length))
         for (let t = 0; t < count; t++) coordinates[t] = cells[(from + t) * width]!
         copyRows(cells, width, plan, decoding, values, from, count)
         const published = reading.publish({
@@ -167,7 +149,7 @@ export async function readResults(
         yielded = performance.now()
       }
     }
-    if (!plan) throw failure('io', 'The results contain no header.')
+    if (!plan) throw problem('io', 'The results contain no header.')
   } catch (error) {
     reading.signal.throwIfAborted()
     throw error
@@ -232,7 +214,7 @@ export const layoutFrom = (names: readonly string[], kase: Case): Layout => ({
  *  their rows reads. A name that repeats matches its rows in turn. A column the case has no output
  *  for is left unread. */
 function layoutOf(header: readonly string[], kase: Case): { fields: readonly Field[]; plan: Plan } {
-  if (header.length === 0) throw failure('io', 'The results do not start with a time column.')
+  if (header.length === 0) throw problem('io', 'The results do not start with a time column.')
   const named = new Map<string, number[]>()
   header.forEach((name, column) => {
     if (column === 0) return
@@ -261,13 +243,16 @@ function layoutOf(header: readonly string[], kase: Case): { fields: readonly Fie
         placed.push(column)
       }
       if (!rows.length) continue
-      const held = Uint32Array.from(rows)
-      fields.push({ name, index: table.index, rows: held, axis: axisOf(held) })
+      fields.push({
+        field: name,
+        table: table.shape.type,
+        ids: rows.map((row) => kase.native(table, row)),
+      })
       columns.push(Int32Array.from(placed))
     }
   }
   if (!fields.length)
-    throw failure('io', 'No result columns match this case. Open the case that wrote them.')
+    throw problem('io', 'No result columns match this case. Open the case that wrote them.')
   const strides = Int32Array.from(columns, (placed) => {
     const first = placed[0]!
     const stride = placed.length > 1 ? placed[1]! - first : 0
@@ -278,20 +263,8 @@ function layoutOf(header: readonly string[], kase: Case): { fields: readonly Fie
   return { fields, plan: { columns, strides } }
 }
 
-/** `rows`, ascending, as the briefest axis: a range when they run unbroken, else their indices. */
-export const axisOf = (rows: Uint32Array): Index.Rows =>
-  rows.every((row, i) => row === rows[0]! + i)
-    ? { kind: 'range', offset: rows[0] ?? 0, count: rows.length }
-    : { kind: 'indices', values: rows }
-
-/** What `fields` hold, as a selection of the rows of the case they were read against: a range when
- *  the rows run unbroken, as a whole type's do, else their indices. */
-export function selectionsOf(fields: readonly Field[]): Query.Selection[] {
-  return fields.map(({ index, name, axis }) => ({
-    from: index.type,
-    select: [name],
-    rows: { ...axis, index },
-  }))
+export function recordedFields(fields: readonly Field[]): RecordedField[] {
+  return fields.map((field) => ({ ...field, ids: [...field.ids] }))
 }
 
 /** A column name as names match: NFC-normalized, in lower case. */

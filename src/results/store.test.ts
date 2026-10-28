@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Stamp } from './stamp.js'
-import { type Manifest, Stores } from './store.js'
+import { type Checkpoint, FORMAT, Stores } from './store.js'
 
 let root: string
 beforeEach(async () => {
@@ -23,7 +23,7 @@ const stamp = (frames: number, modified = 1): Stamp => ({
 })
 
 /** What a store of `frames` frames of the file at `path`, read through, says it holds. */
-const manifest = (path: string, frames: number, modified = 1): Omit<Manifest, 'format'> => ({
+const manifest = (path: string, frames: number, modified = 1): Checkpoint => ({
   path,
   stamp: stamp(frames, modified),
   read: frames * 10,
@@ -33,6 +33,8 @@ const manifest = (path: string, frames: number, modified = 1): Omit<Manifest, 'f
   chunk: 2,
   domain: [0, frames - 1],
   domains: {},
+  complete: true,
+  reducers: [],
 })
 
 /** A store of the file at `path` read through: `frames` frames of two rows, two to a chunk. */
@@ -46,18 +48,20 @@ async function stored(stores: Stores, path: string, frames: number, modified = 1
       { length: 2 * count },
       (_, i) => 100 * (k * 2 + (i >> 1)) + (i & 1),
     )
-    await store.write(k, count, [values])
+    await store.writeRaw(
+      k * 2,
+      Float64Array.from({ length: count }, (_, i) => k * 2 + i),
+      [values],
+    )
   }
-  await store.finish(
-    manifest(path, frames, modified),
-    Float64Array.from({ length: frames }, (_, i) => i),
-  )
+  await store.writeCsv(new Uint8Array(frames * 10), 0)
+  await store.checkpoint(manifest(path, frames, modified))
   return store
 }
 
 /** How many stores the window `owner` keeps, this one's unless said. */
 const folders = async (owner = process.pid) =>
-  (await readdir(join(root, String(owner))).catch(() => [])).length
+  (await readdir(join(root, FORMAT, String(owner))).catch(() => [])).length
 
 /** The id of a process that has exited, as a window gone leaves its extension host's. */
 async function exited(): Promise<number> {
@@ -71,11 +75,17 @@ describe('the stores of the results files a worker reads', () => {
     const stores = new Stores(root)
     const store = await stored(stores, join(root, 'a.csv'), 5)
     // Chunk 1 holds frames 2 and 3; row 0 then row 1, each its two frames.
-    expect(Array.from(await store.read(1, 0, 2))).toEqual([200, 300, 201, 301])
-    expect(Array.from(await store.read(1, 0, 2, Uint32Array.of(1)))).toEqual([201, 301])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0)).values)).toEqual([200, 201, 300, 301])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1])).values)).toEqual([201, 301])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 0], 1, 1)).values)).toEqual([
+      301, 300,
+    ])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 1], 0, 2)).values)).toEqual([
+      201, 201, 301, 301,
+    ])
     // The last chunk, cut short with the file.
-    expect(Array.from(await store.read(2, 0, 1))).toEqual([400, 401])
-    expect(Array.from(await store.times())).toEqual([0, 1, 2, 3, 4])
+    expect(Array.from((await store.readRaw(store.raw[2]!, 0)).values)).toEqual([400, 401])
+    expect(Array.from(await store.times(store.raw[1]!))).toEqual([2, 3])
     await stores.release(store)
   })
 
@@ -148,15 +158,17 @@ describe('the stores of the results files a worker reads', () => {
     const gone = await exited()
     await (await stored(new Stores(root, gone), a, 4)).close()
     // What is no window's folder is no store of Studio's now.
-    await mkdir(join(root, 'stray'))
+    await mkdir(join(root, FORMAT, 'stray'))
     const mine = new Stores(root)
     await mine.sweep([a])
     expect(await folders(open)).toBe(1)
     expect((await mine.find(a, stamp(4), 'case'))?.manifest?.frames).toBe(4)
-    expect((await readdir(root)).sort()).toEqual([String(open), String(process.pid)].sort())
+    expect((await readdir(join(root, FORMAT))).sort()).toEqual(
+      [String(open), String(process.pid)].sort(),
+    )
     // The other window's store takes its frames still.
     writing.shape([2], 2)
-    await writing.write(0, 2, [Float64Array.of(1, 2, 3, 4)])
+    await writing.writeRaw(0, Float64Array.of(0, 1), [Float64Array.of(1, 2, 3, 4)])
     await writing.close()
   })
 })

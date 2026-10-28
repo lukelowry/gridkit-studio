@@ -1,11 +1,19 @@
 /** What every command of Studio's shares: how it finds the case, element and field it acts on, and
  *  what it asks of them. */
 
-import type { Block, Query, Schema } from '@latkit/model'
+import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
 import { display, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
+import type { TableRequest } from '../shared/data.js'
+import {
+  type CaseDefinition,
+  type Entity,
+  fieldDefinition,
+  isEntity,
+  tableDefinition,
+} from '../shared/document.js'
 import type { Command } from '../shared/ids.js'
 import {
   type Element,
@@ -15,7 +23,6 @@ import {
   type ViewAction,
 } from '../shared/messages.js'
 import { plotName } from '../shared/plots.js'
-import { elementType } from '../shared/schema.js'
 import { noCase } from './report.js'
 import type { Session } from './session.js'
 import type { Sessions } from './sessions.js'
@@ -112,7 +119,7 @@ export function commandsOf(studio: Sessions) {
       summary,
       target,
       element,
-      type: target?.type ?? (element && elementType(element.id)),
+      type: target?.type ?? element?.table,
       field: target?.field ?? element?.field,
     }
   }
@@ -153,54 +160,27 @@ export function commandsOf(studio: Sessions) {
     if (element) session.select(element)
     await studio.showView(view)
   }
-  const rows = async (context: Context, query: Query.Rows, signal?: AbortSignal) =>
+  const rows = async (context: Context, request: TableRequest, signal?: AbortSignal) =>
     rowsOf(
-      (await studio.client.cases.call(
-        'query',
-        { ...revisionOf(context.summary), query },
-        signal,
-      )) as Block.Rows[],
+      await studio.client.cases.call('page', { ...revisionOf(context.summary), request }, signal),
     )
-  /** The stored values of `fields` on the `type` element `id`. */
-  const valuesOf = async (context: Context, type: string, fields: string[], id: string) => {
-    const [row] = await rows(context, {
-      kind: 'rows',
-      from: type,
-      select: fields,
-      ids: true,
-      limit: 1,
-      rows: { kind: 'ids', ids: [id] },
-    })
+  const valuesOf = async (context: Context, table: string, fields: string[], id: Id) => {
+    const [row] = await rows(context, { table, fields, ids: [id], offset: 0, limit: 1 })
     return row?.values ?? {}
   }
-  /** The stored value of `field` on the `type` element `id`. */
-  const valueOf = async (context: Context, type: string, field: string, id: string) =>
-    (await valuesOf(context, type, [field], id))[field]
-  /** The id of the element the reference `value` points to; undefined when it points nowhere. */
-  const referred = async (context: Context, value: unknown) => {
-    const reference = value as { index?: { type: string }; row?: number } | null
-    if (!reference?.index || reference.row === undefined) return undefined
-    const [row] = await rows(context, {
-      kind: 'rows',
-      from: reference.index.type,
-      select: [],
-      rows: { kind: 'range', offset: reference.row, count: 1 },
-      ids: true,
-      limit: 1,
-    })
-    return row?.id ?? undefined
-  }
-  /** A signal as every picker shows it: named as its plot is, with what the catalog says of it. */
-  const signalItem = (schema: Schema, plot: Plot) => ({
-    label: plotName(schema, plot),
-    detail: schema.types[plot.from]?.fields[plot.field]?.description,
+  const valueOf = async (context: Context, table: string, field: string, id: Id) =>
+    (await valuesOf(context, table, [field], id))[field]
+  const referred = (value: unknown): Entity | undefined => (isEntity(value) ? value : undefined)
+  const signalItem = (definition: CaseDefinition, plot: Plot) => ({
+    label: plotName(definition, plot),
+    detail: fieldDefinition(definition, plot.from, plot.field)?.label,
     plot,
   })
   /** One of the Monitor's plots, which the user picks. */
   const pickPlot = async ({ session, summary }: Context, title: string) =>
     (
       await vscode.window.showQuickPick(
-        session.plots.map((plot) => signalItem(summary.schema, plot)),
+        session.plots.map((plot) => signalItem(summary.definition, plot)),
         { title },
       )
     )?.plot
@@ -210,11 +190,11 @@ export function commandsOf(studio: Sessions) {
     context: Context,
     type: string,
     every?: string,
-  ): Promise<string | null | undefined> => {
-    type Item = vscode.QuickPickItem & { id: string | null }
+  ): Promise<Id | null | undefined> => {
+    type Item = vscode.QuickPickItem & { id: Id | null }
     const picker = vscode.window.createQuickPick<Item>()
     picker.title = 'Choose ' + type
-    picker.placeholder = 'Search names or enter an exact ' + type + '/ID'
+    picker.placeholder = 'Search names or IDs'
     picker.matchOnDescription = true
     const first: Item[] = every ? [{ label: every, id: null, alwaysShow: true }] : []
     let generation = 0
@@ -225,34 +205,27 @@ export function commandsOf(studio: Sessions) {
       controller?.abort()
       controller = new AbortController()
       picker.busy = true
-      const name = context.summary.schema.types[type]?.fields.name ? 'name' : undefined
+      const name = tableDefinition(context.summary.definition, type)?.labelField
       try {
-        const exact = picker.value.startsWith(type + '/')
         const found = await rows(
           context,
           {
-            kind: 'rows',
-            from: type,
-            select: name ? [name] : [],
-            ids: true,
-            ...(exact
-              ? { rows: { kind: 'ids', ids: [picker.value] } }
-              : picker.value && name
-                ? { where: [{ field: name, operator: 'contains', value: picker.value }] }
-                : {}),
+            table: type,
+            fields: name ? [name] : [],
+            offset: 0,
+            limit: 100,
+            ...(picker.value ? { search: picker.value } : {}),
           },
           controller.signal,
         )
         if (current !== generation) return
         picker.items = [
           ...first,
-          ...found
-            .filter((row) => row.id)
-            .map((row) => ({
-              label: name ? display(row.values[name]) : row.id!,
-              description: row.id!,
-              id: row.id!,
-            })),
+          ...found.map((row) => ({
+            label: name ? display(row.values[name]) : String(row.id),
+            description: String(row.id),
+            id: row.id,
+          })),
         ]
       } catch (error) {
         if (!controller.signal.aborted) studio.reporter.report(error)

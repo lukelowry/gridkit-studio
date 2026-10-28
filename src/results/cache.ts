@@ -1,16 +1,17 @@
-import type { Data } from '@latkit/model'
+import type { FrameBlock } from '../shared/data.js'
 
 /** One batch per field, all over the same frames. */
-export type Frames = readonly Data.SampleBatch[]
+export type Frames = readonly FrameBlock[]
 
-/** The bytes `frames` keep alive of their own: their values. Their times are their file's, which
- *  every chunk of it shares, as are the rows they name. */
-const ownBytes = (frames: Frames) =>
-  frames.reduce(
-    (bytes, batch) =>
-      Object.values(batch.columns).reduce((sum, column) => sum + column.values.byteLength, bytes),
-    0,
-  )
+/** Count each owned backing buffer once, including shared time arrays. */
+const ownBytes = (frames: Frames) => {
+  const buffers = new Set<ArrayBufferLike>()
+  for (const frame of frames) {
+    buffers.add(frame.at.buffer)
+    buffers.add(frame.values.buffer)
+  }
+  return [...buffers].reduce((total, buffer) => total + buffer.byteLength, 0)
+}
 
 /** The key of a file's own entry, which it rests under once nothing holds it. */
 const RESTING = -1

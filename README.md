@@ -64,7 +64,7 @@ _An IEEE39 generator with its exciter and stabilizer in the diagram_
 
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
 
-- Video export to MP4 or WebM
+- Video export to MP4/H.264
 
 ## Author
 

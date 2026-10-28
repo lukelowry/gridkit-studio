@@ -1,6 +1,6 @@
-import { elementType } from '../shared/schema.js'
+import type { Entity } from '../shared/document.js'
 import type { Case, Table } from './case.js'
-import { type Chunk, isValid } from './columns.js'
+import { isValid } from './columns.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
 /** Every port connection of a case, by row: the rows each row's ports name, and the rows that name
@@ -21,15 +21,20 @@ const adjacencies = new WeakMap<Case, Promise<Adjacency>>()
 function* references(kase: Case, numbers: ReadonlyMap<string, number>) {
   for (const [from, table] of [...kase.tables.values()].entries())
     for (const port of table.shape.ports) {
-      const to = numbers.get(port.definition.type.to)
+      const to = numbers.get(port.definition.target)
       const column = table.fields.get(port.name)
       if (to === undefined || !column) continue
       for (const [c, value] of column.chunks.entries()) {
-        const chunk = value as Chunk.Reference
+        const chunk = value as Float64Array
         const first = column.starts[c]!
         for (let at = 0; at < chunk.length; at++)
           if (isValid(chunk, at))
-            yield [from, first + at, to, chunk.values[chunk.offset + at]!] as const
+            yield [
+              from,
+              first + at,
+              to,
+              kase.rowOf(kase.table(port.definition.target), chunk[at]!),
+            ] as const
       }
     }
 }
@@ -80,12 +85,12 @@ async function build(kase: Case): Promise<Adjacency> {
  *  draws it, else the buses its ports reach, through the devices its control ports drive. */
 export async function anchors(
   kase: Case,
-  input: { id: string; drawn: readonly string[] },
+  input: { entity: Entity; drawn: readonly string[] },
   signal: AbortSignal,
-): Promise<string[]> {
-  const located = kase.locate(input.id)
-  if (!located) throw new Error('Unknown element: ' + input.id)
-  if (input.drawn.includes(elementType(input.id))) return []
+): Promise<Entity[]> {
+  const located = kase.locate(input.entity)
+  if (!located) throw new Error('Unknown element: ' + input.entity)
+  if (input.drawn.includes(input.entity.table)) return []
   const adjacency = await new Turns(signal).wait(adjacencyOf(kase))
   const { tables, starts } = adjacency
   const drawn = new Set(
@@ -111,5 +116,5 @@ export async function anchors(
     }
     frontier = next
   }
-  return found.map((at) => kase.id(tables[Math.floor(at / 0x1_0000_0000)]!, at % 0x1_0000_0000))
+  return found.map((at) => kase.entity(tables[Math.floor(at / 0x1_0000_0000)]!, at % 0x1_0000_0000))
 }

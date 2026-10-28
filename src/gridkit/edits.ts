@@ -1,6 +1,9 @@
-import { type Failure, failure } from '@latkit/model'
 import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-parser'
+import type { Id } from 'latkit'
 
+import type { Entity } from '../shared/document.js'
+import type { SourceError } from '../shared/errors.js'
+import { problem } from '../shared/errors.js'
 import { message } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
@@ -91,7 +94,7 @@ export function nested<T>(read: () => T): T {
     return read()
   } catch (error) {
     if (error instanceof RangeError && /call stack/i.test(error.message))
-      throw failure('invalid-input', 'This record nests its values too deeply to read.')
+      throw problem('invalid-input', 'This record nests its values too deeply to read.')
     throw error
   }
 }
@@ -124,9 +127,9 @@ export function nativePath(field: FieldPlan): string[] {
 }
 
 /** The record of row `id`: its table and row, its JSON text, and that text's offset in the file. */
-export function recordOf(kase: Case, id: string) {
+export function recordOf(kase: Case, id: Entity) {
   const located = kase.locate(id)
-  if (!located) throw failure('invalid-input', 'This element no longer exists.')
+  if (!located) throw problem('invalid-input', 'This element no longer exists.')
   return recordAt(kase, located.table, located.row)
 }
 
@@ -184,7 +187,7 @@ function placeOf(kase: Case, table: Table, row: number, plan: FieldPlan): Place 
 }
 
 /** Row `id`'s record, or its `field`'s value, or the record's first character without one. */
-export function sourceRange(kase: Case, id: string, field?: string): SourceRange {
+export function sourceRange(kase: Case, id: Entity, field?: string): SourceRange {
   const record = recordOf(kase, id)
   if (!field) return { offset: record.offset, length: Math.max(1, record.text.length) }
   const plan = record.table.shape.plan.get(field)
@@ -206,17 +209,17 @@ function valueFor(
   kase: Case,
   plan: FieldPlan | undefined,
   input: Value,
-  resolve?: (id: string, type: string) => string | number | undefined,
+  resolve?: (entity: Entity) => Id | undefined,
 ): { plan: FieldPlan; value: unknown } {
   if (!plan || !editable(plan))
-    throw failure('invalid-input', 'Edit identities and structural changes in JSON.')
+    throw problem('invalid-input', 'Edit identities and structural changes in JSON.')
   const value = fieldValue(
     plan,
     input,
     resolve ??
-      ((id, type) => {
+      ((id) => {
         const target = kase.locate(id)
-        return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
+        return target ? kase.native(target.table, target.row) : undefined
       }),
   )
   return { plan, value }
@@ -233,7 +236,7 @@ function edited(place: Place, plan: FieldPlan, value: unknown): SourceEdit {
     !!node &&
     !/[.eE]/.test(text.slice(node.offset, node.offset + node.length)) &&
     Number.isInteger(value)
-  const real = plan.definition.type === 'float64' && typeof value === 'number' && !integer
+  const real = plan.decode === 'number' && typeof value === 'number' && !integer
   if (node)
     return {
       offset: offset + node.offset,
@@ -253,14 +256,14 @@ function edited(place: Place, plan: FieldPlan, value: unknown): SourceEdit {
 /** The edit setting `field` of row `id` to `input`; against `recordText`, at offset 0, if given. */
 export function editField(
   kase: Case,
-  id: string,
+  id: Entity,
   field: string,
   input: Value,
   recordText?: string,
-  resolve?: (id: string, type: string) => string | number | undefined,
+  resolve?: (entity: Entity) => Id | undefined,
 ): SourceEdit[] {
   const located = kase.locate(id)
-  if (!located) throw failure('invalid-input', 'This element no longer exists.')
+  if (!located) throw problem('invalid-input', 'This element no longer exists.')
   if (located.table.shape.array === null) return editCase(kase, new Map([[field, input]]), resolve)
   const { plan, value } = valueFor(kase, located.table.shape.plan.get(field), input, resolve)
   const place =
@@ -275,7 +278,7 @@ export function editField(
 export function editCase(
   kase: Case,
   values: ReadonlyMap<string, Value>,
-  resolve?: (id: string, type: string) => string | number | undefined,
+  resolve?: (entity: Entity) => Id | undefined,
 ): SourceEdit[] {
   const shape = kase.table(CASE).shape
   const byObject = new Map<string, { plan: FieldPlan; value: unknown }[]>()
@@ -291,7 +294,7 @@ export function editCase(
     if (!object) {
       const members = sets.map(
         ({ plan, value }) =>
-          `${JSON.stringify(pathIn(plan).join('.'))}: ${plan.definition.type === 'float64' && typeof value === 'number' ? realText(value) : JSON.stringify(value)}`,
+          `${JSON.stringify(pathIn(plan).join('.'))}: ${plan.decode === 'number' && typeof value === 'number' ? realText(value) : JSON.stringify(value)}`,
       )
       made.push(`${JSON.stringify(name)}: {${members.join(', ')}}`)
       continue
@@ -347,20 +350,20 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
   const issues: Issue[] = []
   for (const table of kase.tables.values())
     if (!kase.catalog.shapes.has(table.shape.type) && table.records.length) {
-      const id = kase.id(table, 0)
+      const id = kase.entity(table, 0)
       issues.push({
         ...sourceRange(kase, id),
-        id,
+        entity: id,
         severity: 'warning',
         message: `${table.shape.type} is not a class GridKit Studio knows; its records are kept as written.`,
       })
     }
   for (const { type, field, row } of kase.found) {
     yield
-    const id = kase.id(kase.table(type), row)
+    const id = kase.entity(kase.table(type), row)
     issues.push({
       ...sourceRange(kase, id, field),
-      id,
+      entity: id,
       field,
       severity: 'warning',
       message: `${field} is not a ${type} field GridKit Studio knows; it is kept as written.`,
@@ -373,10 +376,10 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
       yield
       for (const [n, row] of outside(column, plan.choices!).entries()) {
         if ((n & STEP_RECORDS) === 0) yield
-        const id = kase.id(table, row)
+        const id = kase.entity(table, row)
         issues.push({
           ...sourceRange(kase, id, plan.name),
-          id,
+          entity: id,
           field: plan.name,
           severity: 'warning',
           message: `${kase.cell(table, plan.name, row)} is not a ${table.shape.type} ${plan.name} GridKit Studio knows; it is kept as written.`,
@@ -393,7 +396,7 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
       const at = place++
       // A field the catalog does not know is never required, and holds what it is written as.
       if (
-        plan.definition.sampled ||
+        plan.definition.kind === 'sampled' ||
         plan.source.kind === 'identity' ||
         plan.source.kind === 'found'
       )
@@ -407,16 +410,16 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     wrong.sort((a, b) => a.row - b.row || a.place - b.place)
     for (const [n, { row, plan }] of wrong.entries()) {
       if ((n & STEP_RECORDS) === 0) yield
-      const id = kase.id(table, row)
-      const type = plan.definition.type
+      const id = kase.entity(table, row)
+      const definition = plan.definition
       issues.push({
         ...sourceRange(kase, id, plan.name),
-        id,
+        entity: id,
         field: plan.name,
         severity: 'error',
         message:
-          typeof type === 'object' && type.kind === 'reference'
-            ? 'Missing or invalid ' + type.to + ' reference.'
+          definition.kind === 'reference'
+            ? 'Missing or invalid ' + definition.target + ' reference.'
             : 'Invalid ' + plan.name + ' value.',
       })
     }
@@ -425,10 +428,10 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     kase.checkSignals()
   } catch (error) {
     // A signal two outputs drive is said where it is.
-    const target = (error as Failure).target
+    const target = (error as SourceError).target
     issues.push({
-      ...(target?.kind === 'row' ? sourceRange(kase, target.id) : { offset: 0, length: 1 }),
-      ...(target?.kind === 'row' && { id: target.id }),
+      ...(target?.kind === 'row' ? sourceRange(kase, target.entity) : { offset: 0, length: 1 }),
+      ...(target?.kind === 'row' && { entity: target.entity }),
       severity: 'error',
       message: message(error),
     })
@@ -440,7 +443,6 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
 function empty(column: Column): number[] {
   const rows: number[] = []
   column.chunks.forEach((chunk, c) => {
-    if (chunk.validity === undefined) return
     for (let at = 0; at < chunk.length; at++)
       if (!isValid(chunk, at)) rows.push(column.starts[c]! + at)
   })
@@ -463,40 +465,53 @@ function outside(column: Column, choices: readonly string[]): number[] {
 export function fieldValue(
   plan: FieldPlan,
   input: Value,
-  resolve: (id: string, type: string) => string | number | undefined,
+  resolve: (entity: Entity) => Id | undefined,
 ): unknown {
-  const definition = plan.definition
-  const type = definition.type
-  let value: unknown = input
-  if (value !== null) {
-    if (typeof type === 'string') {
-      const valid =
-        type === 'text'
-          ? typeof value === 'string'
-          : type === 'boolean'
-            ? typeof value === 'boolean'
-            : typeof value === 'number' &&
-              Number.isFinite(value) &&
-              (type !== 'int32' || isInt32(value))
-      if (!valid) throw failure('invalid-input', `Expected ${type} for ${plan.name}.`)
-    } else if (type.kind === 'reference') {
-      const target = typeof value === 'string' ? resolve(value, type.to) : undefined
-      if (target === undefined)
-        throw failure('invalid-input', `Choose an existing or proposed ${type.to} reference.`)
-      value = target
-    } else if (type.kind === 'list') {
-      if (
-        !Array.isArray(value) ||
-        !value.every(
-          (point) =>
-            Array.isArray(point) &&
-            point.length === 2 &&
-            point.every((n) => typeof n === 'number' && Number.isFinite(n)),
-        )
+  const { definition } = plan
+  if (input === null) {
+    if (plan.required) throw problem('invalid-input', 'This field cannot be null.')
+    return null
+  }
+  if (definition.kind === 'reference') {
+    const value =
+      typeof input === 'string' || typeof input === 'number'
+        ? resolve({ table: definition.target!, id: input })
+        : undefined
+    if (value === undefined)
+      throw problem(
+        'invalid-input',
+        'Choose an existing or proposed ' + definition.target + ' reference.',
       )
-        throw failure('invalid-input', 'A route is an array of [longitude, latitude] points.')
+    return value
+  }
+  if (definition.kind === 'path') {
+    if (
+      !Array.isArray(input) ||
+      !input.every(
+        (point) =>
+          Array.isArray(point) &&
+          point.length === 2 &&
+          point.every((value) => typeof value === 'number' && Number.isFinite(value)),
+      )
+    ) {
+      throw problem('invalid-input', 'A route is an array of [longitude, latitude] points.')
     }
-  } else if (!definition.nullable || plan.required)
-    throw failure('invalid-input', 'This field cannot be null.')
-  return value
+    return input
+  }
+  const valid =
+    definition.kind === 'text' || definition.kind === 'json'
+      ? typeof input === 'string'
+      : definition.kind === 'boolean'
+        ? typeof input === 'boolean'
+        : definition.kind === 'number' &&
+          typeof input === 'number' &&
+          Number.isFinite(input) &&
+          (plan.decode !== 'integer' || isInt32(input)) &&
+          (plan.decode !== 'unsigned' ||
+            (Number.isInteger(input) && input >= 0 && input <= 0xffffffff))
+  if (!valid)
+    throw problem('invalid-input', 'Expected ' + definition.kind + ' for ' + plan.name + '.')
+  if (plan.choices && !plan.choices.includes(String(input)))
+    throw problem('invalid-input', 'Choose a supported value for ' + plan.name + '.')
+  return input
 }

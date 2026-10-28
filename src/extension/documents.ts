@@ -52,7 +52,7 @@ export async function current<T>(
 /** Whether `error` says what is wrong with a case's source, rather than why Studio could not read
  *  it. */
 const inSource = (error: unknown) =>
-  !defect(error) && (failedWith(error, 'invalid-input') || failedWith(error, 'resource-limit'))
+  !defect(error) && (failedWith(error, 'invalid-input') || failedWith(error, 'limit'))
 
 /** An open case document as Studio reads it: its last summary, and whether it is behind its
  *  document, and why its revision does not read. */
@@ -346,7 +346,7 @@ export class Documents implements vscode.Disposable {
     return this.transact(
       uri,
       expected,
-      [{ kind: 'set', id: element.id, field: element.field, value }],
+      [{ kind: 'set', entity: element, field: element.field, value }],
       'Edit ' + element.field,
     )
   }

@@ -24,7 +24,6 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
   let live = false
   /** `performance.now()` when `state` arrived. */
   let since = 0
-  let frame = 0
   /** This view's latest action in the showing it counts them in, which the extension counts alike
    *  from naught as the view shows anew; its answers carry it back. */
   let seq = 0
@@ -42,17 +41,10 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     }
   }
   const now = () => advance(state, performance.now() - since).t
-  const tick = () => {
-    frame = 0
-    if (state.status !== 'playing') return
-    draw(now())
-    frame = requestAnimationFrame(tick)
-  }
   const set = (next: ClockState) => {
     state = next
     since = performance.now()
     draw(next.t)
-    if (next.status === 'playing' && !frame) frame = requestAnimationFrame(tick)
   }
   const off = bridge.on((message) => {
     if (message.kind === 'shown') return
@@ -92,7 +84,6 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     },
     stop() {
       off()
-      cancelAnimationFrame(frame)
       cancelAnimationFrame(sending)
     },
   }

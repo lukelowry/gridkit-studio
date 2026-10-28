@@ -1,6 +1,8 @@
-import { failure } from '@latkit/model'
 import { findNodeAtLocation } from 'jsonc-parser'
+import type { Id } from 'latkit'
 
+import { type Entity, entityKey } from '../shared/document.js'
+import { problem } from '../shared/errors.js'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import type { Case } from './case.js'
 import type { ArrayName } from './definition.js'
@@ -27,8 +29,8 @@ export function createRecords(
     removed,
     positions,
   }: {
-    resolve(id: string, type: string): string | number | undefined
-    removed: ReadonlySet<string>
+    resolve(entity: Entity): Id | undefined
+    removed: readonly Entity[]
     positions: ReadonlyMap<string, readonly [number, number] | null>
   },
 ): SourceEdit[] {
@@ -36,19 +38,20 @@ export function createRecords(
   for (const change of changes) {
     const shape = kase.catalog.shapes.get(change.type)
     if (!shape?.array)
-      throw failure('invalid-input', 'Choose a creatable type from inspect_case schema.')
+      throw problem('invalid-input', 'Choose a creatable type from inspect_case schema.')
     const valid =
-      shape.identity.type === 'uint32'
+      shape.identity.type === 'unsigned'
         ? typeof change.key === 'number' &&
           Number.isInteger(change.key) &&
           change.key >= 0 &&
           change.key <= 0xffffffff
         : typeof change.key === 'string' && change.key.length > 0
     if (!valid)
-      throw failure('invalid-input', `Use a ${shape.identity.type} identity for ${change.type}.`)
-    const id = change.type + '/' + change.key
-    if (declared.has(id) || kase.locate(id))
-      throw failure('invalid-input', `Identity already exists: ${id}.`)
+      throw problem('invalid-input', `Use a ${shape.identity.type} identity for ${change.type}.`)
+    const entity = { table: change.type, id: change.key }
+    const id = entityKey(entity)
+    if (declared.has(id) || kase.locate(entity))
+      throw problem('invalid-input', `Identity already exists: ${id}.`)
     declared.set(id, change)
   }
   const records = new Map<ArrayName, string[]>()
@@ -61,10 +64,10 @@ export function createRecords(
     for (const [field, value] of Object.entries(change.fields)) {
       const plan = shape.plan.get(field)
       if (!plan || !editable(plan))
-        throw failure('invalid-input', `Unknown or non-writable field: ${change.type}.${field}.`)
+        throw problem('invalid-input', `Unknown or non-writable field: ${change.type}.${field}.`)
       const native = fieldValue(plan, value, resolve)
       text = withValue(text, nativePath(plan), native)
-      if (plan.definition.type === 'float64' && typeof native === 'number') {
+      if (plan.decode === 'number' && typeof native === 'number') {
         const node = findNodeAtLocation(treeOf(text), nativePath(plan))!
         text = apply(text, [{ offset: node.offset, length: node.length, text: realText(native) }])
       }
@@ -75,7 +78,7 @@ export function createRecords(
         plan.source.kind !== 'identity' &&
         (change.fields[plan.name] === undefined || change.fields[plan.name] === null)
       )
-        throw failure('invalid-input', `${id} requires ${plan.name}.`)
+        throw problem('invalid-input', `${id} requires ${plan.name}.`)
     const position = positions.get(id)
     if (position) text = withValue(text, ['extension', 'diagram', 'position'], position)
     const list = records.get(shape.array!) ?? []
@@ -92,10 +95,10 @@ export function createRecords(
       continue
     }
     let last = array.ends.length - 1
-    if (removed.size) {
+    if (removed.length) {
       const removedRows = new Set<number>()
-      for (const id of removed) {
-        const found = kase.locate(id)
+      for (const entity of removed) {
+        const found = kase.locate(entity)
         if (found?.table.shape.array === name) removedRows.add(found.table.records[found.row]!)
       }
       while (removedRows.has(last)) last--

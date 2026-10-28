@@ -1,7 +1,7 @@
 /** Studio's errors, in one vocabulary on every side: the codes a request fails with, how an error
  *  crosses a channel, which failures are none, and how one is said to the user and to the log. */
 
-import type { Failure } from '@latkit/model'
+import type { LatkitError } from 'latkit'
 
 /** Why a request failed: one of Studio's own reasons, or latkit's. */
 export type Code =
@@ -23,7 +23,23 @@ export type Code =
   | 'results-lost'
   /** A failure with no code of its own. */
   | 'operation-failed'
-  | Failure.Code
+  | 'invalid-input'
+  | 'internal'
+  | 'unavailable'
+  | LatkitError['code']
+
+/** Source diagnostics retain source paths, independently of native runtime errors. */
+export interface SourceProblem {
+  readonly code: 'invalid-input'
+  readonly message: string
+  readonly target: { readonly kind: 'path'; readonly path: readonly [string, number] }
+}
+
+export interface SourceError extends Error {
+  readonly target?:
+    | SourceProblem['target']
+    | { readonly kind: 'row'; readonly entity: import('./document.js').Entity }
+}
 
 /** Why a request failed, as it crosses from whoever answered to whoever asked: its sentence and
  *  code, and what the log and the editor need besides. */
@@ -58,14 +74,7 @@ export const superseded = () =>
 
 /** The codes of failures that are none: whoever asked let go, or another took its place, as results
  *  read again take the place of those lost. */
-const NONE: readonly Code[] = [
-  'cancelled',
-  'aborted',
-  'closed',
-  'superseded',
-  'results-closed',
-  'results-lost',
-]
+const NONE: readonly Code[] = ['cancelled', 'superseded', 'results-closed', 'results-lost']
 /** The codes of failures a view outlives by starting again: its device or connection came back. */
 const PASSING: readonly Code[] = ['device-lost', 'timeout', 'unavailable']
 

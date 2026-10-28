@@ -29,12 +29,9 @@ afterEach(() => vi.unstubAllGlobals())
 const A: Of = { uri: 'file:///a.case.json', showing: 1 }
 const B: Of = { uri: 'file:///b.case.json', showing: 2 }
 
-it('keeps scheduling the playhead after a transient renderer exception', () => {
-  let next: FrameRequestCallback = () => {}
-  const request = vi.fn((callback: FrameRequestCallback) => {
-    next = callback
-    return 1
-  })
+it('computes playback time without owning a rendering RAF and survives a paint error', () => {
+  vi.useFakeTimers({ toFake: ['performance'] })
+  const request = vi.fn()
   vi.stubGlobal('requestAnimationFrame', request)
   vi.stubGlobal('cancelAnimationFrame', vi.fn())
   const paint = vi.fn().mockImplementationOnce(() => {
@@ -48,12 +45,20 @@ it('keeps scheduling the playhead after a transient renderer exception', () => {
     live: false,
     clock: { ...IDLE, status: 'playing', span: [0, 10] },
   })
-  expect(request).toHaveBeenCalledTimes(1)
-  next(16)
-  expect(paint).toHaveBeenCalledTimes(2)
-  expect(request).toHaveBeenCalledTimes(2)
-  expect(transport.report).toHaveBeenCalledTimes(1)
+  vi.advanceTimersByTime(500)
+  expect(clock.now()).toBeCloseTo(0.5)
+  expect(request).not.toHaveBeenCalled()
+  expect(transport.report).toHaveBeenCalledOnce()
+  transport.listener({
+    kind: 'clock',
+    of: transport.of,
+    seq: 1,
+    live: false,
+    clock: { ...IDLE, status: 'paused', t: 2, span: [0, 10] },
+  })
+  expect(paint).toHaveBeenLastCalledWith(2)
   clock.stop()
+  vi.useRealTimers()
 })
 
 it('follows the clock of the case it shows next, whatever it changed of the one before', () => {

@@ -5,11 +5,9 @@
 
 import assert from 'node:assert/strict'
 
-import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 
-import { rowsOf } from '../../src/shared/cells.js'
 import { frames, type TestHost, testHost, until, visible } from './harness.js'
 
 suite('Workflows', function () {
@@ -20,7 +18,7 @@ suite('Workflows', function () {
   let network: Frame
   let table: Frame
   let bus: TestHost['source']['buses'][number]
-  let id: string
+  let id: number
   /** The bus's row in the Case panel. */
   const row = () =>
     table
@@ -29,29 +27,27 @@ suite('Workflows', function () {
   const kv = () => row().locator(`td[data-field="params.kv"]`)
   /** The bus's recorded voltage at time `t` of `results`. */
   async function voltage(results: string, t: number): Promise<number> {
-    const blocks = await bench.studio.client.results.call('query', {
-      results,
-      query: {
-        kind: 'rows',
-        from: 'Bus',
-        select: ['Vm'],
-        ids: true,
-        rows: { kind: 'ids', ids: [id] },
+    return (
+      await bench.studio.client.results.call('sample', {
+        results,
+        table: 'Bus',
+        field: 'Vm',
+        id,
         at: t,
-      },
-    })
-    return rowsOf(blocks as Block.Rows[])[0]!.values.Vm as number
+      })
+    ).value!
   }
 
   suiteSetup(async function () {
     bench = await testHost()
     if (!(await bench.gridkit())) this.skip()
+    bench.session.clear()
     network = await bench.open('network')
     table = await bench.show('case')
     await bench.caseType('Bus')
     await visible(table, 'tbody .cell')
     bus = bench.source.buses.at(-1)!
-    id = 'Bus/' + bus.number
+    id = bus.number
   })
 
   test('finds a bus by name and sees it selected on the Network', async () => {
@@ -67,7 +63,11 @@ suite('Workflows', function () {
     await until(() => bench.session.selection?.id === id, 'the bus selected')
     await until(
       async () =>
-        (await network.evaluate<{ ids: string[] } | null>('gridkitSelection()'))?.ids.includes(id),
+        (
+          await network.evaluate<{ entities: { table: string; id: number }[] } | null>(
+            'gridkitSelection()',
+          )
+        )?.entities.some((item) => item.table === 'Bus' && item.id === id),
       'the Network shows it selected',
     )
   })
@@ -96,7 +96,7 @@ suite('Workflows', function () {
   })
 
   test('records its voltage, faults it in the solver file, runs that, and reads the drop in the Monitor', async () => {
-    await bench.toggleSignal('Bus', 'Vm')
+    await bench.record('Bus', ['Vm'])
     await bench.menu(row().locator('th[scope="row"]'), 'Plot Signal')
     await bench.pick(/^Bus · Vm\b/, 'Bus · Vm')
     await until(

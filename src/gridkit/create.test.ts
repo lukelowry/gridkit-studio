@@ -17,7 +17,7 @@ describe('component creation', () => {
           kind: 'add',
           type: 'Branch',
           key: 'new',
-          fields: { 'ports.bus1': 'Bus/2', 'ports.bus2': 'Bus/3', 'params.R': 0, 'params.X': 0.1 },
+          fields: { 'ports.bus1': 2, 'ports.bus2': 3, 'params.R': 0, 'params.X': 0.1 },
         },
         { kind: 'add', type: 'Bus', key: 2, fields: { name: 'New A', 'params.kv': 230 } },
         { kind: 'add', type: 'Bus', key: 3, fields: { name: 'New B' } },
@@ -25,7 +25,7 @@ describe('component creation', () => {
       expect(edits.every((edit) => edit.length === 0)).toBe(true)
       const next = applyChanges(source, [edits])
       const parsed = await Case.parse(next, catalog)
-      expect(parsed.locate('Branch/new')).toBeDefined()
+      expect(parsed.locate({ table: 'Branch', id: 'new' })).toBeDefined()
       expect(await diagnose(parsed, AbortSignal.any([]))).toEqual([])
       expect(JSON.parse(next).devices[0].ports).toEqual({ bus1: 2, bus2: 3 })
       expect(next).toMatch(/"R":\s*0\.0/)
@@ -38,14 +38,14 @@ describe('component creation', () => {
       /already exists/,
     )
     expect(() => transaction(kase, [{ kind: 'add', type: 'Bus', key: -1, fields: {} }])).toThrow(
-      /uint32/,
+      /unsigned/,
     )
     expect(() =>
       transaction(kase, [{ kind: 'add', type: 'BusFault', key: 'fault', fields: {} }]),
     ).toThrow(/requires ports.bus/)
     expect(() =>
       transaction(kase, [
-        { kind: 'add', type: 'BusFault', key: 'fault', fields: { 'ports.bus': 'Bus/99' } },
+        { kind: 'add', type: 'BusFault', key: 'fault', fields: { 'ports.bus': 99 } },
       ]),
     ).toThrow()
     expect(() =>
@@ -54,8 +54,8 @@ describe('component creation', () => {
     expect(() =>
       transaction(kase, [
         { kind: 'add', type: 'Signal', key: 1, fields: {} },
-        { kind: 'add', type: 'ConstantSignalSource', key: 'A', fields: { 'ports.sr': 'Signal/1' } },
-        { kind: 'add', type: 'ConstantSignalSource', key: 'B', fields: { 'ports.sr': 'Signal/1' } },
+        { kind: 'add', type: 'ConstantSignalSource', key: 'A', fields: { 'ports.sr': 1 } },
+        { kind: 'add', type: 'ConstantSignalSource', key: 'B', fields: { 'ports.sr': 1 } },
       ]),
     ).toThrow(/driver/)
   })

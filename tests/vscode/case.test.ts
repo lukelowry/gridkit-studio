@@ -111,7 +111,7 @@ suite('Case', () => {
       bench.studio.documents.edit(
         bench.key,
         version - 1,
-        { id: 'Bus/' + bench.source.buses[0]!.number, field: 'params.kv' },
+        { table: 'Bus', id: bench.source.buses[0]!.number, field: 'params.kv' },
         1,
       ),
       /changed/,

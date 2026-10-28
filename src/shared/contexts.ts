@@ -1,14 +1,6 @@
 import { type Bindings, NUMERIC } from './bindings.js'
+import { fieldDefinition, networkRole, referenceFields, tableDefinition } from './document.js'
 import type { Element, Plot, Revision, Summary } from './messages.js'
-import {
-  diagramOf,
-  elementType,
-  fieldOf,
-  isReference,
-  networkOf,
-  placementOf,
-  referencesOf,
-} from './schema.js'
 
 /** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
 type Scope = 'element' | 'value' | 'column' | 'plot'
@@ -45,16 +37,19 @@ export function signalContext(
 /** VS Code context keys for a menu on `target`, which carry the target to its commands; opening a
  *  menu never selects another row. Every view's menus take these keys, and only these. */
 export function menuContext(
-  summary: Pick<Summary, 'schema' | 'editable'>,
+  summary: Pick<Summary, 'definition' | 'editable'>,
   target: Target,
   bindings: Bindings = {},
   rows: Rows = {},
 ) {
-  const type = target.type ?? (target.element && elementType(target.element.id))
+  const type = target.type ?? target.element?.table
   const field = target.field ?? target.element?.field
-  const definition = fieldOf(summary.schema, type, field)
-  const network = type ? placementOf(networkOf(summary.schema), type) : null
-  const diagram = type ? placementOf(diagramOf(summary.schema), type) : null
+  const definition = type && field ? fieldDefinition(summary.definition, type, field) : undefined
+  const network = type ? networkRole(summary.definition, type) : null
+  const diagram = type
+    ? summary.definition.drawing.blocks.some((block) => block.table === type) ||
+      summary.definition.drawing.nets.includes(type)
+    : null
   const scope: Scope = target.plot
     ? 'plot'
     : target.origin === 'case' && field
@@ -77,18 +72,18 @@ export function menuContext(
       !!target.element && (field ? !!editable?.includes(field) : (editable?.length ?? 0) > 0),
     // A reference field, or, for a whole element, any it has: what Go to Referenced Element follows.
     gridkitReference: field
-      ? isReference(definition)
-      : !!type && referencesOf(summary.schema, type).length > 0,
+      ? definition?.kind === 'reference'
+      : !!type && referenceFields(summary.definition, type).length > 0,
     gridkitScalar:
-      NUMERIC.has(definition?.type) ||
-      definition?.type === 'text' ||
-      definition?.type === 'boolean',
-    gridkitSampled: Object.values((type && summary.schema.types[type]?.fields) || {}).some(
-      (spec) => spec.sampled,
-    ),
-    gridkitBindable: !!network && NUMERIC.has(definition?.type),
+      NUMERIC.has(definition?.kind) ||
+      definition?.kind === 'text' ||
+      definition?.kind === 'boolean',
+    gridkitSampled:
+      !!type &&
+      tableDefinition(summary.definition, type)?.fields.some((spec) => spec.kind === 'sampled'),
+    gridkitBindable: !!network && NUMERIC.has(definition?.kind),
     gridkitBound: Object.values(bindings).some(
-      (binding) => binding.type === type && binding.field === field,
+      (binding) => binding.table === type && binding.field === field,
     ),
     gridkitOverlapping: (target.items?.length ?? 0) > 1,
     gridkitSort: field && rows.sort?.field === field ? rows.sort.direction : '',

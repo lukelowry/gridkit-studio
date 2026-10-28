@@ -44,7 +44,7 @@ describe('native VS Code contract', () => {
     const given = new Set(
       Object.keys(
         menuContext(
-          { schema: catalog.schema, editable: {} },
+          { definition: catalog.definition, editable: {} },
           { uri: '', version: 0, origin: 'case' },
         ),
       ),
@@ -160,13 +160,13 @@ describe('native VS Code contract', () => {
     expect(registering).toEqual([join('src', 'extension', 'sessions.ts')])
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
-    const schema = catalog.schema
-    const summary = { schema, editable: { BusFault: ['ports.control_signal'] } }
+    const definition = catalog.definition
+    const summary = { definition, editable: { BusFault: ['ports.control_signal'] } }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
       origin: 'diagram' as const,
-      element: { id: 'BusFault/one', field: 'ports.control_signal' },
+      element: { table: 'BusFault', id: 'one', field: 'ports.control_signal' },
     }
     const context = menuContext(summary, target)
     expect(context.gridkitTarget).toEqual(target)
@@ -176,9 +176,10 @@ describe('native VS Code contract', () => {
     expect(context.gridkitDiagram).toBe(true)
     // A whole element goes where it refers when its type refers to anything: a branch to its buses,
     // and a bus nowhere.
-    const element = (id: string) =>
-      menuContext(summary, { ...target, origin: 'network', element: { id } }).gridkitReference
-    expect(element('Branch/one')).toBe(true)
-    expect(element('Bus/1')).toBe(false)
+    const element = (table: string) =>
+      menuContext(summary, { ...target, origin: 'network', element: { table, id: 1 } })
+        .gridkitReference
+    expect(element('Branch')).toBe(true)
+    expect(element('Bus')).toBe(false)
   })
 })

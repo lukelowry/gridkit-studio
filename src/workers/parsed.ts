@@ -82,7 +82,7 @@ export async function summarize(
     ...revision,
     name: kase.name,
     fingerprint: kase.version,
-    schema: kase.schema,
+    definition: kase.definition,
     editable: Object.fromEntries(
       [...kase.tables].map(([type, { shape }]) => [
         type,
@@ -95,7 +95,6 @@ export async function summarize(
     counts: Object.fromEntries(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
-    indexes: Object.fromEntries([...kase.tables].map(([type, { index }]) => [type, index])),
     recording: await recordingOf(kase, signal),
     issues: issues ?? [],
     validation: issues ? 'complete' : 'pending',

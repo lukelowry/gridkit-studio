@@ -1,5 +1,4 @@
-import type { Domain, Query } from '@latkit/model'
-
+import type { RecordedField, TimeRange } from './data.js'
 import type { CaseSource, Revision } from './messages.js'
 
 /** Where GridKit runs: installed here, else in a container of an image. */
@@ -32,12 +31,12 @@ export interface ResultsLayout {
   readonly name: string
   readonly path: string
   /** What the file holds, once its header is read. */
-  readonly outputs: readonly Query.Selection[]
+  readonly outputs: readonly RecordedField[]
   /** Frames per chunk, from the header's width, 0 before it is read. Chunk `k` holds frames
    *  `k * chunk` up to `(k + 1) * chunk`, so every process cuts the file alike. */
   readonly chunk: number
   /** The times a run will cover, as its solver file says. */
-  readonly span?: Domain
+  readonly span?: TimeRange
   /** The solver file whose run wrote it, when one did. */
   readonly solver?: string
 }
@@ -45,9 +44,9 @@ export interface ResultsLayout {
 /** How far a results file is read: what grows as its frames come. */
 export interface ResultsProgress {
   readonly frames: number
-  readonly domain: Domain
+  readonly domain: TimeRange
   /** Finite value ranges over every frame read, shared by all views and time windows. */
-  readonly domains?: Record<string, Record<string, Domain>>
+  readonly domains?: Record<string, Record<string, TimeRange>>
   /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
   readonly growing: boolean
   /** Why reading it stopped before its end, when it did. */

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { DIAGRAM_POSITION } from '../shared/document.js'
 import { Case } from './case.js'
 import { catalog } from './definition.js'
-import { applyChanges, delivered, presentation, transaction } from './transactions.js'
+import { applyChanges, delivered, transaction } from './transactions.js'
 const text =
   '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"BusFault","id":"load","ports":{"bus":7}},{"class":"BusFault","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)
@@ -15,20 +16,20 @@ describe('document transactions', () => {
           kind: 'add',
           type: 'Branch',
           key: 'tie',
-          fields: { 'ports.bus1': 'Bus/8', 'ports.bus2': 'Bus/9', 'params.X': 0.1 },
+          fields: { 'ports.bus1': 8, 'ports.bus2': 9, 'params.X': 0.1 },
         },
         { kind: 'add', type: 'Bus', key: 8, fields: { 'params.kv': 230 } },
         { kind: 'add', type: 'Bus', key: 9, fields: {} },
-        { kind: 'set', id: 'BusFault/load', field: 'ports.bus', value: 'Bus/8' },
-        { kind: 'set', id: 'BusFault/unused', field: 'ports.bus', value: 'Bus/9' },
-        { kind: 'remove', ids: ['Bus/7'] },
-        { kind: 'set', id: 'Branch/tie', field: 'params.X', value: 0.2 },
-        { kind: 'move', id: 'BusFault/load', position: [10, 20] },
+        { kind: 'set', entity: { table: 'BusFault', id: 'load' }, field: 'ports.bus', value: 8 },
+        { kind: 'set', entity: { table: 'BusFault', id: 'unused' }, field: 'ports.bus', value: 9 },
+        { kind: 'remove', entities: [{ table: 'Bus', id: 7 }] },
+        { kind: 'set', entity: { table: 'Branch', id: 'tie' }, field: 'params.X', value: 0.2 },
+        { kind: 'move', entity: { table: 'BusFault', id: 'load' }, position: [10, 20] },
       ]),
     ])
     const final = await parse(next)
-    expect(final.locate('Bus/7')).toBeNull()
-    expect(final.locate('Branch/tie')).toBeDefined()
+    expect(final.locate({ table: 'Bus', id: 7 })).toBeNull()
+    expect(final.locate({ table: 'Branch', id: 'tie' })).toBeDefined()
     expect(JSON.parse(next).buses.map((bus: { number: number }) => bus.number)).toEqual([8, 9])
     expect(next).toContain('"value":1.000')
   })
@@ -40,13 +41,13 @@ describe('document transactions', () => {
           kind: 'add',
           type: 'ConstantSignalSource',
           key: 'replacement',
-          fields: { 'ports.sr': 'Signal/3' },
+          fields: { 'ports.sr': 3 },
         },
-        { kind: 'remove', ids: ['ConstantSignalSource/source'] },
+        { kind: 'remove', entities: [{ table: 'ConstantSignalSource', id: 'source' }] },
         {
           kind: 'connect',
-          from: { id: 'BusFault/load', field: 'ports.control_signal' },
-          to: { id: 'ConstantSignalSource/replacement', field: 'ports.sr' },
+          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          to: { table: 'ConstantSignalSource', id: 'replacement', field: 'ports.sr' },
         },
       ]),
     ])
@@ -60,9 +61,9 @@ describe('document transactions', () => {
   it('batches multiple changes in one record without reformatting untouched records or numeric tokens', async () => {
     const kase = await parse()
     const edits = transaction(kase, [
-      { kind: 'set', id: 'Bus/7', field: 'name', value: '東京 😀' },
-      { kind: 'set', id: 'Bus/7', field: 'extension.longitude', value: -90 },
-      { kind: 'set', id: 'Bus/7', field: 'extension.latitude', value: 40 },
+      { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'name', value: '東京 😀' },
+      { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'extension.longitude', value: -90 },
+      { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'extension.latitude', value: 40 },
     ])
     const next = applyChanges(text, [edits])
     expect(next).toContain('"kv":230.000')
@@ -77,13 +78,17 @@ describe('document transactions', () => {
   it('writes layout metadata as a minimal reversible source change', async () => {
     const kase = await parse()
     const edits = transaction(kase, [
-      { kind: 'move', id: 'ConstantSignalSource/source', position: [120, 48] },
+      {
+        kind: 'move',
+        entity: { table: 'ConstantSignalSource', id: 'source' },
+        position: [120, 48],
+      },
     ])
     const next = applyChanges(text, [edits])
     const after = await parse(next)
-    const layout = (await presentation(after, AbortSignal.any([]))).ConstantSignalSource!
-    expect(layout.x.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(120) })
-    expect(layout.y.values).toMatchObject({ kind: 'numeric', values: Float64Array.of(48) })
+    const table = after.projected().tables.get('ConstantSignalSource')!
+    expect(table.read(DIAGRAM_POSITION[0], 0, 1)).toEqual(Float64Array.of(120))
+    expect(table.read(DIAGRAM_POSITION[1], 0, 1)).toEqual(Float64Array.of(48))
     expect(JSON.parse(next).devices[0].extension.diagram.position).toEqual([120, 48])
     expect(next).toContain('"value":1.000')
     expect(edits[0]!.length).toBeLessThan(120)
@@ -94,8 +99,8 @@ describe('document transactions', () => {
       transaction(kase, [
         {
           kind: 'connect',
-          from: { id: 'BusFault/load', field: 'ports.control_signal' },
-          to: { id: 'ConstantSignalSource/source', field: 'ports.sr' },
+          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          to: { table: 'ConstantSignalSource', id: 'source', field: 'ports.sr' },
         },
       ]),
     ])
@@ -105,8 +110,8 @@ describe('document transactions', () => {
       transaction(fan, [
         {
           kind: 'connect',
-          from: { id: 'ConstantSignalSource/other', field: 'ports.sr' },
-          to: { id: 'Signal/3' },
+          from: { table: 'ConstantSignalSource', id: 'other', field: 'ports.sr' },
+          to: { table: 'Signal', id: 3 },
         },
       ]),
     ).toThrow(/driver/)
@@ -114,14 +119,18 @@ describe('document transactions', () => {
       transaction(fan, [
         {
           kind: 'connect',
-          from: { id: 'BusFault/load', field: 'ports.control_signal' },
-          to: { id: 'BusFault/unused', field: 'ports.control_signal' },
+          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          to: { table: 'BusFault', id: 'unused', field: 'ports.control_signal' },
         },
       ]),
     ).toThrow(/output to an input/)
     const disconnect = applyChanges(next, [
       transaction(fan, [
-        { kind: 'connect', from: { id: 'BusFault/load', field: 'ports.control_signal' }, to: null },
+        {
+          kind: 'connect',
+          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          to: null,
+        },
       ]),
     ])
     expect(JSON.parse(disconnect).devices[2].ports.control_signal).toBeNull()
@@ -131,13 +140,28 @@ describe('document transactions', () => {
     const kase = await parse()
     expect(() =>
       transaction(kase, [
-        { kind: 'set', id: 'ConstantSignalSource/other', field: 'ports.sr', value: 'Signal/3' },
+        {
+          kind: 'set',
+          entity: { table: 'ConstantSignalSource', id: 'other' },
+          field: 'ports.sr',
+          value: 3,
+        },
       ]),
     ).toThrow(/driver/)
     const next = applyChanges(text, [
       transaction(kase, [
-        { kind: 'set', id: 'ConstantSignalSource/source', field: 'ports.sr', value: null },
-        { kind: 'set', id: 'ConstantSignalSource/other', field: 'ports.sr', value: 'Signal/3' },
+        {
+          kind: 'set',
+          entity: { table: 'ConstantSignalSource', id: 'source' },
+          field: 'ports.sr',
+          value: null,
+        },
+        {
+          kind: 'set',
+          entity: { table: 'ConstantSignalSource', id: 'other' },
+          field: 'ports.sr',
+          value: 3,
+        },
       ]),
     ])
     expect(JSON.parse(next).devices[1].ports.sr).toBe(3)
@@ -148,8 +172,8 @@ describe('document transactions', () => {
     const edits = transaction(kase, [
       {
         kind: 'connect',
-        from: { id: 'ConstantSignalSource/other', field: 'ports.sr' },
-        to: { id: 'BusFault/load', field: 'ports.control_signal' },
+        from: { table: 'ConstantSignalSource', id: 'other', field: 'ports.sr' },
+        to: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
       },
     ])
     const next = applyChanges(text, [edits])
@@ -162,10 +186,18 @@ describe('document transactions', () => {
   })
   it('guards referenced deletion and removes disjoint records without rewriting the array', async () => {
     const kase = await parse()
-    expect(() => transaction(kase, [{ kind: 'remove', ids: ['Signal/3'] }])).toThrow(/references/)
+    expect(() =>
+      transaction(kase, [{ kind: 'remove', entities: [{ table: 'Signal', id: 3 }] }]),
+    ).toThrow(/references/)
     const next = applyChanges(text, [
       transaction(kase, [
-        { kind: 'remove', ids: ['ConstantSignalSource/other', 'BusFault/unused'] },
+        {
+          kind: 'remove',
+          entities: [
+            { table: 'ConstantSignalSource', id: 'other' },
+            { table: 'BusFault', id: 'unused' },
+          ],
+        },
       ]),
     ])
     expect(JSON.parse(next).devices.map((record: { id: string }) => record.id)).toEqual([

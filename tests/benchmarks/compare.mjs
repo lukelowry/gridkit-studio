@@ -1,6 +1,6 @@
 /**
- * Compares runs of the benchmarks in views.ts, for a person to read. It never fails: timings vary
- * between runs, even on one machine, and work counters change with every renderer release.
+ * Compares runs of the benchmarks in views.ts, with a failing gate for qualifying timing regressions.
+ * Work counters are compared only within the same renderer version.
  *
  *   node tests/benchmarks/compare.mjs base.json head.json
  *   node tests/benchmarks/compare.mjs base-1.json base-2.json -- head-1.json head-2.json
@@ -14,7 +14,7 @@
  * It reports scenarios slower than the base, work that changed, and time per bus that grows faster
  * than linearly across the cases.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 
 const SLOWER = 1.25
 const SLACK_MS = 5
@@ -100,7 +100,7 @@ const [basePaths, headPaths] =
     ? [args.slice(0, split), args.slice(split + 1)]
     : [args.length > 1 ? [args[0]] : [], [args.at(-1)]]
 const headRuns = headPaths.map(read)
-const baseRuns = basePaths.filter((path) => existsSync(path)).map(read)
+const baseRuns = basePaths.map(read)
 const usual = usualOf([...baseRuns, ...headRuns])
 const head = pooled(headRuns, usual)
 const base = baseRuns.length ? pooled(baseRuns, usual) : undefined
@@ -114,17 +114,29 @@ for (const [side, run] of [
     lines.push(`${side}: ${run.left} timings left out, taken while the machine ran slow`)
 
 const builds = new Set([...(base?.gridkit ?? []), ...head.gridkit].filter(Boolean))
-if (builds.size > 1)
+if (builds.size > 1) {
+  process.exitCode = 1
   lines.push(`GridKit builds differ, so no timing is compared: ${[...builds].join(', ')}`)
-else if (base) {
+} else if (base) {
+  const common = new Set(baseRuns.flatMap((run) => Object.keys(run.timings)))
+  const unmeasured = [...common].filter(
+    (name) =>
+      headRuns.some((run) => name in run.timings) && (!base.timings[name] || !head.timings[name]),
+  )
+  if (unmeasured.length) {
+    process.exitCode = 1
+    lines.push(`inconclusive: ${unmeasured.length} shared scenarios have no unfiltered comparison`)
+  }
   const slower = (now, before) => now > before * SLOWER + SLACK_MS
   for (const [name, now] of Object.entries(head.timings)) {
     const before = base.timings[name]
-    if (before && slower(now.lowest, before.lowest) && slower(now.median, before.median))
+    if (before && slower(now.lowest, before.lowest) && slower(now.median, before.median)) {
+      process.exitCode = 1
       lines.push(`slower ${name}: ${before.median.toFixed(1)} → ${now.median.toFixed(1)} ms`)
+    }
   }
 }
-if (base)
+if (base && baseRuns.at(-1).renderer === headRuns.at(-1).renderer)
   for (const [name, counters] of Object.entries(head.work ?? {}))
     for (const [counter, value] of Object.entries(counters)) {
       const before = base.work?.[name]?.[counter]

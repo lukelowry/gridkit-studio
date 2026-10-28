@@ -1,17 +1,21 @@
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, readdir, readFile, rm, truncate, utimes, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { Data } from '@latkit/model'
+import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
-import type { Results, ResultsApi, SamplesInput } from '../shared/messages.js'
+import type { FramePage, RecordedField } from '../shared/data.js'
+import type { Results, ResultsApi } from '../shared/messages.js'
+import { loadNative } from './native.js'
 import { bundle, start } from './rig.js'
 
 let script: string
 beforeAll(async () => {
   script = await bundle('results', 'results-worker')
+  await loadNative(createRequire(import.meta.url).resolve('latkit/wasm'))
 })
 
 type Rig = Awaited<ReturnType<typeof start<ResultsApi>>>
@@ -60,7 +64,7 @@ async function read(rig: Rig, results: Results): Promise<Results> {
 
 /** The one store this window keeps under the worker folder `folder`. */
 async function storeOf(folder: string): Promise<string> {
-  const own = join(folder, 'store', String(process.pid))
+  const own = join(folder, 'store', 'results-native-1', String(process.pid))
   const [store] = await readdir(own)
   return join(own, store!)
 }
@@ -75,24 +79,33 @@ async function waveform(path: string, frames: number, value = (i: number) => Str
 
 /** Everything a view asking for `field` over all of `results` is sent, asking again for what it
  *  lacks until nothing more comes, as a view does. */
-async function everything(rig: Rig, results: Results, field: SamplesInput['field']) {
-  const held: Record<number, number> = {}
-  const sent: Data.SampleBatch[] = []
-  for (;;) {
-    const batches = await rig.call('samples', {
+async function everything(
+  rig: Rig,
+  results: Results,
+  field: Pick<RecordedField, 'table' | 'field'>,
+): Promise<FramePage[]> {
+  const sent: FramePage[] = []
+  let next: string | undefined
+  do {
+    const page = await rig.call('frames', {
       results: results.id,
-      field,
-      window: results.domain,
-      held,
-      bytes: 8 << 20,
+      ...field,
+      range: results.domain,
+      purpose: 'playhead',
+      pixels: 1024,
+      bytes: 96 << 20,
+      next,
     })
-    if (!batches.length) return sent
-    for (const batch of batches) {
-      const k = Math.floor(batch.firstFrame / results.chunk)
-      held[k] = batch.firstFrame + batch.coordinates.length - k * results.chunk
-      sent.push(batch)
-    }
-  }
+    expect(page.bytes.byteLength).toBeLessThanOrEqual(4 << 20)
+    sent.push(page)
+    next = page.next
+  } while (next)
+  return sent
+}
+function native(pages: FramePage[]): Data {
+  const data = new Data(pages[0]!.source)
+  for (const page of pages) data.apply(page.bytes)
+  return data
 }
 
 describe('the results worker', () => {
@@ -105,17 +118,11 @@ describe('the results worker', () => {
       const results = await read(rig, await open(rig, caseOf('chunks'), path))
       expect(results.domains).toEqual({ Bus: { Vm: [0, 2] } })
       expect(results.frames).toBeGreaterThan(results.chunk)
-      const sent = await everything(rig, results, { from: 'Bus', select: ['Vm'] })
-      // Each batch is part of one chunk, and the chunks tile every frame in order.
-      for (const batch of sent)
-        expect(Math.floor((batch.firstFrame + batch.coordinates.length - 1) / results.chunk)).toBe(
-          Math.floor(batch.firstFrame / results.chunk),
-        )
-      const times = sent
-        .sort((a, b) => a.firstFrame - b.firstFrame)
-        .flatMap((batch) => Array.from(batch.coordinates))
-      expect(times).toHaveLength(frames)
-      expect(times.every((time, i) => time === i)).toBe(true)
+      const sent = await everything(rig, results, { table: 'Bus', field: 'Vm' })
+      using data = native(sent)
+      expect(data.describe().span).toEqual([0, frames - 1])
+      for (let i = 0; i < frames; i += 7919) expect(data.get('Bus', 1, 'Vm', { at: i })).toBe(i % 3)
+      expect(data.get('Bus', 1, 'Vm', { at: frames - 1 })).toBe((frames - 1) % 3)
     } finally {
       await rig.stop()
     }
@@ -221,9 +228,7 @@ describe('the results worker', () => {
       const results = await read(rig, await open(rig, caseOf('in-place'), path))
       expect(results).toMatchObject({ growing: false, path, frames: 3 })
       // The rows the file holds, as the case numbers them: here the one bus.
-      expect(results.outputs).toMatchObject([
-        { from: 'Bus', select: ['Vm'], rows: { kind: 'range', offset: 0, count: 1 } },
-      ])
+      expect(results.outputs).toMatchObject([{ table: 'Bus', field: 'Vm', ids: [1] }])
       expect(results.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
       // What the views read of the case it was read against, and not its issues, which are the
       // case worker's to say.
@@ -256,10 +261,10 @@ describe('the results worker', () => {
       await waveform(path, 3, () => '9')
       const later = new Date(Date.now() + 2000)
       await utimes(path, later, later)
-      const values = async (of: Results) =>
-        (await everything(rig, of, { from: 'Bus', select: ['Vm'] })).flatMap((batch) =>
-          Array.from(batch.columns.Vm!.values),
-        )
+      const values = async (of: Results) => {
+        using data = native(await everything(rig, of, { table: 'Bus', field: 'Vm' }))
+        return [0, 1, 2].map((at) => data.get('Bus', 1, 'Vm', { at }))
+      }
       expect(await values(results)).toEqual([1, 1, 1])
       expect(await values(await read(rig, await open(rig, caseOf('rewritten'), path)))).toEqual([
         9, 9, 9,
@@ -279,7 +284,7 @@ describe('the results worker', () => {
       expect(exported).toMatchObject({ frames: 3, path })
       // The view lets go; the export reads on.
       await rig.call('close', { results: shown.id })
-      expect(await everything(rig, exported, { from: 'Bus', select: ['Vm'] })).not.toEqual([])
+      expect(await everything(rig, exported, { table: 'Bus', field: 'Vm' })).not.toEqual([])
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       await rig.call('close', { results: exported.id })
       expect(await rig.call('stats', {})).toMatchObject({ results: 0, files: 0, resting: 1 })
@@ -336,14 +341,18 @@ describe('the results worker', () => {
     let rig = await start<ResultsApi>(script, { folder })
     try {
       const first = await read(rig, await open(rig, caseOf('cut'), csv))
-      const values = await everything(rig, first, { from: 'Bus', select: ['Vm'] })
+      const values = await everything(rig, first, { table: 'Bus', field: 'Vm' })
       await rig.stop()
       // What was kept of the file ends partway, as a store a crash left would.
-      await truncate(join(await storeOf(folder), 'frames.bin'), 8)
+      await truncate(join(await storeOf(folder), 'raw.bin'), 8)
       rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
       const again = await read(rig, await open(rig, caseOf('cut'), csv))
       expect(again.frames).toBe(first.frames)
-      expect(await everything(rig, again, { from: 'Bus', select: ['Vm'] })).toEqual(values)
+      using a = native(values)
+      using b = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
+      expect([0, 20, 39].map((at) => b.get('Bus', 1, 'Vm', { at }))).toEqual(
+        [0, 20, 39].map((at) => a.get('Bus', 1, 'Vm', { at })),
+      )
     } finally {
       await rig.stop()
       await rm(folder, { recursive: true, force: true })
@@ -358,12 +367,10 @@ describe('the results worker', () => {
     const rig = await start<ResultsApi>(script, { folder, options: { cacheBytes: 0 } })
     try {
       const results = await read(rig, await open(rig, caseOf('lost'), csv))
-      await truncate(join(await storeOf(folder), 'frames.bin'), 0)
-      await expect(everything(rig, results, { from: 'Bus', select: ['Vm'] })).rejects.toMatchObject(
-        {
-          code: 'results-lost',
-        },
-      )
+      await truncate(join(await storeOf(folder), 'raw.bin'), 0)
+      await expect(everything(rig, results, { table: 'Bus', field: 'Vm' })).rejects.toMatchObject({
+        code: 'results-lost',
+      })
       expect(rig.events).toContainEqual({
         kind: 'lost',
         uri: caseOf('lost').uri,
@@ -409,7 +416,7 @@ describe('the results worker', () => {
     }
   })
 
-  it('sends a view only the frames it lacks, and nothing of results closed', async () => {
+  it('sends a view a bounded bracketing window, and nothing of results closed', async () => {
     const rig = await start<ResultsApi>(script)
     const { scratch, call, stop } = rig
     try {
@@ -433,23 +440,25 @@ describe('the results worker', () => {
       await expect(open(rig, revision, broken)).rejects.toThrow(/does not match its header/)
       expect(await call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       const field = results.outputs[0]!
-      const ask = (held: Record<number, number>) =>
-        call('samples', {
+      const ask = () =>
+        call('frames', {
           results: results.id,
-          field,
-          window: [results.domain[1], results.domain[1]],
-          held,
-          bytes: 8 << 20,
+          table: field.table,
+          field: field.field,
+          range: [results.domain[1], results.domain[1]],
+          purpose: 'playhead',
+          pixels: 1,
+          bytes: 4096,
         })
-      // The last moment needs the last chunk, and a view holding it is sent nothing.
-      const last = Math.floor((count - 1) / results.chunk)
-      const sent = await ask({})
-      expect(sent.map(({ firstFrame }) => firstFrame)).toEqual([last * results.chunk])
-      expect(await ask({ [last]: count - last * results.chunk })).toEqual([])
+      const sent = await ask()
+      expect(sent.complete).toBe(true)
+      using data = native([sent])
+      expect(data.get(field.table, field.ids[0]!, field.field)).toBe(Math.fround(1.199))
+      expect(sent.bytes.byteLength).toBeLessThan(4096)
       expect((await call('describe', { results: results.id })).version).toBe(revision.version)
       await call('close', { results: results.id })
       expect(await call('stats', {})).toMatchObject({ results: 0, files: 0 })
-      await expect(ask({})).rejects.toMatchObject({ code: 'results-closed' })
+      await expect(ask()).rejects.toMatchObject({ code: 'results-closed' })
     } finally {
       await stop()
     }

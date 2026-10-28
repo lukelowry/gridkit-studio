@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { bound, channelsFor, channelsOf, recordedWhole, shortNames } from './bindings.js'
+import { bound, channelsFor, channelsOf, recordedRows, shortNames } from './bindings.js'
 
-const vm = { type: 'Bus', field: 'Vm' }
-const kv = { type: 'Bus', field: 'params.kv' }
+const vm = { table: 'Bus', field: 'Vm' }
+const kv = { table: 'Bus', field: 'params.kv' }
 const vertex = channelsFor('vertex')
 
 describe('bindings', () => {
@@ -34,28 +34,13 @@ describe('bindings', () => {
     expect(() => bound({}, vertex, vm, ['edgeColor'])).toThrow(/cannot drive Edge Color/)
   })
 
-  it('counts a signal as recorded for mapping only when a run has it for every row', () => {
-    const index = { source: 'case', type: 'Bus', version: 'one' }
-    const summary = { counts: { Bus: 2 }, indexes: { Bus: index } }
-    const all = [{ from: 'Bus', select: ['Vm', 'Va'] }]
-    const some = [
-      { from: 'Bus', select: ['Vm'], rows: { kind: 'indices', index, values: Uint32Array.of(0) } },
-    ] as never
-    const every = [
-      {
-        from: 'Bus',
-        select: ['Vm'],
-        rows: { kind: 'indices', index, values: Uint32Array.of(0, 1) },
-      },
-    ] as never
-    expect(recordedWhole(all, summary, vm)).toBe(true)
-    expect(recordedWhole(some, summary, vm)).toBe(false)
-    expect(recordedWhole(every, summary, vm)).toBe(true)
-    expect(recordedWhole(all, summary, kv)).toBe(false)
-    expect(recordedWhole([{ from: 'Branch', select: ['Vm'] }], summary, vm)).toBe(false)
-    // Rows numbered otherwise, as a case edited since numbers them, are not the case's rows.
-    const renumbered = { ...summary, indexes: { Bus: { ...index, version: 'two' } } }
-    expect(recordedWhole(every, renumbered, vm)).toBe(false)
+  it('uses stable IDs for sparse recording coverage, regardless of row order', () => {
+    const outputs = [{ table: 'Bus', field: 'Vm', ids: [42, 7] }]
+    expect(recordedRows(outputs, vm, [7, 42])).toBe(true)
+    expect(recordedRows(outputs, vm, [42, 8])).toBe(false)
+    expect(recordedRows(outputs, vm)).toBe(true)
+    expect(recordedRows(outputs, kv)).toBe(false)
+    expect(recordedRows([{ table: 'Branch', field: 'Vm', ids: ['a/b'] }], vm)).toBe(false)
   })
 
   it('names channels by one word each', () => {

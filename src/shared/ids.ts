@@ -119,7 +119,7 @@ export const followed = (uri: string) => uri.startsWith('file:') && CASE_FILE.te
 export const SOLVER_FILE = /\.solver\.json$/i
 
 /** The key a case's saved state is kept under in the workspace's state. */
-const SAVED = 'case:'
+const SAVED = 'case-native-1:'
 export const savedKey = (uri: string) => SAVED + uri
 /** The case a saved state's key names, if it names one. */
 export const savedUri = (key: string) =>

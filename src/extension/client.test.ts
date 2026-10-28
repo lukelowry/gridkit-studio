@@ -18,10 +18,14 @@ beforeAll(async () => {
   await bundle('results', 'client')
   crashing = resolve('output/tests/client-crashing')
   await mkdir(crashing, { recursive: true })
-  await copyFile(join(shipped, 'cases.cjs'), join(crashing, 'cases.cjs'))
+  await copyFile(join(shipped, 'cases.mjs'), join(crashing, 'cases.mjs'))
+  for (const folder of [shipped, crashing]) {
+    await mkdir(join(folder, 'webview'), { recursive: true })
+    await copyFile(OPTIONS.wasmPath, join(folder, 'webview', 'latkit.wasm'))
+  }
   await writeFile(
-    join(crashing, 'results.cjs'),
-    `const { parentPort } = require('node:worker_threads')
+    join(crashing, 'results.mjs'),
+    `import { parentPort } from 'node:worker_threads'
 parentPort.on('message', (message) => {
   if (message.kind !== 'request') return
   if (message.method === 'open') throw new Error('The stand-in crashed.')

@@ -4,9 +4,15 @@
 import * as vscode from 'vscode'
 
 import { display, leaf } from '../shared/cells.js'
+import {
+  type Entity,
+  entityLabel,
+  fieldDefinition,
+  fieldLabel,
+  referenceFields,
+} from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
 import type { Value } from '../shared/messages.js'
-import { elementType, fieldName, referencesOf } from '../shared/schema.js'
 import type { Commands, Context } from './context.js'
 
 export function registerElements({
@@ -57,13 +63,14 @@ export function registerElements({
   command('goToReference', async (context) => {
     const { session, summary, element, type, field } = context
     if (!element || !type) return
-    const definitions = summary.schema.types[type]?.fields ?? {}
-    const fields = field ? [field] : referencesOf(summary.schema, type).map((each) => each.field)
+    const fields = field
+      ? [field]
+      : referenceFields(summary.definition, type).map((each) => each.name)
     const values = await valuesOf(context, type, fields, element.id)
     const found = await Promise.all(
-      fields.map(async (each) => ({ field: each, id: await referred(context, values[each]) })),
+      fields.map(async (each) => ({ field: each, id: referred(values[each]) })),
     )
-    const targets = found.filter((each): each is { field: string; id: string } => !!each.id)
+    const targets = found.filter((each): each is { field: string; id: Entity } => !!each.id)
     if (!targets.length)
       throw new Error(
         field ? 'This reference is disconnected.' : `${element.id} refers to no element.`,
@@ -73,43 +80,43 @@ export function registerElements({
         ? targets[0]
         : await vscode.window.showQuickPick(
             targets.map((each) => ({
-              label: fieldName(definitions[each.field], each.field),
-              description: each.id,
+              label: fieldLabel(fieldDefinition(summary.definition, type, each.field)!),
+              description: entityLabel(each.id),
               ...each,
             })),
             { title: 'Elements ' + element.id + ' refers to' },
           )
-    if (target) session.select({ id: target.id })
+    if (target) session.select(target.id)
   })
   command('editField', async (context) => {
     const { session, summary, element } = context
     if (!element) return
-    const type = elementType(element.id)
+    const type = element.table
     const field =
       context.field ??
       (await vscode.window.showQuickPick(summary.editable[type] ?? [], {
         title: 'Edit ' + element.id,
       }))
     if (!field) return
-    const spec = summary.schema.types[type]?.fields[field]
+    const spec = fieldDefinition(summary.definition, type, field)
     if (!spec || !summary.editable[type]?.includes(field))
       throw new Error(leaf(field) + ' cannot be edited.')
     const current = await valueOf(context, type, field, element.id)
     let value: Value
-    if (typeof spec.type === 'object' && spec.type.kind === 'reference') {
-      const choice = await pickElement(context, spec.type.to)
-      if (!choice) return
+    if (spec.kind === 'reference' && spec.target) {
+      const choice = await pickElement(context, spec.target)
+      if (choice === undefined || choice === null) return
       value = choice
-    } else if (spec.type === 'boolean') {
+    } else if (spec.kind === 'boolean') {
       const choice = await vscode.window.showQuickPick(['true', 'false'], { title: field })
       if (!choice) return
       value = choice === 'true'
     } else {
       const text = await vscode.window.showInputBox({
-        title: fieldName({ ...spec, label: field }, field),
-        value: spec.type === 'text' ? String(current ?? '') : JSON.stringify(current ?? null),
+        title: fieldLabel({ ...spec, label: field }),
+        value: spec.kind === 'text' ? String(current ?? '') : JSON.stringify(current ?? null),
         validateInput: (input) => {
-          if (spec.type === 'text') return
+          if (spec.kind === 'text') return
           try {
             JSON.parse(input)
           } catch {
@@ -118,12 +125,12 @@ export function registerElements({
         },
       })
       if (text === undefined) return
-      value = spec.type === 'text' ? text : JSON.parse(text)
+      value = spec.kind === 'text' ? text : JSON.parse(text)
     }
-    await studio.documents.edit(session.uri, summary.version, { id: element.id, field }, value)
+    await studio.documents.edit(session.uri, summary.version, { ...element, field }, value)
   })
   command('copyId', async ({ element }) => {
-    if (element) await vscode.env.clipboard.writeText(element.id)
+    if (element) await vscode.env.clipboard.writeText(String(element.id))
   })
   command('copyValue', async (context) => {
     if (context.element && context.type && context.field)
@@ -136,7 +143,7 @@ export function registerElements({
   command('selectOverlapping', async (context) => {
     const selected = await vscode.window.showQuickPick(
       (context.target?.items ?? []).map((element) => ({
-        label: element.id,
+        label: entityLabel(element),
         description: element.field,
         element,
       })),
@@ -149,7 +156,7 @@ export function registerElements({
     await studio.documents.transact(
       context.session.uri,
       context.summary.version,
-      [{ kind: 'connect', from: { id: context.element.id, field: context.field }, to: null }],
+      [{ kind: 'connect', from: { ...context.element, field: context.field }, to: null }],
       'Disconnect signal port',
     )
   })
@@ -158,7 +165,7 @@ export function registerElements({
     await studio.documents.transact(
       context.session.uri,
       context.summary.version,
-      [{ kind: 'remove', ids: [context.element.id] }],
+      [{ kind: 'remove', entities: [context.element] }],
       'Delete element',
     )
   })

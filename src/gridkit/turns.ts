@@ -2,8 +2,6 @@
 
 import { setImmediate } from 'node:timers/promises'
 
-import { interruptible } from '@latkit/model'
-
 /** How long a turn runs before the worker answers what else it was asked. */
 const TURN_MS = 8
 
@@ -29,6 +27,22 @@ export class Turns {
 
   /** `task`, unless the signal lets go first. */
   wait<T>(task: PromiseLike<T>): Promise<T> {
-    return interruptible(task, this.signal)
+    const { signal } = this
+    signal.throwIfAborted()
+    return new Promise<T>((resolve, reject) => {
+      const aborted = () => reject(signal.reason)
+      signal.addEventListener('abort', aborted, { once: true })
+      Promise.resolve(task).then(
+        (value) => {
+          signal.removeEventListener('abort', aborted)
+          if (signal.aborted) reject(signal.reason)
+          else resolve(value)
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', aborted)
+          reject(error)
+        },
+      )
+    })
   }
 }

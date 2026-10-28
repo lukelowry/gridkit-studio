@@ -5,13 +5,11 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 
-import type { Block } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { rowsOf } from '../../src/shared/cells.js'
 import {
   again,
   folder,
@@ -114,24 +112,19 @@ suite('Run', function () {
     assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
     await visible(monitor, 'canvas[data-rendered=true]')
     // The plot reads its trace while it holds focus: focus the run's own views take is given back.
-    const reading = () => monitor.locator('.lane [role="status"]').innerText()
+    const reading = () => monitor.locator('.lane__reading').innerText()
     /** Whether the reading says the voltage the run wrote for its bus at the playhead: "1,
      *  1.04852 pu, 10.000 s." */
     const read = async () => {
-      const said = /^(.+?), (-?[\d.]+(?:e[-+]?\d+)?)/.exec(await reading())
+      const said = /^(.+?): (-?[\d.]+(?:e[-+]?\d+)?)/.exec(await reading())
       if (!said) return false
-      const blocks = await bench.studio.client.results.call('query', {
+      const { value: wrote } = await bench.studio.client.results.call('sample', {
         results: results.id,
-        query: {
-          kind: 'rows',
-          from: 'Bus',
-          select: ['Vm'],
-          ids: true,
-          rows: { kind: 'ids', ids: ['Bus/' + said[1]] },
-          at: bench.session.transport.currentT(),
-        },
+        table: 'Bus',
+        field: 'Vm',
+        id: Number(said[1]),
+        at: bench.session.transport.currentT(),
       })
-      const wrote = rowsOf(blocks as Block.Rows[])[0]?.values.Vm
       return typeof wrote === 'number' && Math.abs(Number(said[2]) - wrote) < 1e-3
     }
     // Focus given from the workbench can reach the canvas while its frame lacks it, so the plot
@@ -157,7 +150,7 @@ suite('Run', function () {
               canvas as unknown as { gridkitPlot(): { at?: number; paused: boolean } }
             ).gridkitPlot(),
           )
-        const live = await monitor.locator('.lane [role="status"]').getAttribute('aria-live')
+        const live = await monitor.locator('.lane__reading').getAttribute('aria-live')
         const focused = (name: string) =>
           `(document.hasFocus() ? 'has' : 'lacks') + ' focus on ' + document.activeElement?.${name}`
         const focus = await monitor.evaluate<string>(focused('tagName'))
@@ -243,7 +236,7 @@ suite('Run', function () {
     await bench.toggleSignal('Bus', 'Vm')
     assert.ok(bench.recorded('Bus', 'Va') && !bench.recorded('Bus', 'Vm'))
     assert.deepEqual(bench.session.plots, [{ from: 'Bus', field: 'Vm' }])
-    assert.equal(bench.session.results!.outputs[0]!.select[0], 'Vm')
+    assert.equal(bench.session.results!.outputs[0]!.field, 'Vm')
     bench.run()
     await until(
       () => bench.session.run?.id !== previous && bench.session.run?.state === 'complete',

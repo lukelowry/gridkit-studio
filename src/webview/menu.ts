@@ -1,22 +1,7 @@
 /** The case's elements as the views find them and offer them to VS Code's native menu. */
 
-import { type Data, type Item, rowAt, selectRows } from '@latkit/model'
-
 import { menuContext, type Target } from '../shared/contexts.js'
 import type { Element, Plot, ViewState } from '../shared/messages.js'
-import { elementType } from '../shared/schema.js'
-
-/** The item of element `id` in `source`; undefined when its type has no table. Throws for an id
- *  the table lacks. */
-export function itemOf(source: Data, id: string): Item | undefined {
-  const table = source.tables[elementType(id)]
-  if (!table) return undefined
-  return {
-    source,
-    index: table.index,
-    row: rowAt(selectRows(table, { kind: 'ids', ids: [id] }), 0),
-  }
-}
 
 /** Opens VS Code's menu for `elements` at `point`. Latkit picks asynchronously, so a synthetic
  *  event on a temporary node carries the exact hit's context. */

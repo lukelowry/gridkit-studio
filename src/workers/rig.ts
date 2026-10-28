@@ -1,7 +1,7 @@
 /** Each worker as the extension runs it, for the workers' and the client's tests: bundled for Node,
  *  and asked through the extension's own side of the protocol. */
-
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -13,17 +13,25 @@ import { type Api, Caller } from '../shared/rpc.js'
 
 /** What the tests start the results worker with, but for where it keeps the results it reads:
  *  room for every chunk they read, and no saved session's results to keep. */
-export const OPTIONS: Omit<ResultsOptions, 'store'> = { cacheBytes: 64 << 20, saved: [] }
+const require = createRequire(import.meta.url)
+export const OPTIONS: Omit<ResultsOptions, 'store'> = {
+  cacheBytes: 64 << 20,
+  saved: [],
+  wasmPath: require.resolve('latkit/wasm'),
+}
 
 /** Bundles the worker `name` into `output/tests/<folder>`, as the extension ships it; its path. */
 export async function bundle(name: 'cases' | 'results', folder: string): Promise<string> {
-  const outfile = resolve('output/tests', folder, name + '.cjs')
+  const outfile = resolve('output/tests', folder, name + '.mjs')
   await build({
     entryPoints: [`src/workers/${name}.ts`],
     outfile,
     bundle: true,
     platform: 'node',
-    format: 'cjs',
+    format: 'esm',
+    banner: {
+      js: "import { createRequire as __createRequire } from 'node:module';const require = __createRequire(import.meta.url);",
+    },
     target: 'node22',
     mainFields: ['module', 'main'],
     logLevel: 'warning',

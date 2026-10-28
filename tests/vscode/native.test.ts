@@ -61,7 +61,7 @@ suite('Native menus', () => {
 
   test("a bus on the Network shows its menu's items, and runs the one chosen", async () => {
     const network = await bench.open('network')
-    const id = 'Bus/' + bench.source.buses[2]!.number
+    const id = { table: 'Bus', id: bench.source.buses[2]!.number }
     /** Where the Network draws the bus now. */
     const at = async () => {
       await idle(network)
@@ -77,7 +77,7 @@ suite('Native menus', () => {
     const shown = await bench.native(
       async () => canvas.click({ button: 'right', position: await at() }),
       'Copy ID',
-      async () => (await clipboard()) === id,
+      async () => (await clipboard()) === String(id.id),
     )
     showed(shown, offered, true)
   })

@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
-import type { Block } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { shownType } from '../shared/cells.js'
+import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
 import type {
@@ -20,9 +20,8 @@ import type {
   ViewMessage,
   ViewState,
 } from '../shared/messages.js'
-import type { SettingsValues } from '../shared/preferences.js'
+import { type SettingsValues, validateSettings } from '../shared/preferences.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
-import { typeName } from '../shared/schema.js'
 import { drawnOf } from '../shared/simulation.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
@@ -41,7 +40,7 @@ function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
   const type = summary && shownType(summary, table)
   if (kind === 'case' && summary && type) {
-    parts.push(typeName(summary.schema, type))
+    parts.push(tableLabel(summary.definition, type))
     const count = summary.counts[type]
     const shown = studio.get(uri)?.rows
     if ((table?.filter || table?.equal) && count !== undefined && shown !== undefined)
@@ -148,11 +147,20 @@ function html(
   kind: string,
 ) {
   const nonce = randomBytes(18).toString('base64')
+  const escape = (value: string) =>
+    value
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
   const asset = (path: string) =>
-    webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path))
+    escape(webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path)).toString())
   // The map's worker starts from a blob, and its tiles come from wherever the tiles URL names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource} https:;">
+<meta name="latkit-wasm" content="${asset('dist/webview/latkit.wasm')}">
+<meta name="latkit-worker" content="${asset('dist/webview/latkit-worker.js')}">
+<meta name="latkit-assets" content="${asset('dist/webview/')}">
 <link rel="stylesheet" href="${asset('dist/webview/' + entry + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
@@ -361,7 +369,7 @@ class View {
     const session = uri ? this.studio.get(uri) : undefined
     switch (message.kind) {
       case 'select':
-        if (message.element === null || typeof message.element?.id === 'string')
+        if (message.element === null || isEntity(message.element))
           session?.select(message.element ?? undefined)
         return
       case 'window': {
@@ -375,6 +383,19 @@ class View {
         if (this.kind === 'network' || this.kind === 'diagram')
           session?.setCamera(this.kind, message.camera)
         return
+      case 'display': {
+        if (this.kind !== 'network' || !uri) return
+        const values = validateSettings(message.values)
+        const allowed = new Set(['network.projection', 'network.tilt', 'network.orbit'])
+        if (Object.keys(values).some((key) => !allowed.has(key))) return
+        const configuration = vscode.workspace.getConfiguration(
+          'gridkitStudio',
+          vscode.Uri.parse(uri),
+        )
+        for (const [key, value] of Object.entries(values))
+          await configuration.update(key, value, vscode.ConfigurationTarget.Global)
+        return
+      }
       case 'transport': {
         // Counted whatever comes of it, so the clock's answers say the page's latest change.
         if (Number.isSafeInteger(message.seq)) this.#seq = Math.max(this.#seq, message.seq)
@@ -425,27 +446,22 @@ class View {
   #handlers(): Handlers<ViewApi> {
     const { studio } = this
     const { client } = studio
-    const rows = async (input: ViewApi['query']['input'], signal: AbortSignal) => {
-      if (input.query?.kind !== 'rows') throw new Error('Invalid row query')
-      const blocks =
-        'results' in input
-          ? await client.results.call('query', input, signal)
-          : await client.cases.call('query', { ...input.revision, query: input.query }, signal)
-      return blocks.filter((block): block is Block.Rows => block.kind === 'rows')
-    }
     return {
-      samples: (input, signal) => client.results.call('samples', input, signal),
-      rows: (input, signal) =>
+      frames: (input, signal) => client.results.call('frames', input, signal),
+      sample: (input, signal) => client.results.call('sample', input, signal),
+      project: (input, signal) =>
         'results' in input
-          ? client.results.call('rows', input, signal)
-          : client.cases.call('rows', { ...input.revision, fields: input.fields }, signal),
-      presentation: (input, signal) =>
-        'results' in input
-          ? client.results.call('presentation', input, signal)
-          : client.cases.call('presentation', input.revision, signal),
-      query: (input, signal) => {
-        const read = rows(input, signal)
-        // The Case panel's rows load under VS Code's own progress bar on the view.
+          ? client.results.call('project', input, signal)
+          : client.cases.call(
+              'project',
+              { ...input.revision, fields: input.fields, cursor: input.cursor, base: input.base },
+              signal,
+            ),
+      page: (input, signal) => {
+        const read =
+          'results' in input
+            ? client.results.call('page', input, signal)
+            : client.cases.call('page', { ...input.revision, request: input.request }, signal)
         if (this.kind === 'case')
           void vscode.window.withProgress({ location: { viewId: viewId('case') } }, () =>
             read.catch(() => {}),
@@ -461,9 +477,8 @@ class View {
           revision.attachmentId,
         ),
       cameras: async ({ uri }) => studio.get(uri)?.cameras ?? {},
-      videoOpen: ({ uri, name, format }, signal) =>
-        this.#videos.open(vscode.Uri.parse(uri), name, format, signal),
-      videoWrite: ({ file, position, bytes }) => this.#videos.write(file, position, bytes),
+      videoOpen: ({ uri, name }, signal) => this.#videos.open(vscode.Uri.parse(uri), name, signal),
+      videoWrite: ({ file, bytes }) => this.#videos.write(file, bytes),
       videoClose: ({ file, abort }) => this.#videos.close(file, abort),
       // A share the page let go of as it was made holds nothing past it.
       share: async ({ results }, signal) => {

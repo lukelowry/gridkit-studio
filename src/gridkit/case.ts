@@ -1,26 +1,28 @@
 /** A loaded case: its tables as column chunks, the Data a host reads, and the file as read. */
-
 import { createHash, type Hash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 
-import type { Data, Failure, Index, Schema } from '@latkit/model'
-import { createData, failure } from '@latkit/model'
 import { printParseErrorCode, visit } from 'jsonc-parser'
+import { type Id, reference } from 'latkit'
 
+import type { CaseDefinition, Entity } from '../shared/document.js'
+import { DIAGRAM_POSITION, LABEL, NETWORK_POSITION } from '../shared/document.js'
+import type { SourceError } from '../shared/errors.js'
+import { problem } from '../shared/errors.js'
 import { defect } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import {
-  builder,
   type Chunk,
   chunkAt,
   chunkOf,
   type Column,
+  type DecodeKind,
   deferred,
-  hash,
   isInt32,
   isValid,
   radixOrder,
+  readColumn,
   rowCount,
   utf8,
   valueAt,
@@ -30,11 +32,13 @@ import {
   CASE,
   CASE_ROW,
   type Catalog,
+  definitionsOf,
   type FieldPlan,
   type Shape,
   SIGNAL,
   withFound,
 } from './definition.js'
+import type { ProjectedDocument, ProjectedTable } from './document.js'
 import { bytesAt, carryOffsets, charsAt } from './offsets.js'
 import {
   ARRAYS,
@@ -59,7 +63,6 @@ import { Turns } from './turns.js'
 
 export interface Table {
   readonly shape: Shape
-  readonly index: Index
   /** Where each chunk starts, shared by every column; the last entry is the row count. */
   readonly starts: Uint32Array
   readonly ids: Column
@@ -100,7 +103,7 @@ const RECORD_BYTES = 80
 
 export class Case {
   #signalsChecked = false
-  #data: Data | undefined
+  #projection?: ProjectedDocument
 
   static async read(path: string, catalog: Catalog, signal?: AbortSignal): Promise<Case> {
     return Case.parse(await readFile(path, 'utf8'), catalog, basename(path, '.case.json'), signal)
@@ -137,7 +140,7 @@ export class Case {
       return assembled(file, layout, parts, parser.coding, catalog, name, hashOf(catalog, file))
     } catch (error) {
       // A record the parse refused, or the second of an id, says so where it is.
-      const target = (error as Failure).target
+      const target = (error as SourceError).target
       throw target?.kind === 'path'
         ? placed(error, file, layout.arrays[target.path[0] as ArrayName], target.path[1])
         : error
@@ -183,10 +186,10 @@ export class Case {
 
   constructor(
     readonly name: string,
-    readonly version: Index['version'],
+    readonly version: string,
     readonly catalog: Catalog,
     /** The catalog's types, with the classes and fields this case has that it does not know. */
-    readonly schema: Schema,
+    readonly definition: CaseDefinition,
     readonly tables: ReadonlyMap<string, Table>,
     /** The file as read. */
     readonly file: Uint8Array,
@@ -211,11 +214,6 @@ export class Case {
     return this.members.find((member) => member.name === name)
   }
 
-  /** One immutable Data facade. Each field and row-ID column decodes on its first read. */
-  get data(): Data {
-    return (this.#data ??= dataOf(this.schema, this.tables))
-  }
-
   /** The fewest bytes a case read from `text` keeps alive: its source and the spans into it. */
   static leastBytes(text: string): number {
     return text.length * SOURCE_BYTES
@@ -232,14 +230,14 @@ export class Case {
 
   table(type: string): Table {
     const table = this.tables.get(type)
-    if (table === undefined) throw failure('invalid-input', `No type is called ${type}.`)
+    if (table === undefined) throw problem('invalid-input', `No type is called ${type}.`)
     return table
   }
 
   cell(table: Table, field: string, row: number): Value {
     const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
     if (column === undefined)
-      throw failure('invalid-input', `${table.shape.type} has no field ${field}.`)
+      throw problem('invalid-input', `${table.shape.type} has no field ${field}.`)
     const chunk = chunkAt(column.starts, row)
     return valueAt(column.chunks[chunk]!, row - column.starts[chunk]!)
   }
@@ -247,32 +245,78 @@ export class Case {
   /** A row's native identity, as the file writes it. */
   native(table: Table, row: number): string | number {
     const chunk = chunkAt(table.starts, row)
-    const ids = table.ids.chunks[chunk]!
-    const i = ids.offset + row - table.starts[chunk]!
-    return ids.kind === 'text'
-      ? utf8(ids.bytes, ids.offsets[i]!, ids.offsets[i + 1]!)
-      : (ids as Chunk.Numeric).values[i]!
+    return table.ids.chunks[chunk]![row - table.starts[chunk]!] as Id
   }
 
   /** The row with this native identity, or -1. */
   rowOf(table: Table, native: string | number): number {
     if (table.shape.identity.type === 'text')
       return typeof native === 'string' ? textIds(table).row(native) : -1
-    const number =
-      typeof native === 'number' ? native : /^(0|[1-9][0-9]*)$/.test(native) ? Number(native) : -1
+    const number = typeof native === 'number' ? native : -1
     return number >= 0 && number <= 0xffffffff ? numberIds(table).row(number) : -1
   }
 
-  /** A row's id: its type and native identity, such as `Bus/16`. */
-  id(table: Table, row: number): string {
-    return `${table.shape.type}/${this.native(table, row)}`
+  entity(table: Table, row: number): Entity {
+    return { table: table.shape.type, id: this.native(table, row) }
   }
 
-  locate(id: string): { readonly table: Table; readonly row: number } | null {
-    const slash = id.indexOf('/')
-    const table = slash < 0 ? undefined : this.tables.get(id.slice(0, slash))
-    const row = table === undefined ? -1 : this.rowOf(table, id.slice(slash + 1))
+  locate(entity: Entity): { readonly table: Table; readonly row: number } | null {
+    const table = this.tables.get(entity.table)
+    const row = table ? this.rowOf(table, entity.id) : -1
     return row < 0 ? null : { table: table!, row }
+  }
+
+  projected(): ProjectedDocument {
+    if (this.#projection) return this.#projection
+    const tables = new Map<string, ProjectedTable>()
+    for (const [name, table] of this.tables) {
+      const ids = identities(table)
+      const positions = deferred(() => ({
+        x: new Float64Array(ids.length).fill(NaN),
+        y: new Float64Array(ids.length).fill(NaN),
+        seen: new Uint8Array(ids.length),
+      }))
+      const positionValues = (axis: number, offset: number, count: number): Float64Array => {
+        const held = positions()
+        const spans = table.shape.array ? this.arrays[table.shape.array] : undefined
+        for (let row = offset; row < offset + count; row++) {
+          if (held.seen[row]) continue
+          held.seen[row] = 1
+          if (!spans) continue
+          const record = table.records[row]!
+          const value = JSON.parse(utf8(this.file, spans.starts[record]!, spans.ends[record]!))
+            .extension?.diagram?.position
+          if (
+            Array.isArray(value) &&
+            value.length === 2 &&
+            value.every((item: unknown) => typeof item === 'number' && Number.isFinite(item))
+          ) {
+            held.x[row] = value[0]
+            held.y[row] = value[1]
+          }
+        }
+        return (axis === 0 ? held.x : held.y).slice(offset, offset + count)
+      }
+      tables.set(name, {
+        ids,
+        read: (field, offset, count) => {
+          if (field === LABEL) return ids.slice(offset, offset + count).map(String)
+          const position = DIAGRAM_POSITION.indexOf(field)
+          if (position >= 0) return positionValues(position, offset, count)
+          if (NETWORK_POSITION.includes(field)) return new Float64Array(count).fill(NaN)
+          const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
+          if (!column) throw problem('invalid-input', 'Unknown source field: ' + name + '.' + field)
+          const values = readColumn(column, offset, count)
+          return column.target
+            ? reference(
+                column.target,
+                Array.from(values as Float64Array, (id) => (Number.isFinite(id) ? id : null)),
+              )
+            : values
+        },
+      })
+    }
+    return (this.#projection = { key: this.version, definition: this.definition, tables })
   }
 
   /** Throws when more than one output port drives a signal. */
@@ -282,17 +326,17 @@ export class Case {
     const driven = new Uint8Array(Math.ceil(rowCount(signals.starts) / 8))
     for (const table of this.tables.values())
       for (const port of table.shape.ports) {
-        if (port.definition.type.to !== SIGNAL || port.definition.direction !== 'out') continue
+        if (port.definition.target !== SIGNAL || port.definition.direction !== 'out') continue
         for (const chunk of table.fields.get(port.name)!.chunks) {
-          const reference = chunk as Chunk.Reference
+          const reference = chunk as Float64Array
           for (let at = 0; at < reference.length; at++) {
             if (!isValid(reference, at)) continue
-            const row = reference.values[reference.offset + at]!
+            const row = this.rowOf(signals, reference[at]!)
             const bit = 1 << (row & 7)
             if ((driven[row >>> 3]! & bit) !== 0) {
-              const id = this.id(signals, row)
-              throw failure('invalid-input', `${id} has more than one driver.`, {
-                target: { kind: 'row', type: SIGNAL, id },
+              const id = this.native(signals, row)
+              throw problem('invalid-input', `${id} has more than one driver.`, {
+                target: { kind: 'row', entity: { table: SIGNAL, id } },
               })
             }
             driven[row >>> 3]! |= bit
@@ -361,7 +405,7 @@ async function partsOf(
   const problems = parts.flatMap(({ parsed }) => parsed.problems)
   const [first] = problems
   if (first)
-    throw failure('invalid-input', first.message, {
+    throw problem('invalid-input', first.message, {
       issues: problems.slice(0, PROBLEMS),
       ...(first.target && { target: first.target }),
     })
@@ -440,7 +484,7 @@ function joined(
   file: Uint8Array,
   layout: Layout,
   catalog: Catalog,
-  version: Index['version'],
+  version: string,
   fallback: string,
   hashes: readonly Hash[],
   previous?: Case,
@@ -494,22 +538,22 @@ function joined(
       before?.ids.chunks.length === ids.length &&
       before.ids.chunks.every((chunk, i) => chunk === ids[i])
     const starts = kept ? before!.starts : startsOf(ids)
-    const column = (type: Schema.FieldType, list: readonly Chunk[]): Column => ({
-      type,
+    const column = (type: DecodeKind, list: readonly Chunk[]): Column => ({
+      kind: type,
       chunks: list,
       starts,
     })
     tables.set(shape.type, {
       shape,
-      index: kept ? before!.index : indexOf(catalog, shape.type, ids),
       starts,
       ids: kept ? before!.ids : column(shape.identity.type, ids),
       fields: new Map(
         shape.fields.map((field, i) => [
           field.name,
           {
-            type: field.definition.type,
+            kind: field.decode,
             starts,
+            provided: () => fields[i]!.some((part) => part.provided()),
             get chunks() {
               return decoded[i]!()
             },
@@ -528,7 +572,7 @@ function joined(
     const shape = shapes[code]!
     const table = tables.get(shape.type)!
     shape.ports.forEach((port, i) => {
-      const target = tables.get(port.definition.type.to)!
+      const target = tables.get(port.definition.target)!
       ;(table.fields as Map<string, Column>).set(
         port.name,
         references(chunks[code]!.ports[i]!, table.starts, target),
@@ -536,10 +580,8 @@ function joined(
     })
   }
   const fields = foundColumns(file, found, records, shapes, tables)
-  const header = caseTable(file, layout, catalog.shapes.get(CASE)!, catalog.version)
+  const header = caseTable(file, layout, catalog.shapes.get(CASE)!)
   tables.set(CASE, header)
-  const types: Record<string, Schema.Type> = Object.create(null)
-  for (const [type, table] of tables) types[type] = table.shape.definition
   const arrays: Partial<Record<ArrayName, RecordArray>> = {}
   for (const array of ARRAYS) {
     const spans = layout.arrays[array]
@@ -550,7 +592,10 @@ function joined(
     typeof name === 'string' && name !== '' ? name : fallback,
     version,
     catalog,
-    { ...catalog.schema, types },
+    definitionsOf(
+      [...tables.values()].map((table) => table.shape),
+      (table, field) => tables.get(table)?.fields.get(field)?.provided?.() ?? false,
+    ),
     tables,
     file,
     arrays,
@@ -846,7 +891,7 @@ function syntax(text: string): void {
       onObjectProperty: (name, offset, length) => {
         const keys = objects.at(-1)!
         if (keys.has(name))
-          throw Object.assign(failure('invalid-input', 'Duplicate JSON property: ' + name), {
+          throw Object.assign(problem('invalid-input', 'Duplicate JSON property: ' + name), {
             offset,
             length,
           })
@@ -854,11 +899,14 @@ function syntax(text: string): void {
       },
       onError: (error, offset, length) => {
         // `PropertyNameExpected` reads as `Invalid JSON: property name expected`.
-        const problem = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
-        throw Object.assign(failure('invalid-input', 'Invalid JSON: ' + problem.toLowerCase()), {
-          offset,
-          length,
-        })
+        const description = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
+        throw Object.assign(
+          problem('invalid-input', 'Invalid JSON: ' + description.toLowerCase()),
+          {
+            offset,
+            length,
+          },
+        )
       },
     },
     { disallowComments: true, allowTrailingComma: false },
@@ -915,10 +963,10 @@ function foundColumns(
         }),
       )
       const scalar = kinds.size <= 1 && !kinds.has('object')
-      const type: Schema.FieldType = !scalar
-        ? 'text'
+      const type: DecodeKind = !scalar
+        ? 'json'
         : kinds.has('number')
-          ? 'float64'
+          ? 'number'
           : kinds.has('boolean')
             ? 'boolean'
             : 'text'
@@ -939,7 +987,7 @@ function foundColumns(
         )
       })
       columns.set(name, {
-        type,
+        kind: type,
         starts: table.starts,
         get chunks() {
           return decode()
@@ -947,12 +995,9 @@ function foundColumns(
       })
       plans.push({
         name,
+        decode: type,
         source: { kind: 'found', path: members[0]!.path, json: !scalar },
-        definition: {
-          type,
-          nullable: true,
-          description: "Not in GridKit Studio's catalog; kept as written.",
-        },
+        definition: { name, kind: type, label: name },
       })
       firsts.push({
         type: shape.type,
@@ -965,32 +1010,9 @@ function foundColumns(
   return firsts
 }
 
-/** `type`'s rows as latkit numbers them: by their ids, in order. Any revision whose ids are these
- *  numbers its rows alike, so what was read against one, as results are, fits the others. Hashed
- *  as every id's length, then every id, however they were cut into chunks. */
-function indexOf(catalog: Catalog, type: string, ids: readonly Chunk[]): Index {
-  const hash = createHash('sha256').update(type)
-  if (ids[0]?.kind === 'text') {
-    const texts = ids as readonly Chunk.Text[]
-    const lengths = new Int32Array(texts.reduce((count, chunk) => count + chunk.length, 0))
-    let row = 0
-    for (const { offsets, offset, length } of texts)
-      for (let i = offset; i < offset + length; i++) lengths[row++] = offsets[i + 1]! - offsets[i]!
-    hash.update(new Uint8Array(lengths.buffer))
-    for (const { bytes, offsets, offset, length } of texts)
-      hash.update(bytes.subarray(offsets[offset], offsets[offset + length]))
-  } else
-    for (const chunk of ids) {
-      const { values, offset, length } = chunk as Chunk.Numeric
-      const width = values.BYTES_PER_ELEMENT
-      hash.update(new Uint8Array(values.buffer, values.byteOffset + offset * width, length * width))
-    }
-  return { source: catalog.version, type, version: hash.digest('hex').slice(0, 32) }
-}
-
 /** The Case table's one row: the header's and system parameters' members. Its one row is always
  *  numbered alike, in the row space of `source`, its catalog's. */
-function caseTable(file: Uint8Array, layout: Layout, shape: Shape, source: string): Table {
+function caseTable(file: Uint8Array, layout: Layout, shape: Shape): Table {
   const values = new Map<string, Value>()
   /** The fields the file writes a value for, whether or not it reads as one. */
   const supplied = new Set<string>()
@@ -1013,34 +1035,33 @@ function caseTable(file: Uint8Array, layout: Layout, shape: Shape, source: strin
       const value: unknown = JSON.parse(utf8(file, spans[4 * m + 2]!, spans[4 * m + 3]!))
       if (value !== null) supplied.add(field.name)
       // As a record's field reads its value: a number finite, and whole within range for an int32.
-      const type = field.definition.type
+      const type = field.decode
       if (
         type === 'text'
           ? typeof value === 'string'
           : typeof value === 'number' &&
             Number.isFinite(value) &&
-            (type !== 'int32' || isInt32(value))
+            (type !== 'integer' || isInt32(value))
       )
         values.set(field.name, value as Value)
     }
   }
   const starts = Uint32Array.of(0, 1)
   /** A column of the one row's `value`, wrong when the file writes one that does not read. */
-  const column = (type: Schema.FieldType, value: Value, given = value !== null): Column => ({
-    type,
+  const column = (type: DecodeKind, value: Value, given = value !== null): Column => ({
+    kind: type,
     chunks: [chunkOf(type, [value])],
     starts,
     wrong: () => (given && value === null ? [0] : []),
   })
   return {
     shape,
-    index: { source, type: CASE, version: CASE },
     starts,
     ids: column('text', CASE_ROW),
     fields: new Map(
       shape.fields.map((field) => [
         field.name,
-        column(field.definition.type, values.get(field.name) ?? null, supplied.has(field.name)),
+        column(field.decode, values.get(field.name) ?? null, supplied.has(field.name)),
       ]),
     ),
     records: new Uint32Array(1),
@@ -1063,35 +1084,38 @@ function concatenated(parts: readonly Uint32Array[]): Uint32Array {
   return out
 }
 
-/** Each port chunk as rows of the target it was resolved against, while that target's ids are the
- *  same: a range a revision keeps, of a target it leaves alone, is never resolved again. */
-const resolved = new WeakMap<IndexedChunk, ReturnType<typeof resolve>>()
-
-/** A port's native numbers as rows of `target`; a number no row holds is null. Its wrong rows are
- *  those that write what is no number, and those whose number names no row: found again as the
- *  target's ids change. */
+/** Native references are validated against source identities without serializing physical rows. */
+const resolved = new WeakMap<
+  IndexedChunk,
+  { ids: Column; values: Float64Array; wrong: readonly number[] }
+>()
 function references(native: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
   const decode = deferred(() => {
     const wrong: number[] = []
-    const chunks = native.map((source, c): Chunk.Reference => {
+    const chunks = native.map((source, c) => {
       let found = resolved.get(source)
-      if (found?.ids !== target.ids) resolved.set(source, (found = resolve(source, target)))
-      for (const at of found.wrong) wrong.push(starts[c]! + at)
-      // Of this revision's target, whose index names the version of the case it is of.
-      return {
-        kind: 'reference',
-        index: target.index,
-        values: found.values,
-        offset: 0,
-        length: found.values.length,
-        ...(found.validity && { validity: found.validity }),
+      if (found?.ids !== target.ids) {
+        const port = source.read() as Float64Array
+        const ids = numberIds(target)
+        const values = port.slice()
+        const invalid = new Set(source.wrong())
+        for (let at = 0; at < values.length; at++) {
+          if (Number.isFinite(values[at]) && ids.row(values[at]!) < 0) {
+            values[at] = NaN
+            invalid.add(at)
+          }
+        }
+        found = { ids: target.ids, values, wrong: [...invalid].sort((a, b) => a - b) }
+        resolved.set(source, found)
       }
+      for (const at of found.wrong) wrong.push(starts[c]! + at)
+      return found.values
     })
     return { chunks, wrong }
   })
   return {
-    type: { kind: 'reference', to: target.index.type },
-    index: target.index,
+    kind: 'reference',
+    target: target.shape.type,
     starts,
     get chunks() {
       return decode().chunks
@@ -1100,156 +1124,17 @@ function references(native: readonly IndexedChunk[], starts: Uint32Array, target
   }
 }
 
-/** The port chunk `source` as rows of `target`, which the target's `ids` say: where none, null in
- *  `validity`; and its wrong rows, those that write what is no number, and those whose number
- *  names no row. */
-function resolve(source: IndexedChunk, target: Table) {
-  const port = source.read() as Chunk.Numeric
-  const ids = numberIds(target)
-  const values = new Uint32Array(port.length)
-  let validity: Uint8Array | undefined
-  const dangling: number[] = []
-  for (let at = 0; at < port.length; at++) {
-    const written = isValid(port, at)
-    const row = written ? ids.row(port.values[port.offset + at]!) : -1
-    if (row >= 0) values[at] = row
-    else {
-      validity ??= new Uint8Array(Math.ceil(port.length / 8)).fill(0xff)
-      validity[at >>> 3]! &= ~(1 << (at & 7))
-      if (written) dangling.push(at)
-    }
-  }
-  const wrong = [...source.wrong(), ...dangling].sort((a, b) => a - b)
-  return { ids: target.ids, values, validity, wrong }
-}
-
-/** Every table's static fields as one Data, sharing the parsed chunks; an empty table keeps its
- *  columns. Row IDs are built on first read, so a view of fields alone never pays for them. */
-function dataOf(schema: Schema, tables: ReadonlyMap<string, Table>): Data {
-  const batches: Data.RowBatch[] = []
-  for (const table of tables.values())
-    batches.push({
-      kind: 'rows',
-      index: table.index,
-      rows: { kind: 'range', offset: 0, count: rowCount(table.starts) },
-      columns: {},
-    })
-  const base = createData(schema, batches)
-  return {
-    schema,
-    tables: Object.fromEntries(
-      Object.entries(base.tables).map(([type, empty]) => {
-        const table = tables.get(type)!
-        const fields: Record<string, Data.Pages> = { ...empty.fields }
-        const pages = (name: string, column: Column): Data.Pages =>
-          createData(
-            schema,
-            column.chunks.length === 0
-              ? [
-                  {
-                    kind: 'rows',
-                    index: table.index,
-                    rows: empty.rows,
-                    columns: { [name]: builder(column.type, column.index).finish() },
-                  },
-                ]
-              : column.chunks.map((chunk, i): Data.RowBatch => ({
-                  kind: 'rows',
-                  index: table.index,
-                  rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
-                  columns: { [name]: chunk },
-                })),
-          ).tables[type]!.fields[name]!
-        for (const [name, definition] of Object.entries(schema.types[type]!.fields)) {
-          if (definition.sampled) continue
-          const column = name === table.shape.identity.name ? table.ids : table.fields.get(name)!
-          Object.defineProperty(fields, name, {
-            enumerable: true,
-            get: deferred(() => pages(name, column)),
-          })
-        }
-        const ids = deferred(() => {
-          if (!table.ids.chunks.length) return empty.ids
-          const prefix = UTF8.encode(`${type}/`)
-          return createData(
-            schema,
-            table.ids.chunks.map((chunk, i): Data.RowBatch => ({
-              kind: 'rows',
-              index: table.index,
-              rows: { kind: 'range', offset: table.starts[i]!, count: chunk.length },
-              columns: {},
-              ids: idsOf(prefix, chunk),
-            })),
-          ).tables[type]!.ids
-        })
-        return [
-          type,
-          {
-            ...empty,
-            fields,
-            get ids() {
-              return ids()
-            },
-          },
-        ]
-      }),
-    ),
-  }
-}
-
-/** The `Type/native` IDs of each chunk of native identities, made once: a range a revision keeps
- *  keeps its chunks, and so its IDs. */
-const ids = new WeakMap<Chunk, Chunk.Text>()
-function idsOf(prefix: Uint8Array, native: Chunk): Chunk.Text {
-  let made = ids.get(native)
-  if (!made) ids.set(native, (made = idColumn(prefix, native)))
-  return made
-}
-
-/** `Type/native` IDs written straight into UTF-8, with no string per row. No identity is null. */
-function idColumn(prefix: Uint8Array, native: Chunk): Chunk.Text {
-  const count = native.length
-  const offsets = new Int32Array(count + 1)
-  let bytes: Uint8Array
-  let at = 0
-  if (native.kind === 'text') {
-    const from = native.offset
-    bytes = new Uint8Array(
-      count * prefix.length + native.offsets[from + count]! - native.offsets[from]!,
+const nativeIds = new WeakMap<Column, readonly Id[]>()
+function identities(table: Table): readonly Id[] {
+  let ids = nativeIds.get(table.ids)
+  if (!ids) {
+    ids = table.ids.chunks.flatMap((chunk) =>
+      Array.from({ length: chunk.length }, (_, at) => chunk[at] as Id),
     )
-    for (let i = 0; i < count; i++) {
-      const start = native.offsets[from + i]!
-      const end = native.offsets[from + i + 1]!
-      bytes.set(prefix, at)
-      bytes.set(native.bytes.subarray(start, end), at + prefix.length)
-      offsets[i + 1] = at += prefix.length + end - start
-    }
-  } else {
-    const { values, offset } = native as Chunk.Numeric
-    // A uint32 has at most ten digits.
-    bytes = new Uint8Array(count * (prefix.length + 10))
-    for (let i = 0; i < count; i++) {
-      bytes.set(prefix, at)
-      offsets[i + 1] = at = decimal(values[offset + i]!, bytes, at + prefix.length)
-    }
-    bytes = bytes.slice(0, at)
+    nativeIds.set(table.ids, ids)
   }
-  return { kind: 'text', bytes, offsets, offset: 0, length: count }
+  return ids
 }
-
-/** Writes a uint32's decimal digits at `at`; returns where they end. */
-function decimal(value: number, bytes: Uint8Array, at: number): number {
-  let end = at + 1
-  for (let rest = value; rest >= 10; rest = Math.floor(rest / 10)) end++
-  for (let i = end, rest = value; i > at; rest = Math.floor(rest / 10))
-    bytes[--i] = 48 + (rest % 10)
-  return end
-}
-
-// Identity indexes, built on first lookup: hash tables of UTF-8 text; direct or sorted numbers.
-
-const TEXT = new WeakMap<Column, TextIds>()
-const NUMBER = new WeakMap<Column, NumberIds>()
 
 /** What a failure to index `table` says of its row `row`, which repeats an id: the record it is,
  *  as a parse problem names one. */
@@ -1257,6 +1142,9 @@ const repeated = (table: Table, row: number) =>
   table.shape.array === null
     ? {}
     : ({ target: { kind: 'path', path: [table.shape.array, table.records[row]!] } } as const)
+
+const TEXT = new WeakMap<Column, TextIds>()
+const NUMBER = new WeakMap<Column, NumberIds>()
 
 function textIds(table: Table): TextIds {
   let ids = TEXT.get(table.ids)
@@ -1271,63 +1159,25 @@ function numberIds(table: Table): NumberIds {
 }
 
 class TextIds {
-  /** Row + 1 per slot, 0 empty; a power of two, at most half full. */
-  readonly #slots: Uint32Array
-  readonly #column: Column
-
+  readonly #rows = new Map<string, number>()
   constructor(table: Table) {
-    const column = (this.#column = table.ids)
-    let size = 16
-    while (size < rowCount(column.starts) * 2) size *= 2
-    const slots = new Uint32Array(size)
-    const mask = size - 1
-    column.chunks.forEach((value, index) => {
-      const chunk = value as Chunk.Text
-      const first = column.starts[index]!
+    table.ids.chunks.forEach((chunk, index) => {
       for (let at = 0; at < chunk.length; at++) {
-        if (!isValid(chunk, at)) continue
-        const start = chunk.offsets[chunk.offset + at]!
-        const end = chunk.offsets[chunk.offset + at + 1]!
-        let slot = hash(chunk.bytes, start, end) & mask
-        while (slots[slot] !== 0) {
-          if (this.#equals(slots[slot]! - 1, chunk.bytes, start, end))
-            throw failure(
-              'invalid-input',
-              `Two rows share the id ${utf8(chunk.bytes, start, end)}.`,
-              repeated(table, first + at),
-            )
-          slot = (slot + 1) & mask
-        }
-        slots[slot] = first + at + 1
+        const value = chunk[at]
+        if (typeof value !== 'string') continue
+        const row = table.starts[index]! + at
+        if (this.#rows.has(value))
+          throw problem(
+            'invalid-input',
+            'Two rows share the id ' + value + '.',
+            repeated(table, row),
+          )
+        this.#rows.set(value, row)
       }
     })
-    this.#slots = slots
   }
-
-  /** The row holding `id`, or -1. */
   row(id: string): number {
-    const key = Buffer.from(id, 'utf8')
-    const mask = this.#slots.length - 1
-    for (
-      let slot = hash(key, 0, key.length) & mask;
-      this.#slots[slot] !== 0;
-      slot = (slot + 1) & mask
-    ) {
-      const row = this.#slots[slot]! - 1
-      if (this.#equals(row, key, 0, key.length)) return row
-    }
-    return -1
-  }
-
-  #equals(row: number, bytes: Uint8Array, start: number, end: number): boolean {
-    const index = chunkAt(this.#column.starts, row)
-    const chunk = this.#column.chunks[index] as Chunk.Text
-    const at = chunk.offset + row - this.#column.starts[index]!
-    const from = chunk.offsets[at]!
-    if (chunk.offsets[at + 1]! - from !== end - start) return false
-    for (let i = 0; i < end - start; i++)
-      if (chunk.bytes[from + i] !== bytes[start + i]) return false
-    return true
+    return this.#rows.get(id) ?? -1
   }
 }
 
@@ -1347,10 +1197,10 @@ class NumberIds {
     let min = 0xffffffff
     let max = 0
     column.chunks.forEach((value, index) => {
-      const chunk = value as Chunk.Numeric
+      const chunk = value as Float64Array
       for (let at = 0; at < chunk.length; at++) {
         if (!isValid(chunk, at)) continue
-        const key = chunk.values[chunk.offset + at]!
+        const key = chunk[at]!
         keys[size] = key
         rows[size++] = column.starts[index]! + at
         if (key < min) min = key
@@ -1359,7 +1209,7 @@ class NumberIds {
     })
     this.#min = min
     const duplicate = (key: number, row: number): never => {
-      throw failure('invalid-input', `Two rows share the number ${key}.`, repeated(table, row))
+      throw problem('invalid-input', `Two rows share the number ${key}.`, repeated(table, row))
     }
     if (size > 0 && max - min < 4 * size + 64) {
       const dense = new Uint32Array(max - min + 1)

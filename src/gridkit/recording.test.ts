@@ -60,8 +60,13 @@ describe("a case's recording", () => {
 
   it('counts what a release case lists, as its own file says', async () => {
     const text = await readFile('cases/IEEE39.case.json', 'utf8')
-    const json = JSON.parse(text) as { devices: { class: string; mon?: string[] }[] }
+    const json = JSON.parse(text) as {
+      devices: { class: string; mon?: string[] }[]
+      buses: { mon?: string[] }[]
+    }
     const listed: Record<string, Record<string, number>> = {}
+    for (const { mon = [] } of json.buses)
+      for (const name of mon) (listed.Bus ??= {})[name] = (listed.Bus?.[name] ?? 0) + 1
     for (const { class: type, mon = [] } of json.devices)
       for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
     expect((await recordingOf(await Case.parse(text, catalog))).listed).toEqual(listed)
@@ -119,14 +124,14 @@ describe("a case's recording", () => {
     expect(() =>
       transaction(kase, [
         { kind: 'record', type: 'Bus', add: ['Va'], remove: [] },
-        { kind: 'set', id: 'Bus/7', field: 'params.kv', value: 138 },
+        { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'params.kv', value: 138 },
       ]),
-    ).toThrow('a batch of its own')
+    ).toThrow('separate batch')
     expect(() =>
       transaction(kase, [
         { kind: 'record', type: 'Bus', add: ['Va'], remove: [] },
         { kind: 'record', type: 'Bus', add: [], remove: ['Va'] },
       ]),
-    ).toThrow('once in a batch')
+    ).toThrow('once, in a separate batch')
   })
 })

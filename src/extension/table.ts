@@ -6,28 +6,28 @@
 import * as vscode from 'vscode'
 
 import { leaf, shownColumns, shownType, tableFields } from '../shared/cells.js'
-import { typeName, unitOf } from '../shared/schema.js'
+import { fieldDefinition, tableDefinition, tableLabel } from '../shared/document.js'
 import type { Commands, Context } from './context.js'
 
 export function registerTable({ command, valueOf }: Commands) {
   /** The type the Case panel shows, which its column commands change. */
   const shownOf = (context: Context) => {
     const type = shownType(context.summary, context.session.table)
-    if (!type || !context.summary.schema.types[type])
+    if (!type || !tableDefinition(context.summary.definition, type))
       throw new Error('This case has no elements to show.')
     return type
   }
   command('chooseType', (context) => {
-    const { schema, counts } = context.summary
+    const { definition, counts } = context.summary
     type Item = vscode.QuickPickItem & { type?: string }
     const items: Item[] = []
     let group: string | undefined
     for (const [type, count] of Object.entries(counts)) {
       if (!count) continue
-      const description = schema.types[type]?.description ?? ''
+      const description = tableLabel(definition, type)
       if (description !== group)
         items.push({ label: (group = description), kind: vscode.QuickPickItemKind.Separator })
-      items.push({ label: typeName(schema, type), description: count.toLocaleString(), type })
+      items.push({ label: tableLabel(definition, type), description: count.toLocaleString(), type })
     }
     const picker = vscode.window.createQuickPick<Item>()
     picker.title = 'Show in Case'
@@ -49,7 +49,7 @@ export function registerTable({ command, valueOf }: Commands) {
     const before = session.table.filter
     let kept = false
     const input = vscode.window.createInputBox()
-    input.title = 'Filter ' + typeName(context.summary.schema, shownOf(context))
+    input.title = 'Filter ' + tableLabel(context.summary.definition, shownOf(context))
     input.prompt = 'Rows whose name contains'
     input.value = before ?? ''
     input.onDidChangeValue((filter) => session.setTable({ filter }))
@@ -64,24 +64,23 @@ export function registerTable({ command, valueOf }: Commands) {
     input.show()
   })
   command('chooseColumns', async (context) => {
-    const { schema } = context.summary
+    const { definition } = context.summary
     const { table } = context.session
     const type = shownOf(context)
-    const definitions = schema.types[type]!.fields
     const shown = shownColumns(context.summary, table, type)
     const selected = await vscode.window.showQuickPick(
       tableFields(context.summary, type).map((field) => ({
         label: leaf(field),
         description: [
           field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
-          unitOf(definitions[field], field),
+          fieldDefinition(definition, type, field)?.unit,
         ]
           .filter(Boolean)
           .join(' · '),
         field,
         picked: shown.includes(field),
       })),
-      { title: typeName(schema, type) + ' columns', canPickMany: true },
+      { title: tableLabel(definition, type) + ' columns', canPickMany: true },
     )
     if (selected)
       context.session.setTable({

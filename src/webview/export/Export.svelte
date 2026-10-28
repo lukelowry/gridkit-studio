@@ -1,214 +1,87 @@
 <script lang="ts">
-  import type { VideoProgress, VideoWrite } from '@latkit/video'
   import { onMount } from 'svelte'
 
   import { formatNumber } from '../../shared/format.js'
-  import type { Results, VideoView, ViewState } from '../../shared/messages.js'
+  import type { VideoView, ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
-  import { CanvasGpu } from '../gpu.js'
-  import { plotStatics, rowsOnce, staticNeeds } from '../rows.js'
-  import { networkNeeds, plotBudget, plotNeeds, Samples, type Wants } from '../samples.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { renderVideo } from './controller.js'
   import {
     DEFAULTS,
     exportable,
-    exportVideo,
-    prefetchMap,
+    type VideoProgress,
     type VideoSettings,
     videoTimes,
     viewsOf,
   } from './video.js'
 
   let view = $state.raw<ViewState>({})
-  /** The speed the results play at, which the video plays them at. */
   let rate = $state(1)
-  /** The settings the user chose, kept when the webview reloads. */
   let settings = $state.raw<VideoSettings>({
     ...DEFAULTS,
     ...bridge.state<{ settings?: Partial<VideoSettings> }>({}).settings,
   })
-  $effect(() => bridge.save({ settings }))
   let progress = $state.raw<VideoProgress | null>(null)
   let status = $state<'idle' | 'running' | 'done' | 'cancelled'>('idle')
-  /** Where the last video was written. */
   let saved = $state('')
-  /** The samples the Monitor's part plots, all of the time range; and those the Network's part
-   *  maps, a moment at a time, read a few chunks ahead of the frame drawn. */
-  const plotting = new Samples(bridge, () => {}, plotBudget)
-  const mapping = new Samples(bridge, () => {})
   let stop: AbortController | undefined
-  /** Whether the user cancelled the running export. */
   let cancelled = false
-  /** The moments the Network's part of the last export was given the samples of, and the slices
-   *  its Monitor's part streamed, for tests. */
-  let moments: number[] = []
-  let slices = 0
-  ;(window as { gridkitExport?: () => unknown }).gridkitExport = () => ({ moments, slices })
-  const owner = new CanvasGpu()
-
   const busy = $derived(status === 'running')
   const views = $derived(viewsOf(view))
-  /** The times the video shows: the Monitor's. */
   const times = $derived(videoTimes(view))
-  /** The video as it would export now. */
   const job = $derived(times && { ...settings, timeRange: times, rate })
   const ready = $derived(exportable(job, view))
   const percent = $derived(
-    progress ? Math.floor((100 * progress.completedFrames) / Math.max(1, progress.totalFrames)) : 0,
+    progress ? Math.floor((100 * progress.frames) / Math.max(1, progress.total)) : 0,
   )
-
+  $effect(() => bridge.save({ settings }))
   const change = (next: Partial<VideoSettings>) => (settings = { ...settings, ...next })
-
-  function toggle(shown: VideoView, on: boolean): void {
+  function toggle(shown: VideoView, on: boolean) {
     change({
       views: on ? [...settings.views, shown] : settings.views.filter((item) => item !== shown),
     })
   }
-
-  /** Export to a file the user picks, written as frames are encoded. */
-  async function start(): Promise<void> {
+  async function start() {
     const chosen = job
-    const shown = view
-    const { summary, uri } = shown
-    if (busy || !exportable(chosen, shown) || !summary || !uri) return
-    const control = (stop = new AbortController())
-    const { signal } = control
-    /** Aborted once the export ends, however it ends. */
-    const done = new AbortController()
+    if (busy || !exportable(chosen, view)) return
+    const controller = (stop = new AbortController())
     status = 'running'
     cancelled = false
     progress = null
-    moments = []
-    slices = 0
     bridge.send({ kind: 'busy', busy: true })
-    let file: number | null = null
-    /** The results the export draws, held for it: whatever shows meanwhile, they stay till it ends. */
-    let results: Results | undefined
     try {
-      results =
-        shown.results && (await bridge.request('share', { results: shown.results.id }, signal))
-      const state: ViewState = { ...shown, ...(results && { results }) }
-      const name = summary.name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
-      file = await bridge.request(
-        'videoOpen',
-        { uri, name: `${name}.${chosen.format}`, format: chosen.format },
-        signal,
-      )
-      if (file === null) {
-        status = 'idle'
-        return
-      }
-      const cameras = await bridge.request('cameras', { uri }, signal)
-      // The case the results were read against, which the summary then describes: what its views
-      // draw of it, or, for the Monitor's part alone, the rows its plots draw.
-      const of = { summary, ...(results?.frames && { results: results.id }) }
-      const held = await rowsOnce(
-        bridge,
-        of,
-        chosen.views.some((each) => each !== 'monitor')
-          ? staticNeeds(summary, state.bindings, false)
-          : plotStatics(summary, state.plots ?? []),
-        chosen.views.includes('diagram'),
-        signal,
-      )
-      const rows = held.data
-      // The Monitor's part plots the whole time range, so every sample of it comes first; a range
-      // holding more than a page keeps streams through the plots a slice at a time instead.
-      const plotted = chosen.views.includes('monitor') ? plotNeeds(state) : []
-      const first = plotting.plot(results, plotted, chosen.timeRange, 'start')
-      if (first) slices++
-      await plotting.until(first ?? chosen.timeRange, signal)
-      const stream =
-        first === undefined
-          ? undefined
-          : async (wants: Wants) => {
-              const next = plotting.plot(results, plotted, chosen.timeRange, wants)
-              if (!next) return undefined
-              slices++
-              await plotting.until(next, signal)
-              return plotting.data(rows)
-            }
-      // A field the plots read whole over the range is held already, and mapped from what they hold
-      // rather than read again; one they read a slice at a time is read for each moment.
-      const whole = first === undefined
-      const mapped = (chosen.views.includes('network') ? networkNeeds(state) : []).filter(
-        ({ selection }) => !whole || !plotting.has(selection),
-      )
-      const gpu = await owner.get()
-      signal.throwIfAborted()
-      // Each export follows the device it draws on, which an earlier export may have created; the
-      // export's end lets go of it.
-      const lost = () => control.abort(new Error('WebGPU device lost.'))
-      if (gpu.signal.aborted) lost()
-      gpu.signal.addEventListener('abort', lost, { once: true, signal: done.signal })
-      const handle = file
-      const output = new WritableStream<VideoWrite>({
-        write: ({ position, bytes }) =>
-          bridge.request('videoWrite', { file: handle, position, bytes }),
-      })
-      await exportVideo(
-        gpu,
-        chosen,
-        {
-          state,
-          rows,
-          plotted: plotting.data(rows),
-          ...(stream && { stream }),
-          mapped: async (at, s) => {
-            mapping.want(results, mapped, [at, at], { at, travel: 1 })
-            await mapping.until([at, at], s)
-            moments.push(at)
-            return mapping.data(whole ? plotting.data(rows) : rows)
-          },
-          presentation: held.presentation ?? {},
-          cameras,
-        },
-        output,
-        signal,
-        (made) => (progress = made),
-      )
-      saved = (await bridge.request('videoClose', { file })) ?? ''
-      file = null
-      status = 'done'
-    } catch (reason) {
+      const path = await renderVideo(chosen, view, controller.signal, (value) => (progress = value))
+      saved = path ?? ''
+      status = path ? 'done' : 'idle'
+    } catch (error) {
       status = cancelled ? 'cancelled' : 'idle'
-      // Report why the export was aborted, not the abort error it caused.
-      if (!cancelled)
-        bridge.report(signal.aborted && signal.reason instanceof Error ? signal.reason : reason)
+      if (!cancelled) bridge.report(error)
     } finally {
-      done.abort()
-      // The samples served this export alone.
-      plotting.clear()
-      mapping.clear()
-      if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
-      if (results) await bridge.request('unshare', { results: results.id }).catch(() => {})
+      if (stop === controller) stop = undefined
       bridge.send({ kind: 'busy', busy: false })
     }
   }
-
   onMount(() => {
-    const stops = [
-      bridge.on((message) => {
-        // A clock of the case on show, its last state said, carries the speed.
-        if (message.kind === 'clock') {
-          if (message.of.showing === bridge.of.showing) rate = message.clock.rate
-          return
-        }
-        if (message.kind !== 'state') return
-        view = merged(view, message.state)
-        prefetchMap(view)
-        const offered = viewsOf(view).map(({ value }) => value)
-        if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
-          change({ views: settings.views.filter((shown) => offered.includes(shown)) })
-      }),
-    ]
+    const off = bridge.on((message) => {
+      if (message.kind === 'clock') {
+        rate = message.clock.rate
+        return
+      }
+      if (message.kind !== 'state') return
+      view = merged(view, message.state)
+      const offered = viewsOf(view).map(({ value }) => value)
+      if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
+        change({ views: settings.views.filter((shown) => offered.includes(shown)) })
+    })
+    const hooks = window as Window & { gridkitExport?: () => unknown }
+    hooks.gridkitExport = () => ({ status, progress })
     bridge.ready()
     return () => {
       stop?.abort()
-      for (const off of stops) off()
-      owner.dispose()
+      off()
+      delete hooks.gridkitExport
     }
   })
 </script>
@@ -258,20 +131,7 @@
         </Section>
       {/if}
       <Section label="Output">
-        <Select
-          label="Format"
-          options={[
-            { value: 'mp4', label: 'MP4' },
-            { value: 'webm', label: 'WebM' },
-          ]}
-          data-testid="video-format"
-          bind:value={
-            () => settings.format,
-            (format) => {
-              if (format) change({ format })
-            }
-          }
-        />
+        <p class="c-note">MP4 / H.264</p>
         <Select
           label="Resolution"
           options={[
@@ -340,11 +200,7 @@
         {#if busy}
           <progress max="100" value={percent} aria-label="Video export progress"></progress>
           <p class="c-note" role="status">
-            {progress?.phase === 'finalizing'
-              ? 'Finalizing video…'
-              : progress
-                ? 'Exporting video: ' + percent + '%'
-                : 'Preparing video…'}
+            {progress ? 'Exporting video: ' + percent + '%' : 'Preparing video…'}
           </p>
         {:else if status === 'done'}
           <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>

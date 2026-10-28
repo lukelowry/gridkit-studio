@@ -48,7 +48,7 @@ function readAll(kase: Case) {
       ]),
     ),
     found: kase.found,
-    types: Object.keys(kase.schema.types),
+    types: kase.definition.tables.map((table) => table.name),
     order: [...kase.tables.keys()],
     tables,
   }

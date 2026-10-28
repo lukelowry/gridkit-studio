@@ -3,12 +3,10 @@
 
 import assert from 'node:assert/strict'
 
-import type { Data } from '@latkit/model'
 import { suite, suiteSetup, test } from 'mocha'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import type { SamplesInput } from '../../src/shared/messages.js'
 import { type TestHost, testHost, until, visible, VM } from './harness.js'
 
 suite('Monitor', () => {
@@ -126,134 +124,82 @@ suite('Monitor', () => {
       workbench.update('reduceMotion', value, vscode.ConfigurationTarget.Global)
     try {
       await set('on')
-      await until(async () => (await motion()).renderer === 'reduce', 'motion reduced')
+      await until(async () => (await motion()).renderer === 'reduced', 'motion reduced')
       assert.equal((await motion()).duration, '0ms')
       await set('off')
-      await until(async () => (await motion()).renderer === 'full', 'full motion')
+      await until(async () => (await motion()).renderer === 'system', 'full motion')
       assert.equal((await motion()).duration, '80ms')
     } finally {
       await set(undefined)
     }
   })
 
-  test('draws the samples it holds around those it has not read, then those once they come', async () => {
-    // The worker's replies of samples come without the frames `lacking` names, as if it had not
-    // got to them, and an ask that brings nothing is not made again until the Monitor retries. It
-    // names every frame until the run's chunks are known.
-    const thread = bench.studio.client.results
-    const call = thread.call
-    let lacking: readonly [number, number] = [0, Infinity]
-    /** The first frame of each batch of every bus's voltage the Monitor was sent. */
-    const held: number[] = []
-    thread.call = (async (method: string, input: unknown, signal?: AbortSignal) => {
-      const value = await call.call(thread, method as never, input as never, signal)
-      if (method !== 'samples') return value
-      const kept = (value as Data.SampleBatch[]).filter(
-        ({ firstFrame, coordinates }) =>
-          firstFrame + coordinates.length <= lacking[0] || firstFrame >= lacking[1],
-      )
-      if (!(input as SamplesInput).field.rows) held.push(...kept.map((batch) => batch.firstFrame))
-      return kept
-    }) as typeof call
-    try {
-      monitor = await bench.show('monitor')
-      // Every bus's voltage over three and a half chunks, so the start, the middle and the end of
-      // the run come in replies of their own.
-      const { chunk, frames, domain } = await bench.waveform('Long waveform.csv', 46_000, 46, 3)
-      assert.ok(frames >= 3 * chunk, 'The run must span more than three chunks')
-      bench.session.setPlots([{ from: VM.type, field: VM.field }])
-      lacking = [chunk, 3 * chunk]
-      const show = (window: [number, number] | undefined) => bench.session.setWindow(window)
-      /** The frames of the readings under the plot at `at`, a voltage of 1. */
-      const readings = (at: number) =>
-        monitor.evaluate<number[] | null>(`(async () => {
-          const canvas = document.querySelector('canvas')
-          const point = canvas?.gridkitPoint?.(${at}, 1)
-          if (!point || !canvas.gridkitRead) return null
-          return (await canvas.gridkitRead([point[0], point[1]])).map(({ frame }) => frame)
-        })()`)
-      const step = (domain[1] - domain[0]) / 100
-      show([domain[1] - step, domain[1]])
-      await until(() => held.some((frame) => frame >= 3 * chunk), 'the Monitor holds the end')
-      show([domain[0], domain[0] + step])
-      await until(() => held.some((frame) => frame < chunk), 'the Monitor holds the start')
-      // The whole run, its start and end held and its middle not: the plot draws each run it holds
-      // and nothing between them.
-      show(undefined)
-      const middle = (domain[0] + domain[1]) / 2
-      await until(async () => {
-        const [start, end] = await Promise.all([readings(step), readings(domain[1] - step)])
-        return start?.length && end?.length
-      }, 'the Monitor draws the start and end of the run')
-      const lacked = await readings(middle)
-      assert.ok(lacked, 'The plot reads its middle')
-      assert.ok(
-        lacked.every((frame) => frame < chunk || frame >= 3 * chunk),
-        'The plot draws nothing where it holds nothing',
-      )
-      // The middle comes once asked for again.
-      lacking = [0, 0]
-      await vscode.commands.executeCommand('gridkitStudio.reloadView', bench.uri)
-      await until(
-        async () => (await readings(middle))?.some((frame) => frame >= chunk && frame < 3 * chunk),
-        'the Monitor draws the middle of the run once it comes',
-      )
-    } finally {
-      thread.call = call
-      await bench.reset()
-    }
+  test('selects a native trace by clicking its plotted value', async () => {
+    const results = bench.session.results!
+    const output = results.outputs.find((item) => item.table === 'Bus' && item.field === 'Vm')!
+    const id = output.ids[0]!
+    bench.session.setPlots([
+      { from: 'Bus', field: 'Vm' },
+      { from: 'Bus', field: 'Vm', id },
+    ])
+    bench.session.setWindow(undefined)
+    bench.session.select()
+    monitor = await bench.show('monitor')
+    await visible(monitor, 'canvas[data-rendered=true]')
+    const at = (results.domain[0] + results.domain[1]) / 2
+    const exact = await bench.studio.client.results.call('sample', {
+      results: results.id,
+      table: 'Bus',
+      field: 'Vm',
+      id,
+      at,
+    })
+    const canvas = monitor.locator('canvas').nth(1)
+    await canvas.scrollIntoViewIfNeeded()
+    await until(
+      () =>
+        monitor.evaluate<boolean>(
+          'document.querySelectorAll("canvas")[1]?.gridkitPlot?.().complete',
+        ),
+      'second plot complete',
+    )
+    const point = await monitor.evaluate<[number, number]>(
+      'document.querySelectorAll("canvas")[1].gridkitPoint(' + at + ',' + exact.value + ')',
+    )
+    await canvas.click({ position: { x: point[0], y: point[1] } })
+    await until(
+      () => bench.session.selection?.id === id,
+      async () =>
+        'native trace selected: ' +
+        JSON.stringify({
+          session: bench.session.selection,
+          native: await monitor.evaluate('document.querySelectorAll("canvas")[1].gridkitPlot()'),
+        }),
+    )
   })
 
-  test('streams a window holding more than its budget a slice at a time, drawing every frame of it', async () => {
+  test('keeps bounded native plot sources across repeated window changes', async () => {
+    const results = await bench.waveform('Native windows.csv', 46_000, 46, 3)
+    bench.session.setPlots([{ from: VM.table, field: VM.field }])
     monitor = await bench.show('monitor')
-    // Every bus's voltage over three and a half chunks, and a budget a third of that.
-    const frames = 46_000
-    const frameBytes = (bench.source.buses.length + 1) * 8
-    const budget = Math.floor((frames * frameBytes) / 3)
-    await monitor.evaluate((bytes) => {
-      ;(globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget = bytes
-    }, budget)
-    try {
-      const results = await bench.waveform('Streamed waveform.csv', frames, 4.6, 3)
-      assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
-      bench.session.setPlots([{ from: VM.type, field: VM.field }])
-      // A plot drawn anew, so what it draws is counted from now.
-      await vscode.commands.executeCommand('gridkitStudio.reloadView', bench.uri)
-      type Drawn = { rows: number; segments: number; refining: boolean; wants: unknown }
-      const drawn = () =>
-        monitor.evaluate<Drawn | null>(`document.querySelector('canvas')?.gridkitPlot?.() ?? null`)
-      type Held = { streaming: boolean; slice: unknown; bytes: number }
-      let most = 0
-      let seen: { held: Held; plot: Drawn | null } | undefined
-      await until(
-        async () => {
-          const held = await monitor.evaluate<Held>('gridkitMonitor()')
-          most = Math.max(most, held.bytes)
-          const plot = await drawn()
-          seen = { held, plot }
-          // Streamed to the window's end, with nothing more to read, and drawn.
-          return held.streaming && held.slice === null && plot !== null && !plot.refining
-        },
-        'the plot drawn to the end of its window',
-        150_000,
-      ).catch((error: Error) => {
-        throw new Error(`${error.message}; last seen ${JSON.stringify(seen)}`)
-      })
-      const plot = (await drawn())!
-      bench.report.streamed = { ...plot, frames: results.frames, most, budget }
-      // Every trace joined frame to frame across the whole window.
-      assert.ok(
-        plot.segments >= plot.rows * (results.frames - 1),
-        `${plot.segments} segments drawn for ${plot.rows} traces of ${results.frames} frames`,
-      )
-      // About a budget held, a slice past it at most, and far less than the window.
-      assert.ok(most <= budget + 2 * results.chunk * frameBytes, `${most} bytes held of ${budget}`)
-      assert.ok(most < results.frames * frameBytes, `${most} bytes held, the window's every one`)
-    } finally {
-      await monitor.evaluate(() => {
-        delete (globalThis as { gridkitPlotBudget?: number }).gridkitPlotBudget
-      })
-      await bench.reset()
+    for (const start of [0, 20, 40, 10, 0]) {
+      bench.session.setWindow([start, Math.min(results.domain[1], start + 3)])
+      await until(async () => {
+        const state = await monitor.evaluate<{
+          cacheBytes: number
+          reads: number
+          views: number
+          plots: { camera: { x: number[] }; drawn: number }[]
+        }>('gridkitMonitor()')
+        assert.ok(state.cacheBytes <= 96 * 1024 * 1024)
+        assert.ok(state.reads <= 2)
+        return (
+          state.reads === 0 &&
+          state.views === 1 &&
+          state.plots[0]!.drawn > 0 &&
+          state.plots[0]!.camera.x[0] === start
+        )
+      }, 'a bounded native window is rendered')
     }
-  }).timeout(180_000)
+  })
 })

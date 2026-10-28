@@ -29,28 +29,42 @@ suite('Video files', () => {
   test('cancelling an overwrite preserves the original video', async () => {
     await writeFile(destination.fsPath, 'original')
     file = await VideoFile.create(destination)
-    await file.write(0, bytes('unfinished'))
+    await file.write(bytes('unfinished'))
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'original')
     await file.abort()
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'original')
     assert.deepEqual(await readdir(directory), ['results.mp4'])
   })
 
-  test('publishes positional writes only after successful completion', async () => {
+  test('publishes sequential writes only after successful completion', async () => {
     await writeFile(destination.fsPath, 'original')
     file = await VideoFile.create(destination)
-    await file.write(6, bytes('world'))
-    await file.write(0, bytes('hello '))
+    await file.write(bytes('hello '))
+    await file.write(bytes('world'))
     await file.close()
     await file.abort()
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'hello world')
     assert.deepEqual(await readdir(directory), ['results.mp4'])
-    await assert.rejects(file.write(0, bytes('late')), /closed/)
+    await assert.rejects(file.write(bytes('late')), /closed/)
+  })
+
+  test('serializes concurrent writes before publishing and cancels queued writes', async () => {
+    file = await VideoFile.create(destination)
+    const writes = [file.write(bytes('one')), file.write(bytes('two')), file.write(bytes('three'))]
+    await file.close()
+    await Promise.all(writes)
+    assert.equal(await readFile(destination.fsPath, 'utf8'), 'onetwothree')
+    file = await VideoFile.create(destination)
+    const cancelled = file.write(bytes('cancelled'))
+    const aborting = file.abort()
+    await assert.rejects(cancelled, /cancelled/)
+    await aborting
+    assert.equal(await readFile(destination.fsPath, 'utf8'), 'onetwothree')
   })
 
   test('a failed replacement leaves the destination intact and can be cleaned up', async () => {
     file = await VideoFile.create(destination)
-    await file.write(0, bytes('new video'))
+    await file.write(bytes('new video'))
     await mkdir(destination.fsPath)
     await writeFile(join(destination.fsPath, 'keep.txt'), 'original')
     await assert.rejects(file.close())

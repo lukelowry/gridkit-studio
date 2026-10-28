@@ -4,6 +4,8 @@
 import { workerData } from 'node:worker_threads'
 
 import { Case } from '../gridkit/case.js'
+import { deltaProjectionPage } from '../gridkit/deltas.js'
+import type { ProjectedDocument } from '../gridkit/document.js'
 import { diagnose } from '../gridkit/edits.js'
 import {
   applyChanges,
@@ -12,17 +14,17 @@ import {
   completionsAt,
   delivered,
   outline,
-  presentation,
   sourceContext,
   sourceRange,
   transaction,
   unchangedBy,
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
+import { CaseQueries, projectionPage } from '../gridkit/projection.js'
 import { detail, problem, superseded } from '../shared/errors.js'
 import type { CaseApi, Revision, SourceDelta, Summary, WorkerOptions } from '../shared/messages.js'
+import { loadNative } from './native.js'
 import { nameOf, summarize, TextCases } from './parsed.js'
-import { queried, rowsOf } from './reads.js'
 import { memory, send, serve } from './serve.js'
 
 /** An open case: its source as last sent, the parse under way, and the case that parse read. */
@@ -33,8 +35,17 @@ interface Document {
   /** The latest parse begun: one that ends after another began is let go. */
   parsing: object
   /** The case read, and the text it was read from. */
-  read?: { kase: Case; summary: Summary; text: string }
+  read?: {
+    kase: Case
+    summary: Summary
+    text: string
+    queries?: CaseQueries
+    projection?: ProjectedDocument
+    previous?: Case
+  }
 }
+
+await loadNative((workerData as WorkerOptions).wasmPath)
 
 const chosen = (workerData as WorkerOptions | null)?.catalog
 const catalog = chosen === undefined ? bundled : catalogOf(chosen)
@@ -49,6 +60,7 @@ function latest({ uri, version, attachmentId }: Revision) {
   if (
     !read ||
     read.summary.version !== version ||
+    document.source.version !== version ||
     (attachmentId !== undefined && document.attachmentId !== attachmentId)
   )
     throw superseded()
@@ -120,7 +132,8 @@ serve<CaseApi>(
       )
       // A parse begun meanwhile replaced the document this one began with.
       if (documents.get(uri) !== document) throw superseded()
-      document.read = { kase, summary, text }
+      document.read?.queries?.destroy()
+      document.read = { kase, summary, text, ...(read && { previous: read.kase }) }
       return summary
     },
     async validate(revision, signal) {
@@ -143,25 +156,54 @@ serve<CaseApi>(
     context: async (input) => sourceContext(latest(input).kase, input.offset),
     symbols: async ({ limit, ...revision }, signal) =>
       outline(latest(revision).kase, signal, limit),
-    locate: async (input) => sourceRange(latest(input).kase, input.id, input.field),
+    locate: async (input) => sourceRange(latest(input).kase, input, input.field),
     // As VS Code takes them in least time, from the text they are of.
     transact: async (input) => {
+      if (documents.get(input.uri)?.source.version !== input.version) throw superseded()
       const { kase, text } = latest(input)
       return delivered(text, transaction(kase, input.mutations))
     },
-    presentation: (revision, signal) => presentation(latest(revision).kase, signal),
-    query: ({ query, ...revision }, signal) => queried(latest(revision).kase.data, query, signal),
-    rows: ({ fields, ...revision }, signal) => rowsOf(latest(revision).kase, fields, signal),
+    async project(input, signal) {
+      const read = latest(input)
+      const document = (read.projection ??= read.kase.projected())
+      const page =
+        input.base && read.previous
+          ? await deltaProjectionPage(
+              read.previous,
+              read.kase,
+              input.fields,
+              input.base,
+              input.cursor,
+              signal,
+            )
+          : await projectionPage(document, input.fields, input.cursor, signal)
+      if (latest(input) !== read) throw superseded()
+      return page
+    },
+    async page(input, signal) {
+      const read = latest(input)
+      const queries = (read.queries ??= new CaseQueries(
+        (read.projection ??= read.kase.projected()),
+      ))
+      const page = await queries.page(input.request, signal)
+      if (latest(input) !== read) throw superseded()
+      return page
+    },
     async release({ uri, attachmentId }) {
       const document = documents.get(uri)
       if (attachmentId && document?.attachmentId !== attachmentId) return null
       // A document let go of stays read, so opening it again parses nothing.
       const read = document?.read
+      read?.queries?.destroy()
       if (read) opened.keep(read.kase, () => TextCases.key(read.text, catalog, nameOf(uri)))
       documents.delete(uri)
       return null
     },
     stats: async () => ({ memory: memory(), cases: documents.size }),
   },
-  ['query', 'rows'],
+  ['project', 'page'],
 )
+
+process.once('exit', () => {
+  for (const document of documents.values()) document.read?.queries?.destroy()
+})

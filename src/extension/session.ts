@@ -6,6 +6,7 @@
 
 import { randomUUID } from 'node:crypto'
 
+import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
 import {
@@ -16,6 +17,7 @@ import {
   type FieldRef,
 } from '../shared/bindings.js'
 import { changedTable } from '../shared/cells.js'
+import { type Entity, networkRole } from '../shared/document.js'
 import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { followed, savedKey, savedUri } from '../shared/ids.js'
@@ -36,7 +38,6 @@ import {
 } from '../shared/messages.js'
 import { plotsFor, samePlot } from '../shared/plots.js'
 import type { SettingsValues } from '../shared/preferences.js'
-import { elementType, networkOf, placementOf } from '../shared/schema.js'
 import { Transport } from '../shared/transport.js'
 import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
 import type { Sessions } from './sessions.js'
@@ -115,7 +116,7 @@ export class Session {
   #rows?: number
   #selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
-  #anchors?: string[]
+  #anchors?: Entity[]
   #diagramEditing = false
   #cameras: Cameras = {}
   /** The Monitor's chosen time window; absent, plots show the whole run. */
@@ -179,7 +180,7 @@ export class Session {
   get selection(): Element | undefined {
     return this.#selection
   }
-  get anchors(): readonly string[] | undefined {
+  get anchors(): readonly Entity[] | undefined {
     return this.#anchors
   }
   get diagramEditing(): boolean {
@@ -476,39 +477,41 @@ export class Session {
   /** Selects `element`, or nothing. A selection of an element the Network does not draw finds what
    *  stands for it there. */
   select(element?: Element): void {
-    if (this.#selection?.id === element?.id && this.#selection?.field === element?.field) return
-    const moved = this.#selection?.id !== element?.id
+    if (
+      this.#selection?.table === element?.table &&
+      this.#selection?.id === element?.id &&
+      this.#selection?.field === element?.field
+    )
+      return
+    const moved = this.#selection?.table !== element?.table || this.#selection?.id !== element?.id
     this.#selection = element
     if (moved) {
       this.#anchors = undefined
-      if (element) void this.#anchor(element.id)
+      if (element) void this.#anchor(element)
     }
     this.#changed()
   }
 
   /** Lets go of the selection once the case, read again, no longer holds its element. */
   async forget(): Promise<void> {
-    const id = this.#selection?.id
+    const entity = this.#selection
     const { summary, stale } = this.#studio.documents.get(this.uri) ?? {}
-    if (!id || !summary || stale) return
+    if (!entity || !summary || stale) return
     try {
-      await this.#studio.client.cases.call('query', {
+      const page = await this.#studio.client.cases.call('page', {
         ...revisionOf(summary),
-        query: {
-          kind: 'rows',
-          from: elementType(id),
-          select: [],
-          ids: true,
-          rows: { kind: 'ids', ids: [id] },
-          limit: 1,
-        },
+        request: { table: entity.table, fields: [], ids: [entity.id], offset: 0, limit: 1 },
       })
+      if (
+        !page.ids.length &&
+        this.#selection === entity &&
+        this.#studio.documents.get(this.uri)?.summary?.version === summary.version
+      )
+        this.select()
     } catch (error) {
-      // The case refuses an id it does not hold. A read a newer revision replaced, or one the case
-      // worker stopped during, says nothing of the element; a defect is said, as any is.
-      if (failedWith(error, 'invalid-input')) {
+      if (failedWith(error, 'invalid-input') || failedWith(error, 'invalid')) {
         if (
-          this.#selection?.id === id &&
+          this.#selection === entity &&
           this.#studio.documents.get(this.uri)?.summary?.version === summary.version
         )
           this.select()
@@ -518,9 +521,9 @@ export class Session {
 
   /** Makes `field` drive exactly `channels`, over `domain` when given. */
   bind(field: FieldRef, channels: readonly Channel[], domain?: readonly [number, number]): void {
-    const schema = this.#studio.documents.get(this.uri)?.summary?.schema
-    if (!schema) throw noCase()
-    const allowed = channelsFor(placementOf(networkOf(schema), field.type))
+    const definition = this.#studio.documents.get(this.uri)?.summary?.definition
+    if (!definition) throw noCase()
+    const allowed = channelsFor(networkRole(definition, field.table))
     this.#bindings = bound(this.#bindings, allowed, field, channels, domain)
     this.#save()
     this.#changed()
@@ -544,7 +547,7 @@ export class Session {
 
   /** Plots `plot`'s field of the element `id` alone, or, with none, of every element: the plot
    *  it then is, if there is one already, stays alone. */
-  plotElement(plot: Plot, id?: string): void {
+  plotElement(plot: Plot, id?: Id): void {
     const next: Plot = { from: plot.from, field: plot.field, ...(id !== undefined && { id }) }
     if (samePlot(next, plot)) return
     const there = this.#plots.some((each) => samePlot(each, next))
@@ -680,19 +683,19 @@ export class Session {
   }
 
   /** Finds what the network draws for the selected element `id`. */
-  async #anchor(id: string): Promise<void> {
+  async #anchor(entity: Entity): Promise<void> {
     const summary = this.#studio.documents.get(this.uri)?.summary
     if (!summary || this.#studio.documents.get(this.uri)?.stale) return
-    const network = networkOf(summary.schema)
-    const drawn = [...network.vertices, ...network.edges.map((edge) => edge.type)]
-    if (drawn.includes(elementType(id))) return
+    const network = summary.definition.drawing
+    const drawn = [...network.vertices, ...network.edges].map((item) => item.table)
+    if (drawn.includes(entity.table)) return
     try {
       const anchors = await this.#studio.client.cases.call('anchors', {
         ...revisionOf(summary),
-        id,
+        entity,
         drawn,
       })
-      if (this.#selection?.id !== id) return
+      if (this.#selection?.table !== entity.table || this.#selection?.id !== entity.id) return
       this.#anchors = anchors
       this.#changed()
     } catch (error) {

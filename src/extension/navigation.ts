@@ -3,9 +3,9 @@
 
 import * as vscode from 'vscode'
 
+import { entityLabel, fieldDefinition, withUnit } from '../shared/document.js'
 import { CASE_FILE, CASE_GLOB } from '../shared/ids.js'
 import { type CaseSymbol, revisionOf } from '../shared/messages.js'
-import { withUnit } from '../shared/schema.js'
 import { cancellable } from './client.js'
 import { rangeOf } from './documents.js'
 import type { Sessions } from './sessions.js'
@@ -59,11 +59,11 @@ export function registerNavigation(studio: Sessions) {
         const context = await inspect(document, position, token)
         if (!context?.element?.field || !context.range) return
         const field = context.type
-          ? context.summary.schema.types[context.type]?.fields[context.element.field]
+          ? fieldDefinition(context.summary.definition, context.type, context.element.field)
           : undefined
         return new vscode.Hover(
           new vscode.MarkdownString().appendText(
-            `${withUnit(context.element.field, field?.unit)}\n${field?.description ?? context.reference ?? context.element.id}`,
+            `${withUnit(context.element.field, field?.unit)}\n${field?.label ?? (context.reference ? entityLabel(context.reference) : String(context.element.id))}`,
           ),
           rangeOf(document, context.range),
         )
@@ -79,7 +79,7 @@ export function registerNavigation(studio: Sessions) {
             'locate',
             {
               ...revisionOf(context.summary),
-              id,
+              ...id,
             },
             signal,
           ),

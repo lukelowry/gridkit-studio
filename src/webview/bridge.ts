@@ -50,10 +50,11 @@ export const bridge = {
     return () => listeners.delete(listener)
   },
   state<T>(fallback: T): T {
-    return (api.getState() as T | undefined) ?? fallback
+    const saved = api.getState() as { format?: string; value?: T } | undefined
+    return saved?.format === 'view-native-1' ? (saved.value ?? fallback) : fallback
   },
   save(value: unknown) {
-    api.setState(value)
+    api.setState({ format: 'view-native-1', value })
   },
   /** Tell the user why something failed, in the one place Studio does: a notification from the
    *  extension. A failure that is none says nothing. */
@@ -103,6 +104,8 @@ window.addEventListener('message', (event: MessageEvent<ToView>) => {
     } else if (message.of?.showing !== of.showing) return
     if (message.kind === 'reply') return extension.settle(message)
   }
+  if (message.kind === 'shown') document.body.dataset.shown = String(message.shown)
+  if (message.kind === 'state') document.body.dataset.uri = message.state.uri ?? ''
   // One listener's failure leaves the others their message.
   for (const listener of listeners)
     try {

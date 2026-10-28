@@ -1,10 +1,4 @@
-/** The frames of a results file, decoded once into files of Studio's own: what every read of them
- *  after reads, exactly, whatever has become of the CSV since. Chunk `k` of field `f` is one block,
- *  each of its rows a run of the chunk's frames, so a view reads only the rows it draws. A store
- *  read through says what it holds, once all it holds is on disk, so a window opened again reads
- *  the results from it rather than from the CSV. One store is kept of each results file a saved
- *  session names, in the folder of the window that keeps it. */
-
+/** Persistent scientific blocks and native visualization levels, committed by one atomic watermark. */
 import { randomUUID } from 'node:crypto'
 import {
   type FileHandle,
@@ -14,207 +8,419 @@ import {
   readFile,
   rename,
   rm,
-  stat,
   writeFile,
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
-import type { Domain } from '@latkit/model'
-
+import type { FrameBlock, TimeRange, VisualizationRun } from '../shared/data.js'
 import { alive } from '../shared/processes.js'
+import type { PyramidState, ReducedRun } from './pyramid.js'
 import { same, type Stamp } from './stamp.js'
 
-/** What a store holds: the results file it read, as that file was, and how its frames are cut. */
+export const FORMAT = 'results-native-1'
+export interface RawIndex {
+  readonly kind: 'raw'
+  readonly first: number
+  readonly count: number
+  readonly start: number
+  readonly end: number
+  readonly at: number
+  readonly fields: readonly number[]
+}
+export interface LevelIndex {
+  readonly kind: 'level'
+  readonly field: number
+  readonly level: number
+  readonly first: number
+  readonly count: number
+  readonly start: number
+  readonly end: number
+  readonly at: number
+  readonly values: number
+  readonly gaps: number
+  readonly gapped: readonly number[]
+}
 export interface Manifest {
   readonly format: typeof FORMAT
-  /** The results file, as it stood once read through, and how many of its bytes were read: its
-   *  whole rows, which an export copies. */
   readonly path: string
   readonly stamp: Stamp
   readonly read: number
-  /** The content of the case its header was matched against. */
   readonly fingerprint: string
-  /** The CSV header's names, which say what the file holds of that case. */
   readonly header: readonly string[]
   readonly frames: number
   readonly chunk: number
-  readonly domain: Domain
-  readonly domains: Record<string, Record<string, Domain>>
+  readonly domain: TimeRange
+  readonly domains: Record<string, Record<string, TimeRange>>
+  readonly visualErrors?: Readonly<Record<number, string>>
+  readonly complete: boolean
+  readonly rows: readonly number[]
+  readonly rawBytes: number
+  readonly levelBytes: number
+  readonly indexBytes: number
+  readonly reducers: readonly PyramidState[]
 }
-
-/** The store's own format: a store written in another is read again from its CSV. */
-const FORMAT = 2
-const FRAMES = 'frames.bin'
-const TIMES = 'times.bin'
-const MANIFEST = 'manifest.json'
-const BYTES = Float64Array.BYTES_PER_ELEMENT
-
-/** `path` as its file system compares paths: on Windows and macOS, in any case alike. */
+export type Checkpoint = Omit<
+  Manifest,
+  'format' | 'rows' | 'rawBytes' | 'levelBytes' | 'indexBytes'
+>
 export function fileKey(path: string): string {
   const full = resolve(path)
   return process.platform === 'win32' || process.platform === 'darwin' ? full.toLowerCase() : full
 }
-
-/** Reads `bytes.length` bytes of `file` at `position` into `bytes`, all of them. */
 async function readAll(file: FileHandle, bytes: Uint8Array, position: number): Promise<void> {
   for (let read = 0; read < bytes.length;) {
     const { bytesRead } = await file.read(bytes, read, bytes.length - read, position + read)
-    if (!bytesRead) throw new Error('A results store ends before what it holds.')
+    if (!bytesRead) throw new Error('A results store ends before its committed watermark.')
     read += bytesRead
   }
 }
-
-/** The manifest of the store in `folder`, when it was read through in this format. */
+async function writeAll(file: FileHandle, bytes: Uint8Array, position: number): Promise<void> {
+  for (let written = 0; written < bytes.length;) {
+    const { bytesWritten } = await file.write(
+      bytes,
+      written,
+      bytes.length - written,
+      position + written,
+    )
+    if (!bytesWritten) throw new Error('A results store write made no progress.')
+    written += bytesWritten
+  }
+}
 async function manifestOf(folder: string): Promise<Manifest | undefined> {
   try {
-    const manifest = JSON.parse(await readFile(join(folder, MANIFEST), 'utf8')) as Manifest
-    return manifest.format === FORMAT ? manifest : undefined
+    const manifest = JSON.parse(await readFile(join(folder, 'manifest.json'), 'utf8')) as Manifest
+    if (
+      manifest.format !== FORMAT ||
+      !Array.isArray(manifest.rows) ||
+      !Array.isArray(manifest.reducers) ||
+      ![
+        manifest.read,
+        manifest.frames,
+        manifest.rawBytes,
+        manifest.levelBytes,
+        manifest.indexBytes,
+      ].every((value) => Number.isSafeInteger(value) && value >= 0)
+    )
+      return undefined
+    return manifest
   } catch {
     return undefined
   }
 }
-
-/** One results file's frames, kept as they are decoded. */
 export class Store {
-  #file?: Promise<FileHandle>
-  /** How many rows each field holds, and where each field's rows start among all of them. */
+  readonly raw: RawIndex[] = []
+  readonly levels = new Map<string, LevelIndex[]>()
   #rows: readonly number[] = []
-  #starts: readonly number[] = []
-  #width = 0
-  #chunk = 0
   #manifest?: Manifest
-
+  #rawBytes = 0
+  #levelBytes = 0
+  #indexBytes = 0
+  #files?: Promise<[FileHandle, FileHandle, FileHandle, FileHandle]>
+  #restoring?: Promise<void>
   constructor(
-    /** The folder it is kept in. */
     readonly folder: string,
-    /** The results file, as its file system compares paths. */
     readonly key: string,
     manifest?: Manifest,
-    /** The stores it is one of, which hear once it is read through. */
     private readonly owner?: Stores,
   ) {
     this.#manifest = manifest
+    if (manifest) {
+      this.#rows = manifest.rows
+      this.#rawBytes = manifest.rawBytes
+      this.#levelBytes = manifest.levelBytes
+      this.#indexBytes = manifest.indexBytes
+    }
   }
-
-  /** What it holds, once read through. */
   get manifest(): Manifest | undefined {
     return this.#manifest
   }
-
-  /** Cuts the frames as `rows`, each field's, and `chunk` frames a chunk say: the header's to say. */
-  shape(rows: readonly number[], chunk: number): void {
-    let at = 0
-    this.#starts = rows.map((count) => (at += count) - count)
-    this.#rows = rows
-    this.#width = at
-    this.#chunk = chunk
+  get bytes(): number {
+    return (
+      this.raw.length * (64 + this.#rows.length * 8) +
+      [...this.levels.values()].reduce((n, blocks) => n + blocks.length * 96, 0)
+    )
   }
-
-  /** Where chunk `k` starts: past every whole chunk before it. */
-  #at(k: number): number {
-    return k * this.#chunk * this.#width * BYTES
+  shape(rows: readonly number[], _chunk: number): void {
+    if (this.#rows.length && JSON.stringify(rows) !== JSON.stringify(this.#rows))
+      throw new Error('Result store shape changed.')
+    this.#rows = [...rows]
   }
-
-  #handle(): Promise<FileHandle> {
-    return (this.#file ??= open(join(this.folder, FRAMES), this.#manifest ? 'r' : 'w+'))
+  #handles(): Promise<[FileHandle, FileHandle, FileHandle, FileHandle]> {
+    return (this.#files ??= (async () => {
+      const handles: FileHandle[] = []
+      try {
+        for (const name of ['raw.bin', 'levels.bin', 'index.jsonl', 'source.csv'])
+          handles.push(await open(join(this.folder, name), this.#manifest ? 'r+' : 'w+'))
+        return handles as [FileHandle, FileHandle, FileHandle, FileHandle]
+      } catch (error) {
+        await Promise.allSettled(handles.map((file) => file.close()))
+        throw error
+      }
+    })())
   }
-
-  /** Keeps chunk `k`: `count` frames of each field's `values`, frame by frame as they were read,
-   *  written row by row. */
-  async write(k: number, count: number, values: readonly Float64Array[]): Promise<void> {
-    const block = new Float64Array(count * this.#width)
-    let into = 0
-    values.forEach((field, f) => {
+  async restore(): Promise<void> {
+    return (this.#restoring ??= (async () => {
+      const manifest = this.#manifest
+      if (!manifest) return
+      const files = await this.#handles()
+      const sizes = [manifest.rawBytes, manifest.levelBytes, manifest.indexBytes, manifest.read]
+      for (let i = 0; i < files.length; i++) {
+        if ((await files[i]!.stat()).size < sizes[i]!)
+          throw new Error('A committed result store is truncated.')
+      }
+      const bytes = new Uint8Array(manifest.indexBytes)
+      await readAll(files[2], bytes, 0)
+      this.raw.length = 0
+      this.levels.clear()
+      let expected = 0
+      for (const line of new TextDecoder().decode(bytes).split('\n')) {
+        if (!line) continue
+        const index = JSON.parse(line) as RawIndex | LevelIndex
+        if (
+          !Number.isSafeInteger(index.first) ||
+          !Number.isSafeInteger(index.count) ||
+          index.first < 0 ||
+          index.count < 1 ||
+          !Number.isFinite(index.start) ||
+          !Number.isFinite(index.end) ||
+          index.end < index.start
+        )
+          throw new Error('Invalid results block index.')
+        if (index.kind === 'raw') {
+          if (index.first !== expected || index.fields.length !== this.#rows.length)
+            throw new Error('Results block index is not consecutive.')
+          expected += index.count
+          this.raw.push(index)
+        } else if (index.kind === 'level') this.#addLevel(index)
+        else throw new Error('Unknown results index record.')
+      }
+      if (expected !== manifest.frames)
+        throw new Error('Results checkpoint has a different frame count.')
+      // Only bytes beyond the committed watermark are discarded after an interrupted write.
+      for (let i = 0; i < files.length; i++) await files[i]!.truncate(sizes[i])
+    })())
+  }
+  async #index(index: RawIndex | LevelIndex): Promise<void> {
+    const bytes = new TextEncoder().encode(JSON.stringify(index) + '\n')
+    const files = await this.#handles()
+    await writeAll(files[2], bytes, this.#indexBytes)
+    this.#indexBytes += bytes.byteLength
+  }
+  #addLevel(index: LevelIndex): void {
+    const key = `${index.field}:${index.level}`
+    const blocks = this.levels.get(key) ?? []
+    if (blocks.length && blocks.at(-1)!.first + blocks.at(-1)!.count !== index.first)
+      throw new Error('Nonconsecutive visualization buckets.')
+    blocks.push(index)
+    this.levels.set(key, blocks)
+  }
+  async writeRaw(first: number, at: Float64Array, fields: readonly Float64Array[]): Promise<void> {
+    if (!at.length) return
+    const previous = this.raw.at(-1)
+    if (
+      first !== (previous ? previous.first + previous.count : 0) ||
+      fields.length !== this.#rows.length
+    )
+      throw new Error('Nonconsecutive result frames.')
+    const [file] = await this.#handles()
+    const timeOffset = this.#rawBytes
+    await writeAll(file, new Uint8Array(at.buffer, at.byteOffset, at.byteLength), this.#rawBytes)
+    this.#rawBytes += at.byteLength
+    const offsets: number[] = []
+    for (let f = 0; f < fields.length; f++) {
       const rows = this.#rows[f]!
+      const values = fields[f]!
+      if (values.length !== rows * at.length) throw new Error('Invalid raw result dimensions.')
+      const block = new Float64Array(values.length)
       for (let row = 0; row < rows; row++)
-        for (let t = 0; t < count; t++) block[into++] = field[t * rows + row]!
-    })
-    const file = await this.#handle()
-    const bytes = new Uint8Array(block.buffer)
-    for (let written = 0; written < bytes.length;) {
-      const { bytesWritten } = await file.write(
-        bytes,
-        written,
-        bytes.length - written,
-        this.#at(k) + written,
+        for (let t = 0; t < at.length; t++) block[row * at.length + t] = values[t * rows + row]!
+      offsets.push(this.#rawBytes)
+      await writeAll(file, new Uint8Array(block.buffer), this.#rawBytes)
+      this.#rawBytes += block.byteLength
+    }
+    const index: RawIndex = {
+      kind: 'raw',
+      first,
+      count: at.length,
+      start: at[0]!,
+      end: at.at(-1)!,
+      at: timeOffset,
+      fields: offsets,
+    }
+    await this.#index(index)
+    this.raw.push(index)
+  }
+  async writeLevel(field: number, level: number, runs: readonly ReducedRun[]): Promise<void> {
+    if (!runs.length) return
+    const rows = this.#rows[field]!
+    const count = runs.length
+    const at = new Float64Array(2 * count)
+    const values = new Float32Array(rows * count * 2)
+    const gaps = new Uint8Array(rows * count)
+    runs.forEach((run, i) => {
+      if (
+        run.first !== runs[0]!.first + i ||
+        run.level !== level ||
+        run.at.length !== 2 ||
+        run.values.length !== rows * 2
       )
-      written += bytesWritten
+        throw new Error('Invalid visualization bucket block.')
+      at.set(run.at, 2 * i)
+      values.set(run.values.subarray(0, rows), i * rows)
+      values.set(run.values.subarray(rows), (count + i) * rows)
+      gaps.set(run.gaps, i * rows)
+    })
+    const [, file] = await this.#handles()
+    const timeOffset = this.#levelBytes
+    await writeAll(file, new Uint8Array(at.buffer), this.#levelBytes)
+    this.#levelBytes += at.byteLength
+    const valueOffset = this.#levelBytes
+    await writeAll(file, new Uint8Array(values.buffer), this.#levelBytes)
+    this.#levelBytes += values.byteLength
+    const gapOffset = this.#levelBytes
+    await writeAll(file, gaps, this.#levelBytes)
+    this.#levelBytes += gaps.byteLength
+    const index: LevelIndex = {
+      kind: 'level',
+      field,
+      level,
+      first: runs[0]!.first,
+      count,
+      start: at[0]!,
+      end: at.at(-1)!,
+      at: timeOffset,
+      values: valueOffset,
+      gaps: gapOffset,
+      gapped: runs
+        .filter((run) => run.gaps.some((gap, row) => gap !== 0 && Number.isFinite(run.values[row])))
+        .map((run) => run.first),
     }
+    await this.#index(index)
+    this.#addLevel(index)
   }
-
-  /** Field `f` of chunk `k`, of `count` frames, row by row: of the rows at `places` among the
-   *  field's, ascending, when given, else of every one. One read per run of rows. */
-  async read(k: number, f: number, count: number, places?: Uint32Array): Promise<Float64Array> {
-    const file = await this.#handle()
-    const base = this.#at(k) + count * this.#starts[f]! * BYTES
-    const row = count * BYTES
-    if (!places) {
-      const values = new Float64Array(count * this.#rows[f]!)
-      await readAll(file, new Uint8Array(values.buffer), base)
-      return values
-    }
-    const values = new Float64Array(count * places.length)
-    const bytes = new Uint8Array(values.buffer)
-    for (let i = 0; i < places.length;) {
-      let j = i + 1
-      while (j < places.length && places[j] === places[j - 1]! + 1) j++
-      await readAll(file, bytes.subarray(i * row, j * row), base + places[i]! * row)
-      i = j
-    }
-    return values
+  async times(index: RawIndex, offset = 0, count = index.count - offset): Promise<Float64Array> {
+    if (offset < 0 || count < 0 || offset + count > index.count)
+      throw new Error('Invalid time slice.')
+    const [file] = await this.#handles()
+    const at = new Float64Array(count)
+    await readAll(file, new Uint8Array(at.buffer), index.at + offset * 8)
+    return at
   }
-
-  /** Says what it holds, read through, with every frame's `times`: it reads alone from here on. */
-  async finish(manifest: Omit<Manifest, 'format'>, times: Float64Array): Promise<void> {
-    // All it holds is on disk before anything says it holds it.
-    await (await this.#handle()).sync()
-    await writeFile(join(this.folder, TIMES), times, { flush: true })
-    const written: Manifest = { format: FORMAT, ...manifest }
-    // Written whole, then named, so a store says what it holds or nothing.
-    const draft = join(this.folder, MANIFEST + '.draft')
+  async readRaw(
+    index: RawIndex,
+    field: number,
+    places?: readonly number[],
+    offset = 0,
+    count = index.count - offset,
+  ): Promise<FrameBlock> {
+    const at = await this.times(index, offset, count)
+    const [file] = await this.#handles()
+    const selected = places ?? Array.from({ length: this.#rows[field]! }, (_, i) => i)
+    const values = new Float64Array(count * selected.length)
+    for (const place of selected) {
+      if (!Number.isSafeInteger(place) || place < 0 || place >= this.#rows[field]!)
+        throw new Error('Invalid recorded row.')
+    }
+    // Rows are contiguous on disk. Read adjacent selections together, bounded to 4 MiB,
+    // then transpose directly into the requested order. A single-row inspection still
+    // reads only its requested times, rather than the whole field or run.
+    const order = Array.from({ length: selected.length }, (_, i) => i).sort(
+      (a, b) => selected[a]! - selected[b]!,
+    )
+    for (let first = 0; first < order.length;) {
+      const place = selected[order[first]!]!
+      let stop = first + 1
+      while (
+        stop < order.length &&
+        selected[order[stop]!] === place + stop - first &&
+        ((stop - first) * index.count + count) * 8 <= 4 * 1024 * 1024
+      )
+        stop++
+      const block = new Float64Array((stop - first - 1) * index.count + count)
+      await readAll(
+        file,
+        new Uint8Array(block.buffer),
+        index.fields[field]! + (place * index.count + offset) * 8,
+      )
+      for (let row = first; row < stop; row++)
+        for (let t = 0; t < count; t++)
+          values[t * selected.length + order[row]!] = block[(row - first) * index.count + t]!
+      first = stop
+    }
+    return { first: index.first + offset, rows: selected.length, at, values }
+  }
+  async readLevel(
+    index: LevelIndex,
+    places: readonly number[],
+    offset = 0,
+    count = index.count - offset,
+  ): Promise<VisualizationRun & { gaps: Uint8Array }> {
+    if (offset < 0 || count < 0 || offset + count > index.count)
+      throw new Error('Invalid level slice.')
+    const [, file] = await this.#handles()
+    const rows = this.#rows[index.field]!
+    const at = new Float64Array(count * 2)
+    await readAll(file, new Uint8Array(at.buffer), index.at + offset * 16)
+    const values = new Float32Array(places.length * count * 2)
+    const gaps = new Uint8Array(places.length * count)
+    // Disk values are frame-major, with a separate plane for maxima, matching Patch.frames.
+    const low = new Float32Array(count * rows)
+    const high = new Float32Array(count * rows)
+    const missing = new Uint8Array(count * rows)
+    await readAll(file, new Uint8Array(low.buffer), index.values + offset * rows * 4)
+    await readAll(
+      file,
+      new Uint8Array(high.buffer),
+      index.values + (index.count + offset) * rows * 4,
+    )
+    await readAll(file, missing, index.gaps + offset * rows)
+    for (let t = 0; t < count; t++)
+      for (let r = 0; r < places.length; r++) {
+        values[t * places.length + r] = low[t * rows + places[r]!]!
+        values[(count + t) * places.length + r] = high[t * rows + places[r]!]!
+        gaps[t * places.length + r] = missing[t * rows + places[r]!]!
+      }
+    return { level: index.level, first: index.first + offset, at, values, gaps }
+  }
+  async writeCsv(bytes: Uint8Array, position: number): Promise<void> {
+    const files = await this.#handles()
+    await writeAll(files[3], bytes, position)
+  }
+  async checkpoint(value: Checkpoint): Promise<void> {
+    const files = await this.#handles()
+    await Promise.all(files.map((file) => file.sync()))
+    const written: Manifest = {
+      ...value,
+      format: FORMAT,
+      rows: this.#rows,
+      rawBytes: this.#rawBytes,
+      levelBytes: this.#levelBytes,
+      indexBytes: this.#indexBytes,
+    }
+    const draft = join(this.folder, 'manifest.json.draft')
     await writeFile(draft, JSON.stringify(written), { flush: true })
-    await rename(draft, join(this.folder, MANIFEST))
+    await rename(draft, join(this.folder, 'manifest.json'))
     this.#manifest = written
     await this.owner?.finished(this)
   }
-
-  /** Whether all a store read through says it holds is there: every frame of every chunk, as its
-   *  shape cuts them, and every frame's time. */
   async intact(): Promise<boolean> {
-    const { frames } = this.#manifest!
-    const size = (name: string) =>
-      stat(join(this.folder, name)).then(
-        ({ size }) => size,
-        () => -1,
-      )
-    const [held, timed] = await Promise.all([size(FRAMES), size(TIMES)])
-    return held === frames * this.#width * BYTES && timed === frames * BYTES
-  }
-
-  /** Every frame's time, of a store read through. */
-  async times(): Promise<Float64Array> {
-    const times = new Float64Array(this.#manifest!.frames)
-    const file = await open(join(this.folder, TIMES), 'r')
     try {
-      await readAll(file, new Uint8Array(times.buffer), 0)
-    } finally {
-      await file.close()
+      await this.restore()
+      return true
+    } catch {
+      return false
     }
-    return times
   }
-
-  /** Lets go of its file, and with `remove` of the store itself. */
   async close(remove = false): Promise<void> {
-    const file = this.#file
-    this.#file = undefined
-    await file?.then((handle) => handle.close()).catch(() => {})
+    const files = this.#files
+    this.#files = undefined
+    await files
+      ?.then((handles) => Promise.allSettled(handles.map((file) => file.close())))
+      .catch(() => {})
     if (remove) await rm(this.folder, { recursive: true, force: true })
   }
 }
 
-/** The stores of the results files a worker reads. Every window that shares `root`, as empty
- *  windows share one, keeps its own in a folder named for its extension host, `owner`: no window
- *  ever removes a store another window still open reads or writes. */
 export class Stores {
   /** The latest store read through of each results file, by its key. */
   readonly #latest = new Map<string, Store>()
@@ -229,7 +435,8 @@ export class Stores {
     readonly root: string,
     owner = process.pid,
   ) {
-    this.#own = join(root, String(owner))
+    this.root = join(root, FORMAT)
+    this.#own = join(this.root, String(owner))
   }
 
   /** Keeps the latest store read through of each results file `kept` names, of this window's and
@@ -298,7 +505,13 @@ export class Stores {
     await this.#swept
     const store = this.#latest.get(fileKey(path))
     const manifest = store?.manifest
-    if (!store || !same(manifest?.stamp, now) || manifest?.fingerprint !== fingerprint)
+    if (
+      !store ||
+      !manifest ||
+      (!same(manifest.stamp, now) &&
+        (manifest.complete || manifest.stamp.file !== now.file || now.size < manifest.read)) ||
+      manifest.fingerprint !== fingerprint
+    )
       return undefined
     return this.#use(store)
   }

@@ -3,11 +3,13 @@ import { type FileHandle, open, rename, rm } from 'node:fs/promises'
 
 import * as vscode from 'vscode'
 
-/** An exported video, written at the encoder's offsets and published to its destination on close. */
+/** An exported video, written sequentially and published to its destination on close. */
 export class VideoFile {
   #handle?: FileHandle
   readonly #temporary: vscode.Uri
   #closed = false
+  #aborted = false
+  #tail: Promise<void> = Promise.resolve()
   /** The video in memory, for non-`file` destinations that cannot be written in place. */
   #bytes = new Uint8Array(0)
   #length = 0
@@ -23,22 +25,24 @@ export class VideoFile {
   }
 
   /** Ask the user where to save `name`, next to `beside`; undefined if cancelled. */
-  static async choose(
-    beside: vscode.Uri,
-    name: string,
-    format: 'mp4' | 'webm',
-  ): Promise<VideoFile | undefined> {
+  static async choose(beside: vscode.Uri, name: string): Promise<VideoFile | undefined> {
     const uri = await vscode.window.showSaveDialog({
       title: 'Export video',
       defaultUri: vscode.Uri.joinPath(beside, '..', name),
-      filters: { [format.toUpperCase() + ' video']: [format] },
+      filters: { 'MP4 video': ['mp4'] },
     })
     if (!uri) return undefined
     return VideoFile.create(uri)
   }
 
-  async write(position: number, bytes: Uint8Array) {
+  async write(bytes: Uint8Array): Promise<void> {
     if (this.#closed) throw new Error('The video file is closed.')
+    return (this.#tail = this.#tail.then(() => this.#write(bytes)))
+  }
+
+  async #write(bytes: Uint8Array) {
+    if (this.#aborted) throw new Error('The video export was cancelled.')
+    const position = this.#length
     if (
       !Number.isSafeInteger(position) ||
       position < 0 ||
@@ -56,9 +60,17 @@ export class VideoFile {
         if (!bytesWritten) throw new Error('The video file could not be written.')
         written += bytesWritten
       }
+      this.#length += bytes.length
       return
     }
     const end = position + bytes.length
+    if (end > 256 * 1024 * 1024)
+      throw Object.assign(
+        new Error(
+          'This file provider cannot stream a video larger than 256 MiB. Choose a local destination.',
+        ),
+        { code: 'limit' },
+      )
     if (end > this.#bytes.length) {
       const grown = new Uint8Array(Math.max(end, this.#bytes.length * 2, 1 << 20))
       grown.set(this.#bytes.subarray(0, this.#length))
@@ -71,6 +83,8 @@ export class VideoFile {
   async close() {
     if (this.#closed) throw new Error('The video file is closed.')
     this.#closed = true
+    await this.#tail
+    if (this.#aborted) throw new Error('The video export was cancelled.')
     if (this.#handle) {
       await this.#handle.close()
       // Same file system, so the rename is atomic and a failure leaves the old video.
@@ -85,6 +99,8 @@ export class VideoFile {
   /** Discard the export's temporary file; the destination is untouched. Safe after close or failure. */
   async abort() {
     this.#closed = true
+    this.#aborted = true
+    await this.#tail.catch(() => {})
     await this.#handle?.close().catch(() => {})
     this.#bytes = new Uint8Array(0)
     if (this.uri.scheme === 'file') await rm(this.#temporary.fsPath, { force: true })
@@ -102,13 +118,8 @@ export class VideoFiles {
 
   /** Asks the user where to save `name`, next to `beside`: a handle to write it through, or null
    *  when they cancel. */
-  async open(
-    beside: vscode.Uri,
-    name: string,
-    format: 'mp4' | 'webm',
-    signal: AbortSignal,
-  ): Promise<number | null> {
-    const file = await VideoFile.choose(beside, String(name), format === 'webm' ? 'webm' : 'mp4')
+  async open(beside: vscode.Uri, name: string, signal: AbortSignal): Promise<number | null> {
+    const file = await VideoFile.choose(beside, String(name))
     if (!file) return null
     if (signal.aborted) {
       await file.abort()
@@ -118,12 +129,12 @@ export class VideoFiles {
     return this.#next
   }
 
-  async write(handle: number, position: number, bytes: Uint8Array | ArrayBuffer): Promise<void> {
+  async write(handle: number, bytes: Uint8Array | ArrayBuffer): Promise<void> {
     const chunk = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes
     if (!(chunk instanceof Uint8Array)) throw new Error('Invalid video write.')
     const file = this.#open.get(handle)
     if (!file) throw new Error('The video file is closed.')
-    return file.write(position, chunk)
+    return file.write(chunk)
   }
 
   /** Finishes the video, or with `abort` discards it: the finished video's path. */

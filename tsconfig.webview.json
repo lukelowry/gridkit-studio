@@ -5,5 +5,5 @@
     "types": ["@webgpu/types"]
   },
   "include": ["src/webview/**/*.ts", "src/webview/**/*.svelte", "src/shared/messages.ts"],
-  "exclude": []
+  "exclude": ["**/*.test.ts"]
 }

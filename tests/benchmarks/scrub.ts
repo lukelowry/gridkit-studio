@@ -19,8 +19,10 @@ const STEP_MS = 16
 interface Watched {
   /** Milliseconds since the scenario began. */
   ms: number
-  availability?: string
-  /** The time the Network presented, and the time it was asked to show. */
+  covered?: boolean
+  frames: number
+  complete: boolean
+  /** Native View.at is the assigned time, not a presentation timestamp. */
   at?: number
   requestedAt?: number
 }
@@ -34,7 +36,9 @@ const watch = (network: Frame) =>
       const stats = gridkitStats()
       window.watched.push({
         ms: performance.now() - start,
-        availability: stats?.availability,
+        covered: stats?.covered,
+        frames: stats?.frames ?? 0,
+        complete: stats?.complete ?? false,
         at: stats?.at,
         requestedAt: stats?.requestedAt,
       })
@@ -45,8 +49,8 @@ const watch = (network: Frame) =>
 const stop = (network: Frame) =>
   network.evaluate<Watched[]>('(cancelAnimationFrame(window.watching), window.watched)')
 
-/** How a drag went: the share of frames spent waiting on samples, the distinct times shown, and
- *  how far, in the run's seconds, what was shown trailed the playhead. */
+/** Data availability and actual native draw counts are separate from View.complete, which may
+ *  stay false while a changing playhead keeps new GPU work queued. */
 function summarize(watched: readonly Watched[], ended: number) {
   const during = watched.filter((sample) => sample.ms <= ended)
   const lag = during
@@ -56,15 +60,15 @@ function summarize(watched: readonly Watched[], ended: number) {
   const settled = watched.find(
     (sample) =>
       sample.ms > ended &&
-      sample.availability === 'ready' &&
+      sample.covered &&
       Math.abs((sample.at ?? NaN) - (sample.requestedAt ?? NaN)) < 1e-6,
   )
   return {
     frames: during.length,
-    buffering:
-      during.filter((sample) => sample.availability === 'buffering').length /
-      Math.max(1, during.length),
-    shown: new Set(during.filter((s) => s.availability === 'ready').map((s) => s.at)).size,
+    drawn: Math.max(0, (during.at(-1)?.frames ?? 0) - (during[0]?.frames ?? 0)),
+    complete: during.filter((sample) => sample.complete).length / Math.max(1, during.length),
+    buffering: during.filter((sample) => !sample.covered).length / Math.max(1, during.length),
+    assigned: new Set(during.filter((s) => s.covered).map((s) => s.at)).size,
     lagMedian: lag[Math.floor(lag.length / 2)] ?? null,
     lagMax: lag.at(-1) ?? null,
     settleMs: settled ? settled.ms - ended : null,
@@ -74,6 +78,8 @@ function summarize(watched: readonly Watched[], ended: number) {
 export async function run() {
   const bench = await testHost()
   const report: Record<string, unknown> = {}
+  report.timeSemantics =
+    'View.at is assigned time; drawn counts View.stats.frames. Seek latency waits for a new native frame.'
   try {
     assert.ok(await bench.gridkit(), 'GridKit is required')
     const { uri, network } = await bench.openCase('cases/ACTIVSg10k.case.json')
@@ -104,15 +110,15 @@ export async function run() {
     transport.pause()
     transport.seek(0)
     session.setPlots([{ from: 'Bus', field: 'Vm' }])
-    session.bind({ type: 'Bus', field: 'Vm' }, ['vertexColor'])
-    session.bind({ type: 'Bus', field: 'Va' }, ['vertexHeight'])
+    session.bind({ table: 'Bus', field: 'Vm' }, ['vertexColor'])
+    session.bind({ table: 'Bus', field: 'Va' }, ['vertexHeight'])
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
-    const shows = (t: number) =>
+    const shows = (t: number, after = -1) =>
       network.waitForFunction(
-        `(t) => gridkitStats()?.availability === 'ready' && Math.abs(gridkitStats().at - t) < 1e-6`,
-        t,
+        `([t, after]) => gridkitStats()?.frames > after && gridkitStats()?.covered && gridkitStats()?.complete && Math.abs(gridkitStats().at - t) < 1e-6`,
+        [t, after],
         { polling: 'raf', timeout: 120_000 },
       )
     const firstShown = performance.now()
@@ -129,9 +135,10 @@ export async function run() {
     const seeks: number[] = []
     for (const part of [0.95, 0.05, 0.7, 0.35, 0.85]) {
       const t = transport.currentT()
+      const frames = await network.evaluate<number>('gridkitStats().frames')
       const begun = performance.now()
       transport.seek(at(part))
-      await shows(transport.currentT())
+      await shows(transport.currentT(), frames)
       seeks.push(performance.now() - begun)
       assert.notEqual(t, transport.currentT())
     }
@@ -174,6 +181,6 @@ export async function run() {
     await writeFile(join(output, 'scrub.json'), JSON.stringify(report, null, 2))
     console.log('Scrub: ' + JSON.stringify(report))
   } finally {
-    await bench.browser.close()
+    await bench.finish()
   }
 }

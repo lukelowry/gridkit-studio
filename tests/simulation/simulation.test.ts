@@ -9,8 +9,8 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import { type Domain, type Query, read, rowAt, rowCount, sampleAt } from '@latkit/model'
 import { applyEdits, modify } from 'jsonc-parser'
+import type { Id } from 'latkit'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import manifest from '../../package.json'
@@ -27,6 +27,7 @@ import {
 import { recordEdits } from '../../src/gridkit/recording.js'
 import type { Runtime } from '../../src/gridkit/runtime.js'
 import { ResultCache, type ResultsFile, Stores } from '../../src/results/index.js'
+import type { TimeRange } from '../../src/shared/data.js'
 import type { GridKit, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 import { outputOf, readSolver } from '../../src/shared/study.js'
 
@@ -150,23 +151,34 @@ describe("GridKit's programs on solver files", () => {
   }
 
   /** What Studio reads back of `field` for each recorded bus over `window`. */
-  async function readBack(results: ResultsFile, field: string, window: Query.Window) {
-    const found: { row: number; t: number; value: number | null }[] = []
-    const span: Domain =
-      window.kind === 'range'
-        ? window.between
-        : window.kind === 'at'
-          ? [window.value, window.value]
-          : results.progress.domain
-    const data = await results.data(span, new AbortController().signal)
-    for await (const block of read(data, { kind: 'samples', from: 'Bus', select: [field], window }))
-      for (let frame = 0; frame < block.coordinates.length; frame++)
-        for (let i = 0; i < rowCount(block.rows); i++)
-          found.push({
-            row: rowAt(block.rows, i),
-            t: block.coordinates[frame]!,
-            value: sampleAt(block.columns[field]!, i, frame),
-          })
+  async function readBack(results: ResultsFile, name: string, range: TimeRange | number) {
+    const found: { id: Id; t: number; value: number | null }[] = []
+    const field = results.fields.findIndex((field) => field.table === 'Bus' && field.field === name)
+    const ids = results.fields[field]!.ids
+    if (typeof range === 'number') {
+      for (const id of ids) {
+        const sample = await results.sample(
+          { results: 'simulation', table: 'Bus', field: name, id, at: range },
+          AbortSignal.any([]),
+        )
+        found.push({ id, t: sample.at, value: sample.value })
+      }
+    } else
+      for (const index of results.store.raw) {
+        if (index.end < range[0] || index.start > range[1]) continue
+        const block = await results.store.readRaw(index, field)
+        for (let t = 0; t < block.at.length; t++) {
+          if (block.at[t]! < range[0] || block.at[t]! > range[1]) continue
+          for (let row = 0; row < ids.length; row++) {
+            const value = block.values[t * ids.length + row]!
+            found.push({
+              id: ids[row]!,
+              t: block.at[t]!,
+              value: Number.isFinite(value) ? value : null,
+            })
+          }
+        }
+      }
     return found
   }
 
@@ -194,21 +206,27 @@ describe("GridKit's programs on solver files", () => {
       await access(join(folder, 'output', 'out.csv'))
       expect(info.domain[0]).toBe(0)
       expect(info.domain[1]).toBeCloseTo(0.1, 9)
-      const initial = (await busesOf(name)).map(({ init }) => ({
-        Vm: Math.hypot(init.Vr, init.Vi),
-        Va: Math.atan2(init.Vi, init.Vr),
-      }))
+      const initial = new Map(
+        (await busesOf(name)).map(({ number, init }) => [
+          number,
+          {
+            Vm: Math.hypot(init.Vr, init.Vi),
+            Va: Math.atan2(init.Vi, init.Vr),
+          },
+        ]),
+      )
       for (const field of ['Vm', 'Va'] as const) {
         // Every bus, at least once a monitor step, and every value a number.
-        const samples = await readBack(results, field, { kind: 'range', between: info.domain })
-        expect(new Set(samples.map(({ row }) => row)).size).toBe(initial.length)
+        const samples = await readBack(results, field, info.domain)
+        expect(new Set(samples.map(({ id }) => id)).size).toBe(initial.size)
         expect(samples.every(({ value }) => Number.isFinite(value))).toBe(true)
         const times = [...new Set(samples.map(({ t }) => t))].sort((a, b) => a - b)
         expect(times.every((t, i) => !i || t - times[i - 1]! <= 0.01 + 1e-9)).toBe(true)
         // Each bus starts where the case's power flow left it.
-        const start = await readBack(results, field, { kind: 'at', value: 0 })
-        expect(start).toHaveLength(initial.length)
-        for (const { row, value } of start) expect(value).toBeCloseTo(initial[row]![field], 3)
+        const start = await readBack(results, field, 0)
+        expect(start).toHaveLength(initial.size)
+        for (const { id, value } of start)
+          expect(value).toBeCloseTo(initial.get(Number(id))![field], 3)
       }
     })
 
@@ -220,18 +238,23 @@ describe("GridKit's programs on solver files", () => {
       { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
       signal,
       {
-        record: (_, text) =>
-          applyEdits(text, modify(text, ['buses', row, 'mon'], ['Va', 'Vm'], {})),
+        record: (kase, text) => {
+          const cleared = apply(
+            text,
+            recordEdits(kase, [{ type: 'Bus', add: [], remove: ['Va', 'Vm'] }]),
+          )
+          return applyEdits(cleared, modify(cleared, ['buses', row, 'mon'], ['Va', 'Vm'], {}))
+        },
       },
     )
     const results = await done
     const info = { ...results.layout, ...results.progress }
     for (const field of ['Va', 'Vm']) {
-      const samples = await readBack(results, field, { kind: 'range', between: info.domain })
-      expect(new Set(samples.map(({ row }) => row))).toEqual(new Set([row]))
+      const samples = await readBack(results, field, info.domain)
+      expect(new Set(samples.map(({ id }) => id))).toEqual(new Set([2]))
     }
     // The case's own lists record on: its machines' speeds.
-    expect(info.outputs.some(({ from }) => from !== 'Bus')).toBe(true)
+    expect(info.outputs.some(({ table }) => table !== 'Bus')).toBe(true)
   })
 
   it('sags the faulted bus while the fault lasts', async ({ signal }) => {
@@ -246,8 +269,8 @@ describe("GridKit's programs on solver files", () => {
     expect(info.domain[1]).toBeCloseTo(0.2, 9)
     const faults = kase.table('BusFault')
     const bus = kase.cell(faults, 'ports.bus', 0) as number
-    const samples = (await readBack(results, 'Vm', { kind: 'range', between: info.domain })).filter(
-      (sample) => sample.row === bus,
+    const samples = (await readBack(results, 'Vm', info.domain)).filter(
+      (sample) => sample.id === bus,
     )
     expect(samples.every(({ value }) => Number.isFinite(value))).toBe(true)
     const lowest = (from: number, to: number) =>

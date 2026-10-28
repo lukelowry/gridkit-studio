@@ -2,7 +2,7 @@
   chosen from the view's title bar, which also says what shows; a column's menu maps it onto the
   network. -->
 <script lang="ts">
-  import type { Query, Schema } from '@latkit/model'
+  import type { Id } from 'latkit'
   import { onMount, tick } from 'svelte'
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
@@ -10,14 +10,19 @@
     changedTable,
     display,
     leaf,
-    native,
-    referenceNames,
     rowsOf,
     shownColumns,
     shownType,
-    tableFields,
   } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
+  import type { TableRequest } from '../../shared/data.js'
+  import {
+    type Entity,
+    entityKey,
+    type FieldDefinition,
+    fieldDefinition,
+    tableDefinition,
+  } from '../../shared/document.js'
   import {
     type Revision,
     revisionOf,
@@ -25,7 +30,6 @@
     type Value,
     type ViewState,
   } from '../../shared/messages.js'
-  import { elementType, isReference, unitOf } from '../../shared/schema.js'
   import { bridge, merged } from '../bridge.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
@@ -68,7 +72,7 @@
    *  was read. */
   let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
   let editing = $state<
-    | { id: string; field: string; text: string; revision: Revision; row: number; column: number }
+    | { id: Id; field: string; text: string; revision: Revision; row: number; column: number }
     | undefined
   >()
   let scroll: HTMLDivElement
@@ -77,18 +81,22 @@
   /** A cell the keys moved to on a page not yet read, which takes focus once it is. */
   let pending: { row: number; column: number } | undefined
   /** The selected row the panel scrolls to once it is drawn. */
-  let revealing: string | undefined
+  let revealing: Id | undefined
   /** The last element selected here, which is in sight already. */
   let own: string | undefined
   /** What the rows read are of: another type, filter or order starts them over, at the top. */
   let viewed: { type: string; key: string } | undefined
-  const definitions = $derived<Readonly<Record<string, Schema.Field>>>(
-    summary?.schema.types[type]?.fields ?? {},
+  const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
+    Object.fromEntries(
+      (summary ? (tableDefinition(summary.definition, type)?.fields ?? []) : []).map((field) => [
+        field.name,
+        field,
+      ]),
+    ),
   )
   /** The field each row is known by, shown as the row's own header. */
   const identity = $derived(summary?.identities[type])
   /** The type's static fields besides its identity; sampled ones belong to the Monitor. */
-  const allFields = $derived(summary ? tableFields(summary, type) : [])
   /** A cell as text: a number to six significant digits, which hover and editing show whole. */
   const text = (value: unknown) =>
     typeof value === 'number'
@@ -98,7 +106,7 @@
   const mapped = $derived(
     new Map(
       fields.flatMap((field) => {
-        const channels = channelsOf(view.bindings ?? {}, { type, field })
+        const channels = channelsOf(view.bindings ?? {}, { table: type, field })
         return channels.length ? [[field, shortNames(channels)] as const] : []
       }),
     ),
@@ -111,7 +119,7 @@
       column: at < 0 ? 0 : Math.max(fields.indexOf(view.selection?.field ?? ''), 0),
     }
   })
-  const context = (id: string | null, field?: string) =>
+  const context = (id: Id | null, field?: string) =>
     summary
       ? JSON.stringify(
           menuContext(
@@ -122,7 +130,7 @@
               origin: 'case',
               type,
               field,
-              ...(id ? { element: { id, ...(field ? { field } : {}) } } : {}),
+              ...(id !== null ? { element: { table: type, id, ...(field ? { field } : {}) } } : {}),
             },
             view.bindings,
             // The panel's own view of its rows, for the items that change it.
@@ -135,7 +143,8 @@
   function contextmenu(event: MouseEvent) {
     const target = (event.target as Element | null)?.closest<HTMLElement>('[data-field], [data-id]')
     if (!target || !scroll?.contains(target)) return
-    const id = target.closest<HTMLElement>('[data-id]')?.dataset.id || null
+    const encoded = target.closest<HTMLElement>('[data-id]')?.dataset.id
+    const id: Id | null = encoded ? JSON.parse(encoded) : null
     target.dataset.vscodeContext = context(id, target.dataset.field)
     setTimeout(() => delete target.dataset.vscodeContext)
   }
@@ -189,37 +198,23 @@
     const revision = revisionOf(summary)
     loading = true
     try {
-      // The filter matches a row's name, else its identity.
-      const named = allFields.includes('name') ? 'name' : identity
-      const where: NonNullable<Query.Rows['where']>[number][] = [
-        ...(filter && named
-          ? [{ field: named, operator: 'contains', value: filter } as const]
-          : []),
-        ...(equal ? [{ field: equal.field, operator: 'equal', value: equal.value } as const] : []),
-      ]
-      const query: Query.Rows = {
-        kind: 'rows',
-        from: type,
-        select: fields,
+      const query: TableRequest = {
+        table: type,
+        fields,
         offset: at,
         limit: 100,
-        count: true,
-        ids: true,
-        ...(order ? { orderBy: [order] } : {}),
-        ...(where.length ? { where } : {}),
+        ...(filter ? { search: filter } : {}),
+        ...(equal ? { equal } : {}),
+        ...(order ? { order } : {}),
       }
-      const blocks = await bridge.request(
-        'query',
-        { revision, query: $state.snapshot(query) },
+      const result = await bridge.request(
+        'page',
+        { revision, request: $state.snapshot(query) },
         request.signal,
       )
       if (generation !== current) return
-      const references = await referenceNames(blocks, (query) =>
-        bridge.request('query', { revision, query }, request.signal),
-      )
-      if (generation !== current) return
-      page = { offset: at, rows: rowsOf(blocks, references) }
-      total = blocks[0]?.total ?? page.rows.length
+      page = { offset: result.offset, rows: rowsOf(result) }
+      total = result.total
       // The view's title says how many rows the filters leave.
       bridge.send({ kind: 'rows', shown: total })
       await tick()
@@ -274,14 +269,14 @@
       },
     })
   }
-  function select(id: string | null, field?: string) {
-    if (!id) return
-    own = id
-    bridge.send({ kind: 'select', element: { id, ...(field ? { field } : {}) } })
+  function select(id: Id | null, field?: string) {
+    if (id === null) return
+    own = entityKey({ table: type, id })
+    bridge.send({ kind: 'select', element: { table: type, id, ...(field ? { field } : {}) } })
   }
-  function edit(id: string | null, field: string, value: unknown, row: number, column: number) {
-    if (!id || stale || !view.writable || !summary?.editable[type]?.includes(field)) return
-    const spec = summary.schema.types[type]?.fields[field]
+  function edit(id: Id | null, field: string, value: unknown, row: number, column: number) {
+    if (id === null || stale || !view.writable || !summary?.editable[type]?.includes(field)) return
+    const spec = fieldDefinition(summary.definition, type, field)
     editing = {
       id,
       field,
@@ -289,9 +284,9 @@
       column,
       revision: revisionOf(summary),
       text:
-        spec?.type === 'text'
+        spec?.kind === 'text'
           ? String(value ?? '')
-          : isReference(spec)
+          : spec?.kind === 'reference'
             ? value && typeof value === 'object' && 'id' in value
               ? String(value.id ?? '')
               : ''
@@ -307,17 +302,23 @@
     if (!edit || !summary) return
     editing = undefined
     try {
-      const spec = summary.schema.types[type]!.fields[edit.field]!
+      const spec = fieldDefinition(summary.definition, type, edit.field)!
       const value: Value =
-        spec.type === 'text' || isReference(spec)
-          ? isReference(spec) && edit.text === 'null'
-            ? null
-            : edit.text
-          : JSON.parse(edit.text)
+        spec.kind === 'text'
+          ? edit.text
+          : spec.kind === 'reference'
+            ? edit.text.trim() === 'null' || !edit.text.trim()
+              ? null
+              : Number.isSafeInteger(Number(edit.text))
+                ? Number(edit.text)
+                : edit.text
+            : JSON.parse(edit.text)
       await bridge.request('transact', {
         // The edit's state is reactive; a message carries plain values.
         revision: $state.snapshot(edit.revision),
-        mutations: [{ kind: 'set', id: edit.id, field: edit.field, value }],
+        mutations: [
+          { kind: 'set', entity: { table: type, id: edit.id }, field: edit.field, value },
+        ],
         label: 'Edit ' + leaf(edit.field),
       })
     } catch (reason) {
@@ -335,7 +336,7 @@
   }
   /** Scroll the selected row into view once it is drawn; whether it was. */
   function scrolled(): boolean {
-    const shown = revealing && scroll?.querySelector('tr.selected')
+    const shown = revealing !== undefined && scroll?.querySelector('tr.selected')
     if (!shown) return false
     shown.scrollIntoView({ block: 'nearest' })
     revealing = undefined
@@ -343,8 +344,8 @@
   }
   /** Show the selected element's row: switch to its type, and scroll the row into view, now or
    *  once the page holding it loads. */
-  async function reveal(id: string) {
-    const next = elementType(id)
+  async function reveal(entity: Entity) {
+    const { id, table: next } = entity
     const of = view.uri
     revealing = id
     if (next !== type) change({ type: next })
@@ -354,21 +355,12 @@
     if (filter || equal || order) change({ filter: undefined, equal: undefined, order: undefined })
     try {
       if (!summary) return
-      const blocks = await bridge.request('query', {
+      const result = await bridge.request('page', {
         revision: revisionOf(summary),
-        query: {
-          kind: 'rows',
-          from: next,
-          select: [],
-          ids: true,
-          rows: { kind: 'ids', ids: [id] },
-          limit: 1,
-        },
+        request: { table: next, fields: [], offset: 0, limit: 1, anchor: id },
       })
-      // The page holding the row loads, and `scrolled` brings the row into view once it is drawn:
-      // while the panel still shows that case, and that element is still the one selected.
-      const row = rowsOf(blocks)[0]
-      if (row && view.uri === of && view.selection?.id === id) offset = Math.max(0, row.row - 10)
+      if (view.uri === of && view.selection?.table === next && view.selection.id === id)
+        offset = result.offset
     } catch (reason) {
       bridge.report(reason)
     }
@@ -378,7 +370,8 @@
       if (message.kind === 'state') {
         const other = message.state.uri !== view.uri
         // The selection the panel had in sight: none of a case it has yet to read.
-        const before = other || !view.summary ? undefined : view.selection?.id
+        const before =
+          other || !view.summary || !view.selection ? undefined : entityKey(view.selection)
         view = merged(view, message.state)
         // Another case's rows go with it; its own load once it reads.
         if (other) {
@@ -394,9 +387,9 @@
         }
         // A selection made in another view is brought into sight, its type shown; one made here
         // already is.
-        const selected = view.selection?.id
+        const selected = view.selection ? entityKey(view.selection) : undefined
         if (selected && selected !== before && selected !== own && view.summary && !view.stale)
-          void reveal(selected)
+          void reveal(view.selection!)
         if (selected !== own) own = undefined
       }
     })
@@ -425,14 +418,16 @@
         <tr>
           <th scope="col">{identity ?? ''}</th>
           {#each fields as field (field)}
-            {@const unit = unitOf(definitions[field], field)}
+            {@const unit = definitions[field]?.unit}
             <th
               scope="col"
               aria-sort={order?.field === field ? order.direction : 'none'}
               data-field={field}
             >
               <button onclick={() => sort(field)} title={field}>
-                {leaf(field)}{#if unit}<span class="case__unit">
+                {leaf(field)}{#if unit && leaf(field).toLowerCase() !== unit.toLowerCase()}<span
+                    class="case__unit"
+                  >
                     {unit}
                   </span>{/if}{#if mapped.has(field)}<span class="case__mapped">
                     {mapped.get(field)}
@@ -458,13 +453,13 @@
           </tr>{/if}
         {#each page.rows as row, rowIndex (row.id)}
           <tr
-            class:selected={view.selection?.id === row.id}
+            class:selected={view.selection?.table === type && view.selection.id === row.id}
             aria-rowindex={page.offset + rowIndex + 2}
-            data-id={row.id ?? ''}
+            data-id={JSON.stringify(row.id)}
           >
             <th scope="row">
-              <button tabindex="-1" onclick={() => select(row.id)} title={row.id ?? ''}>
-                {row.id ? native(row.id) : ''}
+              <button tabindex="-1" onclick={() => select(row.id)} title={String(row.id)}>
+                {String(row.id)}
               </button>
             </th>
             {#each fields as field, columnIndex (field)}
@@ -481,7 +476,7 @@
                       }
                     }}
                     onblur={() => void commit()}
-                    placeholder={isReference(definitions[field]) ? 'Type/ID' : ''}
+                    placeholder={definitions[field]?.kind === 'reference' ? 'ID or null' : ''}
                   />
                 {:else}
                   <button

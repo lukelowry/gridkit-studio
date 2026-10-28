@@ -89,10 +89,22 @@ try {
   assert.equal(packaged.contributes.mcpServerDefinitionProviders, undefined)
   await verify(target)
   assert.deepEqual(
-    (await readdir(join(target, 'dist'))).filter((name) => name.endsWith('.cjs')).sort(),
-    ['cases.cjs', 'extension.cjs', 'results.cjs'],
+    (await readdir(join(target, 'dist'))).filter((name) => /\.(cjs|mjs)$/.test(name)).sort(),
+    ['cases.mjs', 'extension.cjs', 'results.mjs'],
     'Ship only the native extension and its two worker bundles',
   )
+  for (const asset of [
+    'webview/latkit.wasm',
+    'webview/latkit-worker.js',
+    'licenses/latkit-NOTICES.md',
+    'licenses/latkit-THIRD_PARTY.md',
+    'webview/maps/coastline.geojson.gz',
+  ]) {
+    assert.ok(
+      (await readFile(join(target, 'dist', asset))).byteLength > 0,
+      'Missing packaged asset: ' + asset,
+    )
+  }
   // Flags, such as --untrusted, go to each launch as they do to launch.mjs itself.
   const flags = process.argv.slice(2).filter((arg) => arg.startsWith('--'))
   const entries = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))

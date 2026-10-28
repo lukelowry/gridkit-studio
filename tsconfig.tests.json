@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable", "ESNext.Disposable"],
+    "types": ["node", "vscode", "@webgpu/types"]
+  },
+  "include": ["src/**/*.test.ts", "tests/**/*.ts"],
+  "exclude": []
+}

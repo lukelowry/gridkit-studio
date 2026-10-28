@@ -177,10 +177,11 @@ export class Client {
 
   constructor(
     folder: string,
-    cases: WorkerOptions,
-    results: () => ResultsOptions,
+    cases: Omit<WorkerOptions, 'wasmPath'>,
+    results: () => Omit<ResultsOptions, 'wasmPath'>,
     failed: (error: unknown) => void,
   ) {
+    const wasmPath = join(folder, 'webview', 'latkit.wasm')
     this.event = new Emitter(failed)
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
@@ -192,17 +193,17 @@ export class Client {
     })
     this.cases = new Thread(
       'case',
-      join(folder, 'cases.cjs'),
+      join(folder, 'cases.mjs'),
       owner(async () => {}),
       failed,
-      () => cases,
+      () => ({ ...cases, wasmPath }),
     )
     this.results = new Thread(
       'results',
-      join(folder, 'results.cjs'),
+      join(folder, 'results.mjs'),
       owner(() => this.#terminate()),
       failed,
-      results,
+      () => ({ ...results(), wasmPath }),
     )
   }
 

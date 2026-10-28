@@ -232,6 +232,116 @@ suite('Network', () => {
     await bench.capture('network-globe')
   })
 
+  test('blends endpoint colors along edges, follows sampled colors, and honors an edge override', async () => {
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    const global = vscode.ConfigurationTarget.Global
+    const overrides = { ...SOLID, 'network.vertexRadius': 8, 'network.edgeWidth': 6 }
+    const busColor = { table: 'Bus', field: 'init.Vr' }
+    const edgeColor = { table: 'Branch', field: 'params.R' }
+    try {
+      await bench.reset()
+      for (const [key, value] of Object.entries(overrides))
+        await settings.update(key, value, global)
+      // One horizontal branch makes actual GPU colors measurable without other strokes,
+      // selection, labels, or antialiasing obscuring its two ends and interior.
+      const source = JSON.parse(bench.text)
+      source.buses = source.buses.slice(0, 2).map((bus: object, index: number) => ({
+        ...bus,
+        init: { Vr: index, Vi: 0 },
+        extension: { longitude: -5 + index * 10, latitude: 0 },
+      }))
+      source.devices = [
+        source.devices.find((device: { class: string }) => device.class === 'Branch'),
+      ]
+      source.signals = []
+      await bench.replace(JSON.stringify(source))
+      await bench.settled()
+      network = await bench.open('network')
+      await vscode.commands.executeCommand('gridkitStudio.fit', bench.uri)
+      await bench.page.mouse.move(0, 0)
+
+      const colors = async (): Promise<RGB[]> => {
+        await until(
+          async () =>
+            JSON.stringify(await network.evaluate('gridkitStats().bindings')) ===
+              JSON.stringify(bench.session.bindings) &&
+            (await network.evaluate<boolean>('gridkitStats().complete && gridkitStats().covered')),
+          'the complete mapped network is drawn',
+        )
+        await idle(network)
+        const points = await network.evaluate<[number, number][]>(
+          'Promise.all([1, 2].map(id => gridkitLocate({ table: "Bus", id })))',
+        )
+        const [from, to] = points
+        assert.ok(from && to, 'both endpoints are drawn')
+        const png = PNG.sync.read(await network.locator('canvas').screenshot({ scale: 'css' }))
+        return [0, 0.08, 0.5, 0.92, 1].map((t) => {
+          const x = Math.round(from[0] + (to[0] - from[0]) * t)
+          const y = Math.round(from[1] + (to[1] - from[1]) * t)
+          const at = (y * png.width + x) * 4
+          return [png.data[at]!, png.data[at + 1]!, png.data[at + 2]!] as const
+        })
+      }
+      const blended = (colors: RGB[]) => {
+        const [left, nearLeft, middle, nearRight, right] = colors as [RGB, RGB, RGB, RGB, RGB]
+        assert.ok(apart(left, right), 'the endpoint colors differ')
+        assert.ok(!apart(left, nearLeft), 'the branch starts in its first bus color')
+        assert.ok(!apart(right, nearRight), 'the branch ends in its second bus color')
+        assert.ok(apart(middle, left) && apart(middle, right), 'the interior blends both colors')
+      }
+      const plain = await colors()
+      assert.ok(
+        plain.every((color) => !apart(color, plain[0]!)),
+        'unmapped edges match their buses',
+      )
+      bench.session.bind(busColor, ['vertexColor'], [0, 1])
+      const mapped = await colors()
+      blended(mapped)
+      await bench.capture('network-endpoint-colors')
+
+      bench.session.bind(edgeColor, ['edgeColor'], [0, 0.007])
+      const overridden = await colors()
+      assert.ok(!apart(overridden[1]!, overridden[3]!), 'an explicit edge mapping is uniform')
+      assert.ok(apart(overridden[1]!, mapped[1]!), 'the explicit edge mapping takes precedence')
+      assert.ok(!apart(overridden[0]!, mapped[0]!), 'the edge override leaves buses unchanged')
+      bench.session.bind(edgeColor, [])
+      const restored = await colors()
+      assert.ok(
+        restored.every((color, i) => !apart(color, mapped[i]!)),
+        'removing it restores the blend',
+      )
+
+      const csv = vscode.Uri.joinPath(bench.uri, '..', 'endpoint-colors.csv')
+      await vscode.workspace.fs.writeFile(
+        csv,
+        new TextEncoder().encode('time,Bus_1_Vm,Bus_2_Vm\n0,0,1\n1,1,0\n'),
+      )
+      await bench.session.load(csv.fsPath)
+      await until(() => bench.session.results?.path === csv.fsPath, 'endpoint samples loaded')
+      bench.session.bind(VM, ['vertexColor'], [0, 1])
+      for (const at of [0, 1]) {
+        bench.session.transport.seek(at)
+        await until(() => network.evaluate<boolean>(`gridkitStats().at === ${at}`), 'seek applied')
+        const sampled = await colors()
+        blended(sampled)
+        const expected = at === 0 ? mapped : [...mapped].reverse()
+        assert.ok(
+          sampled.every((color, i) => !apart(color, expected[i]!)),
+          'edges follow the playhead',
+        )
+      }
+      bench.session.bind(VM, [])
+      const cleared = await colors()
+      assert.ok(
+        cleared.every((color, i) => !apart(color, plain[i]!)),
+        'clearing restores theme colors',
+      )
+    } finally {
+      await bench.reset()
+      for (const key of Object.keys(overrides)) await settings.update(key, undefined, global)
+    }
+  })
+
   test("lays Natural Earth's borders beneath a case on Earth, once it is on screen", async () => {
     await until(
       async () =>

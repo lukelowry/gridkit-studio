@@ -5,7 +5,7 @@ import { mkdir } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fileKey, type ResultCache, ResultsFile, stampAt, type Stores } from '../results/index.js'
+import { fileKey, ResultsFile, stampAt, type Stores } from '../results/index.js'
 import type { RunRequest } from '../shared/simulation.js'
 import type { Case } from './case.js'
 import { type Launch, launch, placed } from './runtime.js'
@@ -53,18 +53,12 @@ export async function turn(path: string, signal: AbortSignal): Promise<() => voi
   return end
 }
 
-/** What the results of a run are read into: a worker's cache, and its stores. */
-export interface Keeping {
-  readonly cache: ResultCache
-  readonly stores: Stores
-}
-
-/** Runs `request` on `kase`, and reads what it writes into results kept as `keeping` says, which
+/** Runs `request` on `kase`, and reads what it writes into results kept in `stores`, which
  *  `context` hears of before GridKit starts. Letting go of those results stops the run. */
 export async function simulate(
   kase: Case,
   request: RunRequest,
-  { cache, stores }: Keeping,
+  stores: Stores,
   context: RunContext,
 ): Promise<ResultsFile> {
   const { solver, output, root, gridkit, tmax } = request
@@ -79,7 +73,7 @@ export async function simulate(
     // The file the last run left stays until GridKit writes over it, as a shell's run leaves it: a
     // run that never starts leaves it whole, and nothing of it is read as this run's.
     const last = await stampAt(output)
-    const file = new ResultsFile(kase, cache, await stores.create(output), {
+    const file = new ResultsFile(kase, await stores.create(output), {
       revision: request,
       path: output,
       solver,

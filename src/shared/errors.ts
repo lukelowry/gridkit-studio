@@ -1,7 +1,7 @@
 /** Studio's errors, in one vocabulary on every side: the codes a request fails with, how an error
  *  crosses a channel, which failures are none, and how one is said to the user and to the log. */
 
-import type { Failure } from '@latkit/model'
+import type { LatkitError } from 'latkit'
 
 /** Why a request failed: one of Studio's own reasons, or latkit's. */
 export type Code =
@@ -23,7 +23,21 @@ export type Code =
   | 'results-lost'
   /** A failure with no code of its own. */
   | 'operation-failed'
-  | Failure.Code
+  | 'invalid-input'
+  | LatkitError['code']
+
+/** Source diagnostics retain source paths, independently of native runtime errors. */
+export interface SourceProblem {
+  readonly code: 'invalid-input'
+  readonly message: string
+  readonly target: { readonly kind: 'path'; readonly path: readonly [string, number] }
+}
+
+export interface SourceError extends Error {
+  readonly target?:
+    | SourceProblem['target']
+    | { readonly kind: 'row'; readonly entity: import('./document.js').Entity }
+}
 
 /** Why a request failed, as it crosses from whoever answered to whoever asked: its sentence and
  *  code, and what the log and the editor need besides. */
@@ -39,6 +53,15 @@ export interface Problem {
   /** Where in the source a parse failed. */
   readonly offset?: number
   readonly length?: number
+  /** Each place in the source a parse refused, and why, the first first. */
+  readonly problems?: readonly Placed[]
+}
+
+/** Why a parse refused a place in the source. */
+export interface Placed {
+  readonly message: string
+  readonly offset: number
+  readonly length: number
 }
 
 /** An error of `code` saying `message`, with `more` besides: the one way Studio makes one. */
@@ -58,16 +81,7 @@ export const superseded = () =>
 
 /** The codes of failures that are none: whoever asked let go, or another took its place, as results
  *  read again take the place of those lost. */
-const NONE: readonly Code[] = [
-  'cancelled',
-  'aborted',
-  'closed',
-  'superseded',
-  'results-closed',
-  'results-lost',
-]
-/** The codes of failures a view outlives by starting again: its device or connection came back. */
-const PASSING: readonly Code[] = ['device-lost', 'timeout', 'unavailable']
+const NONE: readonly Code[] = ['cancelled', 'superseded', 'results-closed', 'results-lost']
 
 /** Whether `error` is a cancellation, as an AbortError or VS Code's Canceled is. */
 export function cancelled(error: unknown): boolean {
@@ -79,11 +93,6 @@ export function cancelled(error: unknown): boolean {
  *  these. */
 export function quiet(error: unknown): boolean {
   return cancelled(error) || NONE.some((code) => failedWith(error, code))
-}
-
-/** Whether a view that failed with `error` works again once it starts again. */
-export function passing(error: unknown): boolean {
-  return PASSING.some((code) => failedWith(error, code))
 }
 
 /** What the user is told of a defect; the log keeps the rest. */
@@ -119,7 +128,12 @@ export function detail(error: unknown): string {
 
 /** `error` as it crosses a boundary. */
 export function problemOf(error: unknown): Problem {
-  const value = error as { code?: unknown; offset?: unknown; length?: unknown } | null
+  const value = error as {
+    code?: unknown
+    offset?: unknown
+    length?: unknown
+    problems?: unknown
+  } | null
   const gone = cancelled(error)
   return {
     message: error instanceof Error ? error.message || error.name : String(error),
@@ -134,6 +148,7 @@ export function problemOf(error: unknown): Problem {
     ...(gone && { cancelled: true }),
     ...(typeof value?.offset === 'number' && { offset: value.offset }),
     ...(typeof value?.length === 'number' && { length: value.length }),
+    ...(Array.isArray(value?.problems) && { problems: value.problems as Placed[] }),
   }
 }
 

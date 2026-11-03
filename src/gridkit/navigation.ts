@@ -1,9 +1,9 @@
 import { findNodeAtLocation, getLocation, visit } from 'jsonc-parser'
 
-import type { CaseSymbol, SourceContext } from '../shared/messages.js'
-import { withUnit } from '../shared/schema.js'
+import { type Entity, entityLabel, withUnit } from '../shared/document.js'
+import type { CaseSymbol, Completion, SourceContext } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
-import { CASE, type Catalog, type FieldPlan, SIGNAL } from './definition.js'
+import { CASE, type Catalog, type FieldPlan } from './definition.js'
 import {
   nativePath,
   nested,
@@ -50,7 +50,7 @@ export async function outline(
       if (children.length >= room) continue
       const offset = at(array.starts[record]!)
       children.push({
-        name: kase.id(found.table, found.row),
+        name: entityLabel(kase.entity(found.table, found.row)),
         detail: found.table.shape.definition.label ?? found.table.shape.type,
         offset,
         length: at(array.ends[record]!) - offset,
@@ -69,8 +69,7 @@ export async function outline(
   return symbols
 }
 
-/** What is at UTF-16 `offset`: its row and field, their range, the row a reference names, and the
- *  fields that complete beside it. */
+/** What is at UTF-16 `offset`: its row and field, their range, and the row a reference names. */
 export function sourceContext(kase: Case, offset: number): SourceContext {
   for (const table of kase.tables.values()) {
     if (!table.shape.array) continue
@@ -85,13 +84,13 @@ export function sourceContext(kase: Case, offset: number): SourceContext {
     }
     const row = low - 1
     if (row < 0 || offset > textOffset(kase, records.ends[indexes[row]!]!)) continue
-    const id = kase.id(table, row)
+    const id = kase.entity(table, row)
     const record = recordAt(kase, table, row)
     const location = nested(() => getLocation(record.text, offset - record.offset))
     const path = location.path.filter((key): key is string => typeof key === 'string')
-    const group = path.slice(0, -1)
     const plans = [...table.shape.plan.values()]
-    // An entry of the record's `mon` list is the output it names; any other value, its field.
+    // An entry of the record's `mon` list is the output it names; any other value, its field. The
+    // list itself names no one output.
     const [list, place] = location.path
     const entry =
       list === 'mon' && typeof place === 'number' && location.previousNode?.type === 'string'
@@ -99,36 +98,30 @@ export function sourceContext(kase: Case, offset: number): SourceContext {
         : undefined
     const plan = entry
       ? plans.find((plan) => plan.source.kind === 'output' && plan.source.name === entry.value)
-      : plans.find((plan) => JSON.stringify(nativePath(plan)) === JSON.stringify(path))
+      : plans.find(
+          (plan) =>
+            plan.source.kind !== 'output' &&
+            JSON.stringify(nativePath(plan)) === JSON.stringify(path),
+        )
     const range = entry
       ? { offset: record.offset + entry.offset, length: entry.length }
       : plan
         ? sourceRange(kase, id, plan.name)
         : { offset: record.offset, length: record.text.length }
-    let reference: string | undefined
-    if (
-      plan &&
-      typeof plan.definition.type === 'object' &&
-      plan.definition.type.kind === 'reference'
-    ) {
+    let reference: Entity | undefined
+    if (plan && plan.definition.kind === 'reference') {
       const node = findNodeAtLocation(treeOf(record.text), path)
-      if (typeof node?.value === 'number') reference = plan.definition.type.to + '/' + node.value
+      if (typeof node?.value === 'number')
+        reference = { table: plan.definition.target!, id: node.value }
     }
     return {
-      element: { id, ...(plan ? { field: plan.name } : {}) },
+      element: { ...id, ...(plan ? { field: plan.name } : {}) },
       type: table.shape.type,
       range,
       reference,
-      completions: plans
-        .filter(
-          (plan) =>
-            !plan.definition.sampled &&
-            JSON.stringify(nativePath(plan).slice(0, -1)) === JSON.stringify(group),
-        )
-        .map((plan) => completion(nativePath(plan).at(-1)!, plan)),
     }
   }
-  return { completions: [] }
+  return {}
 }
 
 /** Whether the JSON value that starts at `start` of `text` is still open at `offset`. */
@@ -199,7 +192,7 @@ export function completionsAt(
   text: string,
   offset: number,
   read?: Read,
-): SourceContext['completions'] {
+): Completion[] {
   const within = read && recordBefore(read, text, offset)
   const location = nested(() =>
     within
@@ -210,21 +203,15 @@ export function completionsAt(
   const path = within ? [within.array, within.record, ...location.path] : location.path
   const array = typeof path[0] === 'string' ? path[0] : ''
   const row = typeof path[1] === 'number' ? path[1] : undefined
+  // The bus and signal arrays each hold one type; a device's is its class.
+  const only = catalog.codes.find((shape) => shape.array === array && shape.kind !== 'device')
   const type =
-    array === 'buses'
-      ? catalog.bus
-      : array === 'signals'
-        ? SIGNAL
-        : row === undefined
-          ? CASE
-          : within
-            ? within.type
-            : classOf(text, array, row)
+    only?.type ?? (row === undefined ? CASE : within ? within.type : classOf(text, array, row))
   const shape = type === undefined ? undefined : catalog.shapes.get(type)
   if (!shape) return []
   const group = path.slice(row === undefined ? 0 : 2, -1)
   const fields = [...shape.plan.values()]
-    .filter((plan) => !plan.definition.sampled)
+    .filter((plan) => plan.definition.kind !== 'sampled')
     .map((plan) => [nativePath(plan), plan] as const)
     .filter(([path]) => JSON.stringify(path.slice(0, -1)) === JSON.stringify(group))
     .map(([path, plan]) => completion(path.at(-1)!, plan))
@@ -273,12 +260,8 @@ function classOf(text: string, array: string, row: number): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-/** The completion `name` offers for `plan`: its type and unit, and its description. */
-function completion(name: string, plan: FieldPlan): SourceContext['completions'][number] {
-  const { type, unit, description } = plan.definition
-  return {
-    name,
-    detail: withUnit(typeof type === 'string' ? type : type.kind, unit),
-    description,
-  }
+/** The completion `name` offers for `plan`: its type and unit. */
+function completion(name: string, plan: FieldPlan): Completion {
+  const { kind, unit } = plan.definition
+  return { name, detail: withUnit(kind, unit) }
 }

@@ -2,9 +2,12 @@
 
 GridKit Studio bundles the software below, and its repository holds GridKit's example cases. The full text of each license follows the list.
 
-## @latkit/diagram, @latkit/gpu, @latkit/model, @latkit/monitor, @latkit/network, @latkit/video
+## latkit
 
 Copyright (c) 2026 Luke Lowery. MIT License.
+
+The bundled native runtime and standalone worker include the notices in
+`dist/licenses/latkit-NOTICES.md` and `dist/licenses/latkit-THIRD_PARTY.md`.
 
 ## GridKit Server
 
@@ -22,14 +25,6 @@ Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte
 
 Copyright 2022 Benjamin McCann. MIT License.
 
-## culori
-
-Copyright (c) 2018 Dan Burzo. MIT License.
-
-## mediabunny
-
-Copyright (c) 2026-present, Vanilagy and contributors. Bundled unmodified for video export, from https://github.com/Vanilagy/mediabunny, under the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/.
-
 ## Color tables
 
 The original color tables by Nathaniel J. Smith, Stefan van der Walt and Eric Firing, from https://github.com/BIDS/colormap. Public domain under CC0, https://creativecommons.org/publicdomain/zero/1.0/.
@@ -44,7 +39,7 @@ The wrench and lightning bolt in the Studio icons are adapted from Google's Mate
 
 ## GridKit case data
 
-Most cases in `cases/` are [GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics), copied as they are by `scripts/cases.mjs`. ACTIVSg25k and ACTIVSg70k come from the [lukelowry/cases](https://github.com/lukelowry/cases) repository, and ACTIVSg70k is saved without whitespace so that VS Code can open it. GridKit provides the dynamics models, and the networks come from:
+Most cases in `cases/` are [GridKit develop's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/01d7543e4d2028a6b4ee0b530b16277ee1278336/cases/PhasorDynamics), copied by `scripts/cases.mjs`, with the signals this repository's runs record added to their `mon` lists. ACTIVSg25k and ACTIVSg70k come from the [lukelowry/cases](https://github.com/lukelowry/cases) repository, and ACTIVSg70k is saved without whitespace so that VS Code can open it. GridKit provides the dynamics models, and the networks come from:
 
 - ACTIVSg2000, ACTIVSg10k, ACTIVSg25k, ACTIVSg70k and IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
 - WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)

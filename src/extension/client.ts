@@ -61,8 +61,12 @@ interface Owner {
 
 /** A worker that stops this many times within `CRASH_MS` is unsteady: what it held is read again
  *  only once the user asks, so what may stop it does not stop it over and over. */
-export const CRASHES = 3
+const CRASHES = 3
 const CRASH_MS = 60_000
+
+/** `error`, of a worker that stopped CRASHES times in a minute, saying what Studio does `instead`. */
+export const unsteady = (error: Error, instead: string) =>
+  new Error(`${error.message} It stopped ${CRASHES} times in a minute, so Studio ${instead}`)
 
 /** A worker of the extension's, started when first asked and again after it stops. */
 class Thread<A extends Api<A>> {
@@ -177,10 +181,11 @@ export class Client {
 
   constructor(
     folder: string,
-    cases: WorkerOptions,
-    results: () => ResultsOptions,
+    cases: Omit<WorkerOptions, 'wasmPath'>,
+    results: () => Omit<ResultsOptions, 'wasmPath'>,
     failed: (error: unknown) => void,
   ) {
+    const wasmPath = join(folder, 'webview', 'latkit.wasm')
     this.event = new Emitter(failed)
     const owner = (release: () => Promise<void>): Owner => ({
       hear: (event) => {
@@ -192,17 +197,17 @@ export class Client {
     })
     this.cases = new Thread(
       'case',
-      join(folder, 'cases.cjs'),
+      join(folder, 'cases.mjs'),
       owner(async () => {}),
       failed,
-      () => cases,
+      () => ({ ...cases, wasmPath }),
     )
     this.results = new Thread(
       'results',
-      join(folder, 'results.cjs'),
+      join(folder, 'results.mjs'),
       owner(() => this.#terminate()),
       failed,
-      results,
+      () => ({ ...results(), wasmPath }),
     )
   }
 

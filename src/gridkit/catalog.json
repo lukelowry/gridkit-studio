@@ -1,9 +1,12 @@
 {
+  "identifier": {
+    "pattern": "^[A-Za-z0-9 _.-]*$",
+    "rule": "only ASCII letters, digits, spaces, _, . and -"
+  },
   "bus": {
     "name": "Bus",
-    "classes": ["Bus", "BusInfinite"],
+    "classes": ["Bus", "BusInfinite", "SignalVoltageIn", "SignalVoltageOut"],
     "label": "Bus",
-    "family": "Bus",
     "params": [
       {
         "id": "kv",
@@ -21,7 +24,56 @@
         "unit": "p.u."
       }
     ],
-    "ports": [],
+    "ports": [
+      {
+        "key": "ports_in",
+        "name": "vr",
+        "kind": "signal",
+        "direction": "in"
+      },
+      {
+        "key": "ports_in",
+        "name": "vi",
+        "kind": "signal",
+        "direction": "in"
+      },
+      {
+        "key": "ports_in",
+        "name": "ir",
+        "kind": "signal",
+        "direction": "in"
+      },
+      {
+        "key": "ports_in",
+        "name": "ii",
+        "kind": "signal",
+        "direction": "in"
+      },
+      {
+        "key": "ports_out",
+        "name": "vr",
+        "kind": "signal",
+        "direction": "out"
+      },
+      {
+        "key": "ports_out",
+        "name": "vi",
+        "kind": "signal",
+        "direction": "out"
+      },
+      {
+        "key": "ports_out",
+        "name": "ir",
+        "kind": "signal",
+        "direction": "out"
+      },
+      {
+        "key": "ports_out",
+        "name": "ii",
+        "kind": "signal",
+        "direction": "out"
+      }
+    ],
     "outputs": [
       {
         "id": "Vr",
@@ -57,7 +109,6 @@
     {
       "name": "Branch",
       "label": "Branch",
-      "family": "Branch",
       "params": [
         {
           "id": "R",
@@ -117,34 +168,44 @@
       ],
       "outputs": [
         {
-          "id": "ir1"
+          "id": "ir1",
+          "unit": "p.u."
         },
         {
-          "id": "ii1"
+          "id": "ii1",
+          "unit": "p.u."
         },
         {
-          "id": "im1"
+          "id": "im1",
+          "unit": "p.u."
         },
         {
-          "id": "p1"
+          "id": "p1",
+          "unit": "p.u."
         },
         {
-          "id": "q1"
+          "id": "q1",
+          "unit": "p.u."
         },
         {
-          "id": "ir2"
+          "id": "ir2",
+          "unit": "p.u."
         },
         {
-          "id": "ii2"
+          "id": "ii2",
+          "unit": "p.u."
         },
         {
-          "id": "im2"
+          "id": "im2",
+          "unit": "p.u."
         },
         {
-          "id": "p2"
+          "id": "p2",
+          "unit": "p.u."
         },
         {
-          "id": "q2"
+          "id": "q2",
+          "unit": "p.u."
         }
       ],
       "extension": [
@@ -164,96 +225,8 @@
       ]
     },
     {
-      "name": "BusFault",
-      "label": "BusFault",
-      "family": "Fault",
-      "params": [
-        {
-          "id": "state0",
-          "type": "flag"
-        },
-        {
-          "id": "R",
-          "type": "real",
-          "unit": "p.u."
-        },
-        {
-          "id": "X",
-          "type": "real",
-          "unit": "p.u."
-        }
-      ],
-      "init": [],
-      "ports": [
-        {
-          "name": "bus",
-          "kind": "bus",
-          "direction": "both",
-          "required": true
-        },
-        {
-          "name": "control_signal",
-          "kind": "signal",
-          "direction": "in",
-          "required": false
-        }
-      ],
-      "outputs": [
-        {
-          "id": "state"
-        },
-        {
-          "id": "ir"
-        },
-        {
-          "id": "ii"
-        }
-      ]
-    },
-    {
-      "name": "BusToSignalAdapter",
-      "label": "BusToSignalAdapter",
-      "family": "Adapter",
-      "params": [],
-      "init": [],
-      "ports": [
-        {
-          "name": "bus",
-          "kind": "bus",
-          "direction": "both",
-          "required": true
-        },
-        {
-          "name": "ir",
-          "kind": "signal",
-          "direction": "in",
-          "required": false
-        },
-        {
-          "name": "ii",
-          "kind": "signal",
-          "direction": "in",
-          "required": false
-        },
-        {
-          "name": "vr",
-          "kind": "signal",
-          "direction": "out",
-          "required": false
-        },
-        {
-          "name": "vi",
-          "kind": "signal",
-          "direction": "out",
-          "required": false
-        }
-      ],
-      "outputs": []
-    },
-    {
       "name": "ConstantSignalSource",
       "label": "ConstantSignalSource",
-      "family": "Source",
       "params": [
         {
           "id": "Sr",
@@ -282,9 +255,40 @@
       "outputs": []
     },
     {
+      "name": "FunctionSignalSource",
+      "label": "FunctionSignalSource",
+      "params": [
+        {
+          "id": "Fr",
+          "type": "text",
+          "choices": ["sin", "cos"]
+        },
+        {
+          "id": "Fi",
+          "type": "text",
+          "choices": ["sin", "cos"]
+        }
+      ],
+      "init": [],
+      "ports": [
+        {
+          "name": "sr",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        },
+        {
+          "name": "si",
+          "kind": "signal",
+          "direction": "out",
+          "required": false
+        }
+      ],
+      "outputs": []
+    },
+    {
       "name": "Esdc1a",
       "label": "ESDC1A",
-      "family": "Exciter",
       "params": [
         {
           "id": "Tr",
@@ -386,7 +390,7 @@
           "name": "speed",
           "kind": "signal",
           "direction": "in",
-          "required": true
+          "required": false
         },
         {
           "name": "vref",
@@ -415,29 +419,34 @@
       ],
       "outputs": [
         {
-          "id": "efd"
+          "id": "efd",
+          "unit": "p.u."
         },
         {
-          "id": "vc"
+          "id": "vc",
+          "unit": "p.u."
         },
         {
-          "id": "vr"
+          "id": "vr",
+          "unit": "p.u."
         },
         {
-          "id": "vf"
+          "id": "vf",
+          "unit": "p.u."
         },
         {
-          "id": "se"
+          "id": "se",
+          "unit": "p.u."
         },
         {
-          "id": "vfe"
+          "id": "vfe",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "GastPti",
       "label": "GAST-PTI",
-      "family": "Governor",
       "params": [
         {
           "id": "R",
@@ -513,29 +522,34 @@
       ],
       "outputs": [
         {
-          "id": "pmech"
+          "id": "pmech",
+          "unit": "p.u."
         },
         {
-          "id": "xvalve"
+          "id": "xvalve",
+          "unit": "p.u."
         },
         {
-          "id": "xflow"
+          "id": "xflow",
+          "unit": "p.u."
         },
         {
-          "id": "xtemp"
+          "id": "xtemp",
+          "unit": "p.u."
         },
         {
-          "id": "vload"
+          "id": "vload",
+          "unit": "p.u."
         },
         {
-          "id": "vtemp"
+          "id": "vtemp",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "GenClassical",
       "label": "GenClassical",
-      "family": "Machine",
       "params": [
         {
           "id": "p0",
@@ -602,32 +616,38 @@
       ],
       "outputs": [
         {
-          "id": "ir"
+          "id": "ir",
+          "unit": "p.u."
         },
         {
-          "id": "ii"
+          "id": "ii",
+          "unit": "p.u."
         },
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         },
         {
-          "id": "delta"
+          "id": "delta",
+          "unit": "rad"
         },
         {
-          "id": "omega"
+          "id": "omega",
+          "unit": "p.u."
         },
         {
-          "id": "speed"
+          "id": "speed",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Genrou",
       "label": "GENROU",
-      "family": "Machine",
       "params": [
         {
           "id": "p0",
@@ -754,32 +774,38 @@
       ],
       "outputs": [
         {
-          "id": "ir"
+          "id": "ir",
+          "unit": "p.u."
         },
         {
-          "id": "ii"
+          "id": "ii",
+          "unit": "p.u."
         },
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         },
         {
-          "id": "delta"
+          "id": "delta",
+          "unit": "rad"
         },
         {
-          "id": "omega"
+          "id": "omega",
+          "unit": "p.u."
         },
         {
-          "id": "speed"
+          "id": "speed",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Gensal",
       "label": "GENSAL",
-      "family": "Machine",
       "params": [
         {
           "id": "p0",
@@ -891,59 +917,74 @@
       ],
       "outputs": [
         {
-          "id": "ir"
+          "id": "ir",
+          "unit": "p.u."
         },
         {
-          "id": "ii"
+          "id": "ii",
+          "unit": "p.u."
         },
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         },
         {
-          "id": "delta"
+          "id": "delta",
+          "unit": "rad"
         },
         {
-          "id": "omega"
+          "id": "omega",
+          "unit": "p.u."
         },
         {
-          "id": "speed"
+          "id": "speed",
+          "unit": "p.u."
         },
         {
-          "id": "Eqp"
+          "id": "Eqp",
+          "unit": "p.u."
         },
         {
-          "id": "psidp"
+          "id": "psidp",
+          "unit": "p.u."
         },
         {
-          "id": "psiqpp"
+          "id": "psiqpp",
+          "unit": "p.u."
         },
         {
-          "id": "psidpp"
+          "id": "psidpp",
+          "unit": "p.u."
         },
         {
-          "id": "vd"
+          "id": "vd",
+          "unit": "p.u."
         },
         {
-          "id": "vq"
+          "id": "vq",
+          "unit": "p.u."
         },
         {
-          "id": "te"
+          "id": "te",
+          "unit": "p.u."
         },
         {
-          "id": "id"
+          "id": "id",
+          "unit": "p.u."
         },
         {
-          "id": "iq"
+          "id": "iq",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Hygov",
       "label": "HYGOV",
-      "family": "Governor",
       "params": [
         {
           "id": "Trate",
@@ -1037,51 +1078,63 @@
         },
         {
           "id": "Gv0",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Gv1",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Gv2",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Gv3",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Gv4",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Gv5",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv0",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv1",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv2",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv3",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv4",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         },
         {
           "id": "Pgv5",
-          "type": "real"
+          "type": "real",
+          "unit": "p.u."
         }
       ],
       "init": [],
@@ -1113,29 +1166,34 @@
       ],
       "outputs": [
         {
-          "id": "pmech"
+          "id": "pmech",
+          "unit": "p.u."
         },
         {
-          "id": "filter"
+          "id": "filter",
+          "unit": "p.u."
         },
         {
-          "id": "desiredgate"
+          "id": "desiredgate",
+          "unit": "p.u."
         },
         {
-          "id": "gate"
+          "id": "gate",
+          "unit": "p.u."
         },
         {
-          "id": "flow"
+          "id": "flow",
+          "unit": "p.u."
         },
         {
-          "id": "head"
+          "id": "head",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Ieeest",
       "label": "IEEEST",
-      "family": "Stabilizer",
       "params": [
         {
           "id": "A1",
@@ -1231,7 +1289,7 @@
           "name": "input",
           "kind": "signal",
           "direction": "in",
-          "required": false
+          "required": true
         },
         {
           "name": "output",
@@ -1242,14 +1300,14 @@
       ],
       "outputs": [
         {
-          "id": "vss"
+          "id": "vss",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Ieeet1",
       "label": "IEEET1",
-      "family": "Exciter",
       "params": [
         {
           "id": "Tr",
@@ -1368,17 +1426,18 @@
       ],
       "outputs": [
         {
-          "id": "efd"
+          "id": "efd",
+          "unit": "p.u."
         },
         {
-          "id": "ksat"
+          "id": "ksat",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "LoadZ",
       "label": "LoadZ",
-      "family": "Load",
       "params": [
         {
           "id": "R",
@@ -1402,17 +1461,18 @@
       ],
       "outputs": [
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "LoadZIP",
       "label": "LoadZIP",
-      "family": "Load",
       "params": [
         {
           "id": "Pnom",
@@ -1444,26 +1504,30 @@
       ],
       "outputs": [
         {
-          "id": "ir"
+          "id": "ir",
+          "unit": "p.u."
         },
         {
-          "id": "ii"
+          "id": "ii",
+          "unit": "p.u."
         },
         {
-          "id": "im"
+          "id": "im",
+          "unit": "p.u."
         },
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Reecb",
       "label": "REECB",
-      "family": "Controller",
       "params": [
         {
           "id": "mva",
@@ -1665,23 +1729,26 @@
       ],
       "outputs": [
         {
-          "id": "iqcmd"
+          "id": "iqcmd",
+          "unit": "p.u."
         },
         {
-          "id": "ipcmd"
+          "id": "ipcmd",
+          "unit": "p.u."
         },
         {
-          "id": "vmeas"
+          "id": "vmeas",
+          "unit": "p.u."
         },
         {
-          "id": "pmeas"
+          "id": "pmeas",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Regca",
       "label": "REGCA",
-      "family": "Converter",
       "params": [
         {
           "id": "p0",
@@ -1820,23 +1887,26 @@
       ],
       "outputs": [
         {
-          "id": "ir"
+          "id": "ir",
+          "unit": "p.u."
         },
         {
-          "id": "ii"
+          "id": "ii",
+          "unit": "p.u."
         },
         {
-          "id": "p"
+          "id": "p",
+          "unit": "p.u."
         },
         {
-          "id": "q"
+          "id": "q",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Repca",
       "label": "REPCA",
-      "family": "Controller",
       "params": [
         {
           "id": "mva",
@@ -2068,26 +2138,30 @@
       ],
       "outputs": [
         {
-          "id": "qext"
+          "id": "qext",
+          "unit": "p.u."
         },
         {
-          "id": "pext"
+          "id": "pext",
+          "unit": "p.u."
         },
         {
-          "id": "vmeas"
+          "id": "vmeas",
+          "unit": "p.u."
         },
         {
-          "id": "qmeas"
+          "id": "qmeas",
+          "unit": "p.u."
         },
         {
-          "id": "pmeas"
+          "id": "pmeas",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "SexsPti",
       "label": "SEXS-PTI",
-      "family": "Exciter",
       "params": [
         {
           "id": "Ta",
@@ -2156,19 +2230,19 @@
           "name": "efd",
           "kind": "signal",
           "direction": "out",
-          "required": false
+          "required": true
         }
       ],
       "outputs": [
         {
-          "id": "efd"
+          "id": "efd",
+          "unit": "p.u."
         }
       ]
     },
     {
       "name": "Tgov1",
       "label": "TGOV1",
-      "family": "Governor",
       "params": [
         {
           "id": "Trate",

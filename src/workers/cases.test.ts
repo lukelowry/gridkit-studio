@@ -20,13 +20,13 @@ describe('the case worker', () => {
         ...revision,
         text: '{"buses":[{"class":"Bus","number":1,"name":"one","mon":["Vm"]}]}',
       })
-      expect(summary.validation).toBe('pending')
       expect(summary.recording).toEqual({ listed: { Bus: { Vm: 1 } }, anything: true })
-      const rows = await rig.call('rows', {
+      const rows = await rig.call('page', {
         ...revision,
-        fields: [{ from: 'Bus', select: ['name'] }],
+        request: { table: 'Bus', fields: ['name'], offset: 0, limit: 100 },
       })
-      expect(rows.map(({ kind }) => kind)).toEqual(['rows'])
+      expect(rows.ids).toEqual([1])
+      expect(rows.fields.name).toEqual(['one'])
       expect(await rig.call('validate', revision)).toEqual([])
       await expect(rig.call('validate', { ...revision, attachmentId: 'old' })).rejects.toThrow(
         /document changed/,
@@ -53,9 +53,9 @@ describe('the case worker', () => {
         text: text.replace('original', 'changed'),
       })
       await rig.call('release', { uri: revision.uri, attachmentId: 'first' })
-      const query = { kind: 'rows', from: 'Bus', select: ['name'], ids: true } as const
-      expect(await rig.call('query', { ...reopened, query })).toHaveLength(1)
-      await expect(rig.call('query', { ...revision, query })).rejects.toThrow(/document changed/)
+      const request = { table: 'Bus', fields: ['name'], offset: 0, limit: 100 } as const
+      expect((await rig.call('page', { ...reopened, request })).ids).toHaveLength(1)
+      await expect(rig.call('page', { ...revision, request })).rejects.toThrow(/document changed/)
     } finally {
       await rig.stop()
     }
@@ -70,15 +70,17 @@ describe('the case worker', () => {
       await call('parse', { ...revision, text })
       expect(
         (
-          await call('query', {
+          await call('page', {
             ...revision,
-            query: { kind: 'rows', from: 'Bus', select: ['name'], limit: 100 },
+            request: { table: 'Bus', fields: ['name'], offset: 0, limit: 100 },
           })
-        ).length,
+        ).ids.length,
       ).toBeGreaterThan(0)
       const edits = await call('transact', {
         ...revision,
-        mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'Delta Ω' }],
+        mutations: [
+          { kind: 'set', entity: { table: 'Bus', id: 1 }, field: 'name', value: 'Delta 2' },
+        ],
       })
       // A change to what every bus records rewrites lists of several lines: one edit to the end.
       const recorded = await call('transact', {
@@ -110,7 +112,9 @@ describe('the case worker', () => {
       await expect(
         call('transact', {
           ...revision,
-          mutations: [{ kind: 'set', id: 'Bus/1', field: 'name', value: 'stale' }],
+          mutations: [
+            { kind: 'set', entity: { table: 'Bus', id: 1 }, field: 'name', value: 'stale' },
+          ],
         }),
       ).rejects.toThrow(/changed/)
       await call('release', { uri: revision.uri })
@@ -139,12 +143,12 @@ describe('the case worker', () => {
   it('says where in the source a case fails to parse', async () => {
     const rig = await start<CaseApi>(script)
     try {
+      const text = '{"buses": ['
       const failed = await rig
-        .call('parse', { uri: 'file:///broken.case.json', version: 1, text: '{"buses": [' })
+        .call('parse', { uri: 'file:///broken.case.json', version: 1, text })
         .catch((error: unknown) => error)
-      expect(failed).toBeInstanceOf(Error)
-      expect(failed).toHaveProperty('offset')
-      expect(failed).toHaveProperty('detail')
+      // Where the text ends, short of closing what it opened.
+      expect(failed).toMatchObject({ code: 'invalid-input', offset: text.length })
     } finally {
       await rig.stop()
     }

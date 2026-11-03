@@ -58,10 +58,28 @@ describe("a case's recording", () => {
     expect((await recordingOf(await Case.parse(twice, catalog))).listed.Bus).toEqual({ Va: 1 })
   })
 
+  it("reads a bus's list in any case, as GridKit does, and a device's as written", async () => {
+    // The branch lists P1, which GridKit, matching a device's outputs as written, takes for no p1.
+    const text = source.replace('"mon":["Va"]', '"mon":["va"]')
+    const kase = await Case.parse(text, catalog)
+    expect((await recordingOf(kase)).listed).toEqual({ Bus: { Va: 1 } })
+    // Recording Va again changes nothing; not recording it takes its entry, however written.
+    expect(recordEdits(kase, [{ type: 'Bus', add: ['Va'], remove: [] }])).toEqual([
+      { offset: text.indexOf('230.000}') + 8, length: 0, text: ', "mon": ["Va"]' },
+    ])
+    const off = apply(text, recordEdits(kase, [{ type: 'Bus', add: [], remove: ['Va'] }]))
+    expect(JSON.parse(off).buses[1].mon).toEqual([])
+  })
+
   it('counts what a release case lists, as its own file says', async () => {
     const text = await readFile('cases/IEEE39.case.json', 'utf8')
-    const json = JSON.parse(text) as { devices: { class: string; mon?: string[] }[] }
+    const json = JSON.parse(text) as {
+      devices: { class: string; mon?: string[] }[]
+      buses: { mon?: string[] }[]
+    }
     const listed: Record<string, Record<string, number>> = {}
+    for (const { mon = [] } of json.buses)
+      for (const name of mon) (listed.Bus ??= {})[name] = (listed.Bus?.[name] ?? 0) + 1
     for (const { class: type, mon = [] } of json.devices)
       for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
     expect((await recordingOf(await Case.parse(text, catalog))).listed).toEqual(listed)
@@ -97,14 +115,14 @@ describe("a case's recording", () => {
       '{"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"mon":["P1"]}',
       [
         '{"class":"Branch","id":"one","ports":{"bus1":42,"bus2":7}}',
-        '{"class":"BusFault","id":"fault","ports":{"bus":7}}',
+        '{"class":"GenClassical","id":"fault","ports":{"bus":7}}',
         '{"class":"Branch","id":"two","ports":{"bus1":42,"bus2":7}}',
       ].join(',\n  '),
     )
     const kase = await Case.parse(text, catalog)
     const edits = transaction(kase, [
       { kind: 'record', type: 'Branch', add: ['p1'], remove: [] },
-      { kind: 'record', type: 'BusFault', add: ['ir'], remove: [] },
+      { kind: 'record', type: 'GenClassical', add: ['ir'], remove: [] },
     ])
     for (let i = 1; i < edits.length; i++)
       expect(edits[i]!.offset).toBeGreaterThanOrEqual(edits[i - 1]!.offset + edits[i - 1]!.length)
@@ -119,14 +137,14 @@ describe("a case's recording", () => {
     expect(() =>
       transaction(kase, [
         { kind: 'record', type: 'Bus', add: ['Va'], remove: [] },
-        { kind: 'set', id: 'Bus/7', field: 'params.kv', value: 138 },
+        { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'params.kv', value: 138 },
       ]),
-    ).toThrow('a batch of its own')
+    ).toThrow('separate batch')
     expect(() =>
       transaction(kase, [
         { kind: 'record', type: 'Bus', add: ['Va'], remove: [] },
         { kind: 'record', type: 'Bus', add: [], remove: ['Va'] },
       ]),
-    ).toThrow('once in a batch')
+    ).toThrow('once, in a separate batch')
   })
 })

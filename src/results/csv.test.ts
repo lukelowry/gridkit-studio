@@ -2,7 +2,7 @@ import { Readable } from 'node:stream'
 
 import { describe, expect, it } from 'vitest'
 
-import { csvMessages } from './csv.js'
+import { csvMessages, type LongReading } from './csv.js'
 
 /** Every number of the rows in `text`, read under a header of `width` columns. */
 async function numbers(text: string, width: number): Promise<number[]> {
@@ -39,7 +39,6 @@ describe('CSV results', () => {
       for await (const _ of csvMessages(
         Readable.from([Buffer.from('0,1\n1,2,3\n')]),
         ['t', 'a'],
-        undefined,
         1000,
       ));
     }
@@ -80,6 +79,76 @@ describe('CSV results', () => {
     )
     await expect(messages(Buffer.from('t,a\n0,'), Buffer.from([0xff, 0x31, 0x0a]))).rejects.toThrow(
       'The CSV results are not valid UTF-8.',
+    )
+  })
+})
+
+describe("GridKit's long layout", () => {
+  /** What reads of `pieces` in turn give, as a run's file is read: the columns, and each frame. */
+  async function long(pieces: readonly string[], ends = false) {
+    const held: { long?: LongReading } = {}
+    let names: readonly string[] | undefined
+    const frames: number[][] = []
+    for (const [i, piece] of pieces.entries())
+      for await (const message of csvMessages(
+        Readable.from([Buffer.from(piece)]),
+        names,
+        frames.length,
+        held,
+        ends && i === pieces.length - 1,
+      ))
+        if (message.kind === 'schema') names = message.names
+        else
+          for (let row = 0; row < message.length; row++)
+            frames.push([
+              ...message.values.subarray(row * message.width, (row + 1) * message.width),
+            ])
+    return { names, frames }
+  }
+  const header = 'sample,t,class,id,variable,value\n'
+  // As GridKit writes it: an event's time twice, the samples before and after it.
+  const samples = [
+    '0,0.0,Bus,Bus 1,Vm,1.0\n0,0.0,Genrou,g1,speed,0.0\n',
+    '1,0.5,Bus,Bus 1,Vm,0.9\n1,0.5,Genrou,g1,speed,0.1\n',
+    '2,0.5,Bus,Bus 1,Vm,0.8\n2,0.5,Genrou,g1,speed,0.2\n',
+  ]
+  const read = {
+    names: ['t', 'Bus_Bus 1_Vm', 'Genrou_g1_speed'],
+    frames: [
+      [0, 1, 0],
+      [0.5, 0.9, 0.1],
+      [0.5, 0.8, 0.2],
+    ],
+  }
+
+  it('reads a row per variable and sample as the wide layout’s columns, a frame per sample', async () => {
+    expect(await long([header + samples.join('')])).toEqual(read)
+  })
+
+  it('carries a sample a read ends partway through to the next, as a run’s file arrives', async () => {
+    const lines = (header + samples.join('')).split(/(?<=\n)/)
+    for (let a = 1; a < lines.length; a++)
+      for (let b = a; b < lines.length; b++)
+        expect(
+          await long([
+            lines.slice(0, a).join(''),
+            lines.slice(a, b).join(''),
+            lines.slice(b).join(''),
+          ]),
+        ).toEqual(read)
+  })
+
+  it('ends its only sample with the file', async () => {
+    expect(await long([header + samples[0]!])).toEqual({ names: undefined, frames: [] })
+    expect(await long([header + samples[0]!, ''], true)).toEqual({
+      names: read.names,
+      frames: [read.frames[0]],
+    })
+  })
+
+  it('refuses a sample that records what the first does not', async () => {
+    await expect(long([header + samples[0]! + '1,0.5,Genrou,g2,speed,0.1\n'])).rejects.toThrow(
+      'Sample 1 records Genrou_g2_speed, which the first sample does not.',
     )
   })
 })

@@ -1,10 +1,9 @@
 /** A case's JSON bytes: members and records indexed once, then columns decoded on demand.
  *  A member the catalog does not know, or a device class, is
  *  found and kept for its own column or table; invalid values become null. */
-
-import type { Failure, Schema } from '@latkit/model'
-import { failure } from '@latkit/model'
-
+import type { SourceProblem } from '../shared/errors.js'
+import { problem } from '../shared/errors.js'
+import type { DecodeKind } from './columns.js'
 import {
   type Builder,
   builder,
@@ -13,11 +12,10 @@ import {
   deferred,
   hash,
   isInt32,
-  type ListBuilder,
+  isUint32,
   NumericBuilder,
   type TextBuilder,
   utf8,
-  type VectorBuilder,
 } from './columns.js'
 import {
   type ArrayName,
@@ -25,6 +23,8 @@ import {
   CASE,
   type Catalog,
   DEVICE_CODES,
+  IDENTITY,
+  type PortKey,
   type Shape,
   SIGNAL_CODE,
   unknownShape,
@@ -74,8 +74,7 @@ export interface Layout {
  *  time, until `signal` lets go. */
 export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Promise<Layout> {
   const work = new Turns(signal)
-  if (bytes.length >= 0xffffffff)
-    throw failure('resource-limit', 'A case file must be smaller than 4 GiB.')
+  if (bytes.length >= 0xffffffff) throw problem('limit', 'A case file must be smaller than 4 GiB.')
   let i = skipSpace(bytes, bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0)
   expect(bytes, i, OPEN_OBJECT, 'a case object')
   const members: Member[] = []
@@ -437,7 +436,7 @@ function expect(bytes: Uint8Array, i: number, code: number, what: string): void 
 
 function malformed(at: number, what: string, more: object = {}): never {
   throw Object.assign(
-    failure('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`),
+    problem('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`),
     { byte: at, ...more },
   )
 }
@@ -456,6 +455,7 @@ export interface Range {
 }
 
 export interface IndexedChunk {
+  provided(): boolean
   read(): Chunk
   /** The rows, ascending, that write a value, not null, the column does not read as its type:
    *  found as it decodes, so a range a revision keeps is never checked again. */
@@ -488,7 +488,7 @@ export interface Parsed {
   readonly codes: Uint16Array<ArrayBuffer>
   /** Each record's `mon` value, as its start and end in the file; 0, 0 where it has none. */
   readonly mons: Uint32Array<ArrayBuffer>
-  readonly problems: readonly Failure.Problem[]
+  readonly problems: readonly SourceProblem[]
 }
 
 export const NONE = 0xffff
@@ -542,17 +542,22 @@ class Keys {
   }
 }
 
-type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'ports' | 'extension'
+type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'extension' | PortKey
+const PORT_KEYS: readonly PortKey[] = ['ports', 'ports_in', 'ports_out']
+/** The members of each array's records, by what they are; a device's class first. A bus or device
+ *  may write ports under any port key: those its class's shape names are read as ports, and the
+ *  rest found as written. */
 const RECORD: Record<ArrayName, readonly Key[]> = {
-  buses: ['identity', 'class', 'name', 'init', 'params', 'mon', 'extension'],
+  buses: ['identity', 'class', 'name', 'init', 'params', 'mon', 'extension', ...PORT_KEYS],
   signals: ['identity', 'name'],
-  devices: ['class', 'identity', 'ports', 'params', 'init', 'mon', 'extension'],
+  devices: ['class', 'identity', 'params', 'init', 'mon', 'extension', ...PORT_KEYS],
 }
-const RECORD_KEYS: Record<ArrayName, Keys> = {
-  buses: new Keys(['number', 'class', 'name', 'init', 'params', 'mon', 'extension']),
-  signals: new Keys(['signal_id', 'name']),
-  devices: new Keys(['class', 'id', 'ports', 'params', 'init', 'mon', 'extension']),
-}
+const RECORD_KEYS = Object.fromEntries(
+  Object.entries(RECORD).map(([array, keys]) => [
+    array,
+    new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName].name : key))),
+  ]),
+) as Record<ArrayName, Keys>
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
 const OWN = new Keys(['diagram'])
 
@@ -572,7 +577,7 @@ export interface Source {
 function lazyColumn(
   source: Source,
   spans: Int32Array,
-  type: Schema.FieldType,
+  type: DecodeKind,
   port: boolean,
 ): IndexedChunk {
   // Held apart, so the decoded column keeps nothing of the file alive.
@@ -591,7 +596,7 @@ function lazyColumn(
       let read: boolean
       if (port) {
         const number = value < 0 ? NaN : parseNumber(bytes, value, end)
-        read = Number.isInteger(number) && number >= 0 && number <= 0xffffffff
+        read = isUint32(number)
         if (read) (target as NumericBuilder).pushNumber(number)
       } else read = value >= 0 && into(bytes, target, type, value, end)
       if (read) continue
@@ -601,16 +606,34 @@ function lazyColumn(
     }
     return { chunk: target.finish(), wrong: Uint32Array.from(wrong) }
   })
-  return { read: () => decode().chunk, wrong: () => decode().wrong }
+  return {
+    // Whether any row writes a value other than `null`, read or not, the same before and after.
+    provided: () =>
+      unread
+        ? unread.spans.some(
+            (at, index) =>
+              index % 2 === 0 &&
+              at >= 0 &&
+              unread!.source.bytes[at + unread!.source.shift] !== 0x6e,
+          )
+        : decode().wrong.length > 0 ||
+          decode().chunk.some(
+            (value) => value !== null && (typeof value !== 'number' || Number.isFinite(value)),
+          ),
+    read: () => decode().chunk,
+    wrong: () => decode().wrong,
+  }
 }
 
 /** One table's identities and value spans, cut into chunks of at most CHUNK_ROWS rows. */
 class Rows {
-  readonly types: readonly Schema.FieldType[]
+  readonly types: readonly DecodeKind[]
   readonly params: Keys
   readonly init: Keys
   readonly extension: Keys
-  readonly portKeys: Keys
+  /** The ports under each member a record writes them in, and each one's place among them. */
+  readonly ports: ReadonlyMap<PortKey, { readonly keys: Keys; readonly port: Int32Array }>
+
   /** The field each param, init and extension key fills. */
   readonly paramField: Int32Array
   readonly initField: Int32Array
@@ -629,7 +652,7 @@ class Rows {
     readonly source: Source,
   ) {
     this.#width = 2 * (shape.fields.length + shape.ports.length)
-    this.types = shape.fields.map((field) => field.definition.type)
+    this.types = shape.fields.map((field) => field.decode)
     const keys = { parameter: [] as string[], initial: [] as string[], extension: [] as string[] }
     const fields = { parameter: [] as number[], initial: [] as number[], extension: [] as number[] }
     shape.fields.forEach(({ source }, index) => {
@@ -641,7 +664,24 @@ class Rows {
     this.params = new Keys(keys.parameter)
     this.init = new Keys(keys.initial)
     this.extension = new Keys(keys.extension)
-    this.portKeys = new Keys(shape.ports.map((port) => port.source.name))
+    this.ports = new Map(
+      PORT_KEYS.flatMap((key) => {
+        const under = shape.ports.flatMap((port, place) =>
+          port.source.key === key ? [{ name: port.source.name, place }] : [],
+        )
+        return under.length
+          ? [
+              [
+                key,
+                {
+                  keys: new Keys(under.map(({ name }) => name)),
+                  port: Int32Array.from(under, ({ place }) => place),
+                },
+              ] as const,
+            ]
+          : []
+      }),
+    )
     this.paramField = Int32Array.from(fields.parameter)
     this.initField = Int32Array.from(fields.initial)
     this.extensionField = Int32Array.from(fields.extension)
@@ -687,7 +727,9 @@ class Rows {
       this.#chunks.fields[i]!.push(lazyColumn(this.source, this.#slot(i), type, false)),
     )
     this.shape.ports.forEach((_, i) =>
-      this.#chunks.ports[i]!.push(lazyColumn(this.source, this.#slot(fields + i), 'uint32', true)),
+      this.#chunks.ports[i]!.push(
+        lazyColumn(this.source, this.#slot(fields + i), 'unsigned', true),
+      ),
     )
     this.#count = 0
     this.#fresh()
@@ -736,7 +778,7 @@ export class Parser {
   #first = 0
   #tables: (Rows | null)[] = []
   #found: Found[] = []
-  #problems: Failure.Problem[] = []
+  #problems: SourceProblem[] = []
 
   /** A parser of `catalog`'s cases, coding tables as `coding` did when given, so ranges it reads join
    *  those another parser read with it. */
@@ -861,8 +903,9 @@ export class Parser {
       else if (key === 'extension') {
         if (OWN.find(bytes, keyStart, keyEnd) >= 0) continue
         known = rows.extensionField[rows.extension.find(bytes, keyStart, keyEnd)] ?? -1
-      } else if (key === 'ports') {
-        const port = rows.portKeys.find(bytes, keyStart, keyEnd)
+      } else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
+        const under = rows.ports.get(key)
+        const port = under ? (under.port[under.keys.find(bytes, keyStart, keyEnd)] ?? -1) : -1
         if (port >= 0) {
           stage(this.#ports, port, value, end)
           continue
@@ -905,8 +948,7 @@ export class Parser {
       return rows.ids.push(null)
     }
     const number = parseNumber(this.#bytes, this.#id, this.#idEnd)
-    if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
-      return (rows.ids as NumericBuilder).pushNumber(number)
+    if (isUint32(number)) return (rows.ids as NumericBuilder).pushNumber(number)
     this.#problem(record, `A ${rows.shape.type} record's ${name} is not a whole number.`)
     rows.ids.push(null)
   }
@@ -925,14 +967,14 @@ export class Parser {
 function into(
   bytes: Uint8Array,
   target: Builder,
-  type: Schema.FieldType,
+  type: DecodeKind,
   value: number,
   end: number,
 ): boolean {
-  if (type === 'float64' || type === 'int32') {
+  if (type === 'number' || type === 'integer') {
     const number = parseNumber(bytes, value, end)
     if (!Number.isFinite(number)) return false
-    if (type === 'int32' && !isInt32(number)) return false
+    if (type === 'integer' && !isInt32(number)) return false
     ;(target as NumericBuilder).pushNumber(number)
     return true
   }
@@ -943,33 +985,19 @@ function into(
     return true
   }
   if (type === 'text') return textInto(bytes, target as TextBuilder, value, end)
-  if (typeof type !== 'object' || type.kind !== 'list') return false
-  // A route: points of two finite numbers, each list checked whole before any of it is kept.
-  const list = target as ListBuilder
-  const lanes: number[] = []
-  const point = (at: number): number => {
-    lanes.length = 0
-    const close = eachItem(bytes, at, (lane) => {
-      let stop = lane
-      while (
-        stop < end &&
-        bytes[stop] !== COMMA &&
-        bytes[stop] !== CLOSE_ARRAY &&
-        bytes[stop]! > 0x20
-      )
-        stop++
-      lanes.push(parseNumber(bytes, lane, stop))
-      return stop
-    })
-    return close < 0 || lanes.length !== 2 || !lanes.every(Number.isFinite) ? -1 : close
-  }
-  if (eachItem(bytes, value, point) < 0) return false
-  eachItem(bytes, value, (at) => {
-    const close = point(at)
-    ;(list.items as VectorBuilder).push(lanes)
-    return close
-  })
-  list.commit()
+  if (type !== 'path') return false
+  const path: unknown = JSON.parse(utf8(bytes, value, end))
+  if (
+    !Array.isArray(path) ||
+    !path.every(
+      (point) =>
+        Array.isArray(point) &&
+        point.length === 2 &&
+        point.every((lane) => typeof lane === 'number' && Number.isFinite(lane)),
+    )
+  )
+    return false
+  target.push(path)
   return true
 }
 
@@ -989,21 +1017,6 @@ function stage(spans: Int32Array, at: number, value: number, end: number): void 
   if (at < 0) return
   spans[2 * at] = value
   spans[2 * at + 1] = end
-}
-
-/** Visits each item of the array at `open`; `item` returns just past it, or -1 to refuse it.
- *  Returns just past the array, or -1 when it is not one or an item was refused. */
-function eachItem(bytes: Uint8Array, open: number, item: (at: number) => number): number {
-  if (bytes[open] !== OPEN_ARRAY) return -1
-  let at = skipSpace(bytes, open + 1)
-  while (bytes[at] !== CLOSE_ARRAY) {
-    const next = item(at)
-    if (next < 0) return -1
-    at = skipSpace(bytes, next)
-    if (bytes[at] === COMMA) at = skipSpace(bytes, at + 1)
-    else if (bytes[at] !== CLOSE_ARRAY) return -1
-  }
-  return at + 1
 }
 
 /** A JSON number: exact by Clinger's fast path for up to 15 significant digits and a small

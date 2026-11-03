@@ -7,9 +7,9 @@ import * as vscode from 'vscode'
 
 import { channelsOf, NUMERIC } from '../shared/bindings.js'
 import { signalContext, type Target } from '../shared/contexts.js'
+import { fieldDefinition, fieldLabel, networkRole, tableLabel } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
 import type { Mutation, Summary } from '../shared/messages.js'
-import { fieldName, networkOf, placementOf, typeName } from '../shared/schema.js'
 import type { Sessions } from './sessions.js'
 
 /** A recordable type, or one of its fields when `field` is set, which its menu's commands act on
@@ -28,8 +28,8 @@ class Signal extends vscode.TreeItem {
 
 /** The types in `summary` with elements and sampled fields, each with those fields. */
 function recordable(summary: Summary): { type: string; fields: string[] }[] {
-  return Object.entries(summary.schema.types).flatMap(([type, { fields }]) => {
-    const sampled = Object.keys(fields).filter((field) => fields[field]!.sampled === true)
+  return summary.definition.tables.flatMap(({ name: type, fields }) => {
+    const sampled = fields.filter((field) => field.kind === 'sampled').map((field) => field.name)
     return summary.counts[type] && sampled.length ? [{ type, fields: sampled }] : []
   })
 }
@@ -62,7 +62,7 @@ export function registerSignals(studio: Sessions) {
       const types = recordable(summary)
       if (!parent)
         return types.map(({ type, fields }) => {
-          const name = typeName(summary.schema, type)
+          const name = tableLabel(summary.definition, type)
           const total = summary.counts[type] ?? 0
           const on = fields.filter((field) => listed(summary, type, field) === total).length
           const item = new Signal(type, undefined, name, vscode.TreeItemCollapsibleState.Collapsed)
@@ -73,13 +73,12 @@ export function registerSignals(studio: Sessions) {
           return item
         })
       const { type } = parent
-      const name = typeName(summary.schema, type)
+      const name = tableLabel(summary.definition, type)
       const total = summary.counts[type] ?? 0
-      const definitions = summary.schema.types[type]?.fields ?? {}
-      const drawn = !!placementOf(networkOf(summary.schema), type)
+      const drawn = !!networkRole(summary.definition, type)
       return (types.find((each) => each.type === type)?.fields ?? []).map((field) => {
         const count = listed(summary, type, field)
-        const label = fieldName(definitions[field], field)
+        const label = fieldLabel(fieldDefinition(summary.definition, type, field)!)
         const item = new Signal(type, field, label, vscode.TreeItemCollapsibleState.None)
         item.id = `${uri}\n${type}\n${field}`
         item.checkboxState = {
@@ -89,13 +88,13 @@ export function registerSignals(studio: Sessions) {
         // When only some list it, the count says how many, and checking it makes every one.
         if (count > 0 && count < total)
           item.description = `${count.toLocaleString()} of ${total.toLocaleString()}`
-        item.tooltip = definitions[field]?.description ?? `${name} ${label}`
+        item.tooltip = `${name} ${label}`
         item.accessibilityInformation = { label: `${name} ${label}` }
         item.gridkitTarget = { uri, version: summary.version, origin: 'signals', type, field }
         item.contextValue = signalContext({
           recorded: count > 0,
-          mappable: drawn && NUMERIC.has(definitions[field]?.type),
-          mapped: channelsOf(bindings, { type, field }).length > 0,
+          mappable: drawn && NUMERIC.has(fieldDefinition(summary.definition, type, field)?.kind),
+          mapped: channelsOf(bindings, { table: type, field }).length > 0,
         })
         return item
       })

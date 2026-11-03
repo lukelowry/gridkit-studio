@@ -1,13 +1,16 @@
-import { type Failure, failure } from '@latkit/model'
 import { findNodeAtLocation, type JSONPath, modify, parseTree } from 'jsonc-parser'
+import type { Id } from 'latkit'
 
+import type { Entity } from '../shared/document.js'
+import type { SourceError } from '../shared/errors.js'
+import { problem } from '../shared/errors.js'
 import { message } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
-import { type Column, isInt32, isValid, valueAt } from './columns.js'
+import { type Column, isInt32, isUint32, isValid, valueAt } from './columns.js'
 import { CASE, type FieldPlan } from './definition.js'
-import { charsAt, charsWalk } from './offsets.js'
+import { charsAt, charsWalk, leads, trails } from './offsets.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
 const decoder = new TextDecoder()
@@ -61,10 +64,6 @@ export function withValue(text: string, path: JSONPath, value: unknown): string 
   )
 }
 
-/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
-const leads = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
-const trails = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
-
 /** The one edit that turns `before`, at `offset`, into `after`: the span where they differ, widened
  *  to whole characters, so neither end splits a surrogate pair. */
 export function minimal(before: string, after: string, offset: number): SourceEdit {
@@ -91,7 +90,7 @@ export function nested<T>(read: () => T): T {
     return read()
   } catch (error) {
     if (error instanceof RangeError && /call stack/i.test(error.message))
-      throw failure('invalid-input', 'This record nests its values too deeply to read.')
+      throw problem('invalid-input', 'This record nests its values too deeply to read.')
     throw error
   }
 }
@@ -113,7 +112,7 @@ export function nativePath(field: FieldPlan): string[] {
     case 'initial':
       return ['init', source.name]
     case 'port':
-      return ['ports', source.name]
+      return [source.key, source.name]
     case 'extension':
       return ['extension', source.name]
     case 'found':
@@ -124,9 +123,9 @@ export function nativePath(field: FieldPlan): string[] {
 }
 
 /** The record of row `id`: its table and row, its JSON text, and that text's offset in the file. */
-export function recordOf(kase: Case, id: string) {
+export function recordOf(kase: Case, id: Entity) {
   const located = kase.locate(id)
-  if (!located) throw failure('invalid-input', 'This element no longer exists.')
+  if (!located) throw problem('invalid-input', 'This element no longer exists.')
   return recordAt(kase, located.table, located.row)
 }
 
@@ -184,7 +183,7 @@ function placeOf(kase: Case, table: Table, row: number, plan: FieldPlan): Place 
 }
 
 /** Row `id`'s record, or its `field`'s value, or the record's first character without one. */
-export function sourceRange(kase: Case, id: string, field?: string): SourceRange {
+export function sourceRange(kase: Case, id: Entity, field?: string): SourceRange {
   const record = recordOf(kase, id)
   if (!field) return { offset: record.offset, length: Math.max(1, record.text.length) }
   const plan = record.table.shape.plan.get(field)
@@ -206,17 +205,17 @@ function valueFor(
   kase: Case,
   plan: FieldPlan | undefined,
   input: Value,
-  resolve?: (id: string, type: string) => string | number | undefined,
+  resolve?: (entity: Entity) => Id | undefined,
 ): { plan: FieldPlan; value: unknown } {
   if (!plan || !editable(plan))
-    throw failure('invalid-input', 'Edit identities and structural changes in JSON.')
+    throw problem('invalid-input', 'Edit identities and structural changes in JSON.')
   const value = fieldValue(
     plan,
     input,
     resolve ??
-      ((id, type) => {
+      ((id) => {
         const target = kase.locate(id)
-        return target?.table.shape.type === type ? kase.native(target.table, target.row) : undefined
+        return target ? kase.native(target.table, target.row) : undefined
       }),
   )
   return { plan, value }
@@ -233,7 +232,7 @@ function edited(place: Place, plan: FieldPlan, value: unknown): SourceEdit {
     !!node &&
     !/[.eE]/.test(text.slice(node.offset, node.offset + node.length)) &&
     Number.isInteger(value)
-  const real = plan.definition.type === 'float64' && typeof value === 'number' && !integer
+  const real = plan.decode === 'number' && typeof value === 'number' && !integer
   if (node)
     return {
       offset: offset + node.offset,
@@ -250,24 +249,20 @@ function edited(place: Place, plan: FieldPlan, value: unknown): SourceEdit {
   return minimal(text, next, offset)
 }
 
-/** The edit setting `field` of row `id` to `input`; against `recordText`, at offset 0, if given. */
+/** The edit setting `field` of row `id` to `input`, against `recordText`, its record as a transaction
+ *  has made it so far, at offset 0. */
 export function editField(
   kase: Case,
-  id: string,
+  id: Entity,
   field: string,
   input: Value,
-  recordText?: string,
-  resolve?: (id: string, type: string) => string | number | undefined,
-): SourceEdit[] {
+  recordText: string,
+  resolve: (entity: Entity) => Id | undefined,
+): SourceEdit {
   const located = kase.locate(id)
-  if (!located) throw failure('invalid-input', 'This element no longer exists.')
-  if (located.table.shape.array === null) return editCase(kase, new Map([[field, input]]), resolve)
+  if (!located) throw problem('invalid-input', 'This element no longer exists.')
   const { plan, value } = valueFor(kase, located.table.shape.plan.get(field), input, resolve)
-  const place =
-    recordText === undefined
-      ? placeOf(kase, located.table, located.row, plan)!
-      : { text: recordText, offset: 0, path: nativePath(plan) }
-  return [edited(place, plan, value)]
+  return edited({ text: recordText, offset: 0, path: nativePath(plan) }, plan, value)
 }
 
 /** The edits setting the case's own fields to `values`: each of its objects they are in, header or
@@ -275,7 +270,7 @@ export function editField(
 export function editCase(
   kase: Case,
   values: ReadonlyMap<string, Value>,
-  resolve?: (id: string, type: string) => string | number | undefined,
+  resolve?: (entity: Entity) => Id | undefined,
 ): SourceEdit[] {
   const shape = kase.table(CASE).shape
   const byObject = new Map<string, { plan: FieldPlan; value: unknown }[]>()
@@ -291,7 +286,7 @@ export function editCase(
     if (!object) {
       const members = sets.map(
         ({ plan, value }) =>
-          `${JSON.stringify(pathIn(plan).join('.'))}: ${plan.definition.type === 'float64' && typeof value === 'number' ? realText(value) : JSON.stringify(value)}`,
+          `${JSON.stringify(pathIn(plan).join('.'))}: ${plan.decode === 'number' && typeof value === 'number' ? realText(value) : JSON.stringify(value)}`,
       )
       made.push(`${JSON.stringify(name)}: {${members.join(', ')}}`)
       continue
@@ -307,7 +302,7 @@ export function editCase(
 
 /** The edit that writes `made`, members of the case's own object, first among its members, as
  *  indented as the one they go before; in a case with none, between its braces. */
-function membersMade(kase: Case, made: readonly string[]): SourceEdit {
+export function membersMade(kase: Case, made: readonly string[]): SourceEdit {
   const [first] = kase.members
   if (!first) return { offset: textOffset(kase, kase.close), length: 0, text: made.join(', ') }
   let indent = first.start
@@ -320,9 +315,9 @@ function membersMade(kase: Case, made: readonly string[]): SourceEdit {
   }
 }
 
-/** Each value present but invalid or required but missing, any signal with two drivers, and, as
- *  warnings, each class and field the catalog does not know, and each value outside the choices
- *  it gives. */
+/** Each value present but invalid or required but missing, each name or id outside the catalog's
+ *  rule, any signal with two drivers, and, as warnings, each class and field the catalog does not
+ *  know, each value outside the choices it gives, and subsystems, which Studio does not show. */
 const diagnoses = new WeakMap<Case, Issue[]>()
 
 /** The case's issues, which every caller shares of the same immutable source. Found a slice at a
@@ -345,22 +340,31 @@ export async function diagnose(kase: Case, signal: AbortSignal): Promise<Issue[]
 
 function* diagnostics(kase: Case): Generator<void, Issue[]> {
   const issues: Issue[] = []
+  const subsystems = kase.member('subsystems')
+  if (subsystems)
+    issues.push({
+      offset: textOffset(kase, subsystems.start),
+      length: textOffset(kase, subsystems.end) - textOffset(kase, subsystems.start),
+      severity: 'warning',
+      message:
+        'GridKit Studio shows the top-level system alone; its subsystems are kept as written.',
+    })
   for (const table of kase.tables.values())
     if (!kase.catalog.shapes.has(table.shape.type) && table.records.length) {
-      const id = kase.id(table, 0)
+      const id = kase.entity(table, 0)
       issues.push({
         ...sourceRange(kase, id),
-        id,
+        entity: id,
         severity: 'warning',
         message: `${table.shape.type} is not a class GridKit Studio knows; its records are kept as written.`,
       })
     }
   for (const { type, field, row } of kase.found) {
     yield
-    const id = kase.id(kase.table(type), row)
+    const id = kase.entity(kase.table(type), row)
     issues.push({
       ...sourceRange(kase, id, field),
-      id,
+      entity: id,
       field,
       severity: 'warning',
       message: `${field} is not a ${type} field GridKit Studio knows; it is kept as written.`,
@@ -373,13 +377,31 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
       yield
       for (const [n, row] of outside(column, plan.choices!).entries()) {
         if ((n & STEP_RECORDS) === 0) yield
-        const id = kase.id(table, row)
+        const id = kase.entity(table, row)
         issues.push({
           ...sourceRange(kase, id, plan.name),
-          id,
+          entity: id,
           field: plan.name,
           severity: 'warning',
           message: `${kase.cell(table, plan.name, row)} is not a ${table.shape.type} ${plan.name} GridKit Studio knows; it is kept as written.`,
+        })
+      }
+    }
+  for (const table of kase.tables.values())
+    for (const plan of table.shape.plan.values()) {
+      const column =
+        plan.allowed && (plan.source.kind === 'identity' ? table.ids : table.fields.get(plan.name))
+      if (!column) continue
+      yield
+      for (const [n, row] of unallowed(column, plan.allowed!.pattern).entries()) {
+        if ((n & STEP_RECORDS) === 0) yield
+        const id = kase.entity(table, row)
+        issues.push({
+          ...sourceRange(kase, id, plan.source.kind === 'identity' ? undefined : plan.name),
+          entity: id,
+          ...(plan.source.kind !== 'identity' && { field: plan.name }),
+          severity: 'error',
+          message: `${plan.name} may contain ${plan.allowed!.rule}.`,
         })
       }
     }
@@ -393,7 +415,7 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
       const at = place++
       // A field the catalog does not know is never required, and holds what it is written as.
       if (
-        plan.definition.sampled ||
+        plan.definition.kind === 'sampled' ||
         plan.source.kind === 'identity' ||
         plan.source.kind === 'found'
       )
@@ -407,16 +429,16 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     wrong.sort((a, b) => a.row - b.row || a.place - b.place)
     for (const [n, { row, plan }] of wrong.entries()) {
       if ((n & STEP_RECORDS) === 0) yield
-      const id = kase.id(table, row)
-      const type = plan.definition.type
+      const id = kase.entity(table, row)
+      const definition = plan.definition
       issues.push({
         ...sourceRange(kase, id, plan.name),
-        id,
+        entity: id,
         field: plan.name,
         severity: 'error',
         message:
-          typeof type === 'object' && type.kind === 'reference'
-            ? 'Missing or invalid ' + type.to + ' reference.'
+          definition.kind === 'reference'
+            ? 'Missing or invalid ' + definition.target + ' reference.'
             : 'Invalid ' + plan.name + ' value.',
       })
     }
@@ -425,10 +447,10 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
     kase.checkSignals()
   } catch (error) {
     // A signal two outputs drive is said where it is.
-    const target = (error as Failure).target
+    const target = (error as SourceError).target
     issues.push({
-      ...(target?.kind === 'row' ? sourceRange(kase, target.id) : { offset: 0, length: 1 }),
-      ...(target?.kind === 'row' && { id: target.id }),
+      ...(target?.kind === 'row' ? sourceRange(kase, target.entity) : { offset: 0, length: 1 }),
+      ...(target?.kind === 'row' && { entity: target.entity }),
       severity: 'error',
       message: message(error),
     })
@@ -440,7 +462,6 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
 function empty(column: Column): number[] {
   const rows: number[] = []
   column.chunks.forEach((chunk, c) => {
-    if (chunk.validity === undefined) return
     for (let at = 0; at < chunk.length; at++)
       if (!isValid(chunk, at)) rows.push(column.starts[c]! + at)
   })
@@ -459,44 +480,68 @@ function outside(column: Column, choices: readonly string[]): number[] {
   return rows
 }
 
-/** Shared validation for existing fields and newly created records. */
-export function fieldValue(
+/** The rows of `column` that hold text `pattern` does not match. */
+function unallowed(column: Column, pattern: RegExp): number[] {
+  const rows: number[] = []
+  column.chunks.forEach((chunk, c) => {
+    for (let at = 0; at < chunk.length; at++) {
+      const value = valueAt(chunk, at)
+      if (typeof value === 'string' && !pattern.test(value)) rows.push(column.starts[c]! + at)
+    }
+  })
+  return rows
+}
+
+/** `input` as field `plan` writes it, checked, with a reference resolved by `resolve`. */
+function fieldValue(
   plan: FieldPlan,
   input: Value,
-  resolve: (id: string, type: string) => string | number | undefined,
+  resolve: (entity: Entity) => Id | undefined,
 ): unknown {
-  const definition = plan.definition
-  const type = definition.type
-  let value: unknown = input
-  if (value !== null) {
-    if (typeof type === 'string') {
-      const valid =
-        type === 'text'
-          ? typeof value === 'string'
-          : type === 'boolean'
-            ? typeof value === 'boolean'
-            : typeof value === 'number' &&
-              Number.isFinite(value) &&
-              (type !== 'int32' || isInt32(value))
-      if (!valid) throw failure('invalid-input', `Expected ${type} for ${plan.name}.`)
-    } else if (type.kind === 'reference') {
-      const target = typeof value === 'string' ? resolve(value, type.to) : undefined
-      if (target === undefined)
-        throw failure('invalid-input', `Choose an existing or proposed ${type.to} reference.`)
-      value = target
-    } else if (type.kind === 'list') {
-      if (
-        !Array.isArray(value) ||
-        !value.every(
-          (point) =>
-            Array.isArray(point) &&
-            point.length === 2 &&
-            point.every((n) => typeof n === 'number' && Number.isFinite(n)),
-        )
+  const { definition } = plan
+  if (input === null) {
+    if (plan.required) throw problem('invalid-input', 'This field cannot be null.')
+    return null
+  }
+  if (definition.kind === 'reference') {
+    const value =
+      typeof input === 'string' || typeof input === 'number'
+        ? resolve({ table: definition.target!, id: input })
+        : undefined
+    if (value === undefined)
+      throw problem(
+        'invalid-input',
+        'Choose an existing or proposed ' + definition.target + ' reference.',
       )
-        throw failure('invalid-input', 'A route is an array of [longitude, latitude] points.')
+    return value
+  }
+  if (definition.kind === 'path') {
+    if (
+      !Array.isArray(input) ||
+      !input.every(
+        (point) =>
+          Array.isArray(point) &&
+          point.length === 2 &&
+          point.every((value) => typeof value === 'number' && Number.isFinite(value)),
+      )
+    ) {
+      throw problem('invalid-input', 'A route is an array of [longitude, latitude] points.')
     }
-  } else if (!definition.nullable || plan.required)
-    throw failure('invalid-input', 'This field cannot be null.')
-  return value
+    return input
+  }
+  const valid =
+    definition.kind === 'text'
+      ? typeof input === 'string'
+      : definition.kind === 'boolean'
+        ? typeof input === 'boolean'
+        : definition.kind === 'number' &&
+          typeof input === 'number' &&
+          Number.isFinite(input) &&
+          (plan.decode !== 'integer' || isInt32(input)) &&
+          (plan.decode !== 'unsigned' || isUint32(input))
+  if (!valid)
+    throw problem('invalid-input', 'Expected ' + definition.kind + ' for ' + plan.name + '.')
+  if (plan.allowed && !plan.allowed.pattern.test(String(input)))
+    throw problem('invalid-input', `${plan.name} may contain ${plan.allowed.rule}.`)
+  return input
 }

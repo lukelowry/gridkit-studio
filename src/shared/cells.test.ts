@@ -1,59 +1,38 @@
-import { type Block, textColumn } from '@latkit/model'
-import { expect, it } from 'vitest'
+﻿import type { QueryResult } from 'latkit'
+import { describe, expect, it } from 'vitest'
 
-import { referenceNames, rowsOf } from './cells.js'
+import { cell, display, rowsOf } from './cells.js'
 
-it('resolves scalar and list references, honoring offsets and null validity', async () => {
-  const index = { source: 'case', version: 'one', type: 'Bus' }
-  const blocks: Block.Rows[] = [
-    {
-      kind: 'rows',
-      index: { ...index, type: 'Device' },
-      rows: { kind: 'range', offset: 0, count: 2 },
-      rowOffset: 0,
-      columns: {
-        port: {
-          kind: 'reference',
-          index,
-          offset: 1,
-          length: 2,
-          values: new Uint32Array([99, 1, 88]),
-          validity: new Uint8Array([2]),
-        },
-        ports: {
-          kind: 'list',
-          offset: 1,
-          length: 2,
-          offsets: new Int32Array([0, 1, 3, 3]),
-          values: {
-            kind: 'reference',
-            index,
-            offset: 0,
-            length: 3,
-            values: new Uint32Array([99, 2, 3]),
-          },
-        },
-      },
+describe('native query cells', () => {
+  const page: QueryResult = {
+    table: 'Device',
+    ids: ['a/b', 0],
+    total: 2,
+    fields: {
+      value: Float64Array.of(Math.PI, NaN),
+      name: ['one', null],
+      enabled: [true, false],
+      bus: { reference: 'Bus', ids: [0, null] },
     },
-  ]
-  const references = await referenceNames(blocks, async (query) => {
-    expect(query.rows?.kind).toBe('indices')
-    if (query.rows?.kind !== 'indices') throw new Error('indices required')
-    expect(Array.from(query.rows.values)).toEqual([1, 2, 3])
-    return [
+  }
+  it('preserves float64 values, native zero IDs, punctuation, and missing values', () => {
+    expect(rowsOf(page)).toEqual([
       {
-        kind: 'rows',
-        index,
-        rowOffset: 0,
-        rows: { kind: 'indices', values: query.rows.values },
-        ids: textColumn(['Bus/2', 'Bus/3', 'Bus/4']),
-        columns: {},
+        id: 'a/b',
+        entity: { table: 'Device', id: 'a/b' },
+        values: { value: Math.PI, name: 'one', enabled: true, bus: { table: 'Bus', id: 0 } },
       },
-    ]
+      {
+        id: 0,
+        entity: { table: 'Device', id: 0 },
+        values: { value: null, name: null, enabled: false, bus: null },
+      },
+    ])
+    expect(cell(page, 'absent', 0)).toBeNull()
   })
-  const rows = rowsOf(blocks, references)
-  expect(rows[0]?.values.port).toMatchObject({ id: 'Bus/2' })
-  expect(rows[1]?.values.port).toBeNull()
-  expect(rows[0]?.values.ports).toMatchObject([{ id: 'Bus/3' }, { id: 'Bus/4' }])
-  expect(rows[1]?.values.ports).toEqual([])
+  it('formats native references directly without resolving physical row numbers', () => {
+    expect(display(cell(page, 'bus', 0), { native: true })).toBe('0')
+    expect(display(null)).toBe('—')
+    expect(display(false)).toBe('false')
+  })
 })

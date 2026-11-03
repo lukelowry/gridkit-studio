@@ -6,10 +6,10 @@ import { randomUUID } from 'node:crypto'
 
 import * as vscode from 'vscode'
 
+import { fieldDefinition, tableLabel } from '../shared/document.js'
 import { formatNumber } from '../shared/format.js'
 import type { Element, Plot } from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
-import { typeName } from '../shared/schema.js'
 import { RATES } from '../shared/transport.js'
 import { askRange, type Commands, type Context, localPath } from './context.js'
 import { CHOOSE_SIGNALS, notice } from './report.js'
@@ -19,7 +19,7 @@ import type { Session } from './session.js'
 function plottable({ session, summary }: Context, type?: string): Plot[] {
   const outputs = session.results?.outputs ?? []
   const offered = outputs.length
-    ? outputs.flatMap(({ from, select }) => select.map((field) => ({ from, field })))
+    ? outputs.map(({ table, field }) => ({ from: table, field }))
     : Object.entries(summary.recording.listed).flatMap(([from, fields]) =>
         Object.entries(fields).flatMap(([field, count]) => (count > 0 ? [{ from, field }] : [])),
       )
@@ -30,7 +30,6 @@ export function registerPlots({
   studio,
   command,
   onSession,
-  action,
   focus,
   signalItem,
   pickPlot,
@@ -44,16 +43,16 @@ export function registerPlots({
   }
   /** A signal the user picks, of `type` alone when it is given. */
   const pickSignal = async (context: Context, title: string, type?: string) => {
-    const { schema } = context.summary
+    const { definition } = context.summary
     const offered = plottable(context, type)
     if (!offered.length)
       throw notice(
-        `There is no ${type ? typeName(schema, type) + ' ' : ''}signal to plot.`,
+        `There is no ${type ? tableLabel(definition, type) + ' ' : ''}signal to plot.`,
         CHOOSE_SIGNALS,
       )
     return (
       await vscode.window.showQuickPick(
-        offered.map((plot) => signalItem(schema, plot)),
+        offered.map((plot) => signalItem(definition, plot)),
         { title },
       )
     )?.plot
@@ -71,7 +70,7 @@ export function registerPlots({
   command('plotSignal', async (context) => {
     const { summary, element, type, field } = context
     const signal =
-      type && field && summary.schema.types[type]?.fields[field]?.sampled
+      type && field && fieldDefinition(summary.definition, type, field)?.kind === 'sampled'
         ? { from: type, field }
         : await pickSignal(
             context,
@@ -79,10 +78,10 @@ export function registerPlots({
             element && type,
           )
     if (!signal) return
-    const id = element?.id.startsWith(signal.from + '/') ? element.id : undefined
+    const id = element?.table === signal.from ? element.id : undefined
     await showPlot(
       context.session,
-      { from: signal.from, field: signal.field, ...(id && { id }) },
+      { from: signal.from, field: signal.field, ...(id !== undefined && { id }) },
       element,
     )
   })
@@ -105,13 +104,11 @@ export function registerPlots({
     const plot = await plotOf(context, 'Choose plot')
     if (!plot) return
     const range = await askRange(
-      'Value range of ' + plotName(context.summary.schema, plot),
-      undefined,
+      'Value range of ' + plotName(context.summary.definition, plot),
+      plot.range,
       'fits the values shown',
     )
-    if (range === undefined) return
-    const { from, field, id } = plot
-    action(context, 'valueRange', { plot: { from, field, ...(id && { id }) }, range }, 'monitor')
+    if (range !== undefined) context.session.plotRange(plot, range ?? undefined)
   })
   onSession('timeWindow', async (session) => {
     const range = await askRange(

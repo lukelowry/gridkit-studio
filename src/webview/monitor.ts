@@ -1,5 +1,4 @@
 import './styles/index.css'
-import './styles/canvas.css'
 
 import { mount } from 'svelte'
 

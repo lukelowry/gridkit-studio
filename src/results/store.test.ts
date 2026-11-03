@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Stamp } from './stamp.js'
-import { type Manifest, Stores } from './store.js'
+import { type Checkpoint, FORMAT, Stores } from './store.js'
 
 let root: string
 beforeEach(async () => {
@@ -23,22 +23,23 @@ const stamp = (frames: number, modified = 1): Stamp => ({
 })
 
 /** What a store of `frames` frames of the file at `path`, read through, says it holds. */
-const manifest = (path: string, frames: number, modified = 1): Omit<Manifest, 'format'> => ({
+const manifest = (path: string, frames: number, modified = 1): Checkpoint => ({
   path,
   stamp: stamp(frames, modified),
   read: frames * 10,
   fingerprint: 'case',
   header: ['time', 'Bus_A_Vm'],
   frames,
-  chunk: 2,
   domain: [0, frames - 1],
   domains: {},
+  complete: true,
+  reducers: [],
 })
 
-/** A store of the file at `path` read through: `frames` frames of two rows, two to a chunk. */
+/** A store of the file at `path` read through: `frames` frames of two rows, two to a block. */
 async function stored(stores: Stores, path: string, frames: number, modified = 1) {
   const store = await stores.create(path)
-  store.shape([2], 2)
+  store.shape([2])
   for (let k = 0; k * 2 < frames; k++) {
     const count = Math.min(2, frames - k * 2)
     // Frame by frame, each frame's two rows: row r of frame t is 100 t + r.
@@ -46,18 +47,20 @@ async function stored(stores: Stores, path: string, frames: number, modified = 1
       { length: 2 * count },
       (_, i) => 100 * (k * 2 + (i >> 1)) + (i & 1),
     )
-    await store.write(k, count, [values])
+    await store.writeRaw(
+      k * 2,
+      Float64Array.from({ length: count }, (_, i) => k * 2 + i),
+      [values],
+    )
   }
-  await store.finish(
-    manifest(path, frames, modified),
-    Float64Array.from({ length: frames }, (_, i) => i),
-  )
+  await store.writeCsv(new Uint8Array(frames * 10), 0)
+  await store.checkpoint(manifest(path, frames, modified))
   return store
 }
 
 /** How many stores the window `owner` keeps, this one's unless said. */
 const folders = async (owner = process.pid) =>
-  (await readdir(join(root, String(owner))).catch(() => [])).length
+  (await readdir(join(root, FORMAT, String(owner))).catch(() => [])).length
 
 /** The id of a process that has exited, as a window gone leaves its extension host's. */
 async function exited(): Promise<number> {
@@ -67,16 +70,33 @@ async function exited(): Promise<number> {
 }
 
 describe('the stores of the results files a worker reads', () => {
-  it('reads back each row of a chunk as one run of its frames, and only the rows asked for', async () => {
+  it('reads back each row of a block as one run of its frames, and only the rows asked for', async () => {
     const stores = new Stores(root)
     const store = await stored(stores, join(root, 'a.csv'), 5)
-    // Chunk 1 holds frames 2 and 3; row 0 then row 1, each its two frames.
-    expect(Array.from(await store.read(1, 0, 2))).toEqual([200, 300, 201, 301])
-    expect(Array.from(await store.read(1, 0, 2, Uint32Array.of(1)))).toEqual([201, 301])
-    // The last chunk, cut short with the file.
-    expect(Array.from(await store.read(2, 0, 1))).toEqual([400, 401])
-    expect(Array.from(await store.times())).toEqual([0, 1, 2, 3, 4])
+    // Block 1 holds frames 2 and 3; row 0 then row 1, each its two frames.
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0)).values)).toEqual([200, 201, 300, 301])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1])).values)).toEqual([201, 301])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 0], 1, 1)).values)).toEqual([
+      301, 300,
+    ])
+    expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 1], 0, 2)).values)).toEqual([
+      201, 201, 301, 301,
+    ])
+    // The last block, cut short with the file.
+    expect(Array.from((await store.readRaw(store.raw[2]!, 0)).values)).toEqual([400, 401])
+    expect(Array.from(await store.times(store.raw[1]!))).toEqual([2, 3])
     await stores.release(store)
+  })
+
+  it('writes manifests one after another, as a file read again while its last read ends does', async () => {
+    const stores = new Stores(root)
+    const path = join(root, 'a.csv')
+    const store = await stored(stores, path, 4)
+    // Asked for together, each manifest is written whole, and the last one asked for stays.
+    const asked = Array.from({ length: 16 }, (_, i) => 1 + (i % 4))
+    await Promise.all([...asked, 4].map((frames) => store.checkpoint(manifest(path, frames))))
+    await stores.release(store)
+    expect((await stores.find(path, stamp(4), 'case'))?.manifest?.frames).toBe(4)
   })
 
   it('finds a store read through only of the same file, as it was, against the same case', async () => {
@@ -147,16 +167,20 @@ describe('the stores of the results files a worker reads', () => {
     // A window gone left a store read through of a file this one's sessions name.
     const gone = await exited()
     await (await stored(new Stores(root, gone), a, 4)).close()
-    // What is no window's folder is no store of Studio's now.
-    await mkdir(join(root, 'stray'))
+    // What is no window's folder, or of another format, is no store of Studio's now.
+    await mkdir(join(root, FORMAT, 'stray'))
+    await mkdir(join(root, 'other-format', String(gone)), { recursive: true })
     const mine = new Stores(root)
     await mine.sweep([a])
     expect(await folders(open)).toBe(1)
     expect((await mine.find(a, stamp(4), 'case'))?.manifest?.frames).toBe(4)
-    expect((await readdir(root)).sort()).toEqual([String(open), String(process.pid)].sort())
+    expect(await readdir(root)).toEqual([FORMAT])
+    expect((await readdir(join(root, FORMAT))).sort()).toEqual(
+      [String(open), String(process.pid)].sort(),
+    )
     // The other window's store takes its frames still.
-    writing.shape([2], 2)
-    await writing.write(0, 2, [Float64Array.of(1, 2, 3, 4)])
+    writing.shape([2])
+    await writing.writeRaw(0, Float64Array.of(0, 1), [Float64Array.of(1, 2, 3, 4)])
     await writing.close()
   })
 })

@@ -1,5 +1,5 @@
 /** Commands on what the views draw: framing and reloading them, editing the Diagram, mapping a
- *  field onto the Network, their settings, and a video of them. */
+ *  field onto the Network, their settings, and a video or image of them. */
 
 import * as vscode from 'vscode'
 
@@ -11,22 +11,26 @@ import {
   type FieldRef,
   NUMERIC,
 } from '../shared/bindings.js'
-import { leaf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
+import { fieldDefinition, leaf, networkRole } from '../shared/document.js'
 import { settingsOf, viewOf } from '../shared/ids.js'
-import { fieldOf, networkOf, placementOf } from '../shared/schema.js'
+import { TILTED } from '../shared/preferences.js'
 import { askRange, type Commands, type Context } from './context.js'
+import { displayOf, setDisplay } from './settings.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
-  /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
-   *  bar, the one in front. */
-  const canvasOf = (context: Context): Target['origin'] | undefined => {
-    if (context.target) return context.target.origin
+  /** The canvas a command acts on: the kind its menu was opened on, else the editor in front alone,
+   *  as its title bar or the Command Palette asks. */
+  const canvasOf = (context: Context): { view?: Target['origin']; active: boolean } => {
+    if (context.target) return { view: context.target.origin, active: false }
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const view = input instanceof vscode.TabInputCustom ? viewOf(input.viewType) : undefined
-    return view === 'network' || view === 'diagram' ? view : undefined
+    return view === 'network' || view === 'diagram' ? { view, active: true } : { active: false }
   }
-  command('fit', (context) => action(context, 'fit', undefined, canvasOf(context)))
+  command('fit', (context) => {
+    const { view, active } = canvasOf(context)
+    action(context, 'fit', undefined, view, active)
+  })
   // Every view of the case, and its results, read and drawn again.
   command('reloadView', (context) => {
     context.session.retry()
@@ -39,7 +43,7 @@ export function registerCanvases({ command, action, focus }: Commands) {
     action(
       context,
       'neighborhood',
-      context.element.id,
+      context.element,
       context.target?.origin === 'diagram' ? 'diagram' : 'network',
     )
   })
@@ -51,34 +55,34 @@ export function registerCanvases({ command, action, focus }: Commands) {
     command(id, (context) => {
       if (context.session.diagramEditing === editing) return
       context.session.setEditing(editing)
-      action(context, 'diagramEditing', editing, 'diagram')
     })
   command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
 
   /** The numeric field in context, which a network channel can show. */
   const mappable = ({ summary, type, field }: Context): FieldRef => {
-    if (!type || !field || !NUMERIC.has(fieldOf(summary.schema, type, field)?.type))
+    if (!type || !field || !NUMERIC.has(fieldDefinition(summary.definition, type, field)?.kind))
       throw new Error('Choose a numeric field to map.')
-    return { type, field }
+    return { table: type, field }
   }
   command('mapTo', async (context) => {
     const field = mappable(context)
     const { bindings } = context.session
     const current = channelsOf(bindings, field)
     const picked = await vscode.window.showQuickPick(
-      channelsFor(placementOf(networkOf(context.summary.schema), field.type)).map((channel) => ({
+      channelsFor(networkRole(context.summary.definition, field.table)).map((channel) => ({
         label: CHANNELS[channel].label,
         channel,
         picked: current.includes(channel),
       })),
       { title: 'Map ' + leaf(field.field), canPickMany: true },
     )
-    if (picked)
-      context.session.bind(
-        field,
-        picked.map(({ channel }) => channel),
-        domainOf(bindings, field),
-      )
+    if (!picked) return
+    const channels = picked.map(({ channel }) => channel)
+    context.session.bind(field, channels, domainOf(bindings, field))
+    // A height shows only from the side: a flat Network tilts, as its Tilt button tilts it.
+    const { uri } = context.document
+    if (channels.includes('vertexHeight') && displayOf(uri)['network.tilt'] === 0)
+      await setDisplay(uri, 'network.tilt', TILTED)
   })
   command('mappingRange', async (context) => {
     const field = mappable(context)
@@ -102,4 +106,13 @@ export function registerCanvases({ command, action, focus }: Commands) {
       vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
     )
   command('exportVideo', ({ session }) => focus(session, 'export'))
+  // A canvas editor's title bar names its file, and a menu its view; the Monitor's title bar names
+  // nothing, so the Command Palette leaves this out.
+  command('exportImage', (context, value) => {
+    const { view, active } =
+      value instanceof vscode.Uri || context.target
+        ? canvasOf(context)
+        : { view: 'monitor' as const, active: false }
+    action(context, 'exportImage', undefined, view, active)
+  })
 }

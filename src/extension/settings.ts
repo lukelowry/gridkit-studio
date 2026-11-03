@@ -53,15 +53,29 @@ export function gridkitOf(uri: vscode.Uri): GridKit {
   }
 }
 
-/** How many bytes of decoded results the results worker keeps read past what views read now. It
- *  only paces what stays decoded, so any value works: one that is not a number keeps the default,
- *  and a negative one keeps nothing. */
+/** How many bytes of results no view shows the results worker keeps open. It only paces what stays
+ *  open, so any value works: one that is not a number keeps the default, and a negative one keeps
+ *  nothing. */
 export function cacheBytes(): number {
   const mib = Number(setting('resultCacheMiB'))
   const fallback = Number(
     vscode.workspace.getConfiguration(PREFIX).inspect('resultCacheMiB')?.defaultValue,
   )
   return Math.max(0, Number.isFinite(mib) ? mib : fallback) * MIB
+}
+
+/** Sets how the views of the case at `uri` look, `id` to `value`, where it takes effect: in the
+ *  most specific place that sets it now, else for the user. */
+export async function setDisplay(uri: vscode.Uri, id: string, value: unknown): Promise<void> {
+  const configuration = vscode.workspace.getConfiguration(PREFIX, uri)
+  const set = configuration.inspect(id)
+  const target =
+    set?.workspaceFolderValue !== undefined
+      ? vscode.ConfigurationTarget.WorkspaceFolder
+      : set?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global
+  await configuration.update(id, value, target)
 }
 
 /** How the views of the case at `uri` look; a value that is not valid keeps its default. */

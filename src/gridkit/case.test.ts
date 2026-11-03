@@ -1,104 +1,101 @@
 import { readFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 
-import {
-  type Block,
-  createData,
-  read,
-  selectBatches,
-  staticFields,
-  validateSchema,
-} from '@latkit/model'
-import { describe, expect, it } from 'vitest'
+import { Data } from 'latkit'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { rowsOf } from '../shared/cells.js'
+import type { ProjectionCursor } from '../shared/data.js'
+import { type Entity, fieldDefinition, tableDefinition } from '../shared/document.js'
 import type { Value } from '../shared/messages.js'
-import { diagramOf, networkOf, positionOf } from '../shared/schema.js'
+import { loadNative } from '../workers/native.js'
 import { Case } from './case.js'
 import { catalog, catalogOf } from './definition.js'
-import { diagnose, editCase, editField, minimal, sourceRange } from './edits.js'
+import { apply, diagnose, editCase, minimal, sourceRange } from './edits.js'
 import { completionsAt, outline, sourceContext } from './navigation.js'
+import { CaseQueries, projectionPage } from './projection.js'
+import { transaction } from './transactions.js'
+
+beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 
 const source = `{
  "header": {"case_name": "東京 ⚡"},
  "buses": [
-  {"class":"Bus","number":42,"name":"東京 😀","params":{"kv":230.000},"extension":{"longitude":-100.00,"latitude":32.5}},
+  {"class":"Bus","number":42,"name":"Tokyo 1","params":{"kv":230.000},"extension":{"longitude":-100.00,"latitude":32.5}},
   {"class":"Bus","number":7,"name":"Seven","params":{"kv":115.0}}
  ],
- "signals":[{"signal_id":1,"name":"setpoint"}],
+ "signals":[{"signal_id":1,"name":"setpoint 😀"}],
  "devices":[
   {"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"unknown":{"keep":1.000}},
   {"class":"ConstantSignalSource","id":"source","ports":{"sr":1}},
-  {"class":"BusFault","id":"fault","ports":{"bus":42,"control_signal":1}},
-  {"class":"BusFault","id":"disconnected","ports":{"bus":7}}
+  {"class":"GenClassical","id":"fault","ports":{"bus":42,"pmech":1}},
+  {"class":"GenClassical","id":"disconnected","ports":{"bus":7}}
  ]
 }`
-const apply = (text: string, edits: ReturnType<typeof editField>) =>
-  edits
-    .sort((a, b) => b.offset - a.offset)
-    .reduce(
-      (text, edit) =>
-        text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length),
-      text,
-    )
+/** The edits setting `field` of `entity` to `value`, as a transaction plans them. */
+const set = (kase: Case, entity: Entity, field: string, value: Value) =>
+  transaction(kase, [{ kind: 'set', entity, field, value }])
 describe('single catalog and source ownership', () => {
-  it('derives valid schema, fields and references', () => {
-    expect(validateSchema(catalog.schema)).toEqual([])
-    expect(catalog.schema.types.BusFault.fields['ports.control_signal']).toMatchObject({
+  it('compiles GridKit metadata and native reference semantics', () => {
+    expect(fieldDefinition(catalog.definition, 'GenClassical', 'ports.pmech')).toMatchObject({
       direction: 'in',
-      type: { kind: 'reference', to: 'Signal' },
+      kind: 'reference',
+      target: 'Signal',
     })
-    expect(networkOf(catalog.schema).edges.find((e) => e.type === 'Branch')).toEqual({
-      type: 'Branch',
+    expect(catalog.definition.drawing.edges.find((edge) => edge.table === 'Branch')).toEqual({
+      table: 'Branch',
       ends: ['ports.bus1', 'ports.bus2'],
       bends: 'extension.polyline',
     })
-    // A bus is placed by its longitude and latitude: two fields, as the case writes them.
-    expect(positionOf(catalog.schema, 'Bus')).toEqual({
-      x: 'extension.longitude',
-      y: 'extension.latitude',
-    })
-    expect(diagramOf(catalog.schema).edges).toContainEqual({ type: 'Signal' })
-    expect(diagramOf(catalog.schema).vertices).toContain('ConstantSignalSource')
+    expect(
+      catalog.definition.drawing.vertices.find((vertex) => vertex.table === 'Bus')?.position,
+    ).toEqual(['extension.longitude', 'extension.latitude'])
+    expect(catalog.definition.drawing.nets).toContain('Signal')
+    expect(
+      catalog.definition.drawing.blocks.some((block) => block.table === 'ConstantSignalSource'),
+    ).toBe(true)
   })
-  it('reads stable IDs and sparse native identities through current Latkit queries', async () => {
+  it('reads sparse native identities and static values through native queries and patches', async () => {
     const kase = await Case.parse(source, catalog)
-    const blocks: Block.Rows[] = []
-    for await (const block of read(
-      kase.data,
-      {
-        kind: 'rows',
-        from: 'Bus',
-        select: ['number', 'name', 'params.kv', 'extension.longitude'],
-        limit: 100,
-        ids: true,
-        count: true,
-      },
-      { buffers: 'owned' },
-    ))
-      blocks.push(block)
-    expect(rowsOf(blocks).map((r) => r.id)).toEqual(['Bus/42', 'Bus/7'])
-    expect(rowsOf(blocks).map((r) => r.values['extension.longitude'])).toEqual([-100, null])
-    expect(kase.rowOf(kase.table('Bus'), 42)).toBe(0)
-    expect(kase.locate('Bus/7')?.row).toBe(1)
-    const batches = []
-    for await (const batch of selectBatches(kase.data, staticFields(kase.schema), {
-      buffers: 'owned',
-      maxBlockBytes: 256 * 1024,
-    }))
-      batches.push(batch)
-    expect(createData(kase.schema, structuredClone(batches)).tables.Bus.rows).toEqual(
-      kase.data.tables.Bus.rows,
-    )
+    const projected = kase.projected()
+    const queries = new CaseQueries(projected)
+    const data = new Data('case')
+    try {
+      const page = await queries.page(
+        {
+          table: 'Bus',
+          fields: ['name', 'params.kv', 'extension.longitude'],
+          offset: 0,
+          limit: 100,
+        },
+        AbortSignal.any([]),
+      )
+      expect(rowsOf(page).map((row) => row.id)).toEqual([42, 7])
+      expect(rowsOf(page).map((row) => row.values['extension.longitude'])).toEqual([-100, null])
+      expect(kase.locate({ table: 'Bus', id: 7 })?.row).toBe(1)
+      // Page after page, as a view reads it.
+      const selection = [{ table: 'Bus', fields: ['name'] }]
+      let cursor: ProjectionCursor | undefined
+      do {
+        const page = await projectionPage(projected, selection, cursor, AbortSignal.any([]))
+        data.apply(page.bytes)
+        cursor = page.next
+      } while (cursor)
+      expect(data.query({ of: 'Bus' }).ids).toEqual([42, 7])
+    } finally {
+      queries.destroy()
+      data.destroy()
+    }
   })
   it('preserves numeric text, unknown properties and UTF-16 source positions', async () => {
     const kase = await Case.parse(source, catalog)
-    const range = sourceRange(kase, 'Bus/42', 'name')
-    expect(source.slice(range.offset, range.offset + range.length)).toBe('"東京 😀"')
-    const next = apply(source, editField(kase, 'Bus/7', 'params.kv', 138))
+    const range = sourceRange(kase, { table: 'Signal', id: 1 }, 'name')
+    expect(source.slice(range.offset, range.offset + range.length)).toBe('"setpoint 😀"')
+    const next = apply(source, set(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
     expect(next).toContain('"kv":138.0')
     expect(next).toContain('"kv":230.000')
     expect(next).toContain('"keep":1.000')
-    expect(JSON.parse(next).buses[0].name).toBe('東京 😀')
+    expect(JSON.parse(next).signals[0].name).toBe('setpoint 😀')
     const updated = await Case.parse(next, catalog)
     expect(updated.version).not.toBe(kase.version)
   })
@@ -107,12 +104,14 @@ describe('single catalog and source ownership', () => {
     expect(
       (await diagnose(kase, AbortSignal.any([]))).filter(({ severity }) => severity === 'error'),
     ).toEqual([])
-    expect(() => editField(kase, 'Branch/line', 'ports.bus2', 'Bus/99')).toThrow()
-    const next = apply(source, editField(kase, 'Branch/line', 'ports.bus2', 'Bus/42'))
+    expect(() => set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 99)).toThrow()
+    const next = apply(source, set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42))
     expect(JSON.parse(next).devices[0].ports.bus2).toBe(42)
     const invalid = await Case.parse(source.replace('"bus2":7', '"bus2":999'), catalog)
     expect(
-      (await diagnose(invalid, AbortSignal.any([]))).some((issue) => issue.id === 'Branch/line'),
+      (await diagnose(invalid, AbortSignal.any([]))).some(
+        (issue) => issue.entity?.table === 'Branch' && issue.entity.id === 'line',
+      ),
     ).toBe(true)
   })
   it('rejects duplicate IDs, malformed JSON and cancellation', async () => {
@@ -162,11 +161,11 @@ describe('single catalog and source ownership', () => {
     expect(kase.cell(kase.table('Bus'), 'name', 1)).toBe('Seven "7"/\\')
   })
   it('says where each problem a parse finds is: the record it refuses, or the second of an id', async () => {
-    const fault = '{"class":"BusFault","id":"fault"'
+    const fault = '{"class":"GenClassical","id":"fault"'
     for (const [text, record, said] of [
       // A bus, a signal and the case are types of their own, never a device's class.
       ...['Bus', 'Signal', 'Case'].map((type) => {
-        const named = fault.replace('BusFault', type)
+        const named = fault.replace('GenClassical', type)
         return [source.replace(fault, named), named, `${type} is not a device class.`] as const
       }),
       [
@@ -176,7 +175,7 @@ describe('single catalog and source ownership', () => {
       ],
       [
         source.replace('"id":"disconnected"', '"id":"fault"'),
-        '{"class":"BusFault","id":"fault","ports":{"bus":7}}',
+        '{"class":"GenClassical","id":"fault","ports":{"bus":7}}',
         'Two rows share the id fault.',
       ],
     ] as const) {
@@ -186,6 +185,21 @@ describe('single catalog and source ownership', () => {
       expect(error).toMatchObject({ offset: text.indexOf(record) })
       expect((error as { length: number }).length).toBeGreaterThan(record.length - 1)
     }
+    // Every record it refuses is said where it is, the first first.
+    const records = [fault, '{"class":"GenClassical","id":"disconnected"'].map((record) =>
+      record.replace('GenClassical', 'Signal'),
+    )
+    const text = source
+      .replace(fault, records[0]!)
+      .replace('{"class":"GenClassical","id":"disconnected"', records[1]!)
+    const error = await Case.parse(text, catalog).catch((reason: unknown) => reason)
+    expect((error as { problems: unknown }).problems).toEqual(
+      records.map((record) => ({
+        message: 'Signal is not a device class.',
+        offset: text.indexOf(record),
+        length: expect.any(Number),
+      })),
+    )
   })
   it('reads an integer at either end of its range back as written', async () => {
     for (const value of [-0x8000_0000, 0x7fff_ffff]) {
@@ -205,8 +219,8 @@ describe('single catalog and source ownership', () => {
     const kase = await Case.parse(text, catalog)
     const tooDeep = { code: 'invalid-input', message: expect.stringMatching(/too deeply/) }
     for (const read of [
-      () => sourceRange(kase, 'Branch/line', 'ports.bus1'),
-      () => editField(kase, 'Branch/line', 'ports.bus2', 'Bus/42'),
+      () => sourceRange(kase, { table: 'Branch', id: 'line' }, 'ports.bus1'),
+      () => set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42),
       () => sourceContext(kase, text.indexOf('"bus1"')),
     ]) {
       const error = (() => {
@@ -238,14 +252,18 @@ describe('single catalog and source ownership', () => {
     expect(next.params).toEqual({ freq_base: 60 })
     expect(apply(source, edits)).toContain('"freq_base": 60.0')
     // A field of the case where it is, as Problems would place it.
-    const range = sourceRange(kase, 'Case/case', 'header.case_name')
+    const range = sourceRange(kase, { table: 'Case', id: 'case' }, 'header.case_name')
     expect(source.slice(range.offset, range.offset + range.length)).toBe('"東京 ⚡"')
   })
   it('validates the case’s own fields without reading past them', async () => {
     const mistyped = await Case.parse(source.replace('"東京 ⚡"', '7'), catalog)
     const issues = await diagnose(mistyped, AbortSignal.any([]))
     expect(issues).toContainEqual(
-      expect.objectContaining({ id: 'Case/case', field: 'header.case_name', severity: 'error' }),
+      expect.objectContaining({
+        entity: { table: 'Case', id: 'case' },
+        field: 'header.case_name',
+        severity: 'error',
+      }),
     )
   })
   it('edits whole characters, never half of a surrogate pair', () => {
@@ -269,7 +287,7 @@ describe('single catalog and source ownership', () => {
     const kase = await Case.parse(text, catalog)
     const at = text.indexOf('"q1"') + 1
     expect(sourceContext(kase, at)).toMatchObject({
-      element: { id: 'Branch/line', field: 'q1' },
+      element: { table: 'Branch', id: 'line', field: 'q1' },
       range: { offset: at - 1, length: 4 },
     })
   })
@@ -290,8 +308,8 @@ describe('single catalog and source ownership', () => {
     const kase = await Case.parse(escaped, catalog)
     // A Branch, known by its id, with its ports as a record written plainly has them.
     const branch = kase.table('Branch')
-    expect(kase.id(branch, 0)).toBe('Branch/line')
-    expect(kase.locate('Bus/42')).not.toBeNull()
+    expect(kase.entity(branch, 0)).toEqual({ table: 'Branch', id: 'line' })
+    expect(kase.locate({ table: 'Bus', id: 42 })).not.toBeNull()
     expect(kase.found.some(({ field }) => field.includes('\\'))).toBe(false)
   })
   it('reads a number of the case’s own as a record’s field reads one: finite, or not at all', async () => {
@@ -299,7 +317,7 @@ describe('single catalog and source ownership', () => {
     const field = kase
       .table('Case')
       .shape.fields.find(
-        ({ definition, source }) => definition.type === 'float64' && source.kind === 'parameter',
+        ({ definition, source }) => definition.kind === 'number' && source.kind === 'parameter',
       )!
     const name = field.name.slice(field.name.indexOf('.') + 1)
     const infinite = await Case.parse(
@@ -308,13 +326,17 @@ describe('single catalog and source ownership', () => {
     )
     expect(infinite.cell(infinite.table('Case'), field.name, 0)).toBeNull()
     expect(await diagnose(infinite, AbortSignal.any([]))).toContainEqual(
-      expect.objectContaining({ id: 'Case/case', field: field.name, severity: 'error' }),
+      expect.objectContaining({
+        entity: { table: 'Case', id: 'case' },
+        field: field.name,
+        severity: 'error',
+      }),
     )
   })
   it('inserts native real-valued tokens without rewriting unrelated numbers', async () => {
     const text = source.replace('\"kv\":115.0', '')
     const kase = await Case.parse(text, catalog)
-    const changed = apply(text, editField(kase, 'Bus/7', 'params.kv', 138))
+    const changed = apply(text, set(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
     expect(changed).toMatch(/"kv":\s*138\.0/)
     expect(changed).toContain('230.000')
   })
@@ -362,8 +384,10 @@ describe('single catalog and source ownership', () => {
       expect(source.slice(array.offset, array.offset + array.length)).toMatch(/^\[[\s\S]*\]$/)
       const offsets = array.children!.map(({ offset }) => offset)
       expect(offsets).toEqual([...offsets].sort((a, b) => a - b))
-      for (const { name, offset, length } of array.children!)
-        expect({ offset, length }).toEqual(sourceRange(kase, name))
+      for (const { offset, length } of array.children!) {
+        const context = sourceContext(kase, offset + 1)
+        expect({ offset, length }).toEqual(sourceRange(kase, context.element!))
+      }
     }
     // Past VS Code's limit for a JSON file's outline, each array says how many it lists.
     const limited = await outline(kase, new AbortController().signal, 3)
@@ -379,14 +403,11 @@ describe('single catalog and source ownership', () => {
   it('loads the real TwoArea case', async () => {
     const kase = await Case.parse(await readFile('cases/TwoArea.case.json', 'utf8'), catalog)
     expect(kase.table('Bus').records.length).toBe(10)
-    expect(kase.data.tables.Branch).toBeDefined()
+    expect(kase.tables.get('Branch')).toBeDefined()
     expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
-    expect(catalog.schema.types.Ieeet1.fields['params.Ispdlim']!.type).toBe('float64')
-    const id = kase.id(kase.table('Ieeet1'), 0)
-    const changed = apply(
-      new TextDecoder().decode(kase.file),
-      editField(kase, id, 'params.Ispdlim', 1),
-    )
+    expect(fieldDefinition(catalog.definition, 'Ieeet1', 'params.Ispdlim')!.kind).toBe('number')
+    const id = kase.entity(kase.table('Ieeet1'), 0)
+    const changed = apply(new TextDecoder().decode(kase.file), set(kase, id, 'params.Ispdlim', 1))
     expect(changed).toMatch(/"Ispdlim":\s*1\.0/)
     const invalid = await Case.parse(
       changed.replace(/"Ispdlim":\s*1\.0/, '"Ispdlim":false'),
@@ -404,12 +425,12 @@ describe('single catalog and source ownership', () => {
       .replace('"params":{"kv":115.0}', '"params":{"kv":115.0,"kz":3}')
     const kase = await Case.parse(text, catalog)
     const buses = kase.table('Bus')
-    expect(kase.schema.types.Bus!.fields['params.kz']).toMatchObject({ type: 'float64' })
+    expect(fieldDefinition(kase.definition, 'Bus', 'params.kz')).toMatchObject({ kind: 'number' })
     expect([kase.cell(buses, 'params.kz', 0), kase.cell(buses, 'params.kz', 1)]).toEqual([null, 3])
     expect(kase.cell(kase.table('Future'), 'params.gain', 0)).toBe(2.5)
     // An object is kept as its JSON text, and not edited in place.
     expect(kase.cell(kase.table('Branch'), 'unknown', 0)).toBe('{"keep":1}')
-    expect(() => editField(kase, 'Branch/line', 'unknown', '{}')).toThrow()
+    expect(() => set(kase, { table: 'Branch', id: 'line' }, 'unknown', '{}')).toThrow()
     expect(
       (await diagnose(kase, AbortSignal.any([]))).map(({ severity, message }) => [
         severity,
@@ -421,32 +442,48 @@ describe('single catalog and source ownership', () => {
         ['warning', expect.stringMatching(/^params\.kz is not a Bus field/)],
       ]),
     )
-    const next = apply(text, editField(kase, 'Bus/7', 'params.kz', 4))
+    const next = apply(text, set(kase, { table: 'Bus', id: 7 }, 'params.kz', 4))
     expect(JSON.parse(next).buses[1].params.kz).toBe(4)
   })
+  it('says a bus name or device id GridKit refuses is an error, and never writes one', async () => {
+    const text = source
+      .replace('"name":"Seven"', '"name":"Seven/7"')
+      .replace('"id":"line"', '"id":"line:1"')
+    const kase = await Case.parse(text, catalog)
+    const said = (await diagnose(kase, AbortSignal.any([])))
+      .filter(({ severity }) => severity === 'error')
+      .map(({ entity, field, message }) => ({ entity, field, message }))
+    const rule = 'only ASCII letters, digits, spaces, _, . and -'
+    expect(said).toEqual(
+      expect.arrayContaining([
+        { entity: { table: 'Bus', id: 7 }, field: 'name', message: `name may contain ${rule}.` },
+        { entity: { table: 'Branch', id: 'line:1' }, message: `id may contain ${rule}.` },
+      ]),
+    )
+    expect(() => set(kase, { table: 'Bus', id: 42 }, 'name', 'Tokyo/1')).toThrow(rule)
+    // A signal's name is the case's own, which GridKit takes as it is.
+    expect(said.some(({ entity }) => entity?.table === 'Signal')).toBe(false)
+  })
   it('reads a bus’s class as a field of it, one of the classes its catalog gives', async () => {
-    const text = source.replace('"class":"Bus","number":7', '"class":"SignalVoltageIn","number":7')
+    const text = source.replace('"class":"Bus","number":7', '"class":"BusDC","number":7')
     const issues = async (kase: Case) =>
       (await diagnose(kase, AbortSignal.any([]))).map(({ message }) => message)
     const kase = await Case.parse(text, catalog)
     const buses = kase.table('Bus')
-    expect([kase.cell(buses, 'class', 0), kase.cell(buses, 'class', 1)]).toEqual([
-      'Bus',
-      'SignalVoltageIn',
-    ])
+    expect([kase.cell(buses, 'class', 0), kase.cell(buses, 'class', 1)]).toEqual(['Bus', 'BusDC'])
     expect(await issues(kase)).toContain(
-      'SignalVoltageIn is not a Bus class GridKit Studio knows; it is kept as written.',
+      'BusDC is not a Bus class GridKit Studio knows; it is kept as written.',
     )
-    expect(JSON.parse(apply(text, editField(kase, 'Bus/7', 'class', 'Bus'))).buses[1].class).toBe(
-      'Bus',
-    )
+    expect(
+      JSON.parse(apply(text, set(kase, { table: 'Bus', id: 7 }, 'class', 'Bus'))).buses[1].class,
+    ).toBe('Bus')
     // A catalog that gives the class, as one for a later GridKit would, reads it as any other.
     const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
     const later = catalogOf({
       ...bundled,
-      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
+      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'BusDC'] },
     })
-    expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/SignalVoltageIn/)
+    expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/BusDC/)
     // What is no catalog says so, as plainly as GridKit Studio can.
     for (const json of [null, {}, { bus: {}, classes: [] }, { bus: { name: 'Bus' } }])
       expect(() => catalogOf(json)).toThrow('A catalog has a bus and a list of classes.')
@@ -455,7 +492,7 @@ describe('single catalog and source ownership', () => {
   it('numbers a table’s rows by its ids, alike in any revision that keeps them', async () => {
     const indexes = async (text: string) => {
       const kase = await Case.parse(text, catalog)
-      return (type: string) => kase.table(type).index
+      return (type: string) => kase.projected().tables.get(type)?.ids
     }
     const before = await indexes(source)
     const edited = await indexes(source.replace('"kv":115.0}', '"kv":138.0},"mon":["Vm"]'))
@@ -482,20 +519,22 @@ describe('single catalog and source ownership', () => {
   it('keeps an unknown key that takes a known name, or a point, or holds a null', async () => {
     const text = source
       .replace('"name":"Seven"', '"name":"Seven","Vm":1.0,"spare":null')
-      .replace('"name":"東京 😀"', '"name":"東京 😀","spare":2,"a.b":1.5')
+      .replace('"name":"Tokyo 1"', '"name":"Tokyo 1","spare":2,"a.b":1.5')
     const kase = await Case.parse(text, catalog)
-    const fields = kase.schema.types.Bus!.fields
+    const fields = Object.fromEntries(
+      tableDefinition(kase.definition, 'Bus')!.fields.map((field) => [field.name, field]),
+    )
     // The output whose name it takes is named by where it is listed, as for a known key's.
-    expect(fields.Vm).toMatchObject({ type: 'float64' })
-    expect(fields['mon.Vm']).toMatchObject({ sampled: true, label: 'Vm' })
+    expect(fields.Vm).toMatchObject({ kind: 'number' })
+    expect(fields['mon.Vm']).toMatchObject({ kind: 'sampled', label: 'Vm' })
     // A key with a point is no path through a record key.
-    expect(fields['"a.b"']).toMatchObject({ type: 'float64' })
+    expect(fields['"a.b"']).toMatchObject({ kind: 'number' })
     // A null is a missing value: the column stays a number, which edits as one.
-    expect(fields.spare).toMatchObject({ type: 'float64' })
+    expect(fields.spare).toMatchObject({ kind: 'number' })
     const buses = kase.table('Bus')
     expect([kase.cell(buses, 'spare', 0), kase.cell(buses, 'spare', 1)]).toEqual([2, null])
     // An integer it holds stays one: GridKit may read an integer there.
-    expect(apply(text, editField(kase, 'Bus/42', 'spare', 4))).toContain('"spare":4,')
-    expect(apply(text, editField(kase, 'Bus/7', 'Vm', 1.05))).toContain('"Vm":1.05,')
+    expect(apply(text, set(kase, { table: 'Bus', id: 42 }, 'spare', 4))).toContain('"spare":4,')
+    expect(apply(text, set(kase, { table: 'Bus', id: 7 }, 'Vm', 1.05))).toContain('"Vm":1.05,')
   })
 })

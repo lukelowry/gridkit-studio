@@ -1,6 +1,6 @@
 /** The VS Code theme as the renderers read it, through the CSS tokens. */
 
-import { type ItemView, parseColor, type RGBA } from '@latkit/gpu'
+import type { Theme as NativeTheme } from 'latkit'
 
 import type { SettingsReader } from '../shared/preferences.js'
 
@@ -10,7 +10,6 @@ const PALETTE = {
   /** The editor's background, which the Network and Diagram sit on wherever they draw, a video's
    *  too, though the page drawing them sits elsewhere. */
   editor: ['--vscode-editor-background', '#1e1e1e'],
-  surface1: ['--color-surface-1', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
   text1: ['--color-text-1', '#cccccc'],
   text2: ['--color-text-2', '#aaaaaa'],
@@ -20,9 +19,9 @@ const PALETTE = {
   primaryText: ['--color-primary-text', '#3794ff'],
 } as const
 
-export type Palette = Readonly<Record<keyof typeof PALETTE, RGBA>>
+export type Palette = Readonly<Record<keyof typeof PALETTE, string>>
 
-/** The theme's colors, and the editor's monospace font family. */
+/** The theme's colors, and the workbench's font family. */
 export interface Theme {
   readonly palette: Palette
   readonly font: string
@@ -41,10 +40,10 @@ export function theme(): Theme {
     palette: Object.fromEntries(
       Object.entries(PALETTE).map(([name, [token, fallback]]) => [
         name,
-        parseColor(css.getPropertyValue(token).trim()) ?? parseColor(fallback)!,
+        css.getPropertyValue(token).trim() || fallback,
       ]),
     ) as Palette,
-    font: css.getPropertyValue('--font-mono').trim(),
+    font: css.getPropertyValue('--font-body').trim(),
   })
 }
 
@@ -64,60 +63,37 @@ function changed() {
   for (const listener of listeners) listener()
 }
 
-/** Resolve a saved hex override, or the contextual default; none leaves the renderer's own. */
-export function color(value: string | null, fallback: RGBA): RGBA
-export function color(value: string | null, fallback?: RGBA): RGBA | undefined
-export function color(value: string | null, fallback?: RGBA): RGBA | undefined {
-  return value === null ? fallback : (parseColor(value) ?? fallback)
-}
-
-/** `color` with its alpha scaled by `alpha`. */
-export const faded = ([r, g, b, a]: RGBA, alpha: number): RGBA => [r, g, b, a * alpha]
-
-/** A grid's lines: the theme's secondary text, faint whatever its own alpha. */
-export const gridLine = ({ text2: [r, g, b] }: Palette): RGBA => [r, g, b, 0.15]
-
-/** `from` moved `t` of the way toward `to`, keeping its alpha. */
-export const mix = (from: RGBA, to: RGBA, t: number): RGBA => [
-  from[0] + (to[0] - from[0]) * t,
-  from[1] + (to[1] - from[1]) * t,
-  from[2] + (to[2] - from[2]) * t,
-  from[3],
-]
-
-/** Whether views move: VS Code marks a page's body when it reduces motion, as its own setting or
- *  the device's asks; and the class changing tells the theme's watchers. Outside a page, as in
- *  tests, they move. */
-export const motion = (): 'full' | 'reduce' =>
-  globalThis.document?.body.classList.contains('vscode-reduce-motion') ? 'reduce' : 'full'
-
-/** The style every latkit view shares, from one view's settings: quality, motion, picking, text
- *  and colors, with `fallback`'s theme colors where a color setting is null. */
-export function viewStyle(
-  s: SettingsReader,
-  view: 'network' | 'diagram' | 'monitor',
-  font: string | null,
-  fallback: {
-    readonly background?: RGBA
-    readonly textColor?: RGBA
-    readonly selectedColor?: RGBA
-  },
-): ItemView.Style {
-  const family = s.get(`${view}.font`) || font
+/** VS Code colors feed native theme properties directly. */
+export function nativeTheme(
+  settings: SettingsReader,
+  kind: 'network' | 'diagram' | 'monitor',
+): NativeTheme {
+  const { palette, font } = theme()
+  const classes = document.body.classList
   return {
-    msaa: s.get(`${view}.msaa`),
-    hover: s.get(`${view}.hover`),
-    hoverBudgetMs: s.get(`${view}.hoverBudgetMs`),
-    pickRadiusPx: s.get(`${view}.pickRadiusPx`),
-    animationMs: s.get(`${view}.animationMs`),
-    fitPaddingPx: s.get(`${view}.fitPaddingPx`),
-    selectedWidthPx: s.get(`${view}.selectedWidthPx`),
-    motion: motion(),
-    ...(family && { font: { family } }),
-    fontSizePx: s.get(`${view}.fontSizePx`),
-    background: color(s.get(`${view}.background`), fallback.background),
-    textColor: color(s.get(`${view}.textColor`), fallback.textColor),
-    selectedColor: color(s.get(`${view}.selectedColor`), fallback.selectedColor),
+    base:
+      classes.contains('vscode-light') || classes.contains('vscode-high-contrast-light')
+        ? 'light'
+        : 'dark',
+    // A high contrast theme keeps colormap colors at WCAG's enhanced contrast with the background,
+    // and a plot's traces keep its minimum for graphics in any theme.
+    ...(classes.contains('vscode-high-contrast') || classes.contains('vscode-high-contrast-light')
+      ? { contrast: 7 }
+      : kind === 'monitor' && { contrast: 3 }),
+    background: kind === 'monitor' ? palette.background : palette.editor,
+    grid: palette.border,
+    // Labels, ticks and titles in the workbench's font, as the page around them.
+    text: { color: palette.text1, ...(font && { font }) },
+    focus: { selected: palette.focus, hover: palette.primaryText },
+    vertex: { color: palette.network },
+    // Native endpoint blending follows static and sampled vertex colors. A mark's explicit
+    // edge-color binding still takes precedence, including in exported network scenes.
+    edge: { color: kind === 'network' ? null : palette.text2 },
+    line: { color: palette.primaryText },
+    earth: {
+      ground: settings.get('network.map.ground') ?? palette.editor,
+      night: settings.get('network.map.night'),
+    },
   }
 }
 

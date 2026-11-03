@@ -62,10 +62,6 @@ button.c-row:disabled {
   color: var(--color-primary-text);
 }
 
-.c-btn--sm {
-  padding: var(--spacing-2xs) var(--spacing-sm);
-}
-
 .c-btn--primary {
   background: var(--color-primary);
   color: var(--color-on-primary);
@@ -92,27 +88,6 @@ button.c-row:disabled {
 
 .c-empty__text {
   max-width: 280px;
-}
-
-/* A recessed mono text field one row tall. */
-.c-input {
-  inline-size: 100%;
-  min-block-size: var(--spacing-row-h);
-  padding-inline: var(--spacing-sm);
-  border: 1px solid var(--vscode-input-border, var(--color-border));
-  border-radius: var(--radius-md);
-  background: var(--color-input);
-  color: var(--vscode-input-foreground, var(--color-text-1));
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.c-input::placeholder {
-  color: var(--color-text-2);
-}
-
-.c-input:focus-visible {
-  outline-offset: -1px;
 }
 
 /* Copy under a group of rows, indented to the row label: it says what is so, never what failed. */
@@ -168,33 +143,8 @@ button.c-row:focus-visible {
   outline-offset: -2px;
 }
 
-/* A settings body: label and control split each row, and stack once the panel is narrow. */
+/* A settings body. */
 .c-settings {
-  container: settings / inline-size;
   min-inline-size: 0;
   padding: var(--spacing-sm);
-}
-
-.c-setting-row {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-
-@container settings (max-width: 15rem) {
-  .c-setting-row {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-  }
-}
-
-/* Hidden from sight, still read by assistive technology. */
-.c-sr-only {
-  position: absolute !important;
-  inline-size: 1px !important;
-  block-size: 1px !important;
-  margin: -1px !important;
-  padding: 0 !important;
-  overflow: hidden !important;
-  border: 0 !important;
-  white-space: nowrap !important;
-  clip-path: inset(50%) !important;
 }

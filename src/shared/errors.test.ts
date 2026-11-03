@@ -7,7 +7,6 @@ import {
   errorOf,
   failedWith,
   message,
-  passing,
   problem,
   problemOf,
   quiet,
@@ -41,11 +40,9 @@ describe('errors for people and for the log', () => {
     expect(cancelled(Object.assign(new Error('Canceled'), { name: 'Canceled' }))).toBe(true)
     expect(cancelled(new Error('Cancelled'))).toBe(false)
     expect(cancelled(undefined)).toBe(false)
-    for (const code of ['superseded', 'results-closed', 'closed', 'aborted'] as const)
+    for (const code of ['superseded', 'results-closed', 'cancelled', 'results-lost'] as const)
       expect(quiet(problem(code, 'Nothing failed.'))).toBe(true)
     expect(quiet(problem('needs-source', 'Send the case again.'))).toBe(false)
-    expect(passing(problem('device-lost', 'Lost.'))).toBe(true)
-    expect(passing(problem('invalid-input', 'Wrong.'))).toBe(false)
   })
 
   it('keeps a code, and what comes with it, across a channel', () => {

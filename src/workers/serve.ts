@@ -3,10 +3,9 @@
 
 import { parentPort } from 'node:worker_threads'
 
-import { blockBuffers } from '@latkit/model'
-
 import type { FromWorker, Memory } from '../shared/messages.js'
 import { answerer, type Api, type Handlers } from '../shared/rpc.js'
+import { transferables } from './transfer.js'
 
 const port = parentPort!
 
@@ -32,7 +31,7 @@ export function serve<A extends Api<A>>(
 ) {
   const moving = new Set<string>(moved)
   const { receive } = answerer(handlers, send, (method, value) =>
-    moving.has(method) ? blockBuffers(value) : [],
+    moving.has(method) ? transferables(value) : [],
   )
   port.on('message', receive)
 }

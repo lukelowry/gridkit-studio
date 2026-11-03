@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { bound, channelsFor, channelsOf, recordedWhole, shortNames } from './bindings.js'
+import { bound, channelsFor, channelsOf, shortNames } from './bindings.js'
 
-const vm = { type: 'Bus', field: 'Vm' }
-const kv = { type: 'Bus', field: 'params.kv' }
+const vm = { table: 'Bus', field: 'Vm' }
+const kv = { table: 'Bus', field: 'params.kv' }
 const vertex = channelsFor('vertex')
 
 describe('bindings', () => {
@@ -32,30 +32,6 @@ describe('bindings', () => {
 
   it('refuses a channel the field cannot drive', () => {
     expect(() => bound({}, vertex, vm, ['edgeColor'])).toThrow(/cannot drive Edge Color/)
-  })
-
-  it('counts a signal as recorded for mapping only when a run has it for every row', () => {
-    const index = { source: 'case', type: 'Bus', version: 'one' }
-    const summary = { counts: { Bus: 2 }, indexes: { Bus: index } }
-    const all = [{ from: 'Bus', select: ['Vm', 'Va'] }]
-    const some = [
-      { from: 'Bus', select: ['Vm'], rows: { kind: 'indices', index, values: Uint32Array.of(0) } },
-    ] as never
-    const every = [
-      {
-        from: 'Bus',
-        select: ['Vm'],
-        rows: { kind: 'indices', index, values: Uint32Array.of(0, 1) },
-      },
-    ] as never
-    expect(recordedWhole(all, summary, vm)).toBe(true)
-    expect(recordedWhole(some, summary, vm)).toBe(false)
-    expect(recordedWhole(every, summary, vm)).toBe(true)
-    expect(recordedWhole(all, summary, kv)).toBe(false)
-    expect(recordedWhole([{ from: 'Branch', select: ['Vm'] }], summary, vm)).toBe(false)
-    // Rows numbered otherwise, as a case edited since numbers them, are not the case's rows.
-    const renumbered = { ...summary, indexes: { Bus: { ...index, version: 'two' } } }
-    expect(recordedWhole(every, renumbered, vm)).toBe(false)
   })
 
   it('names channels by one word each', () => {

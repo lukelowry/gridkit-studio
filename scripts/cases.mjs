@@ -1,8 +1,13 @@
 /** GridKit's cases, copied into cases/ byte for byte as GridKit has them at the ref Studio's default
- *  image is built from, so the samples match the GridKit that runs them. The short solver file
- *  beside each, and ACTIVSg25k and ACTIVSg70k, are kept in cases/ as they are, apart from this.
+ *  image is built from, so the samples match the GridKit that runs them. That ref is the image's
+ *  `org.opencontainers.image.revision` label. The short solver file beside each, and ACTIVSg25k and
+ *  ACTIVSg70k, are kept in cases/ as they are, apart from this.
  *
- *    node scripts/cases.mjs ../GridKit v0.2.0
+ *    node scripts/cases.mjs ../GridKit 01d7543e4d2028a6b4ee0b530b16277ee1278336
+ *
+ *  The cases in cases/ list more in their `mon` lists than GridKit's do, which a copy would undo:
+ *  to follow a newer GridKit, apply its own diff of each case instead, as `git diff` of the two refs
+ *  gives it, and keep this for a case cases/ does not have yet.
  */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'

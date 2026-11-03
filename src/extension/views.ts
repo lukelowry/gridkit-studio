@@ -1,32 +1,35 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 
-import type { Block } from '@latkit/model'
 import * as vscode from 'vscode'
 
 import { shownType } from '../shared/cells.js'
+import { isRange } from '../shared/data.js'
+import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
-import type {
-  FromView,
-  Of,
-  Results,
-  SentState,
-  Summary,
-  TableState,
-  ToView,
-  ViewApi,
-  ViewKind,
-  ViewMessage,
-  ViewState,
+import {
+  framingOf,
+  type FromView,
+  type Of,
+  type Results,
+  type SentState,
+  type Summary,
+  type TableState,
+  type ToView,
+  type ViewApi,
+  type ViewKind,
+  type ViewMessage,
+  type ViewState,
 } from '../shared/messages.js'
-import type { SettingsValues } from '../shared/preferences.js'
+import { type SettingsValues, validateSettings } from '../shared/preferences.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
-import { typeName } from '../shared/schema.js'
 import { drawnOf } from '../shared/simulation.js'
+import { ExportFiles } from './exports.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
-import { VideoFiles } from './video.js'
+import { setDisplay } from './settings.js'
+import { nameOf } from './solvers.js'
 
 /** The views a clock moves, and an export, which plays at its speed. */
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor', 'export'])
@@ -38,10 +41,10 @@ const PANELS = ['case', 'monitor', 'export'] as const
  *  panels. */
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   const { summary, table, results } = studio.state(uri)
-  const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
+  const parts = [summary?.name ?? nameOf(vscode.Uri.parse(uri))]
   const type = summary && shownType(summary, table)
   if (kind === 'case' && summary && type) {
-    parts.push(typeName(summary.schema, type))
+    parts.push(tableLabel(summary.definition, type))
     const count = summary.counts[type]
     const shown = studio.get(uri)?.rows
     if ((table?.filter || table?.equal) && count !== undefined && shown !== undefined)
@@ -148,11 +151,20 @@ function html(
   kind: string,
 ) {
   const nonce = randomBytes(18).toString('base64')
+  const escape = (value: string) =>
+    value
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
   const asset = (path: string) =>
-    webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path))
+    escape(webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path)).toString())
   // The map's worker starts from a blob, and its tiles come from wherever the tiles URL names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource} https:;">
+<meta name="latkit-wasm" content="${asset('dist/webview/latkit.wasm')}">
+<meta name="latkit-worker" content="${asset('dist/webview/latkit-worker.js')}">
+<meta name="latkit-assets" content="${asset('dist/webview/')}">
 <link rel="stylesheet" href="${asset('dist/webview/' + entry + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
 }
@@ -164,7 +176,7 @@ function html(
  *  one past. */
 class View {
   #answering!: Answerer
-  readonly #videos = new VideoFiles()
+  readonly #exports = new ExportFiles()
   /** The showing of the case the view shows. */
   #of: Of
   #summary?: Summary
@@ -225,6 +237,8 @@ class View {
       }),
       studio.action.event((action) => {
         if (action.uri !== this.#of.uri || (action.view && action.view !== kind)) return
+        // An editor's title bar acts on that editor, not on another of the same case beside it.
+        if (action.active && !this.#active) return
         void this.send({
           kind: 'action',
           of: this.#of,
@@ -284,6 +298,11 @@ class View {
     return !this.#disposed && this.panel.visible
   }
 
+  /** Whether it is the editor in front, as an editor's title bar acts on: a panel view never is. */
+  get #active(): boolean {
+    return !this.#disposed && 'active' in this.panel && this.panel.active
+  }
+
   send(message: ToView): Thenable<boolean> {
     // A disposed view's late messages would reach a page that took its place.
     return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(packed(message))
@@ -298,7 +317,6 @@ class View {
       kind: 'clock',
       of: this.#of,
       clock: session.transport.snapshot(),
-      live: session.live,
       seq: this.#seq,
     })
   }
@@ -321,7 +339,7 @@ class View {
       // worked on and wrote goes with it. Either way the page loaded is a showing of its own.
       if (this.#ready) {
         this.#work(undefined)
-        this.#videos.dispose()
+        this.#exports.dispose()
       }
       this.#ready = true
       this.#show(this.#of.uri)
@@ -361,20 +379,37 @@ class View {
     const session = uri ? this.studio.get(uri) : undefined
     switch (message.kind) {
       case 'select':
-        if (message.element === null || typeof message.element?.id === 'string')
+        if (message.element === null || isEntity(message.element))
           session?.select(message.element ?? undefined)
         return
       case 'window': {
         const bounds = message.bounds
-        if (this.kind !== 'monitor' || !session || bounds?.length !== 2) return
-        if (!bounds.every(Number.isFinite) || !(bounds[0] < bounds[1])) return
+        if (this.kind !== 'monitor' || !session || !isRange(bounds)) return
         session.setWindow(bounds)
         return
       }
-      case 'camera':
-        if (this.kind === 'network' || this.kind === 'diagram')
-          session?.setCamera(this.kind, message.camera)
+      case 'range': {
+        const range = message.range
+        if (this.kind !== 'monitor' || !session) return
+        if (range && !isRange(range)) return
+        session.plotRange(message.plot, range ?? undefined)
         return
+      }
+      case 'framing': {
+        const framing = framingOf(message.framing)
+        if (framing && (this.kind === 'network' || this.kind === 'diagram'))
+          session?.setFraming(this.kind, framing)
+        return
+      }
+      case 'display': {
+        if (this.kind !== 'network' || !uri) return
+        const values = validateSettings(message.values)
+        const allowed = new Set(['network.projection', 'network.tilt', 'network.orbit'])
+        if (Object.keys(values).some((key) => !allowed.has(key))) return
+        for (const [key, value] of Object.entries(values))
+          await setDisplay(vscode.Uri.parse(uri), key, value)
+        return
+      }
       case 'transport': {
         // Counted whatever comes of it, so the clock's answers say the page's latest change.
         if (Number.isSafeInteger(message.seq)) this.#seq = Math.max(this.#seq, message.seq)
@@ -399,10 +434,7 @@ class View {
       case 'command':
         if (VIEW_COMMANDS.includes(message.command) && uri && followed(uri)) {
           this.studio.activate(uri)
-          await vscode.commands.executeCommand(commandId(message.command), message.value, {
-            uri,
-            view: this.kind,
-          })
+          await vscode.commands.executeCommand(commandId(message.command), message.value, { uri })
         }
         return
     }
@@ -421,31 +453,26 @@ class View {
   }
 
   /** What the view may ask: of the revision of a case, or of results, each request naming which,
-   *  and the videos it exports. A revision a newer one replaced is refused, quietly. */
+   *  and the videos and images it exports. A revision a newer one replaced is refused, quietly. */
   #handlers(): Handlers<ViewApi> {
     const { studio } = this
     const { client } = studio
-    const rows = async (input: ViewApi['query']['input'], signal: AbortSignal) => {
-      if (input.query?.kind !== 'rows') throw new Error('Invalid row query')
-      const blocks =
-        'results' in input
-          ? await client.results.call('query', input, signal)
-          : await client.cases.call('query', { ...input.revision, query: input.query }, signal)
-      return blocks.filter((block): block is Block.Rows => block.kind === 'rows')
-    }
     return {
-      samples: (input, signal) => client.results.call('samples', input, signal),
-      rows: (input, signal) =>
+      frames: (input, signal) => client.results.call('frames', input, signal),
+      sample: (input, signal) => client.results.call('sample', input, signal),
+      project: (input, signal) =>
         'results' in input
-          ? client.results.call('rows', input, signal)
-          : client.cases.call('rows', { ...input.revision, fields: input.fields }, signal),
-      presentation: (input, signal) =>
-        'results' in input
-          ? client.results.call('presentation', input, signal)
-          : client.cases.call('presentation', input.revision, signal),
-      query: (input, signal) => {
-        const read = rows(input, signal)
-        // The Case panel's rows load under VS Code's own progress bar on the view.
+          ? client.results.call('project', input, signal)
+          : client.cases.call(
+              'project',
+              { ...input.revision, fields: input.fields, cursor: input.cursor, base: input.base },
+              signal,
+            ),
+      page: (input, signal) => {
+        const read =
+          'results' in input
+            ? client.results.call('page', input, signal)
+            : client.cases.call('page', { ...input.revision, request: input.request }, signal)
         if (this.kind === 'case')
           void vscode.window.withProgress({ location: { viewId: viewId('case') } }, () =>
             read.catch(() => {}),
@@ -460,11 +487,13 @@ class View {
           label,
           revision.attachmentId,
         ),
-      cameras: async ({ uri }) => studio.get(uri)?.cameras ?? {},
-      videoOpen: ({ uri, name, format }, signal) =>
-        this.#videos.open(vscode.Uri.parse(uri), name, format, signal),
-      videoWrite: ({ file, position, bytes }) => this.#videos.write(file, position, bytes),
-      videoClose: ({ file, abort }) => this.#videos.close(file, abort),
+      framings: async ({ uri }) => studio.get(uri)?.framings ?? {},
+      exportOpen: ({ uri, name }, signal) =>
+        this.#exports.open(vscode.Uri.parse(uri), name, signal),
+      exportWrite: ({ file, bytes }) => this.#exports.write(file, bytes),
+      exportClose: ({ file, abort }) => this.#exports.close(file, abort),
+      exportSave: ({ uri, name, bytes }, signal) =>
+        this.#exports.save(vscode.Uri.parse(uri), name, bytes, signal),
       // A share the page let go of as it was made holds nothing past it.
       share: async ({ results }, signal) => {
         const id = randomUUID()
@@ -554,7 +583,7 @@ class View {
 
   dispose() {
     this.#disposed = true
-    this.#videos.dispose()
+    this.#exports.dispose()
     this.#unshare()
     this.#answering.cancel()
     this.#work(undefined)

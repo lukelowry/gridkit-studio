@@ -6,11 +6,15 @@ import { parse, type ParseError, printParseErrorCode } from 'jsonc-parser'
 import { CASE_FILE } from './ids.js'
 
 /** What a .solver.json says that Studio uses: the case it runs, when it ends, and the file it names
- *  for its samples, if any. Paths are as written, relative to the solver file's folder. */
+ *  for its samples, if any, in its layout. Paths are as written, relative to the solver file's
+ *  folder. */
 export interface Solver {
   readonly model: string
   readonly tmax: number
   readonly output?: string
+  /** As GridKit reads it, in lower case: `wide`, a column per variable, or `long`, a row per
+   *  variable and sample. GridKit says what it makes of any other. */
+  readonly layout: string
 }
 
 /** A CSV file GridKit writes samples to. */
@@ -31,19 +35,23 @@ export function readSolver(name: string, text: string): Solver {
     system_model_file: model,
     tmax,
     output_file: output,
+    output_layout: written = 'wide',
   } = (json && typeof json === 'object' ? json : {}) as Record<string, unknown>
   if (typeof model !== 'string' || !CASE_FILE.test(model))
     throw new Error(`${name} names no .case.json in its system_model_file.`)
   if (typeof tmax !== 'number' || !(tmax > 0))
     throw new Error(`${name}: tmax must be a time after 0.`)
-  return { model, tmax, ...(typeof output === 'string' && output && { output }) }
+  const layout = String(written).toLowerCase()
+  return { model, tmax, layout, ...(typeof output === 'string' && output && { output }) }
 }
 
-/** Where a run writes its samples, by GridKit's rule in parseStudyData: the case's monitor, else
- *  the solver file's output_file. */
+/** Where a run writes its samples, by GridKit's rule in parseStudyData: the case's CSV monitor,
+ *  which is always wide, when the solver file asks for wide; else its output_file; else that
+ *  monitor still, which GridKit writes whatever the layout. */
 export function outputOf(name: string, solver: Solver, monitor: Sink | undefined): Sink {
-  if (monitor) return monitor
+  if (monitor && solver.layout === 'wide') return monitor
   if (solver.output !== undefined) return { file: solver.output }
+  if (monitor) return monitor
   throw new Error(
     `${name} names no output_file and its case has no monitor, so a run would write nothing to show.`,
   )

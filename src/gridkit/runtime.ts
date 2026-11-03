@@ -10,6 +10,7 @@ import {
   basename,
   delimiter,
   dirname,
+  extname,
   isAbsolute,
   join,
   posix,
@@ -150,7 +151,8 @@ export async function sweepOrphans(folder: string): Promise<void> {
       } catch {
         // Unreadable, or ended as it was swept: either way, done with.
       }
-      await rm(path, { force: true })
+      // One the system holds open now goes at a later sweep.
+      await rm(path, { force: true }).catch(() => {})
     }),
   )
 }
@@ -166,7 +168,9 @@ export type Runtime = { readonly program: string } & (
     }
 )
 
-const executable = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
+/** The file `name` runs from: on Windows, a name with no extension runs its .exe. */
+const executable = (name: string) =>
+  process.platform === 'win32' && !extname(name) ? name + '.exe' : name
 
 /** Whether `path` is a file this process may execute. */
 async function runs(path: string): Promise<boolean> {
@@ -299,7 +303,7 @@ export async function placed(gridkit: GridKit, place: Place, signal: AbortSignal
   if (runtime.kind === 'container')
     for (const path of [place.solver, ...place.touches]) {
       const inside = relative(place.root, path)
-      if (inside.startsWith('..') || isAbsolute(inside))
+      if (inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
         throw new Error(
           `${basename(path)} is outside ${place.root}, the folder GridKit's container mounts.`,
         )

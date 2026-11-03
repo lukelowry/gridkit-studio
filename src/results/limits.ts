@@ -1,8 +1,7 @@
 /** How many bytes of decoded frames one batch aims for; a wider frame is a batch of its own. */
 export const BATCH_BYTES = 8 << 20
 
-/** How many bytes of decoded frames, of every field a file holds, one chunk aims for. A chunk is
- *  what a view asks for at once, and what the worker's cache keeps. */
+/** How many bytes of decoded frames, of every field a file holds, one published chunk aims for. */
 export const CHUNK_BYTES = 4 << 20
 
 /** How many bytes of a results file one segment aims for: it ends at the first row end past them.

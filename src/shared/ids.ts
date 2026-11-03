@@ -69,6 +69,7 @@ export const COMMANDS = [
   'disconnectPort',
   'deleteElement',
   'exportVideo',
+  'exportImage',
 ] as const
 export type Command = (typeof COMMANDS)[number]
 
@@ -76,7 +77,7 @@ export type Command = (typeof COMMANDS)[number]
 export type ViewCommandName = Extract<Command, 'revealInSource' | 'removePlot'>
 export const VIEW_COMMANDS: readonly ViewCommandName[] = ['revealInSource', 'removePlot']
 
-/** The views Studio contributes: its two canvas editors, its three webview panels, and Recorded
+/** The views Studio contributes: its two canvas editors, its three webview panels, and Monitored
  *  Signals. */
 export const VIEWS = ['network', 'diagram', 'case', 'monitor', 'export', 'signals'] as const
 export type View = (typeof VIEWS)[number]
@@ -115,11 +116,9 @@ export const CASE_GLOB = '**/*.case.json'
 /** Whether the views follow the case at `uri`, and Studio saves what they show of it: a case file
  *  on disk, never a copy another extension shows, as Git does of an older version. */
 export const followed = (uri: string) => uri.startsWith('file:') && CASE_FILE.test(uri)
-/** A GridKit solver file, by its name. */
-export const SOLVER_FILE = /\.solver\.json$/i
 
 /** The key a case's saved state is kept under in the workspace's state. */
-const SAVED = 'case:'
+const SAVED = 'case-native-1:'
 export const savedKey = (uri: string) => SAVED + uri
 /** The case a saved state's key names, if it names one. */
 export const savedUri = (key: string) =>

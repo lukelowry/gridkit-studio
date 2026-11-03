@@ -44,7 +44,7 @@ describe('native VS Code contract', () => {
     const given = new Set(
       Object.keys(
         menuContext(
-          { schema: catalog.schema, editable: {} },
+          { definition: catalog.definition, editable: {} },
           { uri: '', version: 0, origin: 'case' },
         ),
       ),
@@ -69,10 +69,13 @@ describe('native VS Code contract', () => {
         scope: 'resource',
       })
     }
-    expect(settings['gridkitStudio.appearance.theme']).toBeUndefined()
-    expect(() => validateSettings({ 'network.vertexRadiusPx': NaN })).toThrow()
-    expect(() => validateSettings({ 'diagram.fontSizePx': -1 })).toThrow()
-    expect(() => validateSettings({ 'monitor.axisColor': 'red' })).toThrow()
+    // Each setting takes only the values of its kind and range.
+    expect(validateSettings({ 'network.vertexRadius': 4 })).toEqual({ 'network.vertexRadius': 4 })
+    expect(() => validateSettings({ 'network.vertexRadius': NaN })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.tilt': 2.5 })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.colormap': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.map.ground': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.unknown': 1 })).toThrow('Unknown setting')
   })
   it('keeps scalar settings separate from nested settings', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
@@ -85,7 +88,7 @@ describe('native VS Code contract', () => {
         key,
       ).toEqual([])
   })
-  it('places Monitor and Case in native panels and exposes no compatibility commands', async () => {
+  it('places Monitor and Case in native panels', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
     expect(
       manifest.contributes.viewsContainers.panel.map((view: { id: string }) => view.id),
@@ -93,11 +96,6 @@ describe('native VS Code contract', () => {
     expect(
       manifest.contributes.customEditors.map((editor: { viewType: string }) => editor.viewType),
     ).toEqual(['gridkitStudio.network', 'gridkitStudio.diagram'])
-    expect(
-      manifest.contributes.commands.some(
-        (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
-      ),
-    ).toBe(false)
     // The side bar holds what the case records and its video; Monitored Signals is a native tree,
     // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
@@ -120,7 +118,6 @@ describe('native VS Code contract', () => {
         expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
       )
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
-    expect(manifest.contributes.taskDefinitions).toBeUndefined()
     // Playback lives in the status bar, not the title bars; Fit is the canvas editors' own title
     // action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
@@ -152,7 +149,7 @@ describe('native VS Code contract', () => {
     const registering: string[] = []
     for (const path of sources) {
       const text = await readFile(path, 'utf8')
-      if (/show(Error|Warning|Information)Message|kind: 'notify'/.test(text)) notifying.push(path)
+      if (/show(Error|Warning|Information)Message/.test(text)) notifying.push(path)
       if (/commands\.registerCommand/.test(text)) registering.push(path)
     }
     // The Reporter tells the user why what they asked for failed; the rest shows in the views.
@@ -160,13 +157,13 @@ describe('native VS Code contract', () => {
     expect(registering).toEqual([join('src', 'extension', 'sessions.ts')])
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
-    const schema = catalog.schema
-    const summary = { schema, editable: { BusFault: ['ports.control_signal'] } }
+    const definition = catalog.definition
+    const summary = { definition, editable: { GenClassical: ['ports.pmech'] } }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
       origin: 'diagram' as const,
-      element: { id: 'BusFault/one', field: 'ports.control_signal' },
+      element: { table: 'GenClassical', id: 'one', field: 'ports.pmech' },
     }
     const context = menuContext(summary, target)
     expect(context.gridkitTarget).toEqual(target)
@@ -175,10 +172,12 @@ describe('native VS Code contract', () => {
     expect(context.gridkitNetwork).toBe(false)
     expect(context.gridkitDiagram).toBe(true)
     // A whole element goes where it refers when its type refers to anything: a branch to its buses,
-    // and a bus nowhere.
-    const element = (id: string) =>
-      menuContext(summary, { ...target, origin: 'network', element: { id } }).gridkitReference
-    expect(element('Branch/one')).toBe(true)
-    expect(element('Bus/1')).toBe(false)
+    // a bus to the signals a signal-voltage bus connects, and a signal nowhere.
+    const element = (table: string) =>
+      menuContext(summary, { ...target, origin: 'network', element: { table, id: 1 } })
+        .gridkitReference
+    expect(element('Branch')).toBe(true)
+    expect(element('Bus')).toBe(true)
+    expect(element('Signal')).toBe(false)
   })
 })

@@ -1,25 +1,26 @@
 /**
- * Compares runs of the benchmarks in views.ts, for a person to read. It never fails: timings vary
- * between runs, even on one machine, and work counters change with every renderer release.
+ * Compares runs of the benchmarks in views.ts, with a failing gate for qualifying timing regressions.
+ * Work counters are compared only within the same renderer version.
  *
  *   node tests/benchmarks/compare.mjs base.json head.json
  *   node tests/benchmarks/compare.mjs base-1.json base-2.json -- head-1.json head-2.json
  *   node tests/benchmarks/compare.mjs head.json
  *
  * Each side may be several rounds, best alternated with the other's. A case's round in which a
- * canary took half again as long as its usual ran on a busy machine, and is left out: GridKit's own
+ * canary took more than 15% longer than in its quickest round ran on a busy machine, and is left out: GridKit's own
  * simulation, and a fixed piece of work timed through the case. Each scenario is then the median of
  * the rounds' medians. Runs on different GridKit builds are not compared.
  *
  * It reports scenarios slower than the base, work that changed, and time per bus that grows faster
  * than linearly across the cases.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 
 const SLOWER = 1.25
 const SLACK_MS = 5
-/** How much longer than its usual a case's canary may take before its round is left out. */
-const BUSY = 1.5
+/** How much longer than in its quickest round a case's canary may take before its round is left
+ *  out: one round in 1.4 slow made a case read a third slower. */
+const BUSY = 1.15
 // Fixed costs make the smallest case dear per bus; quadratic work would still grow 250 times from
 // 39 buses to 10,000.
 const SUPERLINEAR = 3
@@ -41,39 +42,39 @@ const canary = (run, name) => {
   return samples?.length ? Math.max(...samples) : undefined
 }
 
-/** How long each canary usually took, over every round of both sides: the machine's usual pace,
- *  which no one side's busy rounds set. */
-function usualOf(runs) {
-  const usual = new Map()
+/** How long each canary took in its quickest round, over every round of both sides: the machine's
+ *  pace when nothing else ran, which no one side's busy rounds set. */
+function quickestOf(runs) {
+  const quickest = new Map()
   for (const run of runs)
     for (const name of Object.keys(run.timings)) {
       const size = sizeOf(name)
       if (!size) continue
       for (const each of canaries(size)) {
-        if (usual.has(each)) continue
+        if (quickest.has(each)) continue
         const times = runs.map((round) => canary(round, each)).filter(Number.isFinite)
-        if (times.length) usual.set(each, median(times))
+        if (times.length) quickest.set(each, Math.min(...times))
       }
     }
-  return usual
+  return quickest
 }
 
-/** Whether the case of `size` buses ran on a busy machine in `run`: one of its canaries took half
- *  again as long as its usual. */
-const busy = (run, size, usual) =>
-  canaries(size).some((name) => canary(run, name) > BUSY * usual.get(name))
+/** Whether the case of `size` buses ran on a busy machine in `run`: one of its canaries took longer
+ *  than its quickest by more than BUSY allows. */
+const busy = (run, size, quickest) =>
+  canaries(size).some((name) => canary(run, name) > BUSY * quickest.get(name))
 
 /** The rounds' timings as one run: each scenario the median of its rounds' medians, over the rounds
- *  in which its case's canaries took their `usual` time. The lowest sample of every round is kept
+ *  in which its case's canaries kept near their `quickest` time. The lowest sample of every round is kept
  *  too, so a run is slower only when both its best and its typical times are. */
-function pooled(runs, usual) {
+function pooled(runs, quickest) {
   const medians = {}
   const lowest = {}
   let left = 0
   for (const run of runs)
     for (const [name, samples] of Object.entries(run.timings)) {
       const size = sizeOf(name)
-      if (size && busy(run, size, usual)) {
+      if (size && busy(run, size, quickest)) {
         left++
         continue
       }
@@ -100,10 +101,10 @@ const [basePaths, headPaths] =
     ? [args.slice(0, split), args.slice(split + 1)]
     : [args.length > 1 ? [args[0]] : [], [args.at(-1)]]
 const headRuns = headPaths.map(read)
-const baseRuns = basePaths.filter((path) => existsSync(path)).map(read)
-const usual = usualOf([...baseRuns, ...headRuns])
-const head = pooled(headRuns, usual)
-const base = baseRuns.length ? pooled(baseRuns, usual) : undefined
+const baseRuns = basePaths.map(read)
+const quickest = quickestOf([...baseRuns, ...headRuns])
+const head = pooled(headRuns, quickest)
+const base = baseRuns.length ? pooled(baseRuns, quickest) : undefined
 const lines = []
 
 for (const [side, run] of [
@@ -114,17 +115,29 @@ for (const [side, run] of [
     lines.push(`${side}: ${run.left} timings left out, taken while the machine ran slow`)
 
 const builds = new Set([...(base?.gridkit ?? []), ...head.gridkit].filter(Boolean))
-if (builds.size > 1)
+if (builds.size > 1) {
+  process.exitCode = 1
   lines.push(`GridKit builds differ, so no timing is compared: ${[...builds].join(', ')}`)
-else if (base) {
+} else if (base) {
+  const common = new Set(baseRuns.flatMap((run) => Object.keys(run.timings)))
+  const unmeasured = [...common].filter(
+    (name) =>
+      headRuns.some((run) => name in run.timings) && (!base.timings[name] || !head.timings[name]),
+  )
+  if (unmeasured.length) {
+    process.exitCode = 1
+    lines.push(`inconclusive: ${unmeasured.length} shared scenarios have no unfiltered comparison`)
+  }
   const slower = (now, before) => now > before * SLOWER + SLACK_MS
   for (const [name, now] of Object.entries(head.timings)) {
     const before = base.timings[name]
-    if (before && slower(now.lowest, before.lowest) && slower(now.median, before.median))
+    if (before && slower(now.lowest, before.lowest) && slower(now.median, before.median)) {
+      process.exitCode = 1
       lines.push(`slower ${name}: ${before.median.toFixed(1)} → ${now.median.toFixed(1)} ms`)
+    }
   }
 }
-if (base)
+if (base && baseRuns.at(-1).renderer === headRuns.at(-1).renderer)
   for (const [name, counters] of Object.entries(head.work ?? {}))
     for (const [counter, value] of Object.entries(counters)) {
       const before = base.work?.[name]?.[counter]

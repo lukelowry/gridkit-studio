@@ -66,7 +66,7 @@ export function registerPlayback(studio: Sessions): vscode.Disposable[] {
     const finished = !session.live && !playing && t >= state.span[1]
     // The times a run will cover, which its samples fill as they arrive.
     const [from, to] = results.span ?? results.domain
-    const unit = studio.documents.get(session.uri)?.summary?.schema.axis?.unit ?? 's'
+    const unit = 's'
     say(back, '$(chevron-left)', 'Previous sample')
     say(
       play,

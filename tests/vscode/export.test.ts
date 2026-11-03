@@ -1,4 +1,4 @@
-/** Video export: a run written to the file the user picks. */
+/** Video and image export: a run, and what a view shows, written to the file the user picks. */
 
 import assert from 'node:assert/strict'
 import { open, readdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -6,6 +6,7 @@ import { basename, dirname } from 'node:path'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import type { Frame } from 'playwright-core'
+import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
 import { formatNumber } from '../../src/shared/format.js'
@@ -77,6 +78,50 @@ suite('Export', () => {
     bench.report.videoBytes = await mp4(video.fsPath)
     await bench.capture('export-vscode')
   }).timeout(180_000)
+
+  test('saves an image of a canvas, and of the Monitor plots, where the user picks', async () => {
+    /** The image at `path` once saved: twice the size `size` reads in `frame`, and more than its
+     *  background. */
+    const saved = async (path: string, frame: Frame, size: string) => {
+      const png = await until(async () => {
+        try {
+          return PNG.sync.read(await readFile(path))
+        } catch {
+          return undefined
+        }
+      }, 'the image is saved')
+      const shown = await frame.evaluate<{ width: number; height: number }>(size)
+      assert.ok(Math.abs(png.width - 2 * shown.width) <= 2, `${png.width} wide for ${shown.width}`)
+      assert.ok(Math.abs(png.height - 2 * shown.height) <= 2, `${png.height} high`)
+      const colors = new Set<number>()
+      for (let at = 0; at < png.data.length; at += 4) colors.add(png.data.readUInt32BE(at))
+      assert.ok(colors.size > 1, 'the image draws more than its background')
+    }
+    const network = await bench.open('network')
+    const image = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 network.png')
+    await rm(image.fsPath, { force: true })
+    await bench.title('editor', 'Export Image')
+    await bench.dialog(image.fsPath)
+    // The Network as its canvas shows it.
+    await saved(
+      image.fsPath,
+      network,
+      '(({ width, height }) => ({ width, height }))(document.querySelector("canvas").getBoundingClientRect())',
+    )
+
+    const monitor = await bench.show('monitor')
+    await visible(monitor, 'canvas[data-rendered=true]')
+    const plots = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 monitor.png')
+    await rm(plots.fsPath, { force: true })
+    await bench.title('monitor', 'Export Image')
+    await bench.dialog(plots.fsPath)
+    // Every plot, those scrolled out of sight too, in the room the Monitor stacks them in.
+    await saved(
+      plots.fsPath,
+      monitor,
+      '(lanes => ({ width: lanes.clientWidth, height: lanes.scrollHeight }))(document.querySelector("[data-testid=monitor-lanes]"))',
+    )
+  }).timeout(60_000)
 
   test('maps each moment of the times the Monitor shows from the samples of that moment, chunk after chunk', async () => {
     // Results long enough for several chunks, with the Network mapping their voltage.

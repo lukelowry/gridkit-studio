@@ -1,7 +1,7 @@
 ﻿/** Bundle the extension and its two workers for Node, and the webviews for the browser, into dist/.
  *  `--watch` rebuilds on change, unminified. */
 
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,27 +14,10 @@ const output = resolve(root, 'dist')
 const watch = process.argv.includes('--watch')
 const require = createRequire(import.meta.url)
 const packageRoot = resolve(dirname(require.resolve('latkit')), '..')
-const manifest = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8'))
-if (manifest.version !== '0.3.1')
-  throw new Error(`Expected latkit 0.3.1, found ${manifest.version}`)
 
 await rm(output, { recursive: true, force: true })
 await mkdir(resolve(output, 'webview'), { recursive: true })
 await mkdir(resolve(output, 'licenses'), { recursive: true })
-const retirement = {
-  name: 'retired-latkit-packages',
-  setup(builder) {
-    builder.onEnd((result) => {
-      const old = Object.keys(result.metafile?.inputs ?? {}).filter((name) =>
-        /@latkit(?:[\\/+]|\b)/.test(name),
-      )
-      if (old.length)
-        return {
-          errors: [{ text: `Retired Latkit packages entered the bundle:\n${old.join('\n')}` }],
-        }
-    })
-  },
-}
 const common = {
   absWorkingDir: root,
   bundle: true,
@@ -53,7 +36,6 @@ const builds = [
     format: 'cjs',
     target: 'node22',
     external: ['vscode'],
-    plugins: [retirement],
   },
   {
     entryPoints: { cases: 'src/workers/cases.ts', results: 'src/workers/results.ts' },
@@ -65,7 +47,6 @@ const builds = [
     banner: {
       js: "import { createRequire as __createRequire } from 'node:module';const require = __createRequire(import.meta.url);",
     },
-    plugins: [retirement],
   },
   {
     entryPoints: {
@@ -81,7 +62,7 @@ const builds = [
     target: 'es2022',
     // Svelte's production build, without its checks for development.
     conditions: ['browser', watch ? 'development' : 'production'],
-    plugins: [svelte({ compilerOptions: { css: 'external' } }), retirement],
+    plugins: [svelte({ compilerOptions: { css: 'external' } })],
   },
 ]
 await Promise.all([

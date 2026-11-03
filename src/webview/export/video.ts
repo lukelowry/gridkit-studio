@@ -51,13 +51,9 @@ export function videoTimes(state: ViewState): TimeRange | undefined {
   const range: TimeRange = [Math.max(held[0], shown[0]), Math.min(held[1], shown[1])]
   return range[0] < range[1] ? range : undefined
 }
-export function exportable(job: VideoJob | undefined, state: ViewState): job is VideoJob {
+/** Whether the encoder takes `job`: a size of whole 4×2 blocks, and a positive rate over a span. */
+function valid(job: VideoJob): boolean {
   return (
-    !!job &&
-    !!state.summary &&
-    !!job.views.length &&
-    (!job.views.includes('monitor') ||
-      !!state.plots?.some((plot) => holdsPlot(state.results, plot))) &&
     Number.isSafeInteger(job.width) &&
     job.width >= 4 &&
     job.width % 4 === 0 &&
@@ -74,6 +70,17 @@ export function exportable(job: VideoJob | undefined, state: ViewState): job is 
   )
 }
 
+export function exportable(job: VideoJob | undefined, state: ViewState): job is VideoJob {
+  return (
+    !!job &&
+    !!state.summary &&
+    !!job.views.length &&
+    (!job.views.includes('monitor') ||
+      !!state.plots?.some((plot) => holdsPlot(state.results, plot))) &&
+    valid(job)
+  )
+}
+
 export async function exportVideo(
   job: VideoJob,
   placed: readonly Placed[],
@@ -83,22 +90,7 @@ export async function exportVideo(
   signal: AbortSignal,
   progress: (value: VideoProgress) => void,
 ): Promise<void> {
-  if (
-    !Number.isSafeInteger(job.width) ||
-    job.width < 4 ||
-    job.width % 4 ||
-    !Number.isSafeInteger(job.height) ||
-    job.height < 2 ||
-    job.height % 2 ||
-    !Number.isFinite(job.frameRate) ||
-    job.frameRate <= 0 ||
-    !['medium', 'high', 'very-high'].includes(job.quality) ||
-    !Number.isFinite(job.rate) ||
-    job.rate <= 0 ||
-    !job.timeRange.every(Number.isFinite) ||
-    job.timeRange[1] <= job.timeRange[0]
-  )
-    throw new Error('Invalid MP4 export settings.')
+  if (!valid(job)) throw new Error('Invalid MP4 export settings.')
   const [from, to] = job.timeRange
   const total = Math.max(1, Math.ceil(((to - from) / job.rate) * job.frameRate))
   if (!Number.isSafeInteger(total)) throw new Error('The video contains too many frames.')

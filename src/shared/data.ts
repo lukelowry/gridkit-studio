@@ -1,4 +1,4 @@
-import type { Id, QueryResult, Run } from 'latkit'
+import type { Id, QueryResult } from 'latkit'
 
 import type { Entity } from './document.js'
 
@@ -92,7 +92,3 @@ export interface ExactSample {
 
 export const PAGE_BYTES = 4 * 1024 * 1024
 export const ENTRY_BYTES = 16 * 1024 * 1024
-
-export function nativeRun(run: VisualizationRun): Run {
-  return { level: run.level, first: run.first, at: run.at, values: run.values }
-}

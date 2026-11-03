@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import { Data, type Expr, field, type Fields, Patch, type Query } from 'latkit'
 
 import {
-  ENTRY_BYTES,
   PAGE_BYTES,
   type ProjectionCursor,
   type ProjectionPage,
@@ -12,10 +11,26 @@ import {
   type TableRequest,
 } from '../shared/data.js'
 import { LABEL } from '../shared/document.js'
-import type { ChangedRows, ProjectedDocument } from './document.js'
+import type { ProjectedDocument } from './document.js'
 import { Turns } from './turns.js'
 
 const ROWS_PER_PATCH = 4096
+
+/** The patch `write` makes of the most of `rows` rows, up to ROWS_PER_PATCH, that fit a page:
+ *  halving the rows until they do. One row always goes, whatever it weighs. */
+export async function paged(
+  rows: number,
+  write: (count: number) => Uint8Array,
+  turns: Turns,
+): Promise<{ bytes: Uint8Array; count: number }> {
+  for (let count = Math.min(ROWS_PER_PATCH, rows); ;) {
+    const bytes = write(count)
+    turns.signal.throwIfAborted()
+    if (bytes.byteLength <= PAGE_BYTES || count <= 1) return { bytes, count }
+    count = Math.max(1, Math.floor(count / 2))
+    await turns.step()
+  }
+}
 
 export function projectionKey(
   document: ProjectedDocument,
@@ -92,30 +107,22 @@ export async function projectionPage(
       offset = 0
       continue
     }
-    let count = Math.min(ROWS_PER_PATCH, table.ids.length - offset)
-    if (count === 0 && offset !== 0) throw new Error('Projection cursor is past its last row.')
-    let bytes: Uint8Array
-    for (;;) {
-      const values: Record<string, Fields[string]> = {}
-      if (phase === 'fields') {
-        for (const name of fields) values[name] = table.read(name, offset, count)
-      }
-      const patch = new Patch('case')
-      bytes =
-        count === 0
+    if (table.ids.length === offset && offset !== 0)
+      throw new Error('Projection cursor is past its last row.')
+    const { bytes, count } = await paged(
+      table.ids.length - offset,
+      (count) => {
+        const values: Record<string, Fields[string]> = {}
+        if (phase === 'fields') {
+          for (const name of fields) values[name] = table.read(name, offset, count)
+        }
+        const patch = new Patch('case')
+        return count === 0
           ? patch.replace(name, [], values).toBytes()
           : patch.set(name, table.ids.slice(offset, offset + count), values).toBytes()
-      signal.throwIfAborted()
-      if (bytes.byteLength <= PAGE_BYTES) break
-      if (count <= 1) {
-        if (bytes.byteLength > ENTRY_BYTES) {
-          throw Object.assign(new Error('A projected row exceeds 16 MiB.'), { code: 'limit' })
-        }
-        break
-      }
-      count = Math.max(1, Math.floor(count / 2))
-      await turns.step()
-    }
+      },
+      turns,
+    )
     offset += count
     if (offset === table.ids.length) {
       index++
@@ -149,16 +156,6 @@ export async function* project(
     yield page.bytes
     cursor = page.next
   } while (cursor)
-}
-
-export function changedPatch(
-  changed: readonly ChangedRows[],
-  removed: ReadonlyMap<string, readonly (string | number)[]>,
-): Uint8Array {
-  const patch = new Patch('case')
-  for (const [table, ids] of removed) patch.remove(table, ids)
-  for (const change of changed) patch.set(change.table, change.ids, change.fields)
-  return patch.toBytes()
 }
 
 /** A revision owns its native query dataset and releases it with its parser/cache entry. */

@@ -1,6 +1,34 @@
 import { Data, type Mark, Tiles } from 'latkit'
 
+import type { SettingsReader } from '../shared/preferences.js'
 import type { Palette } from './theme.js'
+
+/** A map under the Network: the datasets it draws, its marks, and whose map it is. */
+export interface Background {
+  readonly sources: ReadonlyArray<Data | Tiles>
+  readonly marks: readonly Mark[]
+  readonly attribution?: string
+  destroy?(): void
+}
+
+/** The map the settings choose under a case on the earth; `none` for a case off it. */
+export async function backgroundOf(
+  mode: 'borders' | 'streets' | 'none',
+  settings: SettingsReader,
+  assets: URL,
+  palette: Palette,
+  signal: AbortSignal,
+): Promise<Background> {
+  if (mode === 'borders') {
+    const { data, marks } = await borderMaps(assets, palette, signal)
+    return { sources: data, marks, destroy: () => data.forEach((source) => source.destroy()) }
+  }
+  if (mode === 'streets') {
+    const { source, marks } = streetMaps(settings.get('network.map.tilesUrl'), palette)
+    return { sources: [source], marks, attribution: settings.get('network.map.attribution') }
+  }
+  return { sources: [], marks: [] }
+}
 
 export async function borderMaps(
   base: URL,

@@ -70,12 +70,15 @@ export function nativeTheme(
   kind: 'network' | 'diagram' | 'monitor',
 ): NativeTheme {
   const { palette } = theme()
+  const classes = document.body.classList
   return {
     base:
-      document.body.classList.contains('vscode-light') ||
-      document.body.classList.contains('vscode-high-contrast-light')
+      classes.contains('vscode-light') || classes.contains('vscode-high-contrast-light')
         ? 'light'
         : 'dark',
+    // A high contrast theme keeps colormap colors at WCAG's enhanced contrast with the background.
+    ...((classes.contains('vscode-high-contrast') ||
+      classes.contains('vscode-high-contrast-light')) && { contrast: 7 }),
     background: kind === 'monitor' ? palette.background : palette.editor,
     grid: palette.border,
     text: { color: palette.text1 },

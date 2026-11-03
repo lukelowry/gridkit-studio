@@ -59,18 +59,11 @@ export class DiagramEditor {
       ]),
     )
     this.#stop.push(
-      view.on('drag', ({ phase, hit, position }) => {
+      view.on('drag', ({ phase, patch }) => {
         void (async () => {
           if (this.#ready) await this.#ready
-          if (!this.#preview || this.#busy || this.#closed) return
-          const block = summary.definition.drawing.blocks.find(
-            (block) => block.table === hit.row.table,
-          )
-          if (!block) return
-          this.#preview.set(block.table, [hit.row.id], {
-            [block.position[0]]: [position[0]],
-            [block.position[1]]: [position[1]],
-          })
+          if (!this.#preview || !patch || this.#busy || this.#closed) return
+          this.#preview.apply(patch)
           if (phase === 'end') await this.#commit(this.#moves(), 'Move diagram blocks')
         })().catch(error)
       }),
@@ -107,16 +100,8 @@ export class DiagramEditor {
       signal.throwIfAborted()
       this.#preview?.destroy()
       const preview = (this.#preview = previewOf(this.source))
-      if (all)
-        for (const block of this.summary.definition.drawing.blocks) {
-          const ids = preview.query({ of: block.table, select: {} }).ids
-          preview.set(block.table, ids, {
-            [block.position[0]]: new Float64Array(ids.length).fill(NaN),
-            [block.position[1]]: new Float64Array(ids.length).fill(NaN),
-          })
-        }
       this.replace(preview)
-      for (const patch of await this.view.arrange({ signal })) {
+      for (const patch of await this.view.arrange(all ? 'all' : 'unplaced', { signal })) {
         signal.throwIfAborted()
         if (patch.data === preview.name) preview.apply(patch)
       }

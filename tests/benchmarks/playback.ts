@@ -1,10 +1,10 @@
-﻿/** Sustained native playback, shared GPU ownership, bounded reads, visibility, and recovery. */
+﻿/** Sustained native playback, shared GPU ownership, bounded reads, visibility, and a lost device. */
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { FrameRequest } from '../../src/shared/data.js'
-import { pause, replaying, testHost, until, visible } from '../vscode/harness.js'
+import { pause, renderer, replaying, testHost, until, visible } from '../vscode/harness.js'
 
 interface Plot {
   frames: number
@@ -132,8 +132,8 @@ export async function run() {
     transport.play()
     try {
       for (let loss = 0; loss < 2; loss++) {
+        const drawn = (await firstPlot())!.frames
         await monitor.evaluate(`(async () => {
-        window.oldMonitorCanvas = document.querySelector('canvas');
         const device = await new Promise(resolve => {
           const original = GPUDevice.prototype.createCommandEncoder;
           GPUDevice.prototype.createCommandEncoder = function(...args) {
@@ -142,24 +142,22 @@ export async function run() {
           };
         }); device.destroy();
       })()`)
+        // latkit takes a new device, and moves the plots to it as they are.
         await until(
-          () =>
-            monitor.evaluate<boolean>(
-              "document.querySelector('canvas') !== window.oldMonitorCanvas && document.querySelector('canvas')?.gridkitPlot?.().frames > 2",
-            ),
-          'native GPU recovery recreates Views',
+          async () => ((await firstPlot())?.frames ?? 0) > drawn + 2,
+          'the plots draw on a new device',
         )
         assert.deepEqual(
           (await firstPlot())!.camera.y,
           [0.5, 1.5],
-          'Recovery keeps the value range',
+          'A lost device keeps the value range',
         )
       }
     } finally {
       recovering.dispose()
       transport.pause()
     }
-    console.log('Playback: native GPU recovery passed')
+    console.log('Playback: a lost device passed')
     transport.pause()
     const expected = bench.studio.reporter.errors.splice(0)
     assert.ok(
@@ -202,7 +200,7 @@ export async function run() {
     await writeFile(
       join(bench.output, 'tests', 'playback.json'),
       JSON.stringify(
-        { renderer: 'latkit@0.3.1', before, samples, after: await state(), requests },
+        { renderer: await renderer(), before, samples, after: await state(), requests },
         null,
         2,
       ),

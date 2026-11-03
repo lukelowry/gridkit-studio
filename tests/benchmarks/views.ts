@@ -16,6 +16,7 @@ import {
   fills,
   idle,
   pause,
+  renderer,
   replaying,
   simpleDialog,
   testHost,
@@ -727,7 +728,11 @@ export async function run() {
     await mkdir(output, { recursive: true })
     await writeFile(
       join(output, 'head.json'),
-      JSON.stringify({ renderer: 'latkit@0.3.1', gridkit: build, timings, work, stages }, null, 2),
+      JSON.stringify(
+        { renderer: await renderer(), gridkit: build, timings, work, stages },
+        null,
+        2,
+      ),
     )
     console.log(`Benchmarks: ${Object.keys(timings).length} timed, written to ${output}`)
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')

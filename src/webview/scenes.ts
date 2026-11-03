@@ -5,16 +5,17 @@ import {
   field,
   type Fit,
   type Mark,
+  meters,
   type Scene,
   type Source,
   type TableInput,
   type Theme,
-  when,
 } from 'latkit'
 
 import { type Bindings, type Channel, CHANNELS } from '../shared/bindings.js'
 import type { ProjectionSelection, RecordedField } from '../shared/data.js'
 import { type CaseDefinition, type Drawing, fieldDefinition } from '../shared/document.js'
+import type { Results } from '../shared/messages.js'
 import type { SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
@@ -23,13 +24,7 @@ export function caseFit(data: Data, drawing: Drawing, kind: 'network' | 'diagram
     kind === 'network'
       ? [...drawing.vertices, ...drawing.edges].map((item) => item.table)
       : [...drawing.blocks.map((item) => item.table), ...drawing.nets]
-  return {
-    rows: [...new Set(tables)].map((table) => ({
-      data: data.name,
-      table,
-      ids: data.query({ of: table, select: {} }).ids,
-    })),
-  }
+  return { tables: [...new Set(tables)].map((table) => data.table(table)) }
 }
 
 export interface Binding {
@@ -38,15 +33,23 @@ export interface Binding {
   readonly channel: 'color' | 'radius' | 'elevation' | 'width' | 'dash'
   readonly source?: TableInput
   readonly domain?: readonly [number, number]
-  readonly range?: readonly [number, number]
 }
 
-export function stableDomain(domain: readonly [number, number]): [number, number] {
-  const [low, high] = domain
-  if (!Number.isFinite(low) || !Number.isFinite(high) || low > high)
-    throw new Error('Invalid mapping domain.')
-  const epsilon = Math.max(Math.abs(low) * 1e-6, 1e-6)
-  return low === high ? [low - epsilon, high + epsilon] : [low, high]
+/** The sampled fields the bindings read from `results`, each once, as `[table, field]`. */
+export function sampledFields(
+  definition: CaseDefinition,
+  bindings: Bindings = {},
+  results?: Results,
+): Array<readonly [table: string, field: string]> {
+  const fields = new Map<string, readonly [string, string]>()
+  if (results)
+    for (const { table, field } of Object.values(bindings))
+      if (
+        fieldDefinition(definition, table, field)?.kind === 'sampled' &&
+        results.outputs.some((output) => output.table === table && output.field === field)
+      )
+        fields.set(JSON.stringify([table, field]), [table, field])
+  return [...fields.values()]
 }
 
 interface NetworkSizes {
@@ -70,20 +73,30 @@ function networkSizes(data: Data, drawing: Drawing, settings: SettingsReader): N
   }
 }
 
-function mapped(binding: Binding, map: ColormapName, sizes: NetworkSizes): Expr {
+/** What each channel's mapped values span; a height spans the setting's meters on the earth. */
+const RANGES: Record<'radius' | 'elevation' | 'width', [low: number, high: number]> = {
+  radius: [0.5, 2.5],
+  elevation: [0, 1],
+  width: [0.5, 4],
+}
+
+function mapped(
+  binding: Binding,
+  map: ColormapName,
+  sizes: NetworkSizes,
+  height: number | Expr,
+): Expr {
   let value = field(binding.field)
   if (binding.source) value = value.from(binding.source)
-  if (binding.channel === 'dash') return value.gt(0)
-  const defaults = { radius: [0.5, 2.5], elevation: [0, 1], width: [0.5, 4] } as const
-  const output =
-    binding.channel === 'color'
-      ? value.colormap(map)
-      : value.scale(...(binding.range ?? defaults[binding.channel]))
-  const mapped = binding.domain ? output.domain(...stableDomain(binding.domain)) : output
-  if (binding.channel !== 'radius' && binding.channel !== 'width') return mapped
+  const { channel } = binding
+  if (channel === 'dash') return value.gt(0)
+  const output = channel === 'color' ? value.colormap(map) : value.scale(...RANGES[channel])
+  const ranged = binding.domain ? output.domain(binding.domain[0], binding.domain[1]) : output
+  if (channel === 'color') return ranged
+  if (channel === 'elevation') return ranged.mul(height)
   // Missing sampled rows retain the ordinary case size instead of a theme-sized fallback.
-  const size = sizes[binding.channel]
-  return when(value.eq(value)).then(mapped.mul(size)).otherwise(size)
+  const size = sizes[channel]
+  return ranged.mul(size).fallback(size)
 }
 
 function channels(
@@ -92,12 +105,13 @@ function channels(
   map: ColormapName,
   vertex: boolean,
   sizes: NetworkSizes,
+  height: number | Expr,
 ): Record<string, Expr> {
   const allowed = vertex ? ['color', 'radius', 'elevation'] : ['color', 'width', 'dash']
   return Object.fromEntries(
     bindings
       .filter((binding) => binding.table === table && allowed.includes(binding.channel))
-      .map((binding) => [binding.channel, mapped(binding, map, sizes)]),
+      .map((binding) => [binding.channel, mapped(binding, map, sizes, height)]),
   )
 }
 
@@ -106,7 +120,6 @@ export function sceneBindings(
   bindings: Bindings,
   outputs: readonly RecordedField[],
   sampled: (table: string, field: string) => Source | undefined,
-  settings: SettingsReader,
 ): Binding[] {
   return Object.entries(bindings).flatMap(([key, binding]) => {
     const channel = CHANNELS[key as Channel].option
@@ -124,17 +137,51 @@ export function sceneBindings(
         ...(binding.domain || recorded?.domain
           ? { domain: binding.domain ?? recorded!.domain! }
           : {}),
-        ...(channel === 'elevation'
-          ? {
-              range: [
-                0,
-                definition.drawing.geographic ? settings.get('network.heightMeters') / 111195 : 1,
-              ] as const,
-            }
-          : {}),
       },
     ]
   })
+}
+
+/** What a scene of a case draws besides the case: its bindings' results and a map. */
+export interface SceneExtras {
+  readonly bindings?: Bindings
+  readonly results?: Results
+  /** The source of a binding's sampled field, once its frames are held. */
+  readonly sampled?: (table: string, field: string) => Source | undefined
+  /** Marks drawn under the case's own, such as a map's. */
+  readonly background?: readonly Mark[]
+  readonly editable?: boolean
+}
+
+/** The Network or Diagram of `data`, as every view and export draws it. */
+export function sceneOf(
+  kind: 'network' | 'diagram',
+  data: Data,
+  definition: CaseDefinition,
+  settings: SettingsReader,
+  theme: Theme,
+  {
+    bindings = {},
+    results,
+    sampled = () => undefined,
+    background = [],
+    editable = false,
+  }: SceneExtras,
+): Scene {
+  if (kind === 'diagram') return diagramScene(data, definition.drawing, settings, theme, editable)
+  const outputs =
+    results?.outputs.map((output) => ({
+      ...output,
+      domain: results.domains?.[output.table]?.[output.field],
+    })) ?? []
+  return networkScene(
+    data,
+    definition.drawing,
+    settings,
+    theme,
+    sceneBindings(definition, bindings, outputs, sampled),
+    background,
+  )
 }
 
 function controls(settings: SettingsReader, kind: 'network' | 'diagram' | 'monitor') {
@@ -160,6 +207,8 @@ export function networkScene(
   background: readonly Mark[] = [],
 ): Scene {
   const sizes = networkSizes(data, drawing, settings)
+  const height = drawing.geographic ? meters(settings.get('network.heightMeters')) : 1
+  const map = settings.get('network.colormap')
   return {
     space: drawing.geographic
       ? {
@@ -181,7 +230,7 @@ export function networkScene(
         ...(edge.ends ? { ends: edge.ends } : {}),
         ...(edge.bends ? { bends: edge.bends } : {}),
         width: sizes.width,
-        ...channels(edge.table, bindings, settings.get('network.colormap'), false, sizes),
+        ...channels(edge.table, bindings, map, false, sizes, height),
       })),
       ...drawing.vertices.map((vertex): Mark => ({
         vertices: [data.name, vertex.table],
@@ -189,7 +238,7 @@ export function networkScene(
         position: [field(vertex.position[0]), field(vertex.position[1])],
         label: settings.get('network.labels') && vertex.label ? field(vertex.label) : null,
         radius: sizes.radius,
-        ...channels(vertex.table, bindings, settings.get('network.colormap'), true, sizes),
+        ...channels(vertex.table, bindings, map, true, sizes, height),
       })),
     ],
   }

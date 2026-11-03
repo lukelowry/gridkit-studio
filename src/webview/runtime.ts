@@ -1,9 +1,12 @@
-import { Gpu, load, View } from 'latkit'
+import { Gpu, load } from 'latkit'
+
+import { failedWith } from '../shared/errors.js'
 
 let loading: Promise<void> | undefined
-let workerUrl: string | undefined
-let ended = false
-const workers = new Set<Worker>()
+let worker: string | undefined
+
+/** Whether this page started over after latkit stopped, and has not drawn since. */
+const STOPPED = 'gridkitStudio.stopped'
 
 export function asset(name: string): string {
   const value = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content
@@ -11,41 +14,19 @@ export function asset(name: string): string {
   return value
 }
 
-// load() compares the factory identity when more than one component initializes it.
-function createWorker(): Worker {
-  if (!workerUrl || ended) throw new Error('The Latkit worker is unavailable.')
-  const worker = new Worker(workerUrl)
-  workers.add(worker)
-  return worker
-}
-
+/** Loads latkit once per page. A webview's own service worker serves its assets, and a worker
+ *  fetching its script by URL would go around it, so the worker starts from the script's text,
+ *  fetched while the WebAssembly compiles. Jobs start only once this resolves. */
 export function loadRenderer(): Promise<void> {
   return (loading ??= (async () => {
-    if (ended) throw new Error('The webview is closed.')
-    try {
-      // Native jobs start on demand, after initialization. Fetch the standalone bundle while
-      // load() compiles WASM and starts the GPU, then publish only when both are ready.
-      const results = await Promise.allSettled([
-        load({ wasm: asset('latkit-wasm'), worker: createWorker }),
-        (async () => {
-          const response = await fetch(asset('latkit-worker'))
-          if (!response.ok)
-            throw new Error(`Could not load the Latkit worker (${response.status}).`)
-          return response.text()
-        })(),
-      ])
-      for (const result of results) if (result.status === 'rejected') throw result.reason
-      if (ended) throw new Error('The webview is closed.')
-      const source = results[1]
-      if (source.status === 'fulfilled')
-        workerUrl = URL.createObjectURL(new Blob([source.value], { type: 'text/javascript' }))
-    } catch (error) {
-      for (const worker of workers) worker.terminate()
-      workers.clear()
-      if (workerUrl) URL.revokeObjectURL(workerUrl)
-      workerUrl = undefined
-      throw error
-    }
+    const [script] = await Promise.all([
+      fetch(asset('latkit-worker')).then((response) => {
+        if (!response.ok) throw new Error(`Could not load the Latkit worker (${response.status}).`)
+        return response.text()
+      }),
+      load({ wasm: asset('latkit-wasm'), worker: () => new Worker(worker!) }),
+    ])
+    worker = URL.createObjectURL(new Blob([script], { type: 'text/javascript' }))
   })().catch((error: unknown) => {
     loading = undefined
     throw error
@@ -54,43 +35,28 @@ export function loadRenderer(): Promise<void> {
 
 export async function openGpu(): Promise<Gpu> {
   await loadRenderer()
-  const gpu = await Gpu.create()
-  if (ended) {
-    gpu.destroy()
-    throw new Error('The webview is closed.')
-  }
-  const available = gpu.budget
-  gpu.budget = {
-    bytes: Math.min(available.bytes, 128 * 1024 * 1024),
-    uploadPerFrame: Math.min(available.uploadPerFrame, 8 * 1024 * 1024),
-  }
-  return gpu
+  return Gpu.create()
 }
 
-/** Register every source before compiling marks that join fields across datasets. */
-export async function createView(
-  canvas: Parameters<typeof View.create>[0],
-  scene: Parameters<typeof View.create>[1],
-  options: NonNullable<Parameters<typeof View.create>[2]>,
-): Promise<View> {
-  const view = await View.create(canvas, { ...scene, marks: [] }, options)
+/** Whether latkit stopped after an internal error, and the page starts over for it: once, until it
+ *  draws again. Stopping again before then, the page stays, and the error is said like any other. */
+export function startOver(error: unknown): boolean {
+  if (!failedWith(error, 'stopped')) return false
   try {
-    view.scene = scene
-    if (!options.camera) view.fit()
-    return view
-  } catch (error) {
-    view.destroy()
-    throw error
+    if (sessionStorage.getItem(STOPPED)) return false
+    sessionStorage.setItem(STOPPED, 'true')
+  } catch {
+    // A page without storage cannot tell it started over before, and starts over.
   }
+  location.reload()
+  return true
 }
 
-window.addEventListener(
-  'pagehide',
-  () => {
-    ended = true
-    for (const worker of workers) worker.terminate()
-    workers.clear()
-    if (workerUrl) URL.revokeObjectURL(workerUrl)
-  },
-  { once: true },
-)
+/** The page drew: should latkit stop again, it starts over again. */
+export function drew(): void {
+  try {
+    sessionStorage.removeItem(STOPPED)
+  } catch {
+    // Nothing was kept to forget.
+  }
+}

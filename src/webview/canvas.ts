@@ -2,25 +2,26 @@
 import './styles/index.css'
 import './styles/canvas.css'
 
-import { type Camera, Data, type Gpu, type Mark, type Source, type Tiles, View } from 'latkit'
+import type { Camera, Data, Gpu, Scene, Source } from 'latkit'
 
 import type { Bindings } from '../shared/bindings.js'
-import { type Entity, fieldDefinition, isEntity } from '../shared/document.js'
-import { failedWith } from '../shared/errors.js'
+import { type Entity, isEntity } from '../shared/document.js'
+import { quiet } from '../shared/errors.js'
 import { revisionOf, type Summary, type ViewState } from '../shared/messages.js'
 import { reader } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { DiagramEditor } from './diagram/edit.js'
+import { saveImage, viewShot } from './export/image.js'
 import { FrameReads, FrameWindow } from './frames.js'
+import { ViewHost } from './host.js'
 import { bindInteractions } from './interactions.js'
-import { borderMaps, streetMaps } from './maps.js'
+import { type Background, backgroundOf } from './maps.js'
 import { nativeMenu } from './menu.js'
 import { followPlayback } from './playback.js'
 import { CaseProjection } from './projections.js'
-import { Recovery } from './recovery.js'
-import { asset, createView, openGpu } from './runtime.js'
-import { caseFit, diagramScene, networkScene, sceneBindings, sceneFields } from './scenes.js'
+import { asset, openGpu, startOver } from './runtime.js'
+import { caseFit, sampledFields, sceneFields, sceneOf } from './scenes.js'
 import { nativeTheme, theme, watchTheme } from './theme.js'
 import { icon, type IconName } from './ui/glyphs.js'
 
@@ -35,10 +36,10 @@ function boot() {
   mark('canvas:boot')
   document.getElementById('app')!.innerHTML =
     '<main class="canvas-host" aria-busy="true"><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div><div class="canvas-host__status" role="status" hidden></div></main>'
-  const host = document.querySelector<HTMLElement>('.canvas-host')!
-  const canvas = host.querySelector('canvas')!
-  const fallback = host.querySelector<HTMLElement>('.canvas-host__fallback')!
-  const attribution = host.querySelector<HTMLElement>('.canvas-host__status')!
+  const main = document.querySelector<HTMLElement>('.canvas-host')!
+  const canvas = main.querySelector('canvas')!
+  const fallback = main.querySelector<HTMLElement>('.canvas-host__fallback')!
+  const attribution = main.querySelector<HTMLElement>('.canvas-host__status')!
   const toolbar = document.createElement('div')
   toolbar.className = 'toolbar'
   toolbar.dataset.testid = 'view-toolbar'
@@ -71,7 +72,7 @@ function boot() {
       buttons.set(label, button)
       toolbar.append(button)
     }
-    host.append(toolbar)
+    main.append(toolbar)
   }
   canvas.setAttribute(
     'aria-label',
@@ -80,10 +81,13 @@ function boot() {
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const cases = new CaseProjection()
   const reads = new FrameReads()
+  /** The frames each mapped field of the results holds around the playhead, by `[table, field]`. */
   const windows = new Map<string, FrameWindow>()
+  /** Lets go of an image being drawn once the page goes. */
+  const page = new AbortController()
   let state: ViewState = {}
   let summary: Summary | undefined
-  let view: View | undefined
+  let host: ViewHost | undefined
   let gpu: Gpu | undefined
   let opening: Promise<Gpu> | undefined
   let epoch = 0
@@ -96,60 +100,44 @@ function boot() {
   let editorKey = ''
   let stops: Array<() => void> = []
   let playback: (() => void) | undefined
-  let firstFrame: (() => void) | undefined
   let saving: ReturnType<typeof setTimeout> | undefined
   let own = ''
   let selected = ''
   let tilt: number | undefined
-  let maps: Array<Data | Tiles> = []
-  let marks: Mark[] = []
+  let background: Background = { sources: [], marks: [] }
   let mapKey = ''
   let mapController: AbortController | undefined
   let received = 0
   let drawnBindings: Bindings = {}
   let heldFields = new Map<string, Set<string>>()
   const visible = () => shown && !document.hidden && !closed
-  const report = (error: unknown) => {
-    host.setAttribute('aria-busy', 'false')
-    fallback.hidden = true
-    bridge.report(error, { view: kind, phase: 'draw' })
-  }
   const drop = () => {
     ++epoch
-    restore = view?.camera ?? restore
+    restore = host?.view.camera ?? restore
     editor?.destroy()
     editor = undefined
     editorKey = ''
     preview = undefined
     playback?.()
     playback = undefined
-    firstFrame?.()
-    firstFrame = undefined
     for (const stop of stops) stop()
     stops = []
-    view?.destroy()
-    view = undefined
+    host?.destroy()
+    host = undefined
     tilt = undefined
-    delete canvas.dataset.rendered
   }
-  const recovery = new Recovery(() => {
-    drop()
-    gpu?.destroy()
-    gpu = undefined
-    opening = undefined
-    void render().catch(fail)
-  }, report)
+  /** latkit replaces a lost device itself; only once it stops does the page start over. A wait the
+   *  view let go of, as it went, is no failure. */
   function fail(error: unknown) {
-    if (failedWith(error, 'stopped')) {
-      location.reload()
-      return
-    }
-    recovery.fail(error)
+    if (quiet(error) || startOver(error)) return
+    main.setAttribute('aria-busy', 'false')
+    fallback.hidden = true
+    bridge.report(error, { view: kind, phase: 'draw' })
   }
   const clock = createClock(
     (at) => {
       prefetch(at)
-      if (view && visible() && covered(at)) view.at = at
+      if (host && visible() && covered(at)) host.view.at = at
     },
     () => follow(),
   )
@@ -157,10 +145,10 @@ function boot() {
   function follow() {
     playback?.()
     playback = undefined
-    if (!gpu || !view || !visible() || clock.state.status !== 'playing') return
+    if (!gpu || !host || !visible() || clock.state.status !== 'playing') return
     playback = followPlayback(
       gpu,
-      () => (view && covered(clock.now()) ? [view] : []),
+      () => (host && covered(clock.now()) ? [host.view] : []),
       () => {
         const at = clock.now()
         prefetch(at)
@@ -173,14 +161,20 @@ function boot() {
     const data = preview ?? cases.slot.current?.data
     return [
       ...(data ? [data] : []),
-      ...maps,
+      ...background.sources,
       ...[...windows.values()].flatMap((window) => (window.data ? [window.data] : [])),
     ]
   }
 
-  function paint() {
-    const data = cases.slot.current?.data
-    if (!view || !data || !summary) return
+  const editing = () =>
+    kind === 'diagram' &&
+    !!state.diagramEditing &&
+    !!state.writable &&
+    !state.stale &&
+    summary === state.summary
+
+  /** What the view draws now: the bindings whose fields it holds, and the map. */
+  function scene(data: Data, summary: Summary): Scene {
     const settings = reader(state.settings)
     const requested = sceneFields(summary.definition, kind, state.bindings)
     if (
@@ -189,13 +183,22 @@ function boot() {
       )
     )
       drawnBindings = state.bindings ?? {}
+    return sceneOf(kind, data, summary.definition, settings, nativeTheme(settings, kind), {
+      bindings: drawnBindings,
+      results: state.results,
+      sampled: (table, field) => windows.get(JSON.stringify([table, field]))?.data,
+      background: background.marks,
+      editable: editing(),
+    })
+  }
+
+  function paint() {
+    const data = cases.slot.current?.data
+    if (!host || !data || !summary) return
+    const { view } = host
+    const settings = reader(state.settings)
     view.sources = sources()
-    const editable =
-      kind === 'diagram' &&
-      !!state.diagramEditing &&
-      !!state.writable &&
-      !state.stale &&
-      summary === state.summary
+    const editable = editing()
     if (kind === 'diagram')
       canvas.setAttribute(
         'aria-label',
@@ -203,32 +206,7 @@ function boot() {
           ? 'Diagram editing. Drag blocks or connect signal ports. Right-click for actions.'
           : 'Diagram view. Right-click an element for actions.',
       )
-    view.scene =
-      kind === 'diagram'
-        ? diagramScene(
-            data,
-            summary.definition.drawing,
-            settings,
-            nativeTheme(settings, kind),
-            editable,
-          )
-        : networkScene(
-            data,
-            summary.definition.drawing,
-            settings,
-            nativeTheme(settings, kind),
-            sceneBindings(
-              summary.definition,
-              drawnBindings,
-              state.results?.outputs.map((output) => ({
-                ...output,
-                domain: state.results?.domains?.[output.table]?.[output.field],
-              })) ?? [],
-              (table, field) => windows.get(JSON.stringify([table, field]))?.data,
-              settings,
-            ),
-            marks,
-          )
+    host.scene = scene(data, summary)
     if (kind === 'network') {
       const projection =
         summary.definition.drawing.geographic && settings.get('network.projection') === 'globe'
@@ -246,10 +224,10 @@ function boot() {
         )
       }
       view.orbit = settings.get('network.orbit')
-      const camera = view.camera
+      // A pitch alone turns the camera and keeps a fit that is due.
       if (tilt !== settings.get('network.tilt')) {
         tilt = settings.get('network.tilt')
-        if ('pitch' in camera) view.camera = { ...camera, pitch: tilt }
+        view.camera = { pitch: tilt }
       }
     }
     const key = editable ? cases.slot.current!.key : ''
@@ -266,7 +244,7 @@ function boot() {
           summary,
           (source) => {
             preview = source === cases.slot.current?.data ? undefined : source
-            if (view) view.sources = sources()
+            if (host) host.view.sources = sources()
           },
           fail,
         )
@@ -277,7 +255,7 @@ function boot() {
 
   function selection() {
     const data = cases.slot.current?.data
-    if (!view || !data) return
+    if (!host || !data) return
     const element = state.selection
     const entities =
       element &&
@@ -293,26 +271,19 @@ function boot() {
     const key = JSON.stringify(entities)
     if (key === selected) return
     selected = key
-    view.selection = entities.map((entity) => ({
+    host.view.selection = entities.map((entity) => ({
       data: data.name,
       table: entity.table,
       ids: [entity.id],
     }))
-    if (entities[0] && key !== own) view.fit({ reveal: { data: data.name, ...entities[0] } })
+    if (entities[0] && key !== own) host.fit({ reveal: { data: data.name, ...entities[0] } })
   }
 
+  /** Whether every sampled binding holds the frames at `at`. */
   function covered(at: number): boolean {
     if (kind !== 'network' || !summary || !state.results?.frames) return true
-    return Object.values(state.bindings ?? {}).every((binding) => {
-      if (fieldDefinition(summary!.definition, binding.table, binding.field)?.kind !== 'sampled')
-        return true
-      if (
-        !state.results!.outputs.some(
-          (output) => output.table === binding.table && output.field === binding.field,
-        )
-      )
-        return true
-      const range = windows.get(JSON.stringify([binding.table, binding.field]))?.range
+    return sampledFields(summary.definition, state.bindings, state.results).every((field) => {
+      const range = windows.get(JSON.stringify(field))?.range
       return !!range && at >= range[0] && at <= range[1]
     })
   }
@@ -322,17 +293,8 @@ function boot() {
     const results = state.results
     const wanted = new Set<string>()
     if (results?.frames)
-      for (const binding of Object.values(state.bindings ?? {})) {
-        if (fieldDefinition(summary.definition, binding.table, binding.field)?.kind !== 'sampled')
-          continue
-        if (
-          !results.outputs.some(
-            (output) => output.table === binding.table && output.field === binding.field,
-          )
-        )
-          continue
-        const key = JSON.stringify([binding.table, binding.field])
-        if (wanted.has(key)) continue
+      for (const [table, field] of sampledFields(summary.definition, state.bindings, results)) {
+        const key = JSON.stringify([table, field])
         wanted.add(key)
         const window = windows.get(key) ?? new FrameWindow(reads)
         windows.set(key, window)
@@ -358,8 +320,8 @@ function boot() {
           .playhead(
             {
               results: results.id,
-              table: binding.table,
-              field: binding.field,
+              table,
+              field,
               range: playing
                 ? [
                     Math.max(domain[0], at - 0.25),
@@ -384,7 +346,7 @@ function boot() {
         windows.delete(key)
         removed = true
       }
-    if (removed && view) paint()
+    if (removed && host) paint()
   }
 
   async function backgrounds() {
@@ -398,33 +360,24 @@ function boot() {
     mapKey = key
     mapController?.abort()
     const controller = (mapController = new AbortController())
-    let next: Array<Data | Tiles> = []
-    let nextMarks: Mark[] = []
     try {
-      if (mode === 'borders') {
-        const loaded = await borderMaps(
-          new URL(asset('latkit-assets')),
-          theme().palette,
-          controller.signal,
-        )
-        next = loaded.data
-        nextMarks = loaded.marks
-      } else if (mode === 'streets') {
-        const loaded = streetMaps(settings.get('network.map.tilesUrl'), theme().palette)
-        next = [loaded.source]
-        nextMarks = loaded.marks
-      }
+      const next = await backgroundOf(
+        mode,
+        settings,
+        new URL(asset('latkit-assets')),
+        theme().palette,
+        controller.signal,
+      )
       if (controller.signal.aborted || closed) {
-        for (const source of next) 'destroy' in source && source.destroy()
+        next.destroy?.()
         return
       }
-      const old = maps
-      maps = next
-      marks = nextMarks
-      attribution.hidden = mode !== 'streets'
-      attribution.textContent = mode === 'streets' ? settings.get('network.map.attribution') : ''
+      const old = background
+      background = next
+      attribution.hidden = !next.attribution
+      attribution.textContent = next.attribution ?? ''
       paint()
-      for (const source of old) 'destroy' in source && source.destroy()
+      old.destroy?.()
     } catch (error) {
       if (!controller.signal.aborted) {
         mapKey = ''
@@ -451,42 +404,30 @@ function boot() {
       gpu = device
       mark('canvas:gpu')
       let fit = false
-      if (!view) {
-        const data = cases.slot.current.data
-        const settings = reader(state.settings)
-        const scene =
-          kind === 'diagram'
-            ? diagramScene(
-                data,
-                summary.definition.drawing,
-                settings,
-                nativeTheme(settings, kind),
-                false,
-              )
-            : networkScene(
-                data,
-                summary.definition.drawing,
-                settings,
-                nativeTheme(settings, kind),
-                [],
-              )
+      if (!host) {
         const saved = bridge.state<{ uri?: string; camera?: Camera }>({})
         const camera = restore ?? (saved.uri === state.uri ? saved.camera : undefined)
-        const made = await createView(canvas, scene, {
-          gpu: device,
-          sources: sources(),
-          ...(camera && { camera }),
-        })
+        const made = await ViewHost.open(
+          canvas,
+          scene(cases.slot.current.data, summary),
+          { gpu: device, sources: sources(), ...(camera && { camera }) },
+          fail,
+          () => {
+            mark('canvas:frame')
+            fallback.hidden = true
+            main.setAttribute('aria-busy', 'false')
+          },
+        )
         if (closed || generation !== epoch || !visible()) {
           made.destroy()
           return
         }
-        view = made
+        host = made
         fit = !camera
         selected = ''
         restore = undefined
         stops.push(
-          bindInteractions(made, {
+          bindInteractions(made.view, {
             select(element) {
               own = JSON.stringify(element ? [element] : [])
               bridge.send({ kind: 'select', element })
@@ -506,27 +447,14 @@ function boot() {
             error: fail,
           }),
         )
-        firstFrame = device.on('frame', () => {
-          if (!view?.complete || view.stats.frames === 0) return
-          mark('canvas:frame')
-          canvas.dataset.rendered = 'true'
-          fallback.hidden = true
-          host.setAttribute('aria-busy', 'false')
-          recovery.presented()
-          firstFrame?.()
-          firstFrame = undefined
-        })
       }
       paint()
-      // Setting the initial tilt assigns camera, which cancels a pending native fit.
-      // Request the case extent only after those initial display settings are applied.
-      if (fit) view.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
+      if (fit) host.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
       follow()
       void backgrounds()
     } finally {
       creating = false
-      if (generation !== epoch && visible() && !view && !recovery.pending && !recovery.blocked)
-        void render().catch(fail)
+      if (generation !== epoch && visible() && !host) void render().catch(fail)
     }
   }
 
@@ -539,11 +467,8 @@ function boot() {
         cases.clear()
         summary = undefined
         restore = undefined
-        for (const window of windows.values()) window.clear()
-        windows.clear()
-        reads.clear()
       }
-      if (previous.results?.id !== state.results?.id) {
+      if (previous.uri !== state.uri || previous.results?.id !== state.results?.id) {
         for (const window of windows.values()) window.clear()
         windows.clear()
         reads.clear()
@@ -572,7 +497,7 @@ function boot() {
       void backgrounds()
       if (!state.summary && state.error) {
         fallback.hidden = true
-        host.setAttribute('aria-busy', 'false')
+        main.setAttribute('aria-busy', 'false')
       }
     } else if (message.kind === 'shown') {
       shown = message.shown
@@ -580,21 +505,24 @@ function boot() {
       else drop()
     } else if (message.kind === 'action') {
       if (message.command === 'reloadView') {
-        recovery.reset()
         drop()
         void render().catch(fail)
       } else if (message.command === 'fit' && cases.slot.current && summary)
-        view?.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
+        host?.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
       else if (message.command === 'arrangeDiagram') void editor?.arrange().catch(fail)
-      else if (message.command === 'neighborhood' && view && cases.slot.current) {
+      else if (message.command === 'neighborhood' && host && cases.slot.current) {
         const entity = isEntity(message.value) ? message.value : state.selection
         if (entity) {
           const row = { data: cases.slot.current.data.name, ...entity }
-          view.fit({
-            rows: [{ data: row.data, table: row.table, ids: [row.id] }, ...view.neighbors(row)],
+          host.fit({
+            rows: [
+              { data: row.data, table: row.table, ids: [row.id] },
+              ...host.view.neighbors(row),
+            ],
           })
         }
-      }
+      } else if (message.command === 'exportImage' && host && summary && state.uri)
+        void saveImage(viewShot(host.view), state.uri, summary.name, kind, page.signal).catch(fail)
     }
   })
   const unwatch = watchTheme(() => {
@@ -613,7 +541,7 @@ function boot() {
     gridkitSelection?: () => unknown
     gridkitLocate?: (entity: Entity) => unknown
   }
-  hooks.gridkitPick = (point, radius) => view?.pick(point, { radius })
+  hooks.gridkitPick = (point, radius) => host?.view.pick(point, { radius })
   hooks.gridkitLifecycle = () => ({
     closed,
     shown,
@@ -622,13 +550,13 @@ function boot() {
     epoch,
     summary: summary?.version,
     projection: cases.slot.current?.key,
-    view: !!view,
+    view: !!host,
     pending: !!opening,
-    blocked: recovery.blocked,
   })
-  hooks.gridkitStats = () =>
-    view &&
-    gpu && {
+  hooks.gridkitStats = () => {
+    if (!host || !gpu) return undefined
+    const { view } = host
+    return {
       ...view.stats,
       complete: view.complete,
       waiting: view.waiting,
@@ -648,29 +576,30 @@ function boot() {
       cacheBytes: reads.bytes,
       reads: reads.active,
     }
+  }
   hooks.gridkitSelection = () =>
-    view && {
-      entities: view.selection.flatMap((group) =>
+    host && {
+      entities: host.view.selection.flatMap((group) =>
         group.ids.map((id) => ({ table: group.table, id })),
       ),
-      camera: view.camera,
+      camera: host.view.camera,
     }
   hooks.gridkitLocate = (entity) =>
-    view && cases.slot.current
-      ? view.screenOf({ data: cases.slot.current.data.name, ...entity })
+    host && cases.slot.current
+      ? host.view.screenOf({ data: cases.slot.current.data.name, ...entity })
       : null
   window.addEventListener(
     'pagehide',
     () => {
       closed = true
+      page.abort()
       drop()
       off()
       unwatch()
-      recovery.dispose()
       clock.stop()
       clearTimeout(saving)
       mapController?.abort()
-      for (const source of maps) 'destroy' in source && source.destroy()
+      background.destroy?.()
       for (const window of windows.values()) window.clear()
       cases.clear()
       reads.clear()

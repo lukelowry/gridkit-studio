@@ -330,7 +330,13 @@ export interface Cameras {
 
 /** What a command asks of a view. */
 export type ViewAction =
-  'fit' | 'reloadView' | 'neighborhood' | 'diagramEditing' | 'arrangeDiagram' | 'valueRange'
+  | 'fit'
+  | 'reloadView'
+  | 'neighborhood'
+  | 'diagramEditing'
+  | 'arrangeDiagram'
+  | 'valueRange'
+  | 'exportImage'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -398,12 +404,15 @@ export interface ViewApi {
   }
   /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
    *  cancel. */
-  videoOpen: { input: { uri: string; name: string }; output: number | null }
+  exportOpen: { input: { uri: string; name: string }; output: number | null }
   /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
   cameras: { input: { uri: string }; output: Cameras }
-  videoWrite: { input: { file: number; bytes: Uint8Array }; output: void }
-  /** Finishes the file, or aborts it; resolves to the finished video's path. */
-  videoClose: { input: { file: number; abort?: boolean }; output: string | null }
+  exportWrite: { input: { file: number; bytes: Uint8Array }; output: void }
+  /** Finishes the file, or aborts it; resolves to the finished file's path. */
+  exportClose: { input: { file: number; abort?: boolean }; output: string | null }
+  /** Asks the user where to save an image of the case at `uri`, and saves it there: its path, or
+   *  null when they cancel. */
+  exportSave: { input: { uri: string; name: string; bytes: Uint8Array }; output: string | null }
   /** Holds results under an id of the view's own, while it reads them for an export: whatever
    *  shows meanwhile, they stay until it lets go of them, or the view goes. */
   share: { input: OfResults; output: Results }

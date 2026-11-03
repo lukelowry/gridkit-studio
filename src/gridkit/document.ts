@@ -1,4 +1,4 @@
-import type { Fields, Id, Reference, Values } from 'latkit'
+import type { Id, Reference, Values } from 'latkit'
 
 import type { CaseDefinition } from '../shared/document.js'
 
@@ -12,10 +12,4 @@ export interface ProjectedDocument {
   readonly key: string
   readonly definition: CaseDefinition
   readonly tables: ReadonlyMap<string, ProjectedTable>
-}
-
-export interface ChangedRows {
-  readonly table: string
-  readonly ids: readonly Id[]
-  readonly fields: Fields
 }

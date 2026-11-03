@@ -7,12 +7,13 @@ import { catalog } from '../gridkit/definition.js'
 import { reader } from '../shared/preferences.js'
 import { loadNative } from '../workers/native.js'
 import {
+  caseFit,
   diagramScene,
   networkScene,
   plotScene,
+  sampledFields,
   sceneBindings,
   sceneFields,
-  stableDomain,
 } from './scenes.js'
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 it('builds native scenes and projects only mark fields with separate sampled sources', () => {
@@ -50,7 +51,6 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
     { vertexSize: { table: 'Bus', field: 'Vm' } },
     [{ table: 'Bus', field: 'Vm', ids: [42], domain: [0, 10] }],
     () => sampled,
-    reader(),
   )
   expect(bindings[0]?.domain).toEqual([0, 10])
   expect(bindings[0]?.source).toEqual(['sample', 'Bus'])
@@ -64,19 +64,40 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
   const scene = networkScene(data, drawing, reader(), {}, bindings)
   const radius = (scene.marks![0] as { radius: Expr }).radius
   expect(JSON.stringify(radius)).toContain('sample')
-  expect(stableDomain([1, 1])).toEqual([0.999999, 1.000001])
-  expect(stableDomain([-10, 10])).toEqual([-10, 10])
-  expect(() => stableDomain([NaN, 1])).toThrow()
+  const results = {
+    outputs: [{ table: 'Bus', field: 'Vm', ids: [42] }],
+  } as unknown as Parameters<typeof sampledFields>[2]
+  const both = {
+    vertexSize: { table: 'Bus', field: 'Vm' },
+    edgeColor: { table: 'Bus', field: 'Vm' },
+  }
+  expect(sampledFields(catalog.definition, both, results)).toEqual([['Bus', 'Vm']])
+  expect(sampledFields(catalog.definition, both)).toEqual([])
 })
-it('converts geographic elevation to native degrees of arc', () => {
-  const bindings = sceneBindings(
-    catalog.definition,
-    { vertexHeight: { table: 'Bus', field: 'params.kv' } },
-    [],
-    () => undefined,
-    reader({ 'network.heightMeters': 111195 }),
-  )
-  expect(bindings[0]?.range).toEqual([0, 1])
+it('frames whole case tables and raises geographic heights by meters', () => {
+  using data = new Data('case').replace('Bus', [1, 2], {
+    x: [0, 1],
+    y: [0, 1],
+    kv: [0, 10],
+  })
+  const drawing = {
+    geographic: true,
+    vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
+    edges: [],
+    blocks: [],
+    nets: [],
+  }
+  expect(JSON.parse(JSON.stringify(caseFit(data, drawing, 'network')))).toEqual({
+    tables: [['case', 'Bus']],
+  })
+  // 111,194.93 meters is one degree of arc, the earth's unit of height.
+  const scene = networkScene(data, drawing, reader({ 'network.heightMeters': 111194.93 }), {}, [
+    { table: 'Bus', field: 'kv', channel: 'elevation', domain: [0, 10] },
+  ])
+  const elevation = (scene.marks![0] as { elevation: Expr }).elevation
+  const values = data.query({ of: 'Bus', select: { elevation } }).fields.elevation as Float64Array
+  expect(values[0]).toBeCloseTo(0)
+  expect(values[1]).toBeCloseTo(1, 6)
 })
 
 it('scales dense case marks and their bindings together while preserving missing rows', () => {

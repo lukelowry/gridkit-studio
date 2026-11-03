@@ -1,23 +1,16 @@
-﻿import { Data, type Gpu, type Mark, type Placed, type Rect, type Tiles, View } from 'latkit'
+﻿import { type Gpu, type Placed, type Rect, View } from 'latkit'
 
-import { fieldDefinition } from '../../shared/document.js'
 import { type Cameras, type Results, type ViewState } from '../../shared/messages.js'
-import { holdsPlot, plotName } from '../../shared/plots.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
 import { FrameReads, FrameWindow } from '../frames.js'
-import { borderMaps, streetMaps } from '../maps.js'
+import { type Background, backgroundOf } from '../maps.js'
 import { CaseProjection } from '../projections.js'
-import { asset, createView, openGpu } from '../runtime.js'
-import {
-  caseFit,
-  diagramScene,
-  networkScene,
-  plotScene,
-  sceneBindings,
-  sceneFields,
-} from '../scenes.js'
+import { asset, openGpu } from '../runtime.js'
+import { caseFit, sampledFields, sceneFields, sceneOf } from '../scenes.js'
 import { nativeTheme, theme } from '../theme.js'
+import { caseStem } from './image.js'
+import { plotViews } from './plots.js'
 import { exportVideo, type VideoJob, videoOutput, type VideoProgress } from './video.js'
 
 /** Owns every export resource, including its immutable results lease and sequential file sink. */
@@ -33,8 +26,9 @@ export async function renderVideo(
   const frames: FrameWindow[] = []
   const views: View[] = []
   const placed: Placed[] = []
-  const maps: Array<Data | Tiles> = []
-  let marks: Mark[] = []
+  /** Lets go of the Monitor's plots, whose views and frames are their own. */
+  const released: Array<() => void> = []
+  let background: Background = { sources: [], marks: [] }
   let gpu: Gpu | undefined
   let results: Results | undefined
   let file: number | null = null
@@ -46,18 +40,18 @@ export async function renderVideo(
     const summary = shown.summary
     const settings = reader(app.settings)
     const definition = summary.definition
-    const name = summary.name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
-    file = await bridge.request('videoOpen', { uri: shown.uri, name: `${name}.mp4` }, signal)
+    const name = `${caseStem(summary.name)}.mp4`
+    file = await bridge.request('exportOpen', { uri: shown.uri, name }, signal)
     if (file === null) return null
     const handle = file
     output = videoOutput(
-      (bytes) => bridge.request('videoWrite', { file: handle, bytes }),
+      (bytes) => bridge.request('exportWrite', { file: handle, bytes }),
       async () => {
-        saved = await bridge.request('videoClose', { file: handle })
+        saved = await bridge.request('exportClose', { file: handle })
         file = null
       },
       async () => {
-        await bridge.request('videoClose', { file: handle, abort: true })
+        await bridge.request('exportClose', { file: handle, abort: true })
         file = null
       },
     )
@@ -75,34 +69,26 @@ export async function renderVideo(
     const selection = [...fields].map(([table, fields]) => ({ table, fields: [...fields] }))
     await projection.receive({ results: results.id, fields: selection }, selection, signal)
     const data = projection.slot.current!.data
-    if (job.views.includes('network') && definition.drawing.geographic) {
-      if (settings.get('network.map.source') === 'borders') {
-        const loaded = await borderMaps(new URL(asset('latkit-assets')), theme().palette, signal)
-        maps.push(...loaded.data)
-        marks = loaded.marks
-      } else if (settings.get('network.map.source') === 'streets') {
-        const loaded = streetMaps(settings.get('network.map.tilesUrl'), theme().palette)
-        maps.push(loaded.source)
-        marks = loaded.marks
-      }
-    }
+    if (job.views.includes('network') && definition.drawing.geographic)
+      background = await backgroundOf(
+        settings.get('network.map.source'),
+        settings,
+        new URL(asset('latkit-assets')),
+        theme().palette,
+        signal,
+      )
     const sampled = new Map<string, FrameWindow>()
     if (job.views.includes('network'))
-      for (const binding of Object.values(app.bindings ?? {})) {
-        if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled') continue
-        if (
-          !results.outputs.some(
-            (output) => output.table === binding.table && output.field === binding.field,
-          )
-        )
-          continue
-        const key = JSON.stringify([binding.table, binding.field])
-        if (!sampled.has(key)) {
-          const frame = new FrameWindow(reads)
-          sampled.set(key, frame)
-          frames.push(frame)
-        }
+      for (const field of sampledFields(definition, app.bindings, results)) {
+        const frame = new FrameWindow(reads)
+        sampled.set(JSON.stringify(field), frame)
+        frames.push(frame)
       }
+    const sources = () => [
+      data,
+      ...background.sources,
+      ...[...sampled.values()].flatMap((frame) => (frame.data ? [frame.data] : [])),
+    ]
     let network: View | undefined
     const prepare = async (at: number, abort: AbortSignal) => {
       let changed = false
@@ -128,110 +114,51 @@ export async function renderVideo(
             )) || changed
         }),
       )
-      if (network && changed) {
-        network.sources = [
-          data,
-          ...maps,
-          ...[...sampled.values()].flatMap((frame) => (frame.data ? [frame.data] : [])),
-        ]
-      }
+      if (network && changed) network.sources = sources()
     }
     await prepare(job.timeRange[0], signal)
 
-    const plots = (app.plots ?? []).filter((plot) => holdsPlot(results, plot))
     for (let index = 0; index < job.views.length; index++) {
       const kind = job.views[index]!
       const share = 1 / job.views.length
       const region: Rect =
         job.layout === 'row' ? [index * share, 0, share, 1] : [0, index * share, 1, share]
       if (kind === 'monitor') {
-        for (let lane = 0; lane < plots.length; lane++) {
-          const plot = plots[lane]!
-          const frame = new FrameWindow(reads)
-          frames.push(frame)
-          await frame.receive(
-            {
-              results: results.id,
-              table: plot.from,
-              field: plot.field,
-              ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
-              range: job.timeRange,
-              purpose: 'plot',
-              pixels: Math.ceil(job.width * region[2]),
-              bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, plots.length)),
-            },
-            results.frames,
-            signal,
-          )
-          const source = frame.data!
-          const view = await createView(
-            null,
-            plotScene(
-              source,
-              plot.from,
-              plot.field,
-              plotName(definition, plot),
-              settings,
-              nativeTheme(settings, 'monitor'),
-            ),
-            { gpu, sources: [source], camera: { x: [...job.timeRange] } },
-          )
-          view.at = job.timeRange[0]
-          views.push(view)
-          placed.push({
-            view,
-            region: [
-              region[0],
-              region[1] + (lane * region[3]) / plots.length,
-              region[2],
-              region[3] / plots.length,
-            ],
-          })
-          signal.throwIfAborted()
-        }
-      } else {
-        const bindings = sceneBindings(
-          definition,
-          app.bindings ?? {},
-          results.outputs.map((output) => ({
-            ...output,
-            domain: results!.domains?.[output.table]?.[output.field],
-          })),
-          (table, field) => sampled.get(JSON.stringify([table, field]))?.data,
-          settings,
-        )
-        const scene =
-          kind === 'network'
-            ? networkScene(
-                data,
-                definition.drawing,
-                settings,
-                nativeTheme(settings, kind),
-                bindings,
-                marks,
-              )
-            : diagramScene(data, definition.drawing, settings, nativeTheme(settings, kind), false)
-        if (kind === 'network' && settings.get('network.map.source') === 'streets')
-          scene.subtitle = settings.get('network.map.attribution')
-        const view = await createView(null, scene, {
+        const lanes = await plotViews(
+          app,
+          results,
           gpu,
-          sources: [
-            data,
-            ...maps,
-            ...[...sampled.values()].flatMap((frame) => (frame.data ? [frame.data] : [])),
-          ],
+          reads,
+          job.timeRange,
+          region,
+          job.width,
+          signal,
+        )
+        released.push(lanes.release)
+        views.push(...lanes.placed.map(({ view }) => view))
+        placed.push(...lanes.placed)
+      } else {
+        const scene = sceneOf(kind, data, definition, settings, nativeTheme(settings, kind), {
+          bindings: app.bindings,
+          results,
+          sampled: (table, field) => sampled.get(JSON.stringify([table, field]))?.data,
+          background: background.marks,
+        })
+        if (kind === 'network' && background.attribution) scene.subtitle = background.attribution
+        const view = await View.create(null, scene, {
+          gpu,
+          sources: sources(),
           ...(cameras[kind] ? { camera: cameras[kind] } : {}),
         })
         views.push(view)
         if (kind === 'network') {
           network = view
           view.orbit = settings.get('network.orbit')
-          const camera = view.camera
-          if ('pitch' in camera && camera.pitch !== settings.get('network.tilt'))
-            view.camera = { ...camera, pitch: settings.get('network.tilt') }
+          view.camera = { pitch: settings.get('network.tilt') }
         }
         view.at = job.timeRange[0]
-        if (!cameras[kind]) view.fit(caseFit(data, definition.drawing, kind))
+        if (!cameras[kind])
+          void view.fit(caseFit(data, definition.drawing, kind), { signal }).catch(bridge.report)
         placed.push({ view, region })
         signal.throwIfAborted()
       }
@@ -242,13 +169,14 @@ export async function renderVideo(
     if (output && !output.locked) await output.abort(error).catch(() => {})
     throw error
   } finally {
+    for (const release of released) release()
     for (const view of views) view.destroy()
     gpu?.destroy()
     for (const frame of frames) frame.clear()
     projection.clear()
     reads.clear()
-    for (const source of maps) if (source instanceof Data) source.destroy()
-    if (file !== null) await bridge.request('videoClose', { file, abort: true }).catch(() => {})
+    background.destroy?.()
+    if (file !== null) await bridge.request('exportClose', { file, abort: true }).catch(() => {})
     if (results) await bridge.request('unshare', { results: results.id }).catch(() => {})
   }
 }

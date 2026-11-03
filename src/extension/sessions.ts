@@ -35,6 +35,8 @@ export interface Action {
   readonly command: ViewAction
   readonly value?: unknown
   readonly view?: Target['origin']
+  /** Only the editor in front acts, as an editor's title bar asks. */
+  readonly active?: boolean
 }
 
 export class Sessions implements vscode.Disposable {

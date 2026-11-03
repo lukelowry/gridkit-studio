@@ -230,8 +230,9 @@ suite('Network menus', () => {
   })
 
   test('fits from the editor title bar, and turns from its own toolbar', async () => {
-    // This test exercises motion; the host's accessibility preference may disable orbit.
-    await bench.page.emulateMedia({ reducedMotion: 'no-preference' })
+    // The Network turns whatever the host's accessibility preference says.
+    const settings = vscode.workspace.getConfiguration('gridkitStudio')
+    await settings.update('network.motion', 'full', vscode.ConfigurationTarget.Global)
     try {
       await bench.title('editor', 'Fit All')
       await idle(network)
@@ -249,7 +250,7 @@ suite('Network menus', () => {
       await turn.click()
       await until(async () => (await turn.getAttribute('aria-pressed')) === 'false', 'still')
     } finally {
-      await bench.page.emulateMedia({ reducedMotion: null })
+      await settings.update('network.motion', undefined, vscode.ConfigurationTarget.Global)
     }
   })
 
@@ -280,9 +281,11 @@ suite('Network menus', () => {
 
   test('draws again from the start from its title bar', async () => {
     network = await bench.open('network')
-    const drawn = (await idle(network)).frames
+    // Each view the page lets go of counts once; a reload lets go of the one drawing.
+    const views = () => network.evaluate<number>('gridkitLifecycle().epoch')
+    const before = await views()
     await bench.title('editor', 'Reload View')
-    await until(async () => (await frames(network).catch(() => Infinity)) < drawn, 'a new drawing')
+    await until(async () => (await views().catch(() => before)) > before, 'a new drawing')
     await visible(network, 'canvas[data-rendered=true]')
   })
 })

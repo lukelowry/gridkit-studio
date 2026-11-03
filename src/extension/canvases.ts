@@ -1,5 +1,5 @@
 /** Commands on what the views draw: framing and reloading them, editing the Diagram, mapping a
- *  field onto the Network, their settings, and a video of them. */
+ *  field onto the Network, their settings, and a video or image of them. */
 
 import * as vscode from 'vscode'
 
@@ -18,15 +18,18 @@ import { settingsOf, viewOf } from '../shared/ids.js'
 import { askRange, type Commands, type Context } from './context.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
-  /** The canvas a command acts on: the one its menu was opened on, else, from the editor's title
-   *  bar, the one in front. */
-  const canvasOf = (context: Context): Target['origin'] | undefined => {
-    if (context.target) return context.target.origin
+  /** The canvas a command acts on: the kind its menu was opened on, else the editor in front alone,
+   *  as its title bar or the Command Palette asks. */
+  const canvasOf = (context: Context): { view?: Target['origin']; active: boolean } => {
+    if (context.target) return { view: context.target.origin, active: false }
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const view = input instanceof vscode.TabInputCustom ? viewOf(input.viewType) : undefined
-    return view === 'network' || view === 'diagram' ? view : undefined
+    return view === 'network' || view === 'diagram' ? { view, active: true } : { active: false }
   }
-  command('fit', (context) => action(context, 'fit', undefined, canvasOf(context)))
+  command('fit', (context) => {
+    const { view, active } = canvasOf(context)
+    action(context, 'fit', undefined, view, active)
+  })
   // Every view of the case, and its results, read and drawn again.
   command('reloadView', (context) => {
     context.session.retry()
@@ -102,4 +105,13 @@ export function registerCanvases({ command, action, focus }: Commands) {
       vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
     )
   command('exportVideo', ({ session }) => focus(session, 'export'))
+  // A canvas editor's title bar names its file, and a menu its view; the Monitor's title bar names
+  // nothing, so the Command Palette leaves this out.
+  command('exportImage', (context, value) => {
+    const { view, active } =
+      value instanceof vscode.Uri || context.target
+        ? canvasOf(context)
+        : { view: 'monitor' as const, active: false }
+    action(context, 'exportImage', undefined, view, active)
+  })
 }

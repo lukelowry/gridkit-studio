@@ -1,4 +1,4 @@
-/** Video files: an export replaces its destination only once it completes. */
+/** Export files: an export replaces its destination only once it completes. */
 
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -7,13 +7,13 @@ import { join } from 'node:path'
 import { setup, suite, teardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import { VideoFile } from '../../src/extension/video.js'
+import { ExportFile } from '../../src/extension/exports.js'
 import { folder } from './harness.js'
 
-suite('Video files', () => {
+suite('Export files', () => {
   let directory: string
   let destination: vscode.Uri
-  let file: VideoFile | undefined
+  let file: ExportFile | undefined
   const bytes = (value: string) => new TextEncoder().encode(value)
 
   setup(async () => {
@@ -28,7 +28,7 @@ suite('Video files', () => {
 
   test('cancelling an overwrite preserves the original video', async () => {
     await writeFile(destination.fsPath, 'original')
-    file = await VideoFile.create(destination)
+    file = await ExportFile.create(destination)
     await file.write(bytes('unfinished'))
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'original')
     await file.abort()
@@ -38,7 +38,7 @@ suite('Video files', () => {
 
   test('publishes sequential writes only after successful completion', async () => {
     await writeFile(destination.fsPath, 'original')
-    file = await VideoFile.create(destination)
+    file = await ExportFile.create(destination)
     await file.write(bytes('hello '))
     await file.write(bytes('world'))
     await file.close()
@@ -49,12 +49,12 @@ suite('Video files', () => {
   })
 
   test('serializes concurrent writes before publishing and cancels queued writes', async () => {
-    file = await VideoFile.create(destination)
+    file = await ExportFile.create(destination)
     const writes = [file.write(bytes('one')), file.write(bytes('two')), file.write(bytes('three'))]
     await file.close()
     await Promise.all(writes)
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'onetwothree')
-    file = await VideoFile.create(destination)
+    file = await ExportFile.create(destination)
     const cancelled = file.write(bytes('cancelled'))
     const aborting = file.abort()
     await assert.rejects(cancelled, /cancelled/)
@@ -63,7 +63,7 @@ suite('Video files', () => {
   })
 
   test('a failed replacement leaves the destination intact and can be cleaned up', async () => {
-    file = await VideoFile.create(destination)
+    file = await ExportFile.create(destination)
     await file.write(bytes('new video'))
     await mkdir(destination.fsPath)
     await writeFile(join(destination.fsPath, 'keep.txt'), 'original')

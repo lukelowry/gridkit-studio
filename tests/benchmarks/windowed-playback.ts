@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import type { FrameRequest } from '../../src/shared/data.js'
-import { pause, testHost, until, visible, VM } from '../vscode/harness.js'
+import { pause, renderer, testHost, until, visible, VM } from '../vscode/harness.js'
 
 export async function run() {
   const bench = await testHost()
@@ -160,7 +160,7 @@ export async function run() {
     }
     await writeFile(
       join(bench.output, 'tests', 'windowed-playback.json'),
-      JSON.stringify({ renderer: 'latkit@0.3.1', delayed, cancelled, samples }, null, 2),
+      JSON.stringify({ renderer: await renderer(), delayed, cancelled, samples }, null, 2),
     )
   } catch (error) {
     await bench.failed('windowed-playback')

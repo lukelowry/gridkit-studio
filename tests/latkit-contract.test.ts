@@ -23,7 +23,7 @@ beforeAll(async () => {
   await expect(loadNative(`${wasmPath}.other`)).rejects.toThrow('another WASM')
 })
 
-describe('published Latkit 0.3.1 WASM', () => {
+describe('published Latkit WASM', () => {
   it('preserves native IDs, punctuation, references, and float64 static values', () => {
     using data = new Data('case')
     data.apply(

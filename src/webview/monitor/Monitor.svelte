@@ -3,13 +3,14 @@
   import { onMount, tick } from 'svelte'
 
   import type { TimeRange } from '../../shared/data.js'
-  import { failedWith } from '../../shared/errors.js'
   import type { ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
   import { createClock } from '../clock.js'
+  import { picture, saveImage, SCALE } from '../export/image.js'
+  import { plotViews } from '../export/plots.js'
   import { FrameReads } from '../frames.js'
-  import { Recovery } from '../recovery.js'
-  import { openGpu } from '../runtime.js'
+  import { followPlayback } from '../playback.js'
+  import { openGpu, startOver } from '../runtime.js'
   import { watchTheme } from '../theme.js'
   import { monitorWindow, type PlotState } from './plot.js'
   import Plot from './Plot.svelte'
@@ -23,6 +24,8 @@
   let chosen = $state.raw<TimeRange>()
   const reads = new FrameReads()
   const views = new Set<View>()
+  /** Lets go of an image being drawn once the page goes. */
+  const lifetime = new AbortController()
   const retained = new Map<string, PlotState>()
   function plotState(key: string): PlotState {
     const state = retained.get(key) ?? {}
@@ -49,9 +52,6 @@
       Math.min(16 * 1024 * 1024, Math.floor((64 * 1024 * 1024) / Math.max(1, plots.length))),
     ),
   )
-  const recovery = new Recovery(() => {
-    void device().catch(fail)
-  }, bridge.report)
   const clock = createClock((at) => {
     t = at
     if (active) for (const view of views) view.at = at
@@ -74,29 +74,28 @@
     gpu = created
     follow()
   }
+  /** latkit replaces a lost device itself; only once it stops does the page start over. */
   function fail(error: unknown) {
-    if (failedWith(error, 'stopped')) {
-      location.reload()
-      return
-    }
-    recovery.fail(error)
+    if (!startOver(error)) bridge.report(error)
   }
   function follow() {
     following?.()
     following = undefined
     if (!gpu || !active || !views.size || clock.state.status !== 'playing') return
     let reported = 0
-    following = gpu.on('frame', (now) => {
-      const at = clock.now()
-      for (const view of views) {
-        view.at = at
-        if (view.complete) recovery.presented()
-      }
-      if (now - reported >= 250) {
-        t = at
-        reported = now
-      }
-    })
+    following = followPlayback(
+      gpu,
+      () => views,
+      () => {
+        const at = clock.now()
+        const now = performance.now()
+        if (now - reported >= 250) {
+          t = at
+          reported = now
+        }
+        return at
+      },
+    )
   }
   function register(view: View): () => void {
     views.add(view)
@@ -105,6 +104,35 @@
     return () => {
       views.delete(view)
       follow()
+    }
+  }
+  /** An image of every plot, those scrolled out of sight too, as the Monitor stacks them. */
+  async function exportImage() {
+    const lanes = document.querySelector('[data-testid="monitor-lanes"]')
+    if (!gpu || !results || !app.uri || !app.summary || !lanes) return
+    const size = [lanes.clientWidth, lanes.scrollHeight] as const
+    const pixels = size[0] * SCALE
+    const plots = await plotViews(
+      app,
+      results,
+      gpu,
+      reads,
+      shown,
+      [0, 0, 1, 1],
+      pixels,
+      lifetime.signal,
+    )
+    try {
+      for (const { view } of plots.placed) view.at = t
+      await saveImage(
+        picture(size, plots.placed),
+        app.uri,
+        app.summary.name,
+        'monitor',
+        lifetime.signal,
+      )
+    } finally {
+      plots.release()
     }
   }
   function turn(range: TimeRange) {
@@ -122,21 +150,17 @@
       if (message.kind === 'state') {
         const old = app
         app = merged(app, message.state)
-        if (old.results?.id !== app.results?.id) {
-          chosen = undefined
-          reads.clear()
-        }
-        if (old.window !== app.window) chosen = undefined
+        if (old.results?.id !== app.results?.id) reads.clear()
+        if (old.results?.id !== app.results?.id || old.window !== app.window) chosen = undefined
       } else if (message.kind === 'shown') visible = message.shown
       else if (message.kind === 'action') {
         if (message.command === 'reloadView') {
-          recovery.reset()
           reads.clear()
           void device().catch(fail)
         } else if (message.command === 'fit') {
           chosen = undefined
           bridge.send({ kind: 'window', bounds: monitorWindow(results) })
-        }
+        } else if (message.command === 'exportImage') void exportImage().catch(fail)
       }
     })
     const unwatch = watchTheme(() => themeVersion++)
@@ -144,23 +168,27 @@
     document.addEventListener('visibilitychange', visibility)
     const hooks = window as Window & { gridkitMonitor?: () => unknown }
     hooks.gridkitMonitor = () => ({
+      views: views.size,
       cacheBytes: reads.bytes,
       reads: reads.active,
-      views: views.size,
       work: gpu?.work,
       resident: gpu?.resident,
       uploading: gpu?.uploading,
-      plots: [...views].map((view) => ({ ...view.stats, at: view.at, camera: view.camera })),
+      plots: [...views].map((view) => ({
+        ...view.stats,
+        at: view.at,
+        camera: view.camera,
+      })),
     })
     bridge.ready()
     return () => {
       closed = true
       generation++
+      lifetime.abort()
       following?.()
       clock.stop()
       off()
       unwatch()
-      recovery.dispose()
       clearTimeout(telling)
       document.removeEventListener('visibilitychange', visibility)
       reads.clear()

@@ -137,18 +137,21 @@ export function commandsOf(studio: Sessions) {
       return run(session, value)
     })
   /** Asks the views of the case in context to do `command`: those of one kind, those of the kind
-   *  the menu was opened on, or, with neither, all of them. */
+   *  the menu was opened on, or, with neither, all of them; with `active`, only the editor in
+   *  front. */
   const action = (
     context: Context,
     command: ViewAction,
     value?: unknown,
     view?: Target['origin'],
+    active = false,
   ) =>
     studio.action.fire({
       uri: context.session.uri,
       command,
       value,
       view: view ?? context.target?.origin,
+      active,
     })
   /** Follows the case, and shows its `view`, selecting `element` there. */
   const focus = async (

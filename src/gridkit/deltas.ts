@@ -1,14 +1,12 @@
 import { type Fields, type Id, Patch, type Reference, type Values } from 'latkit'
 
 import {
-  ENTRY_BYTES,
-  PAGE_BYTES,
   type ProjectionCursor,
   type ProjectionPage,
   type ProjectionSelection,
 } from '../shared/data.js'
 import type { Case, Part, Table } from './case.js'
-import { included, projectionKey, projectionPage } from './projection.js'
+import { included, paged, projectionKey, projectionPage } from './projection.js'
 import { Turns } from './turns.js'
 
 interface DirtyTable {
@@ -162,39 +160,32 @@ export async function deltaProjectionPage(
       offset = 0
       continue
     }
-    let count = Math.min(4096, ids.length - offset)
-    let bytes: Uint8Array
-    for (;;) {
-      const patch = new Patch('case')
-      const page = ids.slice(offset, offset + count)
-      if (phase === 'removals') patch.remove(name, page)
-      else if (phase === 'identities') patch.set(name, page)
-      else {
-        const source = document.tables.get(name)!
-        const previous = before.projected().tables.get(name)!
-        for (const id of page) {
-          const row = after.rowOf(after.table(name), id)
-          const old = before.rowOf(before.table(name), id)
-          const values: Record<string, Fields[string]> = {}
-          for (const field of fields) {
-            const next = source.read(field, row, 1)
-            if (old < 0 || !same(scalar(next), scalar(previous.read(field, old, 1))))
-              values[field] = next
+    const { bytes, count } = await paged(
+      ids.length - offset,
+      (count) => {
+        const patch = new Patch('case')
+        const page = ids.slice(offset, offset + count)
+        if (phase === 'removals') patch.remove(name, page)
+        else if (phase === 'identities') patch.set(name, page)
+        else {
+          const source = document.tables.get(name)!
+          const previous = before.projected().tables.get(name)!
+          for (const id of page) {
+            const row = after.rowOf(after.table(name), id)
+            const old = before.rowOf(before.table(name), id)
+            const values: Record<string, Fields[string]> = {}
+            for (const field of fields) {
+              const next = source.read(field, row, 1)
+              if (old < 0 || !same(scalar(next), scalar(previous.read(field, old, 1))))
+                values[field] = next
+            }
+            if (Object.keys(values).length) patch.set(name, [id], values)
           }
-          if (Object.keys(values).length) patch.set(name, [id], values)
         }
-      }
-      bytes = patch.toBytes()
-      signal.throwIfAborted()
-      if (bytes.byteLength <= PAGE_BYTES) break
-      if (count === 1) {
-        if (bytes.byteLength > ENTRY_BYTES)
-          throw Object.assign(new Error('A projected row exceeds 16 MiB.'), { code: 'limit' })
-        break
-      }
-      count = Math.max(1, Math.floor(count / 2))
-      await turns.step()
-    }
+        return patch.toBytes()
+      },
+      turns,
+    )
     offset += count
     if (offset === ids.length) {
       index++

@@ -27,11 +27,11 @@ Studio runs GridKit from an install or from a container image.
 **Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
 
 ```sh
-docker pull ghcr.io/lukelowry/gridkit:0.2.0-perf
+docker pull ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf
 ```
 
 ```json
-"gridkitStudio.gridkitImage": "ghcr.io/lukelowry/gridkit:0.2.0-perf"
+"gridkitStudio.gridkitImage": "ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf"
 ```
 
 ## How to use

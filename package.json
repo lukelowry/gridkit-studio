@@ -66,7 +66,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "latkit": "0.3.1"
+    "latkit": "0.4.2"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",
@@ -553,6 +553,13 @@
         "category": "GridKit Studio",
         "icon": "$(device-camera-video)",
         "enablement": "gridkitStudio.hasCase"
+      },
+      {
+        "command": "gridkitStudio.exportImage",
+        "title": "Export Image…",
+        "category": "GridKit Studio",
+        "icon": "$(device-camera)",
+        "enablement": "gridkitStudio.hasCase"
       }
     ],
     "menus": {
@@ -591,6 +598,11 @@
           "command": "gridkitStudio.exportVideo",
           "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
           "group": "1_view@3"
+        },
+        {
+          "command": "gridkitStudio.exportImage",
+          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "group": "1_view@4"
         },
         {
           "command": "gridkitStudio.arrangeDiagram",
@@ -756,9 +768,14 @@
           "group": "2_results@3"
         },
         {
+          "command": "gridkitStudio.exportImage",
+          "when": "view == gridkitStudio.monitor && gridkitStudio.hasSamples",
+          "group": "2_results@4"
+        },
+        {
           "command": "gridkitStudio.clearResults",
           "when": "view == gridkitStudio.monitor",
-          "group": "2_results@4"
+          "group": "2_results@5"
         },
         {
           "command": "gridkitStudio.reloadView",
@@ -1184,6 +1201,10 @@
         {
           "command": "gridkitStudio.exportVideo",
           "when": "gridkitStudio.hasCase"
+        },
+        {
+          "command": "gridkitStudio.exportImage",
+          "when": "false"
         }
       ]
     },
@@ -1278,10 +1299,10 @@
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",
-            "default": "ghcr.io/lukelowry/gridkit:0.2.0-perf",
+            "default": "ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf",
             "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/lukelowry/gridkit:0.2.0-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
+            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
           },
           "gridkitStudio.containerCli": {
             "type": "string",
@@ -1375,21 +1396,85 @@
             "markdownDescription": "View — Colormap",
             "type": "string",
             "enum": [
-              "viridis",
+              "amber",
+              "amp",
+              "batlow",
               "cividis",
-              "plasma",
-              "magma",
+              "crest",
+              "deep",
+              "devon",
+              "flare",
+              "grays",
+              "haline",
               "inferno",
+              "lajolla",
+              "magma",
+              "mako",
+              "oslo",
+              "plasma",
+              "rocket",
+              "thermal",
+              "turku",
+              "viridis",
+              "balance",
+              "berlin",
+              "brbg",
+              "broc",
               "coolwarm",
+              "cork",
+              "icefire",
+              "managua",
+              "piyg",
+              "puor",
+              "rdbu",
+              "spectral",
+              "vanimo",
+              "vik",
+              "vlag",
+              "phase",
+              "romao",
+              "twilight",
               "turbo"
             ],
             "enumDescriptions": [
-              "Viridis",
+              "Amber",
+              "Amp",
+              "Batlow",
               "Cividis",
-              "Plasma",
-              "Magma",
+              "Crest",
+              "Deep",
+              "Devon",
+              "Flare",
+              "Grays",
+              "Haline",
               "Inferno",
-              "Coolwarm",
+              "Lajolla",
+              "Magma",
+              "Mako",
+              "Oslo",
+              "Plasma",
+              "Rocket",
+              "Thermal",
+              "Turku",
+              "Viridis",
+              "Balance",
+              "Berlin",
+              "Brown / Green",
+              "Broc",
+              "Cool / Warm",
+              "Cork",
+              "Icefire",
+              "Managua",
+              "Pink / Green",
+              "Purple / Orange",
+              "Red / Blue",
+              "Spectral",
+              "Vanimo",
+              "Vik",
+              "Vlag",
+              "Phase",
+              "RomaO",
+              "Twilight",
               "Turbo"
             ]
           },

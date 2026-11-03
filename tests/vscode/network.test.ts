@@ -32,6 +32,15 @@ type RGB = readonly [number, number, number]
 /** Whether two colors differ by more than antialiasing does. */
 const apart = (a: RGB, b: RGB) => a.some((channel, i) => Math.abs(channel - b[i]!) > 24)
 
+/** The case `text` with its buses placed on Earth, as a case on a map holds them. */
+function onEarth(text: string): string {
+  const source = JSON.parse(text)
+  source.buses.forEach((bus: { extension?: unknown }, i: number) => {
+    bus.extension = { longitude: -100 + (i % 8) * 2, latitude: 30 + Math.floor(i / 8) * 2 }
+  })
+  return JSON.stringify(source)
+}
+
 suite('Network', () => {
   let bench: TestHost
   let network: Frame
@@ -215,11 +224,7 @@ suite('Network', () => {
     network = await bench.open('network')
     const globe = () => network.getByRole('button', { name: 'Globe', exact: true })
     await until(() => globe().isDisabled(), 'no globe without coordinates')
-    const source = JSON.parse(bench.text)
-    source.buses.forEach((bus: { extension?: unknown }, i: number) => {
-      bus.extension = { longitude: -100 + (i % 8) * 2, latitude: 30 + Math.floor(i / 8) * 2 }
-    })
-    await bench.replace(JSON.stringify(source))
+    await bench.replace(onEarth(bench.text))
     await bench.settled()
     network = await bench.open('network')
     await until(() => globe().isEnabled(), 'the globe offered')
@@ -343,6 +348,9 @@ suite('Network', () => {
   })
 
   test("lays Natural Earth's borders beneath a case on Earth, once it is on screen", async () => {
+    await bench.replace(onEarth(bench.text))
+    await bench.settled()
+    network = await bench.open('network')
     await until(
       async () =>
         (await network.evaluate<number>('gridkitStats().rows')) >

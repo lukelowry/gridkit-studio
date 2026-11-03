@@ -1,7 +1,7 @@
 /** The display settings of Network, Diagram and Monitor, each defined once; VS Code owns the theme,
  *  its contrast and its motion. `pnpm settings` writes them into package.json for VS Code Settings. */
 
-import type { ColormapName } from 'latkit'
+import { type ColormapName, colormaps } from 'latkit'
 
 /** One setting: the default a reset restores and the values it takes. Null leaves a number or
  *  color to the view. */
@@ -89,15 +89,10 @@ const category = <const G extends readonly Group[]>(id: string, label: string, g
   groups,
 })
 
-const COLORMAPS = [
-  ['viridis', 'Viridis'],
-  ['cividis', 'Cividis'],
-  ['plasma', 'Plasma'],
-  ['magma', 'Magma'],
-  ['inferno', 'Inferno'],
-  ['coolwarm', 'Coolwarm'],
-  ['turbo', 'Turbo'],
-] as const satisfies Options<ColormapName>
+/** latkit's colormaps that map a number, as it names and labels them: all but the categorical. */
+const COLORMAPS: Options<ColormapName> = colormaps()
+  .filter((map) => map.kind !== 'categorical')
+  .map((map) => [map.name, map.label] as const)
 const ZOOM = [
   ['wheel', 'Wheel'],
   ['modifier', 'Modifier + wheel'],

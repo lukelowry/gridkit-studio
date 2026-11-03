@@ -2,7 +2,7 @@
 
 GridKit Studio bundles the software below, and its repository holds GridKit's example cases. The full text of each license follows the list.
 
-## latkit 0.3.1
+## latkit
 
 Copyright (c) 2026 Luke Lowery. MIT License.
 

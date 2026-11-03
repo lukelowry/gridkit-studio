@@ -1092,6 +1092,13 @@ export class TestHost {
 
 let started: Promise<TestHost> | undefined
 
+/** The latkit the extension was built with, as a benchmark names its renderer: only runs on the
+ *  same one compare their work. */
+export async function renderer(): Promise<string> {
+  const path = join(process.env.GRIDKIT_TEST_ROOT!, 'node_modules', 'latkit', 'package.json')
+  return 'latkit@' + (JSON.parse(await readFile(path, 'utf8')) as { version: string }).version
+}
+
 /** The one TestHost, reset: every suite starts from the case alone in its Network editor, so each
  *  runs alone as it does among the others. */
 export async function testHost(): Promise<TestHost> {

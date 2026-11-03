@@ -5,7 +5,7 @@ import { setImmediate } from 'node:timers/promises'
 import type { Id } from 'latkit'
 
 import { type Case, outputName, type Table } from '../gridkit/index.js'
-import type { FrameBlock, RecordedField } from '../shared/data.js'
+import type { RecordedField } from '../shared/data.js'
 import { problem } from '../shared/errors.js'
 import { csvMessages } from './csv.js'
 import { CHUNK_BYTES } from './limits.js'
@@ -59,20 +59,6 @@ export interface Layout {
 export function chunkFrames(fields: readonly Field[]): number {
   const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.ids.length, 0))
   return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
-}
-
-/** Owned float64 blocks in the same field order as the decode plan. */
-export function framesOf(
-  fields: readonly Field[],
-  frames: Decoded,
-  only?: readonly number[],
-): FrameBlock[] {
-  return (only ?? fields.map((_, index) => index)).map((field, index) => ({
-    first: frames.firstFrame,
-    at: frames.coordinates,
-    values: frames.values[index]!,
-    rows: fields[field]!.ids.length,
-  }))
 }
 
 /** Reads the results in `source`, publishing each batch of frames as it decodes. The header says

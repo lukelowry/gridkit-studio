@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { type Camera, type Gpu, type Scene, type Source, View } from 'latkit'
+  import type { Camera, Gpu, Scene, Source, View } from 'latkit'
   import { untrack } from 'svelte'
 
-  import { createView } from '../runtime.js'
+  import { ViewHost } from '../host.js'
 
   let {
     gpu,
@@ -26,39 +26,32 @@
     label: string
   } = $props()
 
-  let view = $state.raw<View>()
+  let host = $state.raw<ViewHost>()
 
   function attach(canvas: HTMLCanvasElement) {
     const device = gpu
     if (!active) return
     let ended = false
-    let owned: View | undefined
+    let owned: ViewHost | undefined
     let disconnect: (() => void) | void
-    let rendered: (() => void) | undefined
     const options = untrack(() => ({ gpu: device, sources, ...(camera ? { camera } : {}) }))
-    void createView(
+    void ViewHost.open(
       canvas,
       untrack(() => scene),
       options,
+      onerror,
     ).then(
-      (created) => {
+      (opened) => {
         if (ended) {
-          created.destroy()
+          opened.destroy()
           return
         }
-        owned = created
+        owned = opened
         try {
-          disconnect = untrack(() => onready(created, canvas))
-          view = created
-          rendered = device.on('frame', () => {
-            if (created.stats.frames > 0 && created.complete) {
-              canvas.dataset.rendered = 'true'
-              rendered?.()
-              rendered = undefined
-            }
-          })
+          disconnect = untrack(() => onready(opened.view, canvas))
+          host = opened
         } catch (error) {
-          created.destroy()
+          opened.destroy()
           owned = undefined
           onerror(error)
         }
@@ -69,25 +62,23 @@
     )
     return () => {
       ended = true
-      rendered?.()
-      delete canvas.dataset.rendered
       try {
         disconnect?.()
       } finally {
         owned?.destroy()
-        if (view === owned) view = undefined
+        if (host === owned) host = undefined
       }
     }
   }
 
   $effect(() => {
-    if (view) view.sources = sources
+    if (host) host.view.sources = sources
   })
   $effect(() => {
-    if (view) view.scene = scene
+    if (host) host.scene = scene
   })
   $effect(() => {
-    if (view) view.at = at
+    if (host) host.view.at = at
   })
 </script>
 

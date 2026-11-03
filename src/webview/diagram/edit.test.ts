@@ -49,10 +49,11 @@ function fixture(
     },
   }
 }
-const drag = (phase: string, position = [55, 66]) => ({
+const drag = (phase: string, [x, y] = [55, 66]) => ({
   phase,
   hit: { row: { data: 'case', table: 'Device', id: 'a/b' } },
-  position,
+  position: [x, y, 0],
+  patch: new Patch('case').set('Device', ['a/b'], { x: [x!], y: [y!] }),
 })
 it('materializes automatic positions with the moved block in one source transaction', async () => {
   const rig = fixture()
@@ -80,7 +81,7 @@ it('cancels arrangement and never commits a late drag after source replacement',
     resolve = done
   })
   const rig = fixture(() => pending)
-  const signal = vi.mocked(rig.view.arrange).mock.calls[0]![0]!.signal!
+  const signal = vi.mocked(rig.view.arrange).mock.calls[0]![1]!.signal!
   rig.editor.destroy()
   expect(signal.aborted).toBe(true)
   resolve([new Patch('case').set('Device', ['a/b'], { x: [1], y: [2] })])
@@ -105,10 +106,11 @@ it('recreates a preview after a rejected transaction so another edit can succeed
     rig.close()
   }
 })
-it('arranges all by clearing positions in a copy and leaves the source unchanged', async () => {
+it('arranges every block in a copy and leaves the source unchanged', async () => {
   const rig = fixture()
   try {
     await rig.editor.arrange()
+    expect(vi.mocked(rig.view.arrange).mock.lastCall![0]).toBe('all')
     expect(request).toHaveBeenCalledOnce()
     expect(rig.source.get('Device', '0', 'y')).toBeNull()
     using copy = previewOf(rig.source)

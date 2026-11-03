@@ -23,9 +23,9 @@ import type {
 import { type SettingsValues, validateSettings } from '../shared/preferences.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
 import { drawnOf } from '../shared/simulation.js'
+import { ExportFiles } from './exports.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
-import { VideoFiles } from './video.js'
 
 /** The views a clock moves, and an export, which plays at its speed. */
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor', 'export'])
@@ -172,7 +172,7 @@ function html(
  *  one past. */
 class View {
   #answering!: Answerer
-  readonly #videos = new VideoFiles()
+  readonly #exports = new ExportFiles()
   /** The showing of the case the view shows. */
   #of: Of
   #summary?: Summary
@@ -233,6 +233,8 @@ class View {
       }),
       studio.action.event((action) => {
         if (action.uri !== this.#of.uri || (action.view && action.view !== kind)) return
+        // An editor's title bar acts on that editor, not on another of the same case beside it.
+        if (action.active && !this.#active) return
         void this.send({
           kind: 'action',
           of: this.#of,
@@ -292,6 +294,11 @@ class View {
     return !this.#disposed && this.panel.visible
   }
 
+  /** Whether it is the editor in front, as an editor's title bar acts on: a panel view never is. */
+  get #active(): boolean {
+    return !this.#disposed && 'active' in this.panel && this.panel.active
+  }
+
   send(message: ToView): Thenable<boolean> {
     // A disposed view's late messages would reach a page that took its place.
     return this.#disposed ? Promise.resolve(false) : this.panel.webview.postMessage(packed(message))
@@ -329,7 +336,7 @@ class View {
       // worked on and wrote goes with it. Either way the page loaded is a showing of its own.
       if (this.#ready) {
         this.#work(undefined)
-        this.#videos.dispose()
+        this.#exports.dispose()
       }
       this.#ready = true
       this.#show(this.#of.uri)
@@ -442,7 +449,7 @@ class View {
   }
 
   /** What the view may ask: of the revision of a case, or of results, each request naming which,
-   *  and the videos it exports. A revision a newer one replaced is refused, quietly. */
+   *  and the videos and images it exports. A revision a newer one replaced is refused, quietly. */
   #handlers(): Handlers<ViewApi> {
     const { studio } = this
     const { client } = studio
@@ -477,9 +484,12 @@ class View {
           revision.attachmentId,
         ),
       cameras: async ({ uri }) => studio.get(uri)?.cameras ?? {},
-      videoOpen: ({ uri, name }, signal) => this.#videos.open(vscode.Uri.parse(uri), name, signal),
-      videoWrite: ({ file, bytes }) => this.#videos.write(file, bytes),
-      videoClose: ({ file, abort }) => this.#videos.close(file, abort),
+      exportOpen: ({ uri, name }, signal) =>
+        this.#exports.open(vscode.Uri.parse(uri), name, signal),
+      exportWrite: ({ file, bytes }) => this.#exports.write(file, bytes),
+      exportClose: ({ file, abort }) => this.#exports.close(file, abort),
+      exportSave: ({ uri, name, bytes }, signal) =>
+        this.#exports.save(vscode.Uri.parse(uri), name, bytes, signal),
       // A share the page let go of as it was made holds nothing past it.
       share: async ({ results }, signal) => {
         const id = randomUUID()
@@ -569,7 +579,7 @@ class View {
 
   dispose() {
     this.#disposed = true
-    this.#videos.dispose()
+    this.#exports.dispose()
     this.#unshare()
     this.#answering.cancel()
     this.#work(undefined)

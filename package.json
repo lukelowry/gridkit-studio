@@ -1299,10 +1299,10 @@
           },
           "gridkitStudio.gridkitImage": {
             "type": "string",
-            "default": "ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf",
+            "default": "ghcr.io/birchfieldresearchgroup/gridkit:develop-perf",
             "scope": "machine-overridable",
             "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
+            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/birchfieldresearchgroup/gridkit:develop-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit."
           },
           "gridkitStudio.containerCli": {
             "type": "string",

@@ -22,13 +22,22 @@ export const BUS_CODE = 0
 export const SIGNAL_CODE = 1
 export const DEVICE_CODES = 2
 export const CASE_ROW = 'case'
+/** The member of a record a port is written under: a device's `ports`, a bus's `ports_in` and
+ *  `ports_out`. */
+export type PortKey = 'ports' | 'ports_in' | 'ports_out'
 type FieldSource =
   | {
       readonly kind:
-        'identity' | 'record' | 'parameter' | 'initial' | 'extension' | 'header' | 'port' | 'output'
+        'identity' | 'record' | 'parameter' | 'initial' | 'extension' | 'header' | 'output'
       readonly name: string
     }
+  | { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
   | { readonly kind: 'found'; readonly path: readonly string[]; readonly json: boolean }
+/** What a text field may hold, as GridKit checks it: a pattern, and the rule it keeps in words. */
+export interface TextRule {
+  readonly pattern: RegExp
+  readonly rule: string
+}
 export interface FieldPlan {
   readonly name: string
   readonly definition: FieldDefinition
@@ -36,11 +45,12 @@ export interface FieldPlan {
   readonly source: FieldSource
   readonly required?: boolean
   readonly choices?: readonly string[]
+  readonly allowed?: TextRule
   readonly geographic?: boolean
 }
 export interface PortPlan extends FieldPlan {
   readonly definition: FieldDefinition & { readonly kind: 'reference'; readonly target: string }
-  readonly source: { readonly kind: 'port'; readonly name: string }
+  readonly source: { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
 }
 export interface Shape {
   readonly type: string
@@ -67,11 +77,13 @@ interface ClassSpec {
   readonly label: string
   readonly params: readonly {
     readonly id: string
-    readonly type: 'real' | 'integer' | 'flag'
+    readonly type: 'real' | 'integer' | 'flag' | 'text'
     readonly unit?: string
+    readonly choices?: readonly string[]
   }[]
   readonly init: readonly { readonly id: string; readonly unit?: string }[]
   readonly ports: readonly {
+    readonly key?: PortKey
     readonly required?: boolean
     readonly name: string
     readonly kind: 'bus' | 'signal'
@@ -101,14 +113,19 @@ function field(name: string, decode: DecodeKind, source: FieldSource, unit?: str
   }
 }
 export function catalogOf(json: unknown): Catalog {
-  const raw = json as { bus?: ClassSpec; classes?: ClassSpec[] } | null
+  const raw = json as {
+    identifier?: { pattern?: unknown; rule?: unknown }
+    bus?: ClassSpec
+    classes?: ClassSpec[]
+  } | null
   if (typeof raw?.bus?.name !== 'string' || !Array.isArray(raw.classes))
     throw problem('invalid-input', 'A catalog has a bus and a list of classes.')
   const text = JSON.stringify(json)
+  const identifier = identifierOf(raw.identifier)
   const codes = [
-    shapeOf(raw.bus, 'bus', raw.bus.name),
+    shapeOf(raw.bus, 'bus', raw.bus.name, identifier),
     signalShape(),
-    ...raw.classes.map((spec) => shapeOf(spec, 'device', raw.bus!.name)),
+    ...raw.classes.map((spec) => shapeOf(spec, 'device', raw.bus!.name, identifier)),
   ]
   const shapes = new Map<string, Shape>()
   for (const shape of [...codes, caseShape()]) {
@@ -125,7 +142,26 @@ export function catalogOf(json: unknown): Catalog {
     definition: definitionsOf([...shapes.values()]),
   }
 }
-function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
+/** The rule a bus's name and a device's id keep, as the catalog says it. */
+function identifierOf(
+  raw: { pattern?: unknown; rule?: unknown } | undefined,
+): TextRule | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw.pattern !== 'string' || typeof raw.rule !== 'string')
+    throw problem('invalid-input', "A catalog's identifier has a pattern and a rule.")
+  try {
+    return { pattern: new RegExp(raw.pattern), rule: raw.rule }
+  } catch {
+    throw problem('invalid-input', `The catalog's identifier pattern does not read: ${raw.pattern}`)
+  }
+}
+const DECODES = { flag: 'boolean', integer: 'integer', real: 'number', text: 'text' } as const
+function shapeOf(
+  spec: ClassSpec,
+  kind: 'bus' | 'device',
+  bus: string,
+  identifier: TextRule | undefined,
+): Shape {
   const parameters = new Set(spec.params.map((param) => param.id))
   for (const port of spec.ports)
     if (parameters.has(port.name))
@@ -143,21 +179,25 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
     [
       ...(kind === 'bus'
         ? [
-            field('name', 'text', { kind: 'record', name: 'name' }),
+            {
+              ...field('name', 'text', { kind: 'record', name: 'name' }),
+              ...(identifier && { allowed: identifier }),
+            },
             {
               ...field('class', 'text', { kind: 'record', name: 'class' }),
               choices: spec.classes ?? [spec.name],
             },
           ]
         : []),
-      ...spec.params.map((param) =>
-        field(
+      ...spec.params.map((param) => ({
+        ...field(
           `params.${param.id}`,
-          param.type === 'flag' ? 'boolean' : param.type === 'integer' ? 'integer' : 'number',
+          DECODES[param.type],
           { kind: 'parameter', name: param.id },
           param.unit,
         ),
-      ),
+        ...(param.choices && { choices: param.choices }),
+      })),
       ...spec.init.map((init) =>
         field(`init.${init.id}`, 'number', { kind: 'initial', name: init.id }, init.unit),
       ),
@@ -185,15 +225,17 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
         }
       }),
       ...spec.ports.map((port): PortPlan => {
-        const name = `ports.${port.name}`
+        const key = port.key ?? 'ports'
+        const name = `${key}.${port.name}`
         return {
           name,
           decode: 'unsigned',
-          source: { kind: 'port', name: port.name },
+          source: { kind: 'port', key, name: port.name },
           required: port.required === true,
           definition: {
             name,
-            label: port.name,
+            // A bus's in and out ports share their names, so each says which it is.
+            label: port.key ? name : port.name,
             kind: 'reference',
             target: port.kind === 'bus' ? bus : SIGNAL,
             required: port.required === true,
@@ -202,6 +244,7 @@ function shapeOf(spec: ClassSpec, kind: 'bus' | 'device', bus: string): Shape {
         }
       }),
     ],
+    kind === 'device' ? identifier : undefined,
   )
 }
 function signalShape(): Shape {
@@ -254,21 +297,27 @@ export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
           : plan,
       )
       .concat(found),
+    shape.plan.get(shape.identity.name)?.allowed,
   )
 }
+/** A table's shape, its identity keeping `allowed` when given. */
 function compile(
   table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity'>,
   label: string,
   entries: readonly FieldPlan[],
+  allowed?: TextRule,
 ): Shape {
   const plan = new Map<string, FieldPlan>()
   const fields: FieldPlan[] = []
   const ports: PortPlan[] = []
   const outputOrder = new Map<string, number>()
-  const identity = field(table.identity.name, table.identity.type, {
-    kind: 'identity',
-    name: table.identity.name,
-  })
+  const identity: FieldPlan = {
+    ...field(table.identity.name, table.identity.type, {
+      kind: 'identity',
+      name: table.identity.name,
+    }),
+    ...(allowed && { allowed }),
+  }
   for (const entry of [identity, ...entries]) {
     if (entry.name.startsWith('@studio.'))
       throw problem('invalid-input', 'The @studio namespace is reserved.')
@@ -347,8 +396,12 @@ export function definitionsOf(
     shape.ports.filter((port) => port.definition.direction).map((port) => ({ shape, port })),
   )
   const nets = [...new Set(directed.map(({ port }) => port.definition.target))]
+  // Devices are the diagram's blocks. A bus, which may drive signals too, is the Network's.
   const blocks = shapes.filter(
-    (shape) => directed.some((item) => item.shape === shape) && !nets.includes(shape.type),
+    (shape) =>
+      shape.kind === 'device' &&
+      directed.some((item) => item.shape === shape) &&
+      !nets.includes(shape.type),
   )
   return {
     tables: shapes.map((shape) => shape.definition),

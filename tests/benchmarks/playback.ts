@@ -31,8 +31,8 @@ export async function run() {
         tmax: 2,
         dt_monitor: 0.005,
         events: [
-          { time: 0.5, type: 'fault_on', element_id: 0 },
-          { time: 0.6, type: 'fault_off', element_id: 0 },
+          { time: 0.5, type: 'fault_on', bus: 16, R: 0, X: 0.01 },
+          { time: 0.6, type: 'fault_off', bus: 16 },
         ],
       }),
     )

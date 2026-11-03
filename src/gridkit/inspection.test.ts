@@ -15,7 +15,7 @@ describe('case inspection', () => {
         signals: [{ signal_id: 1 }],
         devices: [
           { class: 'Branch', id: 'line', ports: { bus1: 1, bus2: 2 } },
-          { class: 'BusFault', id: 'fault', ports: { bus: 2, control_signal: 1 } },
+          { class: 'GenClassical', id: 'fault', ports: { bus: 2, pmech: 1 } },
           { class: 'ConstantSignalSource', id: 'source', ports: { sr: 1 } },
         ],
       }),
@@ -25,7 +25,7 @@ describe('case inspection', () => {
     // A drawn element stands for itself.
     expect(await anchors(kase, { entity: { table: 'Bus', id: 1 }, drawn }, signal)).toEqual([])
     expect(
-      await anchors(kase, { entity: { table: 'BusFault', id: 'fault' }, drawn }, signal),
+      await anchors(kase, { entity: { table: 'GenClassical', id: 'fault' }, drawn }, signal),
     ).toEqual([{ table: 'Bus', id: 2 }])
     // A source reaches its bus through the fault its signal drives.
     expect(

@@ -5,7 +5,7 @@ import { Case } from './case.js'
 import { catalog } from './definition.js'
 import { applyChanges, delivered, transaction } from './transactions.js'
 const text =
-  '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"BusFault","id":"load","ports":{"bus":7}},{"class":"BusFault","id":"unused","ports":{"bus":7}}]\r\n}'
+  '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"GenClassical","id":"load","ports":{"bus":7}},{"class":"GenClassical","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)
 describe('document transactions', () => {
   it('creates forward references, redirects an existing port, removes the old bus and edits values atomically', async () => {
@@ -20,11 +20,21 @@ describe('document transactions', () => {
         },
         { kind: 'add', type: 'Bus', key: 8, fields: { 'params.kv': 230 } },
         { kind: 'add', type: 'Bus', key: 9, fields: {} },
-        { kind: 'set', entity: { table: 'BusFault', id: 'load' }, field: 'ports.bus', value: 8 },
-        { kind: 'set', entity: { table: 'BusFault', id: 'unused' }, field: 'ports.bus', value: 9 },
+        {
+          kind: 'set',
+          entity: { table: 'GenClassical', id: 'load' },
+          field: 'ports.bus',
+          value: 8,
+        },
+        {
+          kind: 'set',
+          entity: { table: 'GenClassical', id: 'unused' },
+          field: 'ports.bus',
+          value: 9,
+        },
         { kind: 'remove', entities: [{ table: 'Bus', id: 7 }] },
         { kind: 'set', entity: { table: 'Branch', id: 'tie' }, field: 'params.X', value: 0.2 },
-        { kind: 'move', entity: { table: 'BusFault', id: 'load' }, position: [10, 20] },
+        { kind: 'move', entity: { table: 'GenClassical', id: 'load' }, position: [10, 20] },
       ]),
     ])
     const final = await parse(next)
@@ -46,7 +56,7 @@ describe('document transactions', () => {
         { kind: 'remove', entities: [{ table: 'ConstantSignalSource', id: 'source' }] },
         {
           kind: 'connect',
-          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          from: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
           to: { table: 'ConstantSignalSource', id: 'replacement', field: 'ports.sr' },
         },
       ]),
@@ -54,14 +64,13 @@ describe('document transactions', () => {
     const final = await parse(next)
     expect(() => final.checkSignals()).not.toThrow()
     expect(
-      JSON.parse(next).devices.find((device: { id: string }) => device.id === 'load').ports
-        .control_signal,
+      JSON.parse(next).devices.find((device: { id: string }) => device.id === 'load').ports.pmech,
     ).toBe(3)
   })
   it('batches multiple changes in one record without reformatting untouched records or numeric tokens', async () => {
     const kase = await parse()
     const edits = transaction(kase, [
-      { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'name', value: '東京 😀' },
+      { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'name', value: 'Tokyo 1' },
       { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'extension.longitude', value: -90 },
       { kind: 'set', entity: { table: 'Bus', id: 7 }, field: 'extension.latitude', value: 40 },
     ])
@@ -70,7 +79,7 @@ describe('document transactions', () => {
     expect(next).toContain('"value":1.000')
     expect(next).toContain('\r\n')
     expect(JSON.parse(next).buses[0]).toMatchObject({
-      name: '東京 😀',
+      name: 'Tokyo 1',
       extension: { longitude: -90, latitude: 40 },
     })
     await parse(next)
@@ -99,12 +108,12 @@ describe('document transactions', () => {
       transaction(kase, [
         {
           kind: 'connect',
-          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          from: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
           to: { table: 'ConstantSignalSource', id: 'source', field: 'ports.sr' },
         },
       ]),
     ])
-    expect(JSON.parse(next).devices[2].ports.control_signal).toBe(3)
+    expect(JSON.parse(next).devices[2].ports.pmech).toBe(3)
     const fan = await parse(next)
     expect(() =>
       transaction(fan, [
@@ -119,8 +128,8 @@ describe('document transactions', () => {
       transaction(fan, [
         {
           kind: 'connect',
-          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
-          to: { table: 'BusFault', id: 'unused', field: 'ports.control_signal' },
+          from: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
+          to: { table: 'GenClassical', id: 'unused', field: 'ports.pmech' },
         },
       ]),
     ).toThrow(/output to an input/)
@@ -128,12 +137,12 @@ describe('document transactions', () => {
       transaction(fan, [
         {
           kind: 'connect',
-          from: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+          from: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
           to: null,
         },
       ]),
     ])
-    expect(JSON.parse(disconnect).devices[2].ports.control_signal).toBeNull()
+    expect(JSON.parse(disconnect).devices[2].ports.pmech).toBeNull()
   })
 
   it('applies the same driver constraint to field edits and allows atomic driver reassignment', async () => {
@@ -173,14 +182,14 @@ describe('document transactions', () => {
       {
         kind: 'connect',
         from: { table: 'ConstantSignalSource', id: 'other', field: 'ports.sr' },
-        to: { table: 'BusFault', id: 'load', field: 'ports.control_signal' },
+        to: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
       },
     ])
     const next = applyChanges(text, [edits])
     const doc = JSON.parse(next)
     expect(doc.signals.at(-1).signal_id).toBe(4)
     expect(doc.devices[1].ports.sr).toBe(4)
-    expect(doc.devices[2].ports.control_signal).toBe(4)
+    expect(doc.devices[2].ports.pmech).toBe(4)
     expect(edits).toHaveLength(3)
     await parse(next)
   })
@@ -195,7 +204,7 @@ describe('document transactions', () => {
           kind: 'remove',
           entities: [
             { table: 'ConstantSignalSource', id: 'other' },
-            { table: 'BusFault', id: 'unused' },
+            { table: 'GenClassical', id: 'unused' },
           ],
         },
       ]),

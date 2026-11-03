@@ -161,12 +161,12 @@ describe('native VS Code contract', () => {
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
     const definition = catalog.definition
-    const summary = { definition, editable: { BusFault: ['ports.control_signal'] } }
+    const summary = { definition, editable: { GenClassical: ['ports.pmech'] } }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
       origin: 'diagram' as const,
-      element: { table: 'BusFault', id: 'one', field: 'ports.control_signal' },
+      element: { table: 'GenClassical', id: 'one', field: 'ports.pmech' },
     }
     const context = menuContext(summary, target)
     expect(context.gridkitTarget).toEqual(target)
@@ -175,11 +175,12 @@ describe('native VS Code contract', () => {
     expect(context.gridkitNetwork).toBe(false)
     expect(context.gridkitDiagram).toBe(true)
     // A whole element goes where it refers when its type refers to anything: a branch to its buses,
-    // and a bus nowhere.
+    // a bus to the signals a signal-voltage bus connects, and a signal nowhere.
     const element = (table: string) =>
       menuContext(summary, { ...target, origin: 'network', element: { table, id: 1 } })
         .gridkitReference
     expect(element('Branch')).toBe(true)
-    expect(element('Bus')).toBe(false)
+    expect(element('Bus')).toBe(true)
+    expect(element('Signal')).toBe(false)
   })
 })

@@ -39,7 +39,7 @@ The wrench and lightning bolt in the Studio icons are adapted from Google's Mate
 
 ## GridKit case data
 
-Most cases in `cases/` are [GridKit v0.2.0's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/v0.2.0/cases/PhasorDynamics), copied as they are by `scripts/cases.mjs`. ACTIVSg25k and ACTIVSg70k come from the [lukelowry/cases](https://github.com/lukelowry/cases) repository, and ACTIVSg70k is saved without whitespace so that VS Code can open it. GridKit provides the dynamics models, and the networks come from:
+Most cases in `cases/` are [GridKit develop's PhasorDynamics cases](https://github.com/ORNL/GridKit/tree/01d7543e4d2028a6b4ee0b530b16277ee1278336/cases/PhasorDynamics), copied by `scripts/cases.mjs`, with the signals this repository's runs record added to their `mon` lists. ACTIVSg25k and ACTIVSg70k come from the [lukelowry/cases](https://github.com/lukelowry/cases) repository, and ACTIVSg70k is saved without whitespace so that VS Code can open it. GridKit provides the dynamics models, and the networks come from:
 
 - ACTIVSg2000, ACTIVSg10k, ACTIVSg25k, ACTIVSg70k and IEEE39: [Texas A&M electric grid test cases](https://electricgrids.engr.tamu.edu/electric-grid-test-cases/)
 - WECC240: [National Laboratory of the Rockies test case repository](https://www.nlr.gov/grid/test-case-repository)

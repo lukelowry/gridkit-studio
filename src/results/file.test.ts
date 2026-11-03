@@ -205,6 +205,21 @@ describe('indexed scientific results', () => {
     const partial = await through(await create('partial', HEADER + '0,1\n1,'))
     expect(partial.progress.frames).toBe(1)
   })
+  it("reads GridKit's long layout as its wide one, an only sample whole once the file is", async () => {
+    const long = 'sample,t,class,id,variable,value\n'
+    const file = await through(await create('long', long + '0,0,Bus,A,Vm,1\n1,1,Bus,A,Vm,1.25\n'))
+    expect(file.layout.outputs).toEqual([{ table: 'Bus', field: 'Vm', ids: [1] }])
+    expect(file.progress.frames).toBe(2)
+    expect((await exact(file, 1)).value).toBe(1.25)
+    const only = await through(await create('long-one', long + '0,0,Bus,A,Vm,1\n'))
+    expect(only.progress.frames).toBe(1)
+    // A writer stopped partway leaves its only sample unfinished, as a cut wide row is.
+    const stopped = await through(
+      await create('long-stopped', long + '0,0,Bus,A,Vm,1\n'),
+      'stopped',
+    )
+    expect(stopped.progress.frames).toBe(0)
+  })
   it('keeps authoritative values and CSV after the original is replaced or deleted', async () => {
     const csv = HEADER + `0,${Math.PI}\n1,1.2345678901234567\n`
     const file = await through(await create('original', csv))

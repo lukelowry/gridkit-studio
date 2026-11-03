@@ -47,10 +47,11 @@ const gridkit: GridKit = {
   cli: process.env.GRIDKIT_CONTAINER_CLI ?? '',
 }
 
-/** A fault on the case's first BusFault from 0.05 s to 0.1 s, as GridKit's events name it. */
+/** IEEE39's bus 16, faulted from 0.05 s to 0.1 s, as GridKit's events give it. */
+const FAULTED = 16
 const FAULT = [
-  { time: 0.05, type: 'fault_on', element_id: 0 },
-  { time: 0.1, type: 'fault_off', element_id: 0 },
+  { time: 0.05, type: 'fault_on', bus: FAULTED, R: 0, X: 0.01 },
+  { time: 0.1, type: 'fault_off', bus: FAULTED },
 ]
 
 describe("GridKit's programs on solver files", () => {
@@ -258,7 +259,7 @@ describe("GridKit's programs on solver files", () => {
   })
 
   it('sags the faulted bus while the fault lasts', async ({ signal }) => {
-    const { kase, done } = await run(
+    const { done } = await run(
       'fault',
       'IEEE39',
       { output_file: 'out.csv', tmax: 0.2, dt_monitor: 0.01, events: FAULT },
@@ -267,16 +268,35 @@ describe("GridKit's programs on solver files", () => {
     const results = await done
     const info = { ...results.layout, ...results.progress }
     expect(info.domain[1]).toBeCloseTo(0.2, 9)
-    const faults = kase.table('BusFault')
-    const bus = kase.cell(faults, 'ports.bus', 0) as number
     const samples = (await readBack(results, 'Vm', info.domain)).filter(
-      (sample) => sample.id === bus,
+      (sample) => sample.id === FAULTED,
     )
     expect(samples.every(({ value }) => Number.isFinite(value))).toBe(true)
     const lowest = (from: number, to: number) =>
       Math.min(...samples.filter(({ t }) => t >= from && t <= to).map(({ value }) => value!))
     expect(lowest(0, 0.04)).toBeGreaterThan(0.9)
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
+  })
+
+  it("reads GridKit's long layout as it reads its wide one, an event's samples and all", async ({
+    signal,
+  }) => {
+    const solver = { tmax: 0.2, dt_monitor: 0.01, events: FAULT }
+    const [wide, long] = await Promise.all([
+      run('wide', 'IEEE39', { ...solver, output_file: 'wide.csv' }, signal).then((run) => run.done),
+      run(
+        'long',
+        'IEEE39',
+        { ...solver, output_file: 'long.csv', output_layout: 'long' },
+        signal,
+      ).then((run) => run.done),
+    ])
+    expect(long.fields).toEqual(wide.fields)
+    expect(long.progress.frames).toBe(wide.progress.frames)
+    for (const { field } of wide.fields.filter(({ table }) => table === 'Bus'))
+      expect(await readBack(long, field, long.progress.domain)).toEqual(
+        await readBack(wide, field, wide.progress.domain),
+      )
   })
 
   it('never reads what the last run of a solver file wrote, and keeps it when a run does not start', async ({

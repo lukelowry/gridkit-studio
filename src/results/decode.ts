@@ -7,7 +7,7 @@ import type { Id } from 'latkit'
 import { type Case, outputName, type Table } from '../gridkit/index.js'
 import type { RecordedField } from '../shared/data.js'
 import { problem } from '../shared/errors.js'
-import { csvMessages } from './csv.js'
+import { csvMessages, type LongReading } from './csv.js'
 import { CHUNK_BYTES } from './limits.js'
 
 /** One output a results file holds: a field of some rows of a table. */
@@ -36,6 +36,8 @@ interface Reading {
   /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
    *  from one chunk into the next. */
   readonly publish: (frames: Decoded) => void | Promise<void>
+  /** Whether the source ends the file, which ends a long layout's only sample. */
+  readonly final?: boolean
 }
 
 /** Where each output's rows are among the columns. */
@@ -53,6 +55,8 @@ export interface Layout {
   header?: readonly string[]
   /** What the header says the file holds, and where. */
   read?: { readonly fields: readonly Field[]; readonly plan: Plan }
+  /** A long layout's reading, whose first sample gives the header. */
+  long?: LongReading
 }
 
 /** Frames per chunk of a file holding `fields`: as many as CHUNK_BYTES of decoded frames hold. */
@@ -87,7 +91,14 @@ export async function readResults(
       reading.only && layout.header && layout.read
         ? columnsOf(layout.read.plan, reading.only, layout.header.length)
         : undefined
-    for await (const message of csvMessages(chunks, layout.header, parse, first)) {
+    for await (const message of csvMessages(
+      chunks,
+      layout.header,
+      parse,
+      first,
+      layout,
+      reading.final,
+    )) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
         if (plan) throw problem('io', 'The results repeat their header.')
@@ -135,7 +146,8 @@ export async function readResults(
         yielded = performance.now()
       }
     }
-    if (!plan) throw problem('io', 'The results contain no header.')
+    // A long layout's header waits on its first sample.
+    if (!plan && !layout.long) throw problem('io', 'The results contain no header.')
   } catch (error) {
     reading.signal.throwIfAborted()
     throw error

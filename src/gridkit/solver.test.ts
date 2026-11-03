@@ -8,6 +8,7 @@ describe("GridKit's own lines", () => {
       ['ERROR', 'error'],
       ['WARNING', 'warn'],
       ['INFO', 'info'],
+      ['SUMMARY', 'info'],
       ['DEBUG', 'debug'],
     ] as const) {
       expect(readSolverLine(`[${printed}] some words`)).toEqual({ level, text: 'some words' })

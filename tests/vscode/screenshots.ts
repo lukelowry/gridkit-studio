@@ -31,40 +31,11 @@ async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promi
   if (session.run?.state !== 'complete') throw new Error(session.run?.message ?? 'The run failed.')
 }
 
-/** A fault on `bus` of the case at `uri` from `from` to `to`, as GridKit's events name it: a
- *  BusFault device added to the case, last among its faults, whose place the events give. */
-async function faultAt(
-  bench: TestHost,
-  uri: vscode.Uri,
-  bus: number,
-  [from, to]: readonly [number, number],
-  X: number,
-) {
-  const key = uri.toString()
-  const summary = await bench.studio.documents.ensure(bench.studio.documents.get(key)!.document)
-  const element = summary.counts.BusFault ?? 0
-  await bench.studio.documents.transact(
-    key,
-    summary.version,
-    [
-      {
-        kind: 'add',
-        type: 'BusFault',
-        key: 'screenshot',
-        fields: { 'ports.bus': bus, 'params.state0': false, 'params.R': 0, 'params.X': X },
-      },
-    ],
-    'Add a fault',
-  )
-  await until(
-    () => bench.studio.state(key).summary?.counts.BusFault === element + 1,
-    'the fault added',
-  )
-  return [
-    { time: from, type: 'fault_on', element_id: element },
-    { time: to, type: 'fault_off', element_id: element },
-  ]
-}
+/** A fault on `bus` from `from` to `to` through reactance `X`, as GridKit's events give it. */
+const faultAt = (bus: number, [from, to]: readonly [number, number], X: number) => [
+  { time: from, type: 'fault_on', bus, R: 0, X },
+  { time: to, type: 'fault_off', bus },
+]
 
 /** Save the workbench below its title bar, which names the test host, once `view` settles. */
 async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> {
@@ -163,7 +134,7 @@ export async function run() {
       // A fault this near to bolted takes GridKit's solver more steps between samples than it
       // allows by default.
       max_steps: 5000,
-      events: await faultAt(bench, wide.uri, fault, [0.1, 0.2], 0.001),
+      events: faultAt(fault, [0.1, 0.2], 0.001),
     })
     await vscode.commands.executeCommand('workbench.action.closePanel')
     wide.session.transport.seek(0.15)
@@ -213,8 +184,8 @@ export async function run() {
     bench.session.select()
     await shoot(bench, 'diagram', diagram)
 
-    // IEEE39 during its own fault at bus 16: every bus voltage on the network and in the Monitor,
-    // which colors it the same way.
+    // IEEE39 during a fault at bus 16, as its solver file has one: every bus voltage on the network
+    // and in the Monitor, which colors it the same way.
     await bench.reset()
     await set('network.colormap', 'thermal')
     const ieee = await bench.open('network')
@@ -223,10 +194,7 @@ export async function run() {
     await simulate(bench, bench.uri, {
       tmax: 5,
       dt_monitor: 0.01,
-      events: [
-        { time: 0.5, type: 'fault_on', element_id: 0 },
-        { time: 0.6, type: 'fault_off', element_id: 0 },
-      ],
+      events: faultAt(16, [0.5, 0.6], 0.01),
     })
     bench.session.setPlots([{ from: VM.table, field: VM.field }])
     await vscode.commands.executeCommand('workbench.action.closeSidebar')

@@ -80,7 +80,7 @@ describe('the case worker', () => {
       const edits = await call('transact', {
         ...revision,
         mutations: [
-          { kind: 'set', entity: { table: 'Bus', id: 1 }, field: 'name', value: 'Delta Ω' },
+          { kind: 'set', entity: { table: 'Bus', id: 1 }, field: 'name', value: 'Delta 2' },
         ],
       })
       // A change to what every bus records rewrites lists of several lines: one edit to the end.

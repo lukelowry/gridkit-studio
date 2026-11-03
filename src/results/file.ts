@@ -23,6 +23,7 @@ import {
 import { message, problem } from '../shared/errors.js'
 import type { ResultsLayout, ResultsProgress, Revision } from '../shared/messages.js'
 import type { ResultCache } from './cache.js'
+import { longReading } from './csv.js'
 import {
   chunkFrames,
   type Decoded,
@@ -120,6 +121,7 @@ export class ResultsFile {
     const manifest = store.manifest!
     const file = new ResultsFile(kase, cache, store, reading)
     Object.assign(file.#decode, layoutFrom(manifest.header, kase))
+    if (manifest.long) file.#decode.long = longReading(manifest.header.slice(1))
     file.#learned(manifest.chunk)
     file.#reducers.forEach((reducer, i) => reducer.restore(manifest.reducers[i]!))
     file.#visualErrors = { ...manifest.visualErrors }
@@ -238,7 +240,8 @@ export class ResultsFile {
             { signal, publish: () => {} },
             this.#decode,
           )
-          this.#learned(chunkFrames(this.fields))
+          // A long layout learns what it holds from its first sample, as its frames arrive.
+          if (this.#decode.read) this.#learned(chunkFrames(this.fields))
           await this.store.writeCsv(piece.bytes, this.#read)
           this.#read += piece.bytes.length
         } else if (piece.kind === 'segment') {
@@ -252,7 +255,22 @@ export class ResultsFile {
           this.#read += piece.bytes.length
           await this.#checkpoint(false)
           await progress()
-        } else this.#stamp = piece.stamp
+        } else {
+          // A long layout's only sample ends with the file its writer finished.
+          if (this.#decode.long && writer() === 'done')
+            await readResults(
+              Readable.from([]),
+              this.kase,
+              {
+                signal,
+                first: this.#progress.frames,
+                final: true,
+                publish: (frames) => this.#add(frames),
+              },
+              this.#decode,
+            )
+          this.#stamp = piece.stamp
+        }
       }
       await this.#checkpoint(!!this.#stamp)
     } catch (error) {
@@ -280,6 +298,7 @@ export class ResultsFile {
   }
   async #add(frames: Decoded): Promise<void> {
     if (!frames.count) return
+    if (!this.#reducers.length) this.#learned(chunkFrames(this.fields))
     const progress = this.#progress
     if (
       frames.firstFrame !== progress.frames ||
@@ -323,6 +342,9 @@ export class ResultsFile {
   }
   async #checkpoint(complete: boolean): Promise<void> {
     if (!this.#decode.header || !this.#opened) return
+    // A long layout resumes between samples, never partway through one.
+    const long = this.#decode.long
+    if (long && !complete && (long.sample >= 0 || long.pending)) return
     await this.#flushLevels()
     await this.store.checkpoint({
       path: this.#layout.path,
@@ -330,6 +352,7 @@ export class ResultsFile {
       read: this.#read,
       fingerprint: this.kase.version,
       header: this.#decode.header,
+      ...(long && { long: true }),
       frames: this.#progress.frames,
       chunk: this.#layout.chunk,
       domain: this.#progress.domain,

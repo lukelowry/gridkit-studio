@@ -41,11 +41,11 @@ describe('component creation', () => {
       /unsigned/,
     )
     expect(() =>
-      transaction(kase, [{ kind: 'add', type: 'BusFault', key: 'fault', fields: {} }]),
+      transaction(kase, [{ kind: 'add', type: 'GenClassical', key: 'fault', fields: {} }]),
     ).toThrow(/requires ports.bus/)
     expect(() =>
       transaction(kase, [
-        { kind: 'add', type: 'BusFault', key: 'fault', fields: { 'ports.bus': 99 } },
+        { kind: 'add', type: 'GenClassical', key: 'fault', fields: { 'ports.bus': 99 } },
       ]),
     ).toThrow()
     expect(() =>

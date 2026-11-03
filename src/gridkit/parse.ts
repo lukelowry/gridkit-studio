@@ -22,6 +22,7 @@ import {
   CASE,
   type Catalog,
   DEVICE_CODES,
+  type PortKey,
   type Shape,
   SIGNAL_CODE,
   unknownShape,
@@ -539,17 +540,38 @@ class Keys {
   }
 }
 
-type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'ports' | 'extension'
+type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'extension' | PortKey
 const RECORD: Record<ArrayName, readonly Key[]> = {
-  buses: ['identity', 'class', 'name', 'init', 'params', 'mon', 'extension'],
+  buses: [
+    'identity',
+    'class',
+    'name',
+    'init',
+    'params',
+    'mon',
+    'extension',
+    'ports_in',
+    'ports_out',
+  ],
   signals: ['identity', 'name'],
   devices: ['class', 'identity', 'ports', 'params', 'init', 'mon', 'extension'],
 }
 const RECORD_KEYS: Record<ArrayName, Keys> = {
-  buses: new Keys(['number', 'class', 'name', 'init', 'params', 'mon', 'extension']),
+  buses: new Keys([
+    'number',
+    'class',
+    'name',
+    'init',
+    'params',
+    'mon',
+    'extension',
+    'ports_in',
+    'ports_out',
+  ]),
   signals: new Keys(['signal_id', 'name']),
   devices: new Keys(['class', 'id', 'ports', 'params', 'init', 'mon', 'extension']),
 }
+const PORT_KEYS: readonly PortKey[] = ['ports', 'ports_in', 'ports_out']
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
 const OWN = new Keys(['diagram'])
 
@@ -621,7 +643,9 @@ class Rows {
   readonly params: Keys
   readonly init: Keys
   readonly extension: Keys
-  readonly portKeys: Keys
+  /** The ports under each member a record writes them in, and each one's place among them. */
+  readonly ports: ReadonlyMap<PortKey, { readonly keys: Keys; readonly port: Int32Array }>
+
   /** The field each param, init and extension key fills. */
   readonly paramField: Int32Array
   readonly initField: Int32Array
@@ -652,7 +676,24 @@ class Rows {
     this.params = new Keys(keys.parameter)
     this.init = new Keys(keys.initial)
     this.extension = new Keys(keys.extension)
-    this.portKeys = new Keys(shape.ports.map((port) => port.source.name))
+    this.ports = new Map(
+      PORT_KEYS.flatMap((key) => {
+        const under = shape.ports.flatMap((port, place) =>
+          port.source.key === key ? [{ name: port.source.name, place }] : [],
+        )
+        return under.length
+          ? [
+              [
+                key,
+                {
+                  keys: new Keys(under.map(({ name }) => name)),
+                  port: Int32Array.from(under, ({ place }) => place),
+                },
+              ] as const,
+            ]
+          : []
+      }),
+    )
     this.paramField = Int32Array.from(fields.parameter)
     this.initField = Int32Array.from(fields.initial)
     this.extensionField = Int32Array.from(fields.extension)
@@ -874,8 +915,9 @@ export class Parser {
       else if (key === 'extension') {
         if (OWN.find(bytes, keyStart, keyEnd) >= 0) continue
         known = rows.extensionField[rows.extension.find(bytes, keyStart, keyEnd)] ?? -1
-      } else if (key === 'ports') {
-        const port = rows.portKeys.find(bytes, keyStart, keyEnd)
+      } else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
+        const under = rows.ports.get(key)
+        const port = under ? (under.port[under.keys.find(bytes, keyStart, keyEnd)] ?? -1) : -1
         if (port >= 0) {
           stage(this.#ports, port, value, end)
           continue

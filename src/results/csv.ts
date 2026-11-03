@@ -1,6 +1,35 @@
 import { problem } from '../shared/errors.js'
-/** GridKit's numeric CSV results, under a header of quoted UTF-8 names. */
+/** GridKit's numeric CSV results, under a header of quoted UTF-8 names: a column per variable (its
+ *  wide layout), or a row per variable and sample (its long layout), read as the wide. */
 import { BATCH_BYTES } from './limits.js'
+
+/** The header of GridKit's long layout. */
+const LONG = 'sample,t,class,id,variable,value'
+
+/** A long-layout file's reading, carried from one read of it to the next: its variables, named as
+ *  the wide layout's columns are, in its first sample's order, each one's place once that sample is
+ *  whole, the sample being gathered, and a line a read ends partway through. */
+export interface LongReading {
+  readonly names: string[]
+  places?: ReadonlyMap<string, number>
+  /** The sample being gathered, -1 between samples, its time, its values, and how many it has. */
+  sample: number
+  time: number
+  values: number[]
+  filled: number
+  pending: string
+}
+
+/** A long layout's reading from its start, or, with `names`, past whole samples of those variables. */
+export const longReading = (names?: readonly string[]): LongReading => ({
+  names: names ? [...names] : [],
+  ...(names && { places: new Map(names.map((name, place) => [name, place])) }),
+  sample: -1,
+  time: NaN,
+  values: [],
+  filled: 0,
+  pending: '',
+})
 
 type CsvMessage =
   | { readonly kind: 'schema'; readonly names: readonly string[] }
@@ -17,12 +46,15 @@ type CsvMessage =
  *  then rows alone, the first of them frame `first` of the file, as a problem numbers it. With
  *  `parse`, only the columns it marks are read as numbers, the time always: the others are
  *  counted, so each row still matches its header, and left NaN. A last row cut short, as a writer
- *  that was stopped leaves it, is left out. */
+ *  that was stopped leaves it, is left out. A long layout's reading is kept in `held`, which says
+ *  so for a read past its header; `final` says `source` ends the file. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
   known?: readonly string[],
   parse?: Uint8Array,
   first = 0,
+  held: { long?: LongReading } = {},
+  final = false,
 ): AsyncGenerator<CsvMessage> {
   let header = ''
   let quoted = false
@@ -42,8 +74,13 @@ export async function* csvMessages(
     return { kind: 'schema', names }
   }
   if (known) yield schema(known)
+  const texts = textChunks(source)
+  if (held.long) {
+    yield* longMessages(texts, held.long, first, final)
+    return
+  }
 
-  for await (const [text, closing] of textChunks(source)) {
+  for await (const [text, closing] of texts) {
     let start = 0
     if (!headed) {
       for (; start < text.length; start++) {
@@ -53,7 +90,15 @@ export async function* csvMessages(
       }
       header += text.slice(0, start)
       if (start === text.length) continue
-      yield schema(headerOf(header))
+      const names = headerOf(header)
+      if (names.join() === LONG) {
+        held.long = longReading()
+        yield* longMessages(after([text.slice(start + 1), closing], texts), held.long, first, final)
+        return
+      }
+      if (!/^(t|time)$/i.test(names[0]!))
+        throw problem('io', 'The first CSV column must be t or time.')
+      yield schema(names)
       header = ''
       start++
     }
@@ -105,6 +150,92 @@ export async function* csvMessages(
   }
   if (!headed) throw problem('io', 'The CSV results do not have a complete header.')
   if (rows > 0) yield { kind: 'rows', length: rows, values, width }
+}
+
+/** `head`, then the rest of `texts`. */
+async function* after(
+  head: readonly [string, boolean],
+  texts: AsyncIterable<readonly [string, boolean]>,
+): AsyncGenerator<readonly [string, boolean]> {
+  yield head
+  yield* texts
+}
+
+/** A long layout's whole samples in `texts`, which `long` reads on from, each a row as the wide
+ *  layout writes it: the schema first, once the first sample is whole, which the next sample's
+ *  first row says, or the file's end. A sample is whole once it has a value of every variable, or
+ *  the next begins; a value it lacks is NaN. A last sample the file ends partway through is left
+ *  out, as a cut wide row is. Event times repeat, as samples before and after the event. */
+async function* longMessages(
+  texts: AsyncIterable<readonly [string, boolean]>,
+  long: LongReading,
+  first: number,
+  final: boolean,
+): AsyncGenerator<CsvMessage> {
+  const out: number[] = []
+  let frames = first
+  const learn = (): CsvMessage => {
+    long.places = new Map(long.names.map((name, place) => [name, place]))
+    if (long.places.size !== long.names.length)
+      throw problem('io', 'The first sample of the long results names a variable twice.')
+    return { kind: 'schema', names: ['t', ...long.names] }
+  }
+  const close = () => {
+    out.push(long.time, ...long.values)
+    frames++
+    long.sample = -1
+    long.values = []
+    long.filled = 0
+  }
+  for await (const [text, closing] of texts) {
+    const lines = (long.pending + text).split('\n')
+    long.pending = lines.pop()!
+    for (const line of lines) {
+      const row = line.endsWith('\r') ? line.slice(0, -1) : line
+      if (!row) continue
+      const cells = row.split(',')
+      if (cells.length !== 6) {
+        // The newline that closes the source ends a row its writer cut short; it never finished.
+        if (closing) break
+        throw problem('io', `Long results row ${frames + 1} does not have six values.`)
+      }
+      const sample = Number(cells[0])
+      if (!Number.isSafeInteger(sample) || sample < 0)
+        throw problem('io', `Long results row ${frames + 1} names no sample.`)
+      if (sample !== long.sample) {
+        if (long.sample >= 0) {
+          if (!long.places) yield learn()
+          close()
+        }
+        long.sample = sample
+        long.time = numberOf(cells[1]!, frames + 1, 2)
+        if (!Number.isFinite(long.time)) throw problem('io', 'A CSV frame must have a finite time.')
+        if (long.places) long.values = new Array<number>(long.names.length).fill(NaN)
+      }
+      const name = `${cells[2]}_${cells[3]}_${cells[4]}`
+      const value = numberOf(cells[5]!, frames + 1, 6)
+      if (!long.places) {
+        long.names.push(name)
+        long.values.push(value)
+        continue
+      }
+      const place = long.places.get(name)
+      if (place === undefined)
+        throw problem('io', `Sample ${sample} records ${name}, which the first sample does not.`)
+      long.values[place] = value
+      if (++long.filled === long.names.length) close()
+    }
+    // A file's only sample is whole once the file ends.
+    if (final && closing && !long.places && long.sample >= 0) {
+      yield learn()
+      close()
+    }
+    if (out.length && long.places) {
+      const width = long.names.length + 1
+      yield { kind: 'rows', length: out.length / width, values: Float64Array.from(out), width }
+      out.length = 0
+    }
+  }
 }
 
 /** `source` as text, then a closing newline to end a last record that has none, each with whether
@@ -180,7 +311,6 @@ function headerOf(text: string): string[] {
     if (start === text.length) break
     start++
   }
-  if (!/^(t|time)$/i.test(names[0]!)) throw problem('io', 'The first CSV column must be t or time.')
   return names
 }
 

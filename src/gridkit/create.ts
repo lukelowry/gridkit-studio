@@ -48,6 +48,9 @@ export function createRecords(
         : typeof change.key === 'string' && change.key.length > 0
     if (!valid)
       throw problem('invalid-input', `Use a ${shape.identity.type} identity for ${change.type}.`)
+    const allowed = shape.plan.get(shape.identity.name)?.allowed
+    if (allowed && !allowed.pattern.test(String(change.key)))
+      throw problem('invalid-input', `${shape.identity.name} may contain ${allowed.rule}.`)
     const entity = { table: change.type, id: change.key }
     const id = entityKey(entity)
     if (declared.has(id) || kase.locate(entity))

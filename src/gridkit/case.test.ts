@@ -19,15 +19,15 @@ beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')
 const source = `{
  "header": {"case_name": "東京 ⚡"},
  "buses": [
-  {"class":"Bus","number":42,"name":"東京 😀","params":{"kv":230.000},"extension":{"longitude":-100.00,"latitude":32.5}},
+  {"class":"Bus","number":42,"name":"Tokyo 1","params":{"kv":230.000},"extension":{"longitude":-100.00,"latitude":32.5}},
   {"class":"Bus","number":7,"name":"Seven","params":{"kv":115.0}}
  ],
- "signals":[{"signal_id":1,"name":"setpoint"}],
+ "signals":[{"signal_id":1,"name":"setpoint 😀"}],
  "devices":[
   {"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"unknown":{"keep":1.000}},
   {"class":"ConstantSignalSource","id":"source","ports":{"sr":1}},
-  {"class":"BusFault","id":"fault","ports":{"bus":42,"control_signal":1}},
-  {"class":"BusFault","id":"disconnected","ports":{"bus":7}}
+  {"class":"GenClassical","id":"fault","ports":{"bus":42,"pmech":1}},
+  {"class":"GenClassical","id":"disconnected","ports":{"bus":7}}
  ]
 }`
 const apply = (text: string, edits: ReturnType<typeof editField>) =>
@@ -40,7 +40,7 @@ const apply = (text: string, edits: ReturnType<typeof editField>) =>
     )
 describe('single catalog and source ownership', () => {
   it('compiles GridKit metadata and native reference semantics', () => {
-    expect(fieldDefinition(catalog.definition, 'BusFault', 'ports.control_signal')).toMatchObject({
+    expect(fieldDefinition(catalog.definition, 'GenClassical', 'ports.pmech')).toMatchObject({
       direction: 'in',
       kind: 'reference',
       target: 'Signal',
@@ -90,13 +90,13 @@ describe('single catalog and source ownership', () => {
   })
   it('preserves numeric text, unknown properties and UTF-16 source positions', async () => {
     const kase = await Case.parse(source, catalog)
-    const range = sourceRange(kase, { table: 'Bus', id: 42 }, 'name')
-    expect(source.slice(range.offset, range.offset + range.length)).toBe('"東京 😀"')
+    const range = sourceRange(kase, { table: 'Signal', id: 1 }, 'name')
+    expect(source.slice(range.offset, range.offset + range.length)).toBe('"setpoint 😀"')
     const next = apply(source, editField(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
     expect(next).toContain('"kv":138.0')
     expect(next).toContain('"kv":230.000')
     expect(next).toContain('"keep":1.000')
-    expect(JSON.parse(next).buses[0].name).toBe('東京 😀')
+    expect(JSON.parse(next).signals[0].name).toBe('setpoint 😀')
     const updated = await Case.parse(next, catalog)
     expect(updated.version).not.toBe(kase.version)
   })
@@ -162,11 +162,11 @@ describe('single catalog and source ownership', () => {
     expect(kase.cell(kase.table('Bus'), 'name', 1)).toBe('Seven "7"/\\')
   })
   it('says where each problem a parse finds is: the record it refuses, or the second of an id', async () => {
-    const fault = '{"class":"BusFault","id":"fault"'
+    const fault = '{"class":"GenClassical","id":"fault"'
     for (const [text, record, said] of [
       // A bus, a signal and the case are types of their own, never a device's class.
       ...['Bus', 'Signal', 'Case'].map((type) => {
-        const named = fault.replace('BusFault', type)
+        const named = fault.replace('GenClassical', type)
         return [source.replace(fault, named), named, `${type} is not a device class.`] as const
       }),
       [
@@ -176,7 +176,7 @@ describe('single catalog and source ownership', () => {
       ],
       [
         source.replace('"id":"disconnected"', '"id":"fault"'),
-        '{"class":"BusFault","id":"fault","ports":{"bus":7}}',
+        '{"class":"GenClassical","id":"fault","ports":{"bus":7}}',
         'Two rows share the id fault.',
       ],
     ] as const) {
@@ -434,18 +434,34 @@ describe('single catalog and source ownership', () => {
     const next = apply(text, editField(kase, { table: 'Bus', id: 7 }, 'params.kz', 4))
     expect(JSON.parse(next).buses[1].params.kz).toBe(4)
   })
+  it('says a bus name or device id GridKit refuses is an error, and never writes one', async () => {
+    const text = source
+      .replace('"name":"Seven"', '"name":"Seven/7"')
+      .replace('"id":"line"', '"id":"line:1"')
+    const kase = await Case.parse(text, catalog)
+    const said = (await diagnose(kase, AbortSignal.any([])))
+      .filter(({ severity }) => severity === 'error')
+      .map(({ entity, field, message }) => ({ entity, field, message }))
+    const rule = 'only ASCII letters, digits, spaces, _, . and -'
+    expect(said).toEqual(
+      expect.arrayContaining([
+        { entity: { table: 'Bus', id: 7 }, field: 'name', message: `name may contain ${rule}.` },
+        { entity: { table: 'Branch', id: 'line:1' }, message: `id may contain ${rule}.` },
+      ]),
+    )
+    expect(() => editField(kase, { table: 'Bus', id: 42 }, 'name', 'Tokyo/1')).toThrow(rule)
+    // A signal's name is the case's own, which GridKit takes as it is.
+    expect(said.some(({ entity }) => entity?.table === 'Signal')).toBe(false)
+  })
   it('reads a bus’s class as a field of it, one of the classes its catalog gives', async () => {
-    const text = source.replace('"class":"Bus","number":7', '"class":"SignalVoltageIn","number":7')
+    const text = source.replace('"class":"Bus","number":7', '"class":"BusDC","number":7')
     const issues = async (kase: Case) =>
       (await diagnose(kase, AbortSignal.any([]))).map(({ message }) => message)
     const kase = await Case.parse(text, catalog)
     const buses = kase.table('Bus')
-    expect([kase.cell(buses, 'class', 0), kase.cell(buses, 'class', 1)]).toEqual([
-      'Bus',
-      'SignalVoltageIn',
-    ])
+    expect([kase.cell(buses, 'class', 0), kase.cell(buses, 'class', 1)]).toEqual(['Bus', 'BusDC'])
     expect(await issues(kase)).toContain(
-      'SignalVoltageIn is not a Bus class GridKit Studio knows; it is kept as written.',
+      'BusDC is not a Bus class GridKit Studio knows; it is kept as written.',
     )
     expect(
       JSON.parse(apply(text, editField(kase, { table: 'Bus', id: 7 }, 'class', 'Bus'))).buses[1]
@@ -455,9 +471,9 @@ describe('single catalog and source ownership', () => {
     const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
     const later = catalogOf({
       ...bundled,
-      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
+      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'BusDC'] },
     })
-    expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/SignalVoltageIn/)
+    expect((await issues(await Case.parse(text, later))).join()).not.toMatch(/BusDC/)
     // What is no catalog says so, as plainly as GridKit Studio can.
     for (const json of [null, {}, { bus: {}, classes: [] }, { bus: { name: 'Bus' } }])
       expect(() => catalogOf(json)).toThrow('A catalog has a bus and a list of classes.')
@@ -493,7 +509,7 @@ describe('single catalog and source ownership', () => {
   it('keeps an unknown key that takes a known name, or a point, or holds a null', async () => {
     const text = source
       .replace('"name":"Seven"', '"name":"Seven","Vm":1.0,"spare":null')
-      .replace('"name":"東京 😀"', '"name":"東京 😀","spare":2,"a.b":1.5')
+      .replace('"name":"Tokyo 1"', '"name":"Tokyo 1","spare":2,"a.b":1.5')
     const kase = await Case.parse(text, catalog)
     const fields = Object.fromEntries(
       tableDefinition(kase.definition, 'Bus')!.fields.map((field) => [field.name, field]),

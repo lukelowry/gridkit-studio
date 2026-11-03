@@ -50,7 +50,7 @@ it('commits scalar, position, connection, and removal edits through source spans
     signals: [{ signal_id: 1, name: 'existing' }],
     devices: [
       { id: 'a/b', class: 'ConstantSignalSource', ports: { sr: 1 }, params: { k: 1 } },
-      { id: 'fault:[]', class: 'BusFault', ports: { bus: 42 } },
+      { id: 'fault:[]', class: 'GenClassical', ports: { bus: 42 } },
     ],
   })
   const kase = await Case.parse(text, catalog)
@@ -58,20 +58,20 @@ it('commits scalar, position, connection, and removal edits through source spans
     text,
     transaction(kase, [
       { kind: 'set', entity: { table: 'Bus', id: 42 }, field: 'params.kv', value: 230 },
-      { kind: 'move', entity: { table: 'BusFault', id: 'fault:[]' }, position: [5, 6] },
+      { kind: 'move', entity: { table: 'GenClassical', id: 'fault:[]' }, position: [5, 6] },
       {
         kind: 'connect',
         from: { table: 'ConstantSignalSource', id: 'a/b', field: 'ports.sr' },
-        to: { table: 'BusFault', id: 'fault:[]', field: 'ports.control_signal' },
+        to: { table: 'GenClassical', id: 'fault:[]', field: 'ports.pmech' },
       },
     ]),
   )
   const edited = await Case.parse(changed, catalog)
   const json = JSON.parse(changed)
   expect(json.buses[0].params.kv).toBe(230)
-  expect(json.devices[1].ports.control_signal).toBe(1)
+  expect(json.devices[1].ports.pmech).toBe(1)
   expect(json.devices[1].extension.diagram.position).toEqual([5, 6])
-  expect(sourceRange(edited, { table: 'BusFault', id: 'fault:[]' }).length).toBeGreaterThan(1)
+  expect(sourceRange(edited, { table: 'GenClassical', id: 'fault:[]' }).length).toBeGreaterThan(1)
   expect(() =>
     transaction(edited, [{ kind: 'remove', entities: [{ table: 'Signal', id: 1 }] }]),
   ).toThrow('still references')
@@ -82,7 +82,7 @@ it('commits scalar, position, connection, and removal edits through source spans
         kind: 'remove',
         entities: [
           { table: 'ConstantSignalSource', id: 'a/b' },
-          { table: 'BusFault', id: 'fault:[]' },
+          { table: 'GenClassical', id: 'fault:[]' },
           { table: 'Signal', id: 1 },
         ],
       },

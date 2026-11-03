@@ -102,14 +102,14 @@ describe("a case's recording", () => {
       '{"class":"Branch","id":"line","ports":{"bus1":42,"bus2":7},"mon":["P1"]}',
       [
         '{"class":"Branch","id":"one","ports":{"bus1":42,"bus2":7}}',
-        '{"class":"BusFault","id":"fault","ports":{"bus":7}}',
+        '{"class":"GenClassical","id":"fault","ports":{"bus":7}}',
         '{"class":"Branch","id":"two","ports":{"bus1":42,"bus2":7}}',
       ].join(',\n  '),
     )
     const kase = await Case.parse(text, catalog)
     const edits = transaction(kase, [
       { kind: 'record', type: 'Branch', add: ['p1'], remove: [] },
-      { kind: 'record', type: 'BusFault', add: ['ir'], remove: [] },
+      { kind: 'record', type: 'GenClassical', add: ['ir'], remove: [] },
     ])
     for (let i = 1; i < edits.length; i++)
       expect(edits[i]!.offset).toBeGreaterThanOrEqual(edits[i - 1]!.offset + edits[i - 1]!.length)

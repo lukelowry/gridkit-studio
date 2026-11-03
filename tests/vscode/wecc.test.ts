@@ -52,9 +52,10 @@ suite('WECC240 run', function () {
         {
           tmax: 1,
           dt_monitor: 0.01,
+          // The bus GridKit's own WECC240 example faults.
           events: [
-            { time: 0.1, type: 'fault_on', element_id: 0 },
-            { time: 0.15, type: 'fault_off', element_id: 0 },
+            { time: 0.1, type: 'fault_on', bus: 4005, R: 0, X: 0.01 },
+            { time: 0.15, type: 'fault_off', bus: 4005 },
           ],
         },
         uri,

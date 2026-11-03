@@ -103,17 +103,13 @@ suite('Workflows', function () {
       () => bench.session.plots.some((plot) => plot.field === 'Vm' && plot.id === id),
       'its voltage plotted',
     )
-    // The fault GridKit's events name: the case's own fault on this bus, by its place among them.
-    const element = (bench.source.devices as { class?: string; ports?: { bus?: number } }[])
-      .filter((device) => device.class === 'BusFault')
-      .findIndex((device) => device.ports?.bus === bus.number)
-    assert.ok(element >= 0, 'the case has a fault on the bus')
+    // GridKit's events fault the bus by its number.
     await bench.writeSolver({
       tmax: 2,
       dt_monitor: 0.01,
       events: [
-        { time: 1, type: 'fault_on', element_id: element },
-        { time: 1.1, type: 'fault_off', element_id: element },
+        { time: 1, type: 'fault_on', bus: bus.number, R: 0, X: 0.01 },
+        { time: 1.1, type: 'fault_off', bus: bus.number },
       ],
     })
     const before = bench.session.run?.id

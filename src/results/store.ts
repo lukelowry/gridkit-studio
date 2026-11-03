@@ -46,7 +46,10 @@ export interface Manifest {
   readonly stamp: Stamp
   readonly read: number
   readonly fingerprint: string
+  /** The columns, as the wide layout names them; a long layout's are its first sample's. */
   readonly header: readonly string[]
+  /** Whether the file is in GridKit's long layout, a row per variable and sample. */
+  readonly long?: boolean
   readonly frames: number
   readonly chunk: number
   readonly domain: TimeRange

@@ -116,7 +116,7 @@ export function nativePath(field: FieldPlan): string[] {
     case 'initial':
       return ['init', source.name]
     case 'port':
-      return ['ports', source.name]
+      return [source.key, source.name]
     case 'extension':
       return ['extension', source.name]
     case 'found':
@@ -323,9 +323,9 @@ function membersMade(kase: Case, made: readonly string[]): SourceEdit {
   }
 }
 
-/** Each value present but invalid or required but missing, any signal with two drivers, and, as
- *  warnings, each class and field the catalog does not know, and each value outside the choices
- *  it gives. */
+/** Each value present but invalid or required but missing, each name or id outside the catalog's
+ *  rule, any signal with two drivers, and, as warnings, each class and field the catalog does not
+ *  know, each value outside the choices it gives, and subsystems, which Studio does not show. */
 const diagnoses = new WeakMap<Case, Issue[]>()
 
 /** The case's issues, which every caller shares of the same immutable source. Found a slice at a
@@ -348,6 +348,15 @@ export async function diagnose(kase: Case, signal: AbortSignal): Promise<Issue[]
 
 function* diagnostics(kase: Case): Generator<void, Issue[]> {
   const issues: Issue[] = []
+  const subsystems = kase.member('subsystems')
+  if (subsystems)
+    issues.push({
+      offset: textOffset(kase, subsystems.start),
+      length: textOffset(kase, subsystems.end) - textOffset(kase, subsystems.start),
+      severity: 'warning',
+      message:
+        'GridKit Studio shows the top-level system alone; its subsystems are kept as written.',
+    })
   for (const table of kase.tables.values())
     if (!kase.catalog.shapes.has(table.shape.type) && table.records.length) {
       const id = kase.entity(table, 0)
@@ -383,6 +392,24 @@ function* diagnostics(kase: Case): Generator<void, Issue[]> {
           field: plan.name,
           severity: 'warning',
           message: `${kase.cell(table, plan.name, row)} is not a ${table.shape.type} ${plan.name} GridKit Studio knows; it is kept as written.`,
+        })
+      }
+    }
+  for (const table of kase.tables.values())
+    for (const plan of table.shape.plan.values()) {
+      const column =
+        plan.allowed && (plan.source.kind === 'identity' ? table.ids : table.fields.get(plan.name))
+      if (!column) continue
+      yield
+      for (const [n, row] of unallowed(column, plan.allowed!.pattern).entries()) {
+        if ((n & STEP_RECORDS) === 0) yield
+        const id = kase.entity(table, row)
+        issues.push({
+          ...sourceRange(kase, id, plan.source.kind === 'identity' ? undefined : plan.name),
+          entity: id,
+          ...(plan.source.kind !== 'identity' && { field: plan.name }),
+          severity: 'error',
+          message: `${plan.name} may contain ${plan.allowed!.rule}.`,
         })
       }
     }
@@ -461,6 +488,18 @@ function outside(column: Column, choices: readonly string[]): number[] {
   return rows
 }
 
+/** The rows of `column` that hold text `pattern` does not match. */
+function unallowed(column: Column, pattern: RegExp): number[] {
+  const rows: number[] = []
+  column.chunks.forEach((chunk, c) => {
+    for (let at = 0; at < chunk.length; at++) {
+      const value = valueAt(chunk, at)
+      if (typeof value === 'string' && !pattern.test(value)) rows.push(column.starts[c]! + at)
+    }
+  })
+  return rows
+}
+
 /** Shared validation for existing fields and newly created records. */
 export function fieldValue(
   plan: FieldPlan,
@@ -513,5 +552,7 @@ export function fieldValue(
     throw problem('invalid-input', 'Expected ' + definition.kind + ' for ' + plan.name + '.')
   if (plan.choices && !plan.choices.includes(String(input)))
     throw problem('invalid-input', 'Choose a supported value for ' + plan.name + '.')
+  if (plan.allowed && !plan.allowed.pattern.test(String(input)))
+    throw problem('invalid-input', `${plan.name} may contain ${plan.allowed.rule}.`)
   return input
 }

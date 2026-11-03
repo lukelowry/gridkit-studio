@@ -1,7 +1,7 @@
 # GridKit Studio
 
 [![CI](https://github.com/lukelowry/gridkit-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/lukelowry/gridkit-studio/actions/workflows/ci.yml)
-[![GridKit v0.2.0](https://img.shields.io/badge/GridKit-v0.2.0-brightgreen)](https://github.com/ORNL/GridKit/releases/tag/v0.2.0)
+[![GridKit develop](https://img.shields.io/badge/GridKit-develop-brightgreen)](https://github.com/ORNL/GridKit/tree/develop)
 [![VS Code ≥ 1.140](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.140-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Release](https://img.shields.io/github/v/release/lukelowry/gridkit-studio?include_prereleases)](https://github.com/lukelowry/gridkit-studio/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -27,11 +27,11 @@ Studio runs GridKit from an install or from a container image.
 **Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
 
 ```sh
-docker pull ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf
+docker pull ghcr.io/birchfieldresearchgroup/gridkit:develop-perf
 ```
 
 ```json
-"gridkitStudio.gridkitImage": "ghcr.io/birchfieldresearchgroup/gridkit:0.2.0-perf"
+"gridkitStudio.gridkitImage": "ghcr.io/birchfieldresearchgroup/gridkit:develop-perf"
 ```
 
 ## How to use

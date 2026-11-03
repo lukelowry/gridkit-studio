@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Results, Summary, ViewState } from '../../shared/messages.js'
-import { DEFAULTS, exportable, videoTimes } from './video.js'
+import { DEFAULTS, exportable, framed, videoTimes } from './video.js'
 
 // What a video shows and whether it can start ask nothing of the extension.
 vi.mock('../bridge.js', () => ({ bridge: {} }))
@@ -23,6 +23,17 @@ describe('a video', () => {
     expect(videoTimes({})).toBeUndefined()
     expect(videoTimes({ results: results([1, 1]) })).toBeUndefined()
     expect(videoTimes({ results: results([0, 2]), window: [3, 4] })).toBeUndefined()
+  })
+
+  it('frames what the canvas showed, its place, tilt and turn kept, at the picture size', () => {
+    const camera = { center: [-97, 31] as [number, number], zoom: 5, pitch: 60, bearing: 30 }
+    // A picture twice the canvas each way shows the same at one zoom level more.
+    expect(framed({ camera, size: [800, 450] }, [1600, 900])).toEqual({ ...camera, zoom: 6 })
+    // Of another shape, all the canvas showed fits: the way the picture is narrower decides.
+    expect(framed({ camera, size: [800, 800] }, [1600, 900])).toEqual({
+      ...camera,
+      zoom: 5 + Math.log2(900 / 800),
+    })
   })
 
   it('exports once it has times, a view, a size and a speed', () => {

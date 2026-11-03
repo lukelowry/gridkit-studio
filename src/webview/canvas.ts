@@ -111,6 +111,21 @@ function boot() {
   let drawnBindings: Bindings = {}
   let heldFields = new Map<string, Set<string>>()
   const visible = () => shown && !document.hidden && !closed
+  /** Says what the canvas frames once its camera and size rest: the page keeps the camera to open on
+   *  again, and the extension the framing, for an export to frame what the user saw. A canvas out
+   *  of sight frames nothing. */
+  const framing = () => {
+    clearTimeout(saving)
+    saving = setTimeout(() => {
+      const size = [canvas.clientWidth, canvas.clientHeight]
+      if (!host || !size[0] || !size[1]) return
+      const { camera } = host.view
+      bridge.save({ uri: state.uri, camera })
+      bridge.send({ kind: 'framing', framing: { camera, size } })
+    }, 200)
+  }
+  const resizing = new ResizeObserver(framing)
+  resizing.observe(canvas)
   const drop = () => {
     ++epoch
     restore = host?.view.camera ?? restore
@@ -440,13 +455,7 @@ function boot() {
               bridge.command('revealInSource')
             },
             menu: (point, elements) => nativeMenu(canvas, point, elements, state, kind),
-            camera(camera) {
-              clearTimeout(saving)
-              saving = setTimeout(() => {
-                bridge.save({ uri: state.uri, camera })
-                bridge.send({ kind: 'camera', camera })
-              }, 200)
-            },
+            camera: framing,
             error: fail,
           }),
         )
@@ -607,6 +616,7 @@ function boot() {
       off()
       unwatch()
       clock.stop()
+      resizing.disconnect()
       clearTimeout(saving)
       mapController?.abort()
       background.destroy?.()

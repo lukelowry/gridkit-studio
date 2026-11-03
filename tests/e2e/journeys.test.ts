@@ -122,6 +122,15 @@ suite('Journeys', function () {
 
   test('the Network is saved as a picture, and the Monitor as a video', async () => {
     const network = await bench.open('network')
+    // What the Network shows at rest is what a video of it frames: its camera, over its canvas.
+    await idle(network)
+    const framing = await network.evaluate<unknown>(
+      `({ camera: gridkitSelection().camera, size: [document.querySelector('canvas').clientWidth, document.querySelector('canvas').clientHeight] })`,
+    )
+    await until(
+      () => JSON.stringify(bench.session.framings.network) === JSON.stringify(framing),
+      'the framing a video keeps',
+    )
     const image = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 network.png')
     await rm(image.fsPath, { force: true })
     await bench.title('editor', 'Export Image')

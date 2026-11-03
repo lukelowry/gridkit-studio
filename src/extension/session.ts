@@ -22,9 +22,10 @@ import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { followed, savedKey, savedUri } from '../shared/ids.js'
 import {
-  type Cameras,
   type CaseSource,
   type Element,
+  type Framing,
+  type Framings,
   type Plot,
   type Results,
   type ResultsLayout,
@@ -118,7 +119,7 @@ export class Session {
   /** The network elements that stand for a selection the network does not draw. */
   #anchors?: Entity[]
   #diagramEditing = false
-  #cameras: Cameras = {}
+  #framings: Framings = {}
   /** The Monitor's chosen time window; absent, plots show the whole run. */
   #window?: readonly [number, number]
   /** The results file the views draw: a run's, or one opened. */
@@ -186,8 +187,8 @@ export class Session {
   get diagramEditing(): boolean {
     return this.#diagramEditing
   }
-  get cameras(): Cameras {
-    return this.#cameras
+  get framings(): Framings {
+    return this.#framings
   }
   get window(): readonly [number, number] | undefined {
     return this.#window
@@ -598,8 +599,8 @@ export class Session {
   }
 
   /** How the Network or Diagram was last framed, for an export to keep. */
-  setCamera(kind: Extract<ViewKind, 'network' | 'diagram'>, camera: unknown): void {
-    this.#cameras = { ...this.#cameras, [kind]: camera }
+  setFraming(kind: Extract<ViewKind, 'network' | 'diagram'>, framing: Framing | undefined): void {
+    this.#framings = { ...this.#framings, [kind]: framing }
   }
 
   /** Reads its display settings again, as they change. */

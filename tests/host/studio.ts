@@ -345,8 +345,8 @@ export class Bench {
     for (const { table, field } of Object.values(session.bindings))
       session.bind({ table, field }, [])
     session.setEditing(false)
-    session.setCamera('network', undefined)
-    session.setCamera('diagram', undefined)
+    session.setFraming('network', undefined)
+    session.setFraming('diagram', undefined)
     session.setTable({
       type: undefined,
       columns: undefined,

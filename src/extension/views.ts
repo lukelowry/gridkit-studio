@@ -8,18 +8,19 @@ import { isRange } from '../shared/data.js'
 import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
-import type {
-  FromView,
-  Of,
-  Results,
-  SentState,
-  Summary,
-  TableState,
-  ToView,
-  ViewApi,
-  ViewKind,
-  ViewMessage,
-  ViewState,
+import {
+  framingOf,
+  type FromView,
+  type Of,
+  type Results,
+  type SentState,
+  type Summary,
+  type TableState,
+  type ToView,
+  type ViewApi,
+  type ViewKind,
+  type ViewMessage,
+  type ViewState,
 } from '../shared/messages.js'
 import { type SettingsValues, validateSettings } from '../shared/preferences.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
@@ -394,10 +395,12 @@ class View {
         session.plotRange(message.plot, range ?? undefined)
         return
       }
-      case 'camera':
-        if (this.kind === 'network' || this.kind === 'diagram')
-          session?.setCamera(this.kind, message.camera)
+      case 'framing': {
+        const framing = framingOf(message.framing)
+        if (framing && (this.kind === 'network' || this.kind === 'diagram'))
+          session?.setFraming(this.kind, framing)
         return
+      }
       case 'display': {
         if (this.kind !== 'network' || !uri) return
         const values = validateSettings(message.values)
@@ -484,7 +487,7 @@ class View {
           label,
           revision.attachmentId,
         ),
-      cameras: async ({ uri }) => studio.get(uri)?.cameras ?? {},
+      framings: async ({ uri }) => studio.get(uri)?.framings ?? {},
       exportOpen: ({ uri, name }, signal) =>
         this.#exports.open(vscode.Uri.parse(uri), name, signal),
       exportWrite: ({ file, bytes }) => this.#exports.write(file, bytes),

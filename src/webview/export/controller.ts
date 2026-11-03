@@ -1,6 +1,6 @@
 ﻿import { type Gpu, type Placed, type Rect, View } from 'latkit'
 
-import { type Cameras, type Results, type ViewState } from '../../shared/messages.js'
+import { type Results, type ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
 import { FrameReads, FrameWindow } from '../frames.js'
@@ -11,7 +11,7 @@ import { caseFit, sampledFields, sceneFields, sceneOf } from '../scenes.js'
 import { nativeTheme, theme } from '../theme.js'
 import { caseStem } from './image.js'
 import { plotViews } from './plots.js'
-import { exportVideo, type VideoJob, videoOutput, type VideoProgress } from './video.js'
+import { exportVideo, framed, type VideoJob, videoOutput, type VideoProgress } from './video.js'
 
 /** Owns every export resource, including its immutable results lease and sequential file sink. */
 export async function renderVideo(
@@ -55,7 +55,7 @@ export async function renderVideo(
         file = null
       },
     )
-    const cameras: Cameras = await bridge.request('cameras', { uri: shown.uri }, signal)
+    const framings = await bridge.request('framings', { uri: shown.uri }, signal)
     gpu = await openGpu()
     signal.throwIfAborted()
     const canvases = job.views.filter((kind) => kind !== 'monitor')
@@ -138,20 +138,26 @@ export async function renderVideo(
         })
         if (kind === 'network' && background.attribution)
           scene.title = { text: background.attribution, place: 'bottom-right' }
+        // What the user framed in the canvas, as they framed it; else the whole case, as the
+        // canvas first frames it.
+        const framing = framings[kind]
         const view = await View.create(null, scene, {
           gpu,
           sources: sources(),
-          ...(cameras[kind] ? { camera: cameras[kind] } : {}),
+          ...(framing && {
+            camera: framed(framing, [region[2] * job.width, region[3] * job.height]),
+          }),
         })
         views.push(view)
         if (kind === 'network') {
           network = view
           view.orbit = settings.get('network.orbit')
-          view.camera = { pitch: settings.get('network.tilt') }
         }
         view.at = job.timeRange[0]
-        if (!cameras[kind])
+        if (!framing) {
+          if (kind === 'network') view.camera = { pitch: settings.get('network.tilt') }
           void view.fit(caseFit(data, definition.drawing, kind), { signal }).catch(bridge.report)
+        }
         placed.push({ view, region })
         signal.throwIfAborted()
       }

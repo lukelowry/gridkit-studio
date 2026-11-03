@@ -323,10 +323,31 @@ export interface ViewState {
   window?: TimeRange
 }
 
+/** What a canvas showed: its camera, over a canvas `size` CSS pixels wide and high. */
+export interface Framing {
+  readonly camera: Camera
+  readonly size: readonly [number, number]
+}
+
 /** How Network and Diagram were last framed, for a video export to keep. */
-export interface Cameras {
-  network?: Camera
-  diagram?: Camera
+export interface Framings {
+  network?: Framing
+  diagram?: Framing
+}
+
+/** `value` as a framing a page sent: a camera with a zoom, over a canvas with an area. */
+export function framingOf(value: unknown): Framing | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { camera, size } = value as { camera?: unknown; size?: unknown }
+  const zoomed =
+    !!camera && typeof camera === 'object' && 'zoom' in camera && Number.isFinite(camera.zoom)
+  const sized =
+    Array.isArray(size) &&
+    size.length === 2 &&
+    size.every((length) => typeof length === 'number' && length > 0 && Number.isFinite(length))
+  return zoomed && sized
+    ? { camera: camera as Camera, size: [size[0] as number, size[1] as number] }
+    : undefined
 }
 
 /** What a command asks of a view. */
@@ -400,7 +421,7 @@ export interface ViewApi {
    *  cancel. */
   exportOpen: { input: { uri: string; name: string }; output: number | null }
   /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
-  cameras: { input: { uri: string }; output: Cameras }
+  framings: { input: { uri: string }; output: Framings }
   exportWrite: { input: { file: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished file's path. */
   exportClose: { input: { file: number; abort?: boolean }; output: string | null }
@@ -422,7 +443,8 @@ export type ViewMessage =
   | { kind: 'window'; bounds: TimeRange }
   /** The values the user chose for a plot to show; null, the values it shows. */
   | { kind: 'range'; plot: Plot; range: readonly [number, number] | null }
-  | { kind: 'camera'; camera: unknown }
+  /** What the user framed in a canvas: its camera, and the canvas's size. */
+  | { kind: 'framing'; framing: unknown }
   | { kind: 'display'; values: Partial<SettingsValues> }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   /** A change the user made in the Case panel to what it shows, which the session takes. */

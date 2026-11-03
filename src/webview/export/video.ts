@@ -1,7 +1,7 @@
-﻿import { type Placed, Shot, type Video, View } from 'latkit'
+﻿import { type Camera, type Placed, Shot, type Video, View } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
-import type { VideoView, ViewState } from '../../shared/messages.js'
+import type { Framing, VideoView, ViewState } from '../../shared/messages.js'
 import { holdsPlot } from '../../shared/plots.js'
 import { monitorWindow } from '../monitor/plot.js'
 
@@ -13,6 +13,15 @@ export interface VideoSettings {
   readonly frameRate: number
   readonly quality: 'medium' | 'high' | 'very-high'
 }
+/** The camera that frames in a picture `size` pixels wide and high what `framing`'s canvas showed:
+ *  its own place, tilt and turn, zoomed by as much as the picture is larger than the canvas, so
+ *  all the canvas showed fits. A zoom is log₂ of pixels per unit, so it scales by adding. */
+export function framed({ camera, size }: Framing, [width, height]: readonly [number, number]) {
+  if (!('zoom' in camera)) return camera
+  const scale = Math.min(width / size[0], height / size[1])
+  return { ...camera, zoom: camera.zoom + Math.log2(scale) } satisfies Camera
+}
+
 export interface VideoJob extends VideoSettings {
   readonly timeRange: TimeRange
   readonly rate: number

@@ -32,9 +32,6 @@ export interface ResultsLayout {
   readonly path: string
   /** What the file holds, once its header is read. */
   readonly outputs: readonly RecordedField[]
-  /** Frames per chunk, from the header's width, 0 before it is read. Chunk `k` holds frames
-   *  `k * chunk` up to `(k + 1) * chunk`, so every process cuts the file alike. */
-  readonly chunk: number
   /** The times a run will cover, as its solver file says. */
   readonly span?: TimeRange
   /** The solver file whose run wrote it, when one did. */
@@ -60,16 +57,15 @@ export interface Results extends ResultsLayout, ResultsProgress {
   readonly id: string
 }
 
-/** What of results a view draws: which they are, how far they are read, whether more come, how
- *  they are cut, what they hold, and the times and values they span. Two readings alike in it draw
- *  alike. A file's outputs are fixed once its header is read: whether they are is all that changes,
- *  so their row indexes are never compared or written out again. */
+/** What of results a view draws: which they are, how far they are read, whether more come, what
+ *  they hold, and the times and values they span. Two readings alike in it draw alike. A file's
+ *  outputs are fixed once its header is read: whether they are is all that changes, so their row
+ *  indexes are never compared or written out again. */
 export const drawnOf = (results: Results | undefined) =>
   results && [
     results.id,
     results.frames,
     results.growing,
-    results.chunk,
     results.outputs.length,
     results.domain,
     results.span,

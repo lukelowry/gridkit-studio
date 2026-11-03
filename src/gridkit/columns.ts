@@ -27,6 +27,8 @@ export function deferred<T>(decode: () => T): () => T {
 export const CHUNK_ROWS = 65_536
 export const isInt32 = (value: number) =>
   Number.isInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff
+export const isUint32 = (value: number) =>
+  Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff
 export const rowCount = (starts: Uint32Array) => starts[starts.length - 1]!
 export function chunkAt(starts: Uint32Array, row: number): number {
   let low = 0

@@ -187,8 +187,8 @@ export function commandsOf(studio: Sessions) {
         { title },
       )
     )?.plot
-  /** Searches the `type` elements by name, or by exact id once the input starts with `type/`: the
-   *  id of the one picked. With `every`, the first choice is every element, which picks null. */
+  /** Searches the `type` elements as the user types: the id of the one picked. With `every`, the
+   *  first choice is every element, which picks null. */
   const pickElement = (
     context: Context,
     type: string,

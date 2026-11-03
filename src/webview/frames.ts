@@ -1,12 +1,10 @@
 import type { Data } from 'latkit'
 
-import type { FramePage, FrameRequest } from '../shared/data.js'
+import { type FramePage, type FrameRequest, PAYLOAD_BYTES } from '../shared/data.js'
 import { failedWith } from '../shared/errors.js'
 import { bridge } from './bridge.js'
 import { DatasetSlot } from './datasets.js'
 import { loadRenderer } from './runtime.js'
-
-const PAYLOAD_BYTES = 96 * 1024 * 1024
 
 /** Shared by every plot and network binding in this page. Cached patch bytes are immutable. */
 export class FrameReads {
@@ -19,10 +17,6 @@ export class FrameReads {
     string,
     { task: Promise<FramePage>; controller: AbortController; users: number }
   >()
-  constructor(readonly limit = PAYLOAD_BYTES) {
-    if (!Number.isSafeInteger(limit) || limit < 0 || limit > PAYLOAD_BYTES)
-      throw new Error('Invalid frame cache budget.')
-  }
 
   get bytes(): number {
     return this.#bytes
@@ -77,13 +71,13 @@ export class FrameReads {
         try {
           const page = await bridge.request('frames', request, controller.signal)
           controller.signal.throwIfAborted()
-          if (epoch === this.#epoch && page.bytes.byteLength <= this.limit) {
+          if (epoch === this.#epoch && page.bytes.byteLength <= PAYLOAD_BYTES) {
             const previous = this.#cache.get(key)
             if (previous) this.#bytes -= previous.bytes.byteLength
             this.#cache.delete(key)
             this.#cache.set(key, page)
             this.#bytes += page.bytes.byteLength
-            while (this.#bytes > this.limit) {
+            while (this.#bytes > PAYLOAD_BYTES) {
               const oldest = this.#cache.entries().next().value!
               this.#cache.delete(oldest[0])
               this.#bytes -= oldest[1].bytes.byteLength
@@ -178,10 +172,13 @@ export class FrameWindow {
     if (signal?.aborted) abort()
     this.#key = key
     this.#requested = request.range
+    // A plot offers the window it holds, and is sent only what that lacks of a grown one.
+    const held = request.purpose === 'plot' ? this.slot.current?.key : undefined
+    const asked = held === undefined ? request : { ...request, since: held }
     const task = (async () => {
       try {
         await loadRenderer()
-        const first = await this.reads.page(request, version, controller.signal)
+        const first = await this.reads.page(asked, version, controller.signal)
         const reads = this.reads
         async function* pages() {
           let page = first
@@ -192,7 +189,7 @@ export class FrameWindow {
             if (page.complete) return
             if (!page.next || seen.has(page.next)) throw new Error('Invalid frame continuation.')
             seen.add(page.next)
-            page = await reads.page({ ...request, next: page.next }, version, controller.signal)
+            page = await reads.page({ ...asked, next: page.next }, version, controller.signal)
             if (page.key !== first.key || page.source !== first.source)
               throw new Error('The result window changed while loading.')
           }
@@ -202,6 +199,7 @@ export class FrameWindow {
           first.key,
           pages(),
           controller.signal,
+          first.base,
         )
         if (published) {
           this.#range = this.data?.describe().span ?? undefined

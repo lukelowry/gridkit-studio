@@ -8,7 +8,7 @@ import { message } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
-import { type Column, isInt32, isValid, valueAt } from './columns.js'
+import { type Column, isInt32, isUint32, isValid, valueAt } from './columns.js'
 import { CASE, type FieldPlan } from './definition.js'
 import { charsAt, charsWalk } from './offsets.js'
 import { STEP_RECORDS, Turns } from './turns.js'
@@ -546,12 +546,9 @@ export function fieldValue(
           typeof input === 'number' &&
           Number.isFinite(input) &&
           (plan.decode !== 'integer' || isInt32(input)) &&
-          (plan.decode !== 'unsigned' ||
-            (Number.isInteger(input) && input >= 0 && input <= 0xffffffff))
+          (plan.decode !== 'unsigned' || isUint32(input))
   if (!valid)
     throw problem('invalid-input', 'Expected ' + definition.kind + ' for ' + plan.name + '.')
-  if (plan.choices && !plan.choices.includes(String(input)))
-    throw problem('invalid-input', 'Choose a supported value for ' + plan.name + '.')
   if (plan.allowed && !plan.allowed.pattern.test(String(input)))
     throw problem('invalid-input', `${plan.name} may contain ${plan.allowed.rule}.`)
   return input

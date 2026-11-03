@@ -12,8 +12,9 @@ export interface Solver {
   readonly model: string
   readonly tmax: number
   readonly output?: string
-  /** A column per variable, or a row per variable and sample. */
-  readonly layout: 'wide' | 'long'
+  /** As GridKit reads it, in lower case: `wide`, a column per variable, or `long`, a row per
+   *  variable and sample. GridKit says what it makes of any other. */
+  readonly layout: string
 }
 
 /** A CSV file GridKit writes samples to. */
@@ -40,9 +41,7 @@ export function readSolver(name: string, text: string): Solver {
     throw new Error(`${name} names no .case.json in its system_model_file.`)
   if (typeof tmax !== 'number' || !(tmax > 0))
     throw new Error(`${name}: tmax must be a time after 0.`)
-  const layout = typeof written === 'string' ? written.toLowerCase() : written
-  if (layout !== 'wide' && layout !== 'long')
-    throw new Error(`${name}: output_layout must be "wide" or "long".`)
+  const layout = String(written).toLowerCase()
   return { model, tmax, layout, ...(typeof output === 'string' && output && { output }) }
 }
 

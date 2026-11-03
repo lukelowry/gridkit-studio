@@ -27,12 +27,6 @@ describe('a solver file as Studio reads it', () => {
         '{"system_model_file":"a.case.json","tmax":1,"output_layout":"LONG"}',
       ).layout,
     ).toBe('long')
-    expect(() =>
-      readSolver(
-        'a.solver.json',
-        '{"system_model_file":"a.case.json","tmax":1,"output_layout":"tall"}',
-      ),
-    ).toThrow('output_layout')
   })
 
   it('says why a solver file cannot run, naming the line of a syntax error', () => {

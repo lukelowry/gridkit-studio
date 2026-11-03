@@ -7,7 +7,6 @@ import {
   errorOf,
   failedWith,
   message,
-  passing,
   problem,
   problemOf,
   quiet,
@@ -44,8 +43,6 @@ describe('errors for people and for the log', () => {
     for (const code of ['superseded', 'results-closed', 'cancelled', 'results-lost'] as const)
       expect(quiet(problem(code, 'Nothing failed.'))).toBe(true)
     expect(quiet(problem('needs-source', 'Send the case again.'))).toBe(false)
-    expect(passing(problem('device-lost', 'Lost.'))).toBe(true)
-    expect(passing(problem('invalid-input', 'Wrong.'))).toBe(false)
   })
 
   it('keeps a code, and what comes with it, across a channel', () => {

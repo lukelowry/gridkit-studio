@@ -30,9 +30,6 @@ interface Reading {
   readonly signal: AbortSignal
   /** The frame the source starts at, which `publish` hears frames counted from. */
   readonly first?: number
-  /** The outputs to decode, by their place among the file's; every one when absent. The rest are
-   *  never read as numbers. */
-  readonly only?: readonly number[]
   /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
    *  from one chunk into the next. */
   readonly publish: (frames: Decoded) => void | Promise<void>
@@ -60,7 +57,7 @@ export interface Layout {
 }
 
 /** Frames per chunk of a file holding `fields`: as many as CHUNK_BYTES of decoded frames hold. */
-export function chunkFrames(fields: readonly Field[]): number {
+function chunkFrames(fields: readonly Field[]): number {
   const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.ids.length, 0))
   return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
 }
@@ -76,8 +73,6 @@ export async function readResults(
 ): Promise<void> {
   let plan: Plan | undefined
   let outputs: readonly Field[] = []
-  /** The outputs decoded, by their place among the file's. */
-  let decoding: readonly number[] = []
   let chunk = 1
   const first = reading.first ?? 0
   let received = 0
@@ -86,19 +81,7 @@ export async function readResults(
   try {
     reading.signal.throwIfAborted()
     const chunks = addAbortSignal(reading.signal, source)
-    // Rows read with a known header parse only the columns of the outputs asked for.
-    const parse =
-      reading.only && layout.header && layout.read
-        ? columnsOf(layout.read.plan, reading.only, layout.header.length)
-        : undefined
-    for await (const message of csvMessages(
-      chunks,
-      layout.header,
-      parse,
-      first,
-      layout,
-      reading.final,
-    )) {
+    for await (const message of csvMessages(chunks, layout.header, first, layout, reading.final)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {
         if (plan) throw problem('io', 'The results repeat their header.')
@@ -106,7 +89,6 @@ export async function readResults(
         layout.read ??= layoutOf(message.names, kase)
         plan = layout.read.plan
         outputs = layout.read.fields
-        decoding = reading.only ?? outputs.map((_, f) => f)
         chunk = chunkFrames(outputs)
         continue
       }
@@ -124,13 +106,11 @@ export async function readResults(
             throw problem('io', 'Result times must be finite and nondecreasing.')
           lastTime = value
         }
-        // With no outputs to decode, only the times are checked.
-        if (!decoding.length) continue
         // The copy kernel writes every cell, so fresh arrays need no clearing.
         const coordinates = new Float64Array(count)
-        const values = decoding.map((f) => new Float64Array(count * outputs[f]!.ids.length))
+        const values = outputs.map((field) => new Float64Array(count * field.ids.length))
         for (let t = 0; t < count; t++) coordinates[t] = cells[(from + t) * width]!
-        copyRows(cells, width, plan, decoding, values, from, count)
+        copyRows(cells, width, plan, values, from, count)
         const published = reading.publish({
           firstFrame: first + received + from,
           count,
@@ -154,28 +134,18 @@ export async function readResults(
   }
 }
 
-/** The columns a read parses: the time, and each row of `outputs`. */
-function columnsOf(plan: Plan, outputs: readonly number[], width: number): Uint8Array {
-  const parse = new Uint8Array(width)
-  parse[0] = 1
-  for (const f of outputs) for (const column of plan.columns[f]!) parse[column] = 1
-  return parse
-}
-
-/** Copies `outputs`' rows into `fields`, one array each in turn. */
+/** Copies each output's rows into its array of `fields`, one in turn. */
 function copyRows(
   source: Float64Array,
   width: number,
   plan: Plan,
-  outputs: readonly number[],
   fields: readonly Float64Array[],
   from: number,
   count: number,
 ): void {
-  for (let i = 0; i < outputs.length; i++) {
-    const f = outputs[i]!
+  for (let f = 0; f < fields.length; f++) {
     const placed = plan.columns[f]!
-    const values = fields[i]!
+    const values = fields[f]!
     const rows = placed.length
     const stride = plan.strides[f]!
     if (stride >= 0) {

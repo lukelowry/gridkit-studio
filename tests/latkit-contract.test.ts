@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 import type { ProjectedDocument } from '../src/gridkit/document.js'
 import { CaseQueries, project, projectionPage } from '../src/gridkit/projection.js'
-import { framePatch, initializeFrames, rawRun, visualValues } from '../src/results/frames.js'
+import { rawRun, visualValues } from '../src/results/frames.js'
 import { detail, Pyramid, type ReducedRun } from '../src/results/pyramid.js'
 import { DatasetSlot } from '../src/webview/datasets.js'
 import { loadNative } from '../src/workers/native.js'
@@ -69,26 +69,17 @@ describe('published Latkit WASM', () => {
 
   it('uses sparse frame entries and float32 visualization without changing raw values', () => {
     using data = new Data('sample')
-    data.apply(initializeFrames('sample', 'Bus', [2]))
+    data.apply(new Patch('sample').axis('time', 's').replace('Bus', [2]))
     const values = Float64Array.of(Math.PI, NaN, 7)
-    data.apply(
-      framePatch(
-        'sample',
-        'Bus',
-        'Vm',
-        rawRun({
-          first: 100,
-          at: Float64Array.of(0.1, 0.1, 1.7),
-          rows: 1,
-          values,
-        }),
-      ),
-    )
+    const run = rawRun({ first: 100, at: Float64Array.of(0.1, 0.1, 1.7), rows: 1, values })
+    data.apply(new Patch('sample').frames('Bus', 'Vm', run))
     expect(values[0]).toBe(Math.PI)
     expect(data.get('Bus', 2, 'Vm', { at: 1.7 })).toBe(7)
     expect(() => data.frames('Bus', 'Vm', { first: 100, at: [0.1], values: [1] })).toThrow()
     expect(visualValues(Float64Array.of(Math.PI))[0]).toBe(Math.fround(Math.PI))
-    expect(() => visualValues(Float64Array.of(Number.MAX_VALUE))).toThrow('float32')
+    expect(
+      [...visualValues(Float64Array.of(Number.MAX_VALUE, -Infinity))].every(Number.isNaN),
+    ).toBe(true)
   })
 })
 
@@ -244,17 +235,25 @@ it('reduces exact eight-way boundaries with irregular times, gaps, and restart t
   expect(actual.find((run) => run.level === 1 && run.first === 2)?.gaps[0]).toBe(1)
 })
 
-it('plots at the level latkit draws: frames at two a column, else the finest level with two buckets a column', () => {
+it('holds a plot finer than latkit draws it: buckets no wider than a pixel column', () => {
+  // latkit's own level: frames while two fit a column, else the finest with two buckets a column.
+  const latkit = (frames: number, columns: number) => {
+    const needed = Math.ceil(frames / (2 * columns))
+    let level = 0
+    while (8 ** level < needed) level++
+    return level
+  }
   for (const columns of [1, 37, 440, 2400])
     for (const frames of [1, 2, 2403, 600_000, 9e15]) {
       const level = detail(frames, columns)
-      // Frames while two fit a column; no level coarser than needed to fit two buckets a column.
-      expect(frames / 8 ** level).toBeLessThanOrEqual(2 * columns)
-      if (level > 0) expect(frames / 8 ** (level - 1)).toBeGreaterThan(2 * columns)
+      // Each bucket spans at most a column; the next level's would span more.
+      if (level > 0) expect(frames / 8 ** level).toBeGreaterThanOrEqual(columns)
+      expect(frames / 8 ** (level + 1)).toBeLessThan(columns)
+      // At most one level finer than latkit would choose, so it draws these, never coarser ones.
+      expect(latkit(frames, columns) - level).toBeOneOf([0, 1])
     }
-  // ACTIVSg2000's ten seconds at 240 frames a second, across a Monitor lane.
-  expect(detail(2403, 550)).toBe(1)
-  expect(detail(2403, 1300)).toBe(0)
+  // ACTIVSg2000's ten seconds at 240 frames a second, across a narrow Monitor lane: every frame.
+  expect(detail(2403, 550)).toBe(0)
 })
 
 it('transfers each owned backing buffer once, even with cycles', () => {

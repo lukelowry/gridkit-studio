@@ -31,13 +31,13 @@ export interface PyramidState {
   })[]
 }
 
-/** The level latkit draws `frames` frames at across `columns` device pixel columns, as its own
- *  `detail` chooses: frames while there are at most two per column, else the finest level with at
- *  most two buckets per column. A plot holds that level, so latkit never shows a coarser one. */
+/** The level a plot of `frames` frames across `columns` device pixel columns holds: the coarsest
+ *  whose buckets each span at most one column. latkit draws a bucket as its least then its greatest
+ *  value, at its middle, which steps visibly once a bucket spans more than a column. Held this fine,
+ *  at most one level finer than latkit would choose, every step stays within a pixel. */
 export function detail(frames: number, columns: number): number {
-  const needed = Math.ceil(frames / (2 * Math.max(1, columns)))
   let level = 0
-  while (8 ** level < needed && level < 21) level++
+  while (level < 21 && frames / 8 ** (level + 1) >= Math.max(1, columns)) level++
   return level
 }
 

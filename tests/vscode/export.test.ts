@@ -123,20 +123,18 @@ suite('Export', () => {
     )
   }).timeout(60_000)
 
-  test('maps each moment of the times the Monitor shows from the samples of that moment, chunk after chunk', async () => {
-    // Results long enough for several chunks, with the Network mapping their voltage.
+  test('maps each moment of the times the Monitor shows from the samples of that moment', async () => {
+    // Long results, with the Network mapping their voltage.
     const shown = await bench.results()
-    const results = await bench.waveform('Long waveform.csv', 30_000, 3)
-    const { chunk, frames, domain } = results
-    assert.ok(frames > 2 * chunk, `the results span three chunks: ${frames} of ${chunk}`)
-    const boundary = (k: number) => domain[0] + ((domain[1] - domain[0]) * k * chunk) / frames
+    const { domain } = await bench.waveform('Long waveform.csv', 30_000, 3)
+    const boundary = (k: number) => domain[0] + ((domain[1] - domain[0]) * k) / 3
     bench.session.bind(VM, ['vertexColor'])
-    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 chunks.mp4')
+    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 window.mp4')
     try {
       const exporter = await bench.show('export')
       await visible(exporter, '[data-testid="video-export"]')
-      // The Network's part alone, over the time the Monitor shows: from the first chunk into the
-      // third, at twice the speed.
+      // The Network's part alone, over the time the Monitor shows: its middle third, at twice the
+      // speed.
       const plots = exporter.getByRole('switch', { name: 'Monitor' })
       if ((await plots.getAttribute('aria-checked')) === 'true') await plots.click()
       const start = boundary(1) - 0.05
@@ -167,10 +165,8 @@ suite('Export', () => {
 
   test('plots a long run through bounded native visualization levels', async () => {
     const shown = await bench.results()
-    // Every bus's voltage over more than the two chunks a first reply brings, and a budget a quarter
-    // of that. The run is short, so the video records a few frames of it.
-    const results = await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
-    assert.ok(results.frames > 2 * results.chunk, 'The run must span more than two chunks')
+    // Every bus's voltage over many frames. The run is short, so the video records a few of them.
+    await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
     // The Case panel takes the Monitor's place, which would draw the same plots beside the export:
     // on a software GPU that holds up every frame the window draws, for tens of seconds.
     await bench.show('case')

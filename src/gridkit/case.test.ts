@@ -186,6 +186,21 @@ describe('single catalog and source ownership', () => {
       expect(error).toMatchObject({ offset: text.indexOf(record) })
       expect((error as { length: number }).length).toBeGreaterThan(record.length - 1)
     }
+    // Every record it refuses is said where it is, the first first.
+    const records = [fault, '{"class":"GenClassical","id":"disconnected"'].map((record) =>
+      record.replace('GenClassical', 'Signal'),
+    )
+    const text = source
+      .replace(fault, records[0]!)
+      .replace('{"class":"GenClassical","id":"disconnected"', records[1]!)
+    const error = await Case.parse(text, catalog).catch((reason: unknown) => reason)
+    expect((error as { problems: unknown }).problems).toEqual(
+      records.map((record) => ({
+        message: 'Signal is not a device class.',
+        offset: text.indexOf(record),
+        length: expect.any(Number),
+      })),
+    )
   })
   it('reads an integer at either end of its range back as written', async () => {
     for (const value of [-0x8000_0000, 0x7fff_ffff]) {

@@ -10,6 +10,7 @@ import {
   basename,
   delimiter,
   dirname,
+  extname,
   isAbsolute,
   join,
   posix,
@@ -166,7 +167,9 @@ export type Runtime = { readonly program: string } & (
     }
 )
 
-const executable = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
+/** The file `name` runs from: on Windows, a name with no extension runs its .exe. */
+const executable = (name: string) =>
+  process.platform === 'win32' && !extname(name) ? name + '.exe' : name
 
 /** Whether `path` is a file this process may execute. */
 async function runs(path: string): Promise<boolean> {

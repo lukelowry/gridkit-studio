@@ -9,9 +9,8 @@ import { Data } from 'latkit'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
-import type { FrameRequest } from '../shared/data.js'
+import type { FrameRequest, TimeRange } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
-import { ResultCache } from './cache.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
 import type { Writer } from './follow.js'
@@ -41,7 +40,7 @@ const reading = (path: string) => ({ path, revision: { uri: 'file:///case', vers
 async function create(name: string, csv: string, of = kase) {
   const path = join(directory, name + '.csv')
   await writeFile(path, csv)
-  const file = new ResultsFile(of, new ResultCache(0), await stores.create(path), reading(path))
+  const file = new ResultsFile(of, await stores.create(path), reading(path))
   made.push(file)
   return file
 }
@@ -177,7 +176,6 @@ describe('indexed scientific results', () => {
     expect(data.describe().span).toEqual([500, 500.001])
     expect(bytes).toBeLessThan(4096)
     expect(read.mock.calls.every(([, , , , frames]) => frames! <= 2)).toBe(true)
-    expect(file.cache.bytes).toBe(0)
     const columns = 600
     const plot = await capture(file, {
       results: 'test',
@@ -204,6 +202,61 @@ describe('indexed scientific results', () => {
     expect((await exact(finished, 1)).value).toBe(1.25)
     const partial = await through(await create('partial', HEADER + '0,1\n1,'))
     expect(partial.progress.frames).toBe(1)
+  })
+  it('sends a plot whose window grew only what the window its page holds lacks', async () => {
+    const file = await through(
+      await create(
+        'grown',
+        HEADER + Array.from({ length: 4000 }, (_, i) => `${i / 100},${(i * 7) % 13}\n`).join(''),
+      ),
+    )
+    const plot = (range: TimeRange, since?: string): FrameRequest => ({
+      results: 'test',
+      table: 'Bus',
+      field: 'Vm',
+      range,
+      purpose: 'plot',
+      columns: 100,
+      ...(since && { since }),
+    })
+    const made: Data[] = []
+    /** Every page of `request`, applied to `onto` or a dataset of their own, with the first page's
+     *  key and base, and their bytes. */
+    const read = async (request: FrameRequest, onto?: Data) => {
+      let next: string | undefined
+      let first: { key: string; base?: string } | undefined
+      let data = onto
+      let bytes = 0
+      do {
+        const page = await file.frames({ ...request, next }, signal)
+        first ??= page
+        if (!data) made.push((data = new Data(page.source)))
+        data.apply(page.bytes)
+        bytes += page.bytes.byteLength
+        next = page.next
+      } while (next)
+      return { ...first!, bytes, data: data! }
+    }
+    try {
+      const whole = await read(plot([0, 30]))
+      // A page holding the first ten seconds, as a live run's plot has, is sent what came since.
+      const held = await read(plot([0, 10]))
+      const grown = await read(plot([0, 30], held.key), held.data)
+      expect(grown.base).toBe(held.key)
+      expect(grown.bytes).toBeLessThan(whole.bytes * 0.8)
+      const envelope = (data: Data) =>
+        data.envelope({ table: 'Bus', field: 'Vm', range: [0, 30], spans: 60 })
+      expect(envelope(grown.data)).toEqual(envelope(whole.data))
+      // A window it covers at least as finely, as a zoom into it is, lacks nothing.
+      const zoomed = await read(plot([12, 20], grown.key), grown.data)
+      expect(zoomed.base).toBe(grown.key)
+      expect(zoomed.bytes).toBeLessThan(1024)
+      expect(envelope(zoomed.data)).toEqual(envelope(whole.data))
+      // A window past it is read whole.
+      expect((await read(plot([5, 40], grown.key))).base).toBeUndefined()
+    } finally {
+      for (const data of made) data.destroy()
+    }
   })
   it("reads GridKit's long layout as its wide one, an only sample whole once the file is", async () => {
     const long = 'sample,t,class,id,variable,value\n'
@@ -237,12 +290,7 @@ describe('indexed scientific results', () => {
     const { folder, key, manifest } = file.store
     await file.store.close()
     const store = new Store(folder, key, manifest)
-    const reopened = await ResultsFile.stored(
-      kase,
-      new ResultCache(0),
-      store,
-      reading(file.layout.path),
-    )
+    const reopened = await ResultsFile.stored(kase, store, reading(file.layout.path))
     made.push(reopened)
     expect(reopened.progress).toEqual(file.progress)
     expect((await exact(reopened, 1)).value).toBe(2)
@@ -250,9 +298,9 @@ describe('indexed scientific results', () => {
     await truncate(join(folder, 'raw.bin'), 8)
     const broken = new Store(folder, key, manifest)
     try {
-      await expect(
-        ResultsFile.stored(kase, new ResultCache(0), broken, reading(file.layout.path)),
-      ).rejects.toThrow('truncated')
+      await expect(ResultsFile.stored(kase, broken, reading(file.layout.path))).rejects.toThrow(
+        'truncated',
+      )
     } finally {
       await broken.close()
     }

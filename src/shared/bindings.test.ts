@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { bound, channelsFor, channelsOf, recordedRows, shortNames } from './bindings.js'
+import { bound, channelsFor, channelsOf, shortNames } from './bindings.js'
 
 const vm = { table: 'Bus', field: 'Vm' }
 const kv = { table: 'Bus', field: 'params.kv' }
@@ -32,15 +32,6 @@ describe('bindings', () => {
 
   it('refuses a channel the field cannot drive', () => {
     expect(() => bound({}, vertex, vm, ['edgeColor'])).toThrow(/cannot drive Edge Color/)
-  })
-
-  it('uses stable IDs for sparse recording coverage, regardless of row order', () => {
-    const outputs = [{ table: 'Bus', field: 'Vm', ids: [42, 7] }]
-    expect(recordedRows(outputs, vm, [7, 42])).toBe(true)
-    expect(recordedRows(outputs, vm, [42, 8])).toBe(false)
-    expect(recordedRows(outputs, vm)).toBe(true)
-    expect(recordedRows(outputs, kv)).toBe(false)
-    expect(recordedRows([{ table: 'Branch', field: 'Vm', ids: ['a/b'] }], vm)).toBe(false)
   })
 
   it('names channels by one word each', () => {

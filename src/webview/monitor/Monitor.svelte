@@ -12,7 +12,7 @@
   import { followPlayback } from '../playback.js'
   import { openGpu, startOver } from '../runtime.js'
   import { watchTheme } from '../theme.js'
-  import { monitorWindow, type PlotState } from './plot.js'
+  import { monitorWindow, type PlotState, SETTLE_MS } from './plot.js'
   import Plot from './Plot.svelte'
 
   let app = $state.raw<ViewState>({})
@@ -128,10 +128,17 @@
       plots.release()
     }
   }
+  /** Whether a zoom or pan is under way: the plots show it at once, and read its samples once it
+   *  settles. */
+  let settling = $state(false)
   function turn(range: TimeRange) {
     chosen = range
+    settling = true
     clearTimeout(telling)
-    telling = setTimeout(() => bridge.send({ kind: 'window', bounds: range }), 120)
+    telling = setTimeout(() => {
+      settling = false
+      bridge.send({ kind: 'window', bounds: range })
+    }, SETTLE_MS)
   }
   $effect(() => {
     void active
@@ -213,6 +220,7 @@
           {reads}
           {active}
           {shown}
+          {settling}
           {t}
           {clock}
           {themeVersion}

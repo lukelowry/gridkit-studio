@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { FORMAT } from '../results/store.js'
 import type { FramePage, RecordedField } from '../shared/data.js'
 import type { Results, ResultsApi } from '../shared/messages.js'
 import { loadNative } from './native.js'
@@ -64,7 +65,7 @@ async function read(rig: Rig, results: Results): Promise<Results> {
 
 /** The one store this window keeps under the worker folder `folder`. */
 async function storeOf(folder: string): Promise<string> {
-  const own = join(folder, 'store', 'results-native-1', String(process.pid))
+  const own = join(folder, 'store', FORMAT, String(process.pid))
   const [store] = await readdir(own)
   return join(own, store!)
 }
@@ -108,15 +109,14 @@ function native(pages: FramePage[]): Data {
 }
 
 describe('the results worker', () => {
-  it('sends a view every frame of a file once and in order, a chunk at a time', async () => {
+  it('sends a view every frame of a file once and in order, a page at a time', async () => {
     const rig = await start<ResultsApi>(script)
     try {
       const path = join(rig.scratch, 'many.csv')
       const frames = 600_000
       await waveform(path, frames)
-      const results = await read(rig, await open(rig, caseOf('chunks'), path))
+      const results = await read(rig, await open(rig, caseOf('pages'), path))
       expect(results.domains).toEqual({ Bus: { Vm: [0, 2] } })
-      expect(results.frames).toBeGreaterThan(results.chunk)
       const sent = await everything(rig, results, { table: 'Bus', field: 'Vm' })
       using data = native(sent)
       expect(data.describe().span).toEqual([0, frames - 1])
@@ -322,7 +322,6 @@ describe('the results worker', () => {
         domain: first.domain,
         domains: first.domains,
         outputs: first.outputs,
-        chunk: first.chunk,
       })
       await rig.call('export', { results: again.id, path: exported })
       expect(await readFile(exported, 'utf8')).toEqual(measured)
@@ -421,7 +420,7 @@ describe('the results worker', () => {
     try {
       const text = await readFile('cases/TwoArea.case.json', 'utf8')
       const revision = { uri: 'file:///test.case.json', version: 1, fingerprint: '', text }
-      // 700,000 frames of one bus's voltage: a few chunks of results.
+      // 700,000 frames of one bus's voltage: many blocks of results.
       const path = join(scratch, 'waveform.csv')
       const name = JSON.parse(text).buses[0].name
       const count = 700_000

@@ -17,7 +17,7 @@
   import { nativeTheme } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
   import LatkitCanvas from '../ui/LatkitCanvas.svelte'
-  import { type PlotState, sameWindow } from './plot.js'
+  import { type PlotState, sameWindow, SETTLE_MS } from './plot.js'
 
   let {
     plot,
@@ -27,6 +27,7 @@
     reads,
     active,
     shown,
+    settling,
     t,
     clock,
     themeVersion,
@@ -41,6 +42,8 @@
     reads: FrameReads
     active: boolean
     shown: TimeRange
+    /** Whether a zoom or pan is under way, whose samples the plot reads once it settles. */
+    settling: boolean
     t: number
     clock: Clock
     themeVersion: number
@@ -51,8 +54,9 @@
   const frames = new FrameWindow(untrack(() => reads))
   let source = $state.raw<Data>()
   let native = $state.raw<View>()
-  /** The device pixel columns the lane spans, which latkit draws its traces across. */
-  let columns = $state(800)
+  /** The device pixel columns the lane spans, which latkit draws its traces across: none until the
+   *  lane is laid out. */
+  let columns = $state(0)
   let visible = $state(true)
   let camera = $state.raw<Camera | undefined>(untrack(() => kept.camera))
   let inspected = $state<Id>()
@@ -87,9 +91,15 @@
   })
 
   function observe(element: HTMLElement) {
+    let resized: ReturnType<typeof setTimeout> | undefined
     const size = new ResizeObserver(([entry]) => {
       const box = entry?.devicePixelContentBoxSize[0]
-      if (box) columns = Math.max(1, box.inlineSize)
+      if (!box) return
+      const next = Math.max(1, box.inlineSize)
+      clearTimeout(resized)
+      // The lane's first width reads at once; a resize, once it settles.
+      if (!columns) columns = next
+      else resized = setTimeout(() => (columns = next), SETTLE_MS)
     })
     const intersection = new IntersectionObserver(([entry]) => {
       if (entry) visible = entry.isIntersecting
@@ -97,13 +107,14 @@
     size.observe(element, { box: 'device-pixel-content-box' })
     intersection.observe(element)
     return () => {
+      clearTimeout(resized)
       size.disconnect()
       intersection.disconnect()
     }
   }
 
   $effect(() => {
-    if (!enabled || !results?.frames || !recorded) return
+    if (!enabled || settling || !columns || !results?.frames || !recorded) return
     const controller = new AbortController()
     failed = false
     void frames

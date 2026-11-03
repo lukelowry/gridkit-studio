@@ -53,9 +53,9 @@ export function gridkitOf(uri: vscode.Uri): GridKit {
   }
 }
 
-/** How many bytes of decoded results the results worker keeps read past what views read now. It
- *  only paces what stays decoded, so any value works: one that is not a number keeps the default,
- *  and a negative one keeps nothing. */
+/** How many bytes of results no view shows the results worker keeps open. It only paces what stays
+ *  open, so any value works: one that is not a number keeps the default, and a negative one keeps
+ *  nothing. */
 export function cacheBytes(): number {
   const mib = Number(setting('resultCacheMiB'))
   const fallback = Number(

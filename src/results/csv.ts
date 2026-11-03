@@ -1,15 +1,23 @@
 import { problem } from '../shared/errors.js'
-/** GridKit's numeric CSV results, under a header of quoted UTF-8 names: a column per variable (its
- *  wide layout), or a row per variable and sample (its long layout), read as the wide. */
+/** GridKit's numeric CSV results, under a header of UTF-8 names: a column per variable (its wide
+ *  layout), or a row per variable and sample (its long layout), read as the wide. */
 import { BATCH_BYTES } from './limits.js'
 
-/** The header of GridKit's long layout. */
-const LONG = 'sample,t,class,id,variable,value'
+/** The columns of GridKit's long layout, which a header names in any order among others. */
+const LONG = ['sample', 't', 'class', 'id', 'variable', 'value'] as const
 
-/** A long-layout file's reading, carried from one read of it to the next: its variables, named as
- *  the wide layout's columns are, in its first sample's order, each one's place once that sample is
- *  whole, the sample being gathered, and a line a read ends partway through. */
+/** Where a long layout's columns are, in LONG's order, among its header's `width` names. */
+export interface LongColumns {
+  readonly at: readonly number[]
+  readonly width: number
+}
+
+/** A long-layout file's reading, carried from one read of it to the next: its columns; its
+ *  variables, named as the wide layout's columns are, in its first sample's order, and each one's
+ *  place once that sample is whole; the sample being gathered; and a line a read ends partway
+ *  through. */
 export interface LongReading {
+  readonly columns: LongColumns
   readonly names: string[]
   places?: ReadonlyMap<string, number>
   /** The sample being gathered, -1 between samples, its time, its values, and how many it has. */
@@ -21,7 +29,8 @@ export interface LongReading {
 }
 
 /** A long layout's reading from its start, or, with `names`, past whole samples of those variables. */
-export const longReading = (names?: readonly string[]): LongReading => ({
+export const longReading = (columns: LongColumns, names?: readonly string[]): LongReading => ({
+  columns,
   names: names ? [...names] : [],
   ...(names && { places: new Map(names.map((name, place) => [name, place])) }),
   sample: -1,
@@ -30,6 +39,12 @@ export const longReading = (names?: readonly string[]): LongReading => ({
   filled: 0,
   pending: '',
 })
+
+/** Where the long layout's columns are among a header's `names`, or undefined when one is missing. */
+function longColumns(names: readonly string[]): LongColumns | undefined {
+  const at = LONG.map((name) => names.indexOf(name))
+  return at.every((place) => place >= 0) ? { at, width: names.length } : undefined
+}
 
 type CsvMessage =
   | { readonly kind: 'schema'; readonly names: readonly string[] }
@@ -43,15 +58,12 @@ type CsvMessage =
 
 /** The header, then batches of rows whose values are reused, so consume each before advancing.
  *  `known` is the header's names, when another read of the same results parsed it: `source` is
- *  then rows alone, the first of them frame `first` of the file, as a problem numbers it. With
- *  `parse`, only the columns it marks are read as numbers, the time always: the others are
- *  counted, so each row still matches its header, and left NaN. A last row cut short, as a writer
- *  that was stopped leaves it, is left out. A long layout's reading is kept in `held`, which says
- *  so for a read past its header; `final` says `source` ends the file. */
+ *  then rows alone, the first of them frame `first` of the file, as a problem numbers it. A last
+ *  row cut short, as a writer that was stopped leaves it, is left out. A long layout's reading is
+ *  kept in `held`, which says so for a read past its header; `final` says `source` ends the file. */
 export async function* csvMessages(
   source: AsyncIterable<Uint8Array>,
   known?: readonly string[],
-  parse?: Uint8Array,
   first = 0,
   held: { long?: LongReading } = {},
   final = false,
@@ -91,8 +103,9 @@ export async function* csvMessages(
       header += text.slice(0, start)
       if (start === text.length) continue
       const names = headerOf(header)
-      if (names.join() === LONG) {
-        held.long = longReading()
+      const long = longColumns(names)
+      if (long) {
+        held.long = longReading(long)
         yield* longMessages(after([text.slice(start + 1), closing], texts), held.long, first, final)
         return
       }
@@ -112,10 +125,8 @@ export async function* csvMessages(
         pending += text.slice(start)
         break
       }
-      // A column left unread is never cut out of the text.
-      const read = column === 0 || !parse || parse[column] === 1
       const carried = pending
-      const token = read ? carried + text.slice(start, end) : ''
+      const token = carried + text.slice(start, end)
       pending = ''
       const last = end === newline
       start = end + 1
@@ -127,7 +138,7 @@ export async function* csvMessages(
       if (closing && (column !== width - 1 || carried === '')) break
       if (column >= width || (last && column !== width - 1))
         throw problem('io', `CSV frame ${received + rows + 1} does not match its header.`)
-      const value = read ? numberOf(token, received + rows + 1, column + 1) : NaN
+      const value = numberOf(token, received + rows + 1, column + 1)
       if (column === 0) {
         if (!Number.isFinite(value)) throw problem('io', 'A CSV frame must have a finite time.')
         // A batch's buffer grows as its rows arrive, so a page of a few rows allocates little.
@@ -187,6 +198,7 @@ async function* longMessages(
     long.values = []
     long.filled = 0
   }
+  const { at, width } = long.columns
   for await (const [text, closing] of texts) {
     const lines = (long.pending + text).split('\n')
     long.pending = lines.pop()!
@@ -194,26 +206,27 @@ async function* longMessages(
       const row = line.endsWith('\r') ? line.slice(0, -1) : line
       if (!row) continue
       const cells = row.split(',')
-      if (cells.length !== 6) {
+      if (cells.length !== width) {
         // The newline that closes the source ends a row its writer cut short; it never finished.
         if (closing) break
-        throw problem('io', `Long results row ${frames + 1} does not have six values.`)
+        throw problem('io', `Long results row ${frames + 1} does not match its header.`)
       }
-      const sample = Number(cells[0])
-      if (!Number.isSafeInteger(sample) || sample < 0)
+      const [sample, t, kind, id, variable, written] = at.map((place) => cells[place]!)
+      const number = Number(sample)
+      if (!Number.isSafeInteger(number) || number < 0)
         throw problem('io', `Long results row ${frames + 1} names no sample.`)
-      if (sample !== long.sample) {
+      if (number !== long.sample) {
         if (long.sample >= 0) {
           if (!long.places) yield learn()
           close()
         }
-        long.sample = sample
-        long.time = numberOf(cells[1]!, frames + 1, 2)
+        long.sample = number
+        long.time = numberOf(t!, frames + 1, at[1]! + 1)
         if (!Number.isFinite(long.time)) throw problem('io', 'A CSV frame must have a finite time.')
         if (long.places) long.values = new Array<number>(long.names.length).fill(NaN)
       }
-      const name = `${cells[2]}_${cells[3]}_${cells[4]}`
-      const value = numberOf(cells[5]!, frames + 1, 6)
+      const name = `${kind}_${id}_${variable}`
+      const value = numberOf(written!, frames + 1, at[5]! + 1)
       if (!long.places) {
         long.names.push(name)
         long.values.push(value)
@@ -231,8 +244,8 @@ async function* longMessages(
       close()
     }
     if (out.length && long.places) {
-      const width = long.names.length + 1
-      yield { kind: 'rows', length: out.length / width, values: Float64Array.from(out), width }
+      const wide = long.names.length + 1
+      yield { kind: 'rows', length: out.length / wide, values: Float64Array.from(out), width: wide }
       out.length = 0
     }
   }

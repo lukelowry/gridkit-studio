@@ -12,7 +12,7 @@ import type { FromWorker, ResultsOptions, WorkerEvent } from '../shared/messages
 import { type Api, Caller } from '../shared/rpc.js'
 
 /** What the tests start the results worker with, but for where it keeps the results it reads:
- *  room for every chunk they read, and no saved session's results to keep. */
+ *  room for the files they let go of to rest, and no saved session's results to keep. */
 const require = createRequire(import.meta.url)
 export const OPTIONS: Omit<ResultsOptions, 'store'> = {
   cacheBytes: 64 << 20,

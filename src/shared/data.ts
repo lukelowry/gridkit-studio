@@ -51,8 +51,9 @@ export interface FrameBlock {
   readonly rows: number
 }
 
-/** A window of a recorded field: a plot's, across the device pixel columns it draws in, or the
- *  frames around the playhead a Network binding reads, within `bytes`. */
+/** A window of a recorded field: a plot's, across the device pixel columns it draws in, sent only
+ *  what the window it holds (`since`, the key it was sent under) lacks where that is the same
+ *  window grown; or the frames around the playhead a Network binding reads, within `bytes`. */
 export type FrameRequest = {
   readonly results: string
   readonly table: string
@@ -60,7 +61,7 @@ export type FrameRequest = {
   readonly ids?: readonly Id[]
   readonly range: TimeRange
 } & (
-  | { readonly purpose: 'plot'; readonly columns: number }
+  | { readonly purpose: 'plot'; readonly columns: number; readonly since?: string }
   | { readonly purpose: 'playhead'; readonly bytes: number }
 )
 
@@ -78,6 +79,8 @@ export interface FramePage {
   readonly field: string
   readonly bytes: Uint8Array
   readonly complete: boolean
+  /** The key of the window these pages go on top of, when they hold only what it lacks. */
+  readonly base?: string
   readonly next?: string
 }
 
@@ -94,3 +97,5 @@ export interface ExactSample {
 
 export const PAGE_BYTES = 4 * 1024 * 1024
 export const ENTRY_BYTES = 16 * 1024 * 1024
+/** The most frame pages a view keeps, and so the most a playhead window may hold. */
+export const PAYLOAD_BYTES = 96 * 1024 * 1024

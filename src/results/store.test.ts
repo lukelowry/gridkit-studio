@@ -30,17 +30,16 @@ const manifest = (path: string, frames: number, modified = 1): Checkpoint => ({
   fingerprint: 'case',
   header: ['time', 'Bus_A_Vm'],
   frames,
-  chunk: 2,
   domain: [0, frames - 1],
   domains: {},
   complete: true,
   reducers: [],
 })
 
-/** A store of the file at `path` read through: `frames` frames of two rows, two to a chunk. */
+/** A store of the file at `path` read through: `frames` frames of two rows, two to a block. */
 async function stored(stores: Stores, path: string, frames: number, modified = 1) {
   const store = await stores.create(path)
-  store.shape([2], 2)
+  store.shape([2])
   for (let k = 0; k * 2 < frames; k++) {
     const count = Math.min(2, frames - k * 2)
     // Frame by frame, each frame's two rows: row r of frame t is 100 t + r.
@@ -71,10 +70,10 @@ async function exited(): Promise<number> {
 }
 
 describe('the stores of the results files a worker reads', () => {
-  it('reads back each row of a chunk as one run of its frames, and only the rows asked for', async () => {
+  it('reads back each row of a block as one run of its frames, and only the rows asked for', async () => {
     const stores = new Stores(root)
     const store = await stored(stores, join(root, 'a.csv'), 5)
-    // Chunk 1 holds frames 2 and 3; row 0 then row 1, each its two frames.
+    // Block 1 holds frames 2 and 3; row 0 then row 1, each its two frames.
     expect(Array.from((await store.readRaw(store.raw[1]!, 0)).values)).toEqual([200, 201, 300, 301])
     expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1])).values)).toEqual([201, 301])
     expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 0], 1, 1)).values)).toEqual([
@@ -83,7 +82,7 @@ describe('the stores of the results files a worker reads', () => {
     expect(Array.from((await store.readRaw(store.raw[1]!, 0, [1, 1], 0, 2)).values)).toEqual([
       201, 201, 301, 301,
     ])
-    // The last chunk, cut short with the file.
+    // The last block, cut short with the file.
     expect(Array.from((await store.readRaw(store.raw[2]!, 0)).values)).toEqual([400, 401])
     expect(Array.from(await store.times(store.raw[1]!))).toEqual([2, 3])
     await stores.release(store)
@@ -157,17 +156,19 @@ describe('the stores of the results files a worker reads', () => {
     // A window gone left a store read through of a file this one's sessions name.
     const gone = await exited()
     await (await stored(new Stores(root, gone), a, 4)).close()
-    // What is no window's folder is no store of Studio's now.
+    // What is no window's folder, or of another format, is no store of Studio's now.
     await mkdir(join(root, FORMAT, 'stray'))
+    await mkdir(join(root, 'other-format', String(gone)), { recursive: true })
     const mine = new Stores(root)
     await mine.sweep([a])
     expect(await folders(open)).toBe(1)
     expect((await mine.find(a, stamp(4), 'case'))?.manifest?.frames).toBe(4)
+    expect(await readdir(root)).toEqual([FORMAT])
     expect((await readdir(join(root, FORMAT))).sort()).toEqual(
       [String(open), String(process.pid)].sort(),
     )
     // The other window's store takes its frames still.
-    writing.shape([2], 2)
+    writing.shape([2])
     await writing.writeRaw(0, Float64Array.of(0, 1), [Float64Array.of(1, 2, 3, 4)])
     await writing.close()
   })

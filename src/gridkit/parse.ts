@@ -12,6 +12,7 @@ import {
   deferred,
   hash,
   isInt32,
+  isUint32,
   NumericBuilder,
   type TextBuilder,
   utf8,
@@ -541,37 +542,23 @@ class Keys {
 }
 
 type Key = 'identity' | 'class' | 'name' | 'mon' | 'params' | 'init' | 'extension' | PortKey
-const RECORD: Record<ArrayName, readonly Key[]> = {
-  buses: [
-    'identity',
-    'class',
-    'name',
-    'init',
-    'params',
-    'mon',
-    'extension',
-    'ports_in',
-    'ports_out',
-  ],
-  signals: ['identity', 'name'],
-  devices: ['class', 'identity', 'ports', 'params', 'init', 'mon', 'extension'],
-}
-const RECORD_KEYS: Record<ArrayName, Keys> = {
-  buses: new Keys([
-    'number',
-    'class',
-    'name',
-    'init',
-    'params',
-    'mon',
-    'extension',
-    'ports_in',
-    'ports_out',
-  ]),
-  signals: new Keys(['signal_id', 'name']),
-  devices: new Keys(['class', 'id', 'ports', 'params', 'init', 'mon', 'extension']),
-}
 const PORT_KEYS: readonly PortKey[] = ['ports', 'ports_in', 'ports_out']
+/** The members of each array's records, by what they are; a device's class first. A bus or device
+ *  may write ports under any port key: those its class's shape names are read as ports, and the
+ *  rest found as written. */
+const RECORD: Record<ArrayName, readonly Key[]> = {
+  buses: ['identity', 'class', 'name', 'init', 'params', 'mon', 'extension', ...PORT_KEYS],
+  signals: ['identity', 'name'],
+  devices: ['class', 'identity', 'params', 'init', 'mon', 'extension', ...PORT_KEYS],
+}
+/** Each array's identity, as its records write it. */
+const IDENTITY: Record<ArrayName, string> = { buses: 'number', signals: 'signal_id', devices: 'id' }
+const RECORD_KEYS = Object.fromEntries(
+  Object.entries(RECORD).map(([array, keys]) => [
+    array,
+    new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName] : key))),
+  ]),
+) as Record<ArrayName, Keys>
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
 const OWN = new Keys(['diagram'])
 
@@ -610,7 +597,7 @@ function lazyColumn(
       let read: boolean
       if (port) {
         const number = value < 0 ? NaN : parseNumber(bytes, value, end)
-        read = Number.isInteger(number) && number >= 0 && number <= 0xffffffff
+        read = isUint32(number)
         if (read) (target as NumericBuilder).pushNumber(number)
       } else read = value >= 0 && into(bytes, target, type, value, end)
       if (read) continue
@@ -960,8 +947,7 @@ export class Parser {
       return rows.ids.push(null)
     }
     const number = parseNumber(this.#bytes, this.#id, this.#idEnd)
-    if (Number.isInteger(number) && number >= 0 && number <= 0xffffffff)
-      return (rows.ids as NumericBuilder).pushNumber(number)
+    if (isUint32(number)) return (rows.ids as NumericBuilder).pushNumber(number)
     this.#problem(record, `A ${rows.shape.type} record's ${name} is not a whole number.`)
     rows.ids.push(null)
   }

@@ -26,13 +26,10 @@ import {
 } from '../../src/gridkit/index.js'
 import { recordEdits } from '../../src/gridkit/recording.js'
 import type { Runtime } from '../../src/gridkit/runtime.js'
-import { ResultCache, type ResultsFile, Stores } from '../../src/results/index.js'
+import { type ResultsFile, Stores } from '../../src/results/index.js'
 import type { TimeRange } from '../../src/shared/data.js'
 import type { GridKit, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 import { outputOf, readSolver } from '../../src/shared/study.js'
-
-/** Room for every chunk a run reads. */
-const ROOM = 1 << 20
 
 const gridkit: GridKit = {
   program: PROGRAM,
@@ -59,7 +56,6 @@ describe("GridKit's programs on solver files", () => {
   let runtime: Runtime
   /** Where the runs' results are kept, as a worker keeps them. */
   let stores: Stores
-  const keeping = () => ({ cache: new ResultCache(ROOM), stores })
 
   beforeAll(async () => {
     await mkdir('output/simulation', { recursive: true })
@@ -130,7 +126,7 @@ describe("GridKit's programs on solver files", () => {
     /** The results file the run reads, once it begins to. */
     let read: ResultsFile | undefined
     const controller = new AbortController()
-    const done = simulate(kase, request, keeping(), {
+    const done = simulate(kase, request, stores, {
       signal: AbortSignal.any([signal, controller.signal]),
       reading: (file) => (read = file),
       progress: async () => progress((reason) => controller.abort(reason)),
@@ -188,7 +184,10 @@ describe("GridKit's programs on solver files", () => {
       signal,
     }) => {
       expect(
-        await diagnose(await Case.read(`cases/${name}.case.json`, catalog), AbortSignal.any([])),
+        await diagnose(
+          await Case.parse(await readFile(`cases/${name}.case.json`, 'utf8'), catalog),
+          AbortSignal.any([]),
+        ),
       ).toEqual([])
       const { folder, done, released } = await run(
         name,
@@ -323,7 +322,7 @@ describe("GridKit's programs on solver files", () => {
           results: randomUUID(),
           gridkit: { ...gridkit, path: join(folder, 'missing'), image: '' },
         },
-        keeping(),
+        stores,
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),
     ).rejects.toThrow(/GridKit Path/)
@@ -342,12 +341,12 @@ describe("GridKit's programs on solver files", () => {
       simulate(
         first.kase,
         { ...request, results: randomUUID(), gridkit: { ...gridkit, path: broken, image: '' } },
-        keeping(),
+        stores,
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),
     ).rejects.toThrow(/did not start.*GridKit Path/)
     expect(await readFile(out, 'utf8')).toBe(written)
-    const results = await simulate(first.kase, { ...request, results: randomUUID() }, keeping(), {
+    const results = await simulate(first.kase, { ...request, results: randomUUID() }, stores, {
       signal,
       reading: () => {},
       progress: () => {},
@@ -379,7 +378,7 @@ describe("GridKit's programs on solver files", () => {
     const second = simulate(
       first.kase,
       { ...first.request, run: randomUUID(), results: randomUUID(), tmax: 0.05 },
-      keeping(),
+      stores,
       {
         signal,
         reading: () => order.push('second began'),

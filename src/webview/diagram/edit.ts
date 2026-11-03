@@ -14,6 +14,10 @@ export function previewOf(source: Data): Data {
   return new Data(source.name).restore(snapshot)
 }
 
+/** A numeric column, in whichever typed array latkit reads it into. */
+const numbers = (column: unknown) =>
+  ArrayBuffer.isView(column) ? (column as unknown as ArrayLike<number>) : undefined
+
 export function positions(data: Data, blocks: readonly BlockDefinition[]): Move[] {
   const moves: Move[] = []
   for (const block of blocks) {
@@ -21,9 +25,8 @@ export function positions(data: Data, blocks: readonly BlockDefinition[]): Move[
       of: block.table,
       select: { x: field(block.position[0]), y: field(block.position[1]) },
     })
-    const { x, y } = result.fields
-    if (!(x instanceof Float64Array) || !(y instanceof Float64Array))
-      throw new Error('Diagram positions must be numeric.')
+    const [x, y] = [result.fields.x, result.fields.y].map(numbers)
+    if (!x || !y) throw new Error('Diagram positions must be numeric.')
     for (let index = 0; index < result.ids.length; index++) {
       if (Number.isFinite(x[index]) && Number.isFinite(y[index]))
         moves.push({

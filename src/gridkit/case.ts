@@ -1,14 +1,12 @@
 /** A loaded case: its tables as column chunks, the Data a host reads, and the file as read. */
 import { createHash, type Hash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
 
 import { printParseErrorCode, visit } from 'jsonc-parser'
 import { type Id, reference } from 'latkit'
 
 import type { CaseDefinition, Entity } from '../shared/document.js'
 import { DIAGRAM_POSITION, LABEL, NETWORK_POSITION } from '../shared/document.js'
-import type { SourceError } from '../shared/errors.js'
+import type { SourceError, SourceProblem } from '../shared/errors.js'
 import { problem } from '../shared/errors.js'
 import { defect } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
@@ -20,6 +18,7 @@ import {
   type DecodeKind,
   deferred,
   isInt32,
+  isUint32,
   isValid,
   radixOrder,
   readColumn,
@@ -105,10 +104,6 @@ export class Case {
   #signalsChecked = false
   #projection?: ProjectedDocument
 
-  static async read(path: string, catalog: Catalog, signal?: AbortSignal): Promise<Case> {
-    return Case.parse(await readFile(path, 'utf8'), catalog, basename(path, '.case.json'), signal)
-  }
-
   /** The case `text` holds, parsed in ranges of about 256 KiB whose column chunks join their tables
    *  in file order without a copy. */
   static async parse(
@@ -139,11 +134,18 @@ export class Case {
       const parts = await partsOf(file, rangesOf(layout), parser, signal)
       return assembled(file, layout, parts, parser.coding, catalog, name, hashOf(catalog, file))
     } catch (error) {
-      // A record the parse refused, or the second of an id, says so where it is.
-      const target = (error as SourceError).target
-      throw target?.kind === 'path'
-        ? placed(error, file, layout.arrays[target.path[0] as ArrayName], target.path[1])
-        : error
+      // A record the parse refused, or the second of an id, says so where it is, as each other
+      // record it refused does.
+      const { target, problems } = error as SourceError & { problems?: readonly SourceProblem[] }
+      if (target?.kind !== 'path') throw error
+      const at = ({ path: [array, record] }: SourceProblem['target']) =>
+        placeOf(file, layout.arrays[array as ArrayName], record)
+      throw Object.assign(error as Error, at(target), {
+        problems: problems?.flatMap(({ message, target }) => {
+          const place = at(target)
+          return place ? [{ message, ...place }] : []
+        }),
+      })
     }
   }
 
@@ -252,8 +254,7 @@ export class Case {
   rowOf(table: Table, native: string | number): number {
     if (table.shape.identity.type === 'text')
       return typeof native === 'string' ? textIds(table).row(native) : -1
-    const number = typeof native === 'number' ? native : -1
-    return number >= 0 && number <= 0xffffffff ? numberIds(table).row(number) : -1
+    return typeof native === 'number' && isUint32(native) ? numberIds(table).row(native) : -1
   }
 
   entity(table: Table, row: number): Entity {
@@ -406,8 +407,8 @@ async function partsOf(
   const [first] = problems
   if (first)
     throw problem('invalid-input', first.message, {
-      issues: problems.slice(0, PROBLEMS),
-      ...(first.target && { target: first.target }),
+      problems: problems.slice(0, PROBLEMS),
+      target: first.target,
     })
   return parts
 }
@@ -861,18 +862,17 @@ function misread(
   })
 }
 
-/** `error`, placed on record `record` of `records`: where that record lies in `file`. */
-function placed(
-  error: unknown,
+/** Where record `record` of `records` lies in `file`. */
+function placeOf(
   file: Uint8Array,
   records: Records | undefined,
   record: unknown,
-): unknown {
-  if (!records || typeof record !== 'number' || !(record < records.starts.length)) return error
+): { offset: number; length: number } | undefined {
+  if (!records || typeof record !== 'number' || !(record < records.starts.length)) return undefined
   const start = records.starts[record]!
   const offset = charsAt(file, start)
   const length = utf8(file, start, records.ends[record]!).length
-  return Object.assign(error as Error, { offset, length })
+  return { offset, length }
 }
 
 /** Throws why `text` is not JSON, as an editor says it: the first problem, at its place in the

@@ -10,14 +10,15 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import type { FrameBlock, TimeRange, VisualizationRun } from '../shared/data.js'
 import { alive } from '../shared/processes.js'
+import type { LongColumns } from './csv.js'
 import type { PyramidState, ReducedRun } from './pyramid.js'
 import { same, type Stamp } from './stamp.js'
 
-export const FORMAT = 'results-native-1'
+export const FORMAT = 'results-native-2'
 export interface RawIndex {
   readonly kind: 'raw'
   readonly first: number
@@ -48,13 +49,11 @@ export interface Manifest {
   readonly fingerprint: string
   /** The columns, as the wide layout names them; a long layout's are its first sample's. */
   readonly header: readonly string[]
-  /** Whether the file is in GridKit's long layout, a row per variable and sample. */
-  readonly long?: boolean
+  /** Where GridKit's long layout's columns are, for a file in it: a row per variable and sample. */
+  readonly long?: LongColumns
   readonly frames: number
-  readonly chunk: number
   readonly domain: TimeRange
   readonly domains: Record<string, Record<string, TimeRange>>
-  readonly visualErrors?: Readonly<Record<number, string>>
   readonly complete: boolean
   readonly rows: readonly number[]
   readonly rawBytes: number
@@ -143,7 +142,7 @@ export class Store {
       [...this.levels.values()].reduce((n, blocks) => n + blocks.length * 96, 0)
     )
   }
-  shape(rows: readonly number[], _chunk: number): void {
+  shape(rows: readonly number[]): void {
     if (this.#rows.length && JSON.stringify(rows) !== JSON.stringify(this.#rows))
       throw new Error('Result store shape changed.')
     this.#rows = [...rows]
@@ -453,6 +452,10 @@ export class Stores {
 
   async #sweep(named: ReadonlySet<string>): Promise<void> {
     await mkdir(this.#own, { recursive: true })
+    // Stores of another format are no stores of this Studio's.
+    const formats = dirname(this.root)
+    for (const name of await readdir(formats).catch(() => []))
+      if (name !== FORMAT) await rm(join(formats, name), { recursive: true, force: true })
     for (const name of await readdir(this.root).catch(() => [])) {
       const folder = join(this.root, name)
       const window = /^\d+$/.test(name) ? Number(name) : undefined

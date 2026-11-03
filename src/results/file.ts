@@ -17,15 +17,14 @@ import {
   type FramePage,
   type FrameRequest,
   PAGE_BYTES,
+  PAYLOAD_BYTES,
   type TimeRange,
   type VisualizationRun,
 } from '../shared/data.js'
 import { message, problem } from '../shared/errors.js'
 import type { ResultsLayout, ResultsProgress, Revision } from '../shared/messages.js'
-import type { ResultCache } from './cache.js'
 import { longReading } from './csv.js'
 import {
-  chunkFrames,
   type Decoded,
   type Field,
   type Layout,
@@ -59,6 +58,9 @@ interface FramePlan {
   field: number
   ids: readonly Id[]
   places: readonly number[]
+  /** The level the window is held at, and its first frame. */
+  level: number
+  first: number
   intervals: readonly Interval[]
   frames: number
 }
@@ -67,6 +69,8 @@ interface Cursor {
   frames: number
   part: number
   offset: number
+  /** The plan the page holds, when it is sent only what that lacks. */
+  base?: string
 }
 function lowerBound(count: number, predicate: (index: number) => boolean): number {
   let lo = 0
@@ -85,9 +89,10 @@ export class ResultsFile {
   readonly #decode: Layout = {}
   readonly #readers = new Map<AbortController, Promise<void>>()
   readonly #plans = new Map<string, FramePlan>()
+  /** What a page holding one plan lacks of another, by both their keys. */
+  readonly #deltas = new Map<string, readonly Interval[]>()
   #reducers: Pyramid[] = []
   #pending: Map<number, ReducedRun[]>[] = []
-  #visualErrors: Record<number, string> = {}
   #opened?: Stamp
   #stamp?: Stamp
   #read = 0
@@ -95,7 +100,6 @@ export class ResultsFile {
   #queries?: CaseQueries
   constructor(
     readonly kase: Case,
-    readonly cache: ResultCache,
     readonly store: Store,
     { revision, path, solver, span }: Reading,
   ) {
@@ -105,26 +109,19 @@ export class ResultsFile {
       name: basename(path),
       path,
       outputs: [],
-      chunk: 0,
       ...(solver && { solver }),
       ...(span && { span }),
     }
     this.#progress = { frames: 0, domain: [0, 0], domains: {}, growing: false }
   }
-  static async stored(
-    kase: Case,
-    cache: ResultCache,
-    store: Store,
-    reading: Reading,
-  ): Promise<ResultsFile> {
+  static async stored(kase: Case, store: Store, reading: Reading): Promise<ResultsFile> {
     await store.restore()
     const manifest = store.manifest!
-    const file = new ResultsFile(kase, cache, store, reading)
+    const file = new ResultsFile(kase, store, reading)
     Object.assign(file.#decode, layoutFrom(manifest.header, kase))
-    if (manifest.long) file.#decode.long = longReading(manifest.header.slice(1))
-    file.#learned(manifest.chunk)
+    if (manifest.long) file.#decode.long = longReading(manifest.long, manifest.header.slice(1))
+    file.#learned()
     file.#reducers.forEach((reducer, i) => reducer.restore(manifest.reducers[i]!))
-    file.#visualErrors = { ...manifest.visualErrors }
     Object.assign(file.#progress, {
       frames: manifest.frames,
       domain: manifest.domain,
@@ -189,7 +186,6 @@ export class ResultsFile {
     await Promise.all(readers.map(([, done]) => done))
     this.idle()
     this.#pending = []
-    this.cache.drop(this)
   }
   async #verifyPrefix(signal: AbortSignal): Promise<void> {
     const original = await open(this.#layout.path, 'r')
@@ -241,7 +237,7 @@ export class ResultsFile {
             this.#decode,
           )
           // A long layout learns what it holds from its first sample, as its frames arrive.
-          if (this.#decode.read) this.#learned(chunkFrames(this.fields))
+          if (this.#decode.read) this.#learned()
           await this.store.writeCsv(piece.bytes, this.#read)
           this.#read += piece.bytes.length
         } else if (piece.kind === 'segment') {
@@ -280,12 +276,9 @@ export class ResultsFile {
       this.#progress.growing = false
     }
   }
-  #learned(chunk: number): void {
-    this.#layout = { ...this.#layout, outputs: recordedFields(this.fields), chunk }
-    this.store.shape(
-      this.fields.map((field) => field.ids.length),
-      chunk,
-    )
+  #learned(): void {
+    this.#layout = { ...this.#layout, outputs: recordedFields(this.fields) }
+    this.store.shape(this.fields.map((field) => field.ids.length))
     this.#pending = this.fields.map(() => new Map())
     this.#reducers = this.fields.map(
       (field, f) =>
@@ -298,7 +291,7 @@ export class ResultsFile {
   }
   async #add(frames: Decoded): Promise<void> {
     if (!frames.count) return
-    if (!this.#reducers.length) this.#learned(chunkFrames(this.fields))
+    if (!this.#reducers.length) this.#learned()
     const progress = this.#progress
     if (
       frames.firstFrame !== progress.frames ||
@@ -316,14 +309,7 @@ export class ResultsFile {
           max = Math.max(max, value)
         }
       if (min <= max) ranges[field.field] = [min, max]
-      if (!this.#visualErrors[f]) {
-        try {
-          this.#reducers[f]!.push(frames.firstFrame, frames.coordinates, frames.values[f]!)
-        } catch (error) {
-          if ((error as { code?: string }).code !== 'limit') throw error
-          this.#visualErrors[f] = message(error)
-        }
-      }
+      this.#reducers[f]!.push(frames.firstFrame, frames.coordinates, frames.values[f]!)
     })
     progress.domain = [
       progress.frames ? progress.domain[0] : frames.coordinates[0]!,
@@ -352,14 +338,12 @@ export class ResultsFile {
       read: this.#read,
       fingerprint: this.kase.version,
       header: this.#decode.header,
-      ...(long && { long: true }),
+      ...(long && { long: long.columns }),
       frames: this.#progress.frames,
-      chunk: this.#layout.chunk,
       domain: this.#progress.domain,
       domains: this.#progress.domains ?? {},
       complete,
       reducers: this.#reducers.map((reducer) => reducer.snapshot()),
-      visualErrors: this.#visualErrors,
     })
   }
   async #bound(at: number, strict: boolean, frames = this.#progress.frames): Promise<number> {
@@ -482,7 +466,7 @@ export class ResultsFile {
         ? !Number.isSafeInteger(request.columns) || request.columns < 1
         : !Number.isSafeInteger(request.bytes) ||
           request.bytes < 1024 ||
-          request.bytes > 96 * 1024 * 1024) ||
+          request.bytes > PAYLOAD_BYTES) ||
       frames > this.#progress.frames ||
       frames < 0
     )
@@ -525,13 +509,9 @@ export class ResultsFile {
       ? Math.min(frames, (await this.#bound(request.range[1], true, frames)) + 1)
       : 0
     signal.throwIfAborted()
-    // A plot holds the level latkit draws across its columns; the playhead reads frames.
-    const intervals = this.#intervals(
-      field,
-      request.purpose === 'plot' ? detail(stop - first, request.columns) : 0,
-      first,
-      stop,
-    )
+    // A plot holds buckets no wider than its columns; the playhead reads frames.
+    const level = request.purpose === 'plot' ? detail(stop - first, request.columns) : 0
+    const intervals = this.#intervals(field, level, first, stop)
     if (request.purpose === 'playhead') {
       const entries = intervals.reduce((sum, item) => sum + item.count, 0)
       const bytes = entries * (8 + places.length * 4) + intervals.length * 128 + ids.length * 16
@@ -541,10 +521,50 @@ export class ResultsFile {
           'This window exceeds the visualization budget. Choose fewer rows or a narrower time range.',
         )
     }
-    const plan: FramePlan = { key, source, field, ids, places, intervals, frames }
+    const plan: FramePlan = { key, source, field, ids, places, level, first, intervals, frames }
     this.#plans.set(key, plan)
     while (this.#plans.size > 16) this.#plans.delete(this.#plans.keys().next().value!)
     return plan
+  }
+  /** The entries of `plan` a page holding the plan `held` lacks, every stored entry being final once
+   *  written: none when `held` covers the window at least as finely, as a zoom into it does; else,
+   *  for the same window grown, as a run's grows, those from the end of the last bucket of its
+   *  level `held` has. Undefined when `held` is another field's, window's or level's, or no plan
+   *  this file keeps, which the page reads whole instead. */
+  #lacking(plan: FramePlan, held: string): readonly Interval[] | undefined {
+    const key = `${plan.key}:${held}`
+    const kept = this.#deltas.get(key)
+    if (kept) return kept
+    const was = this.#plans.get(held)
+    if (!was || was.source !== plan.source || was.frames > plan.frames) return undefined
+    /** The frame past the last entry of `of`, of its own level alone with `level`. */
+    const end = (of: FramePlan, level?: number) =>
+      of.intervals.reduce(
+        (stop, item) =>
+          level === undefined || item.level === level
+            ? Math.max(stop, (item.first + item.count) * 8 ** item.level)
+            : stop,
+        of.first,
+      )
+    let lacking: readonly Interval[]
+    if (
+      was.frames === plan.frames &&
+      was.level <= plan.level &&
+      was.first <= plan.first &&
+      end(was) >= end(plan)
+    )
+      lacking = []
+    else if (was.level === plan.level && was.first === plan.first) {
+      const from = end(was, was.level)
+      lacking = plan.intervals.flatMap((item) => {
+        const first = Math.max(item.first, Math.floor(from / 8 ** item.level))
+        const count = item.first + item.count - first
+        return count > 0 ? [{ level: item.level, first, count }] : []
+      })
+    } else return undefined
+    this.#deltas.set(key, lacking)
+    while (this.#deltas.size > 16) this.#deltas.delete(this.#deltas.keys().next().value!)
+    return lacking
   }
   async frames(request: FrameRequest & { next?: string }, signal: AbortSignal): Promise<FramePage> {
     let cursor: Cursor | undefined
@@ -557,10 +577,15 @@ export class ResultsFile {
         throw new Error('Invalid frame cursor.')
     }
     const plan = await this.#plan(request, cursor?.frames ?? this.#progress.frames, signal)
-    if (cursor && cursor.key !== plan.key) throw new Error('The result window changed.')
+    // A plot whose page holds an earlier plan of its window is sent what that lacks, on top of it.
+    const since = request.purpose === 'plot' ? request.since : undefined
+    const lacking = since === undefined ? undefined : this.#lacking(plan, since)
+    const intervals = lacking ?? plan.intervals
+    if (cursor && (cursor.key !== plan.key || cursor.base !== (lacking && since)))
+      throw new Error('The result window changed.')
     let part = cursor?.part ?? 0
     let offset = cursor?.offset ?? 0
-    const initial = plan.intervals[part]
+    const initial = intervals[part]
     if (cursor && (!initial || offset >= initial.count))
       throw new Error('Frame cursor exceeds its window.')
     // A plot colors each trace by its place among them.
@@ -569,7 +594,7 @@ export class ResultsFile {
         ? { series: Float32Array.from(plan.ids, (_, place) => place) }
         : undefined
     const make = () =>
-      cursor
+      cursor || lacking
         ? new Patch(plan.source)
         : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids, fields)
     const runs: VisualizationRun[] = []
@@ -578,8 +603,8 @@ export class ResultsFile {
       throw problem('limit', 'Visualization identities exceed 16 MiB.')
     // Disk blocks follow ingestion boundaries; a wire page combines them up to its byte
     // budget. This avoids one RPC per small live-ingestion block during later playback.
-    page: while (part < plan.intervals.length && runs.length < 64) {
-      const interval = plan.intervals[part]!
+    page: while (part < intervals.length && runs.length < 64) {
+      const interval = intervals[part]!
       const first = interval.first + offset
       const block =
         interval.level === 0
@@ -630,8 +655,14 @@ export class ResultsFile {
         count = Math.max(1, Math.floor(count / 2))
       }
     }
-    const complete = part === plan.intervals.length
-    const next: Cursor = { key: plan.key, frames: plan.frames, part, offset }
+    const complete = part === intervals.length
+    const next: Cursor = {
+      key: plan.key,
+      frames: plan.frames,
+      part,
+      offset,
+      ...(lacking && { base: since }),
+    }
     return {
       key: plan.key,
       source: plan.source,
@@ -639,6 +670,7 @@ export class ResultsFile {
       field: request.field,
       bytes,
       complete,
+      ...(lacking && { base: since }),
       ...(!complete && { next: JSON.stringify(next) }),
     }
   }

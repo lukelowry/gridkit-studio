@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 
-import { defect, failedWith, superseded } from '../shared/errors.js'
+import { defect, failedWith, type Placed, superseded } from '../shared/errors.js'
 import {
   type Element,
   type Mutation,
@@ -282,14 +282,15 @@ export class Documents implements vscode.Disposable {
           current.stale = true
           current.error = error.message
           current.failed = { version, reason }
-          if (wrong)
-            this.diagnostics.set(document.uri, [
-              new vscode.Diagnostic(
-                rangeOf(document, { offset: error.offset ?? 0, length: error.length ?? 1 }),
-                error.message,
-              ),
-            ])
-          else this.report(reason)
+          if (wrong) {
+            const places: readonly Placed[] = error.problems?.length
+              ? error.problems
+              : [{ message: error.message, offset: error.offset ?? 0, length: error.length ?? 1 }]
+            this.diagnostics.set(
+              document.uri,
+              places.map((place) => new vscode.Diagnostic(rangeOf(document, place), place.message)),
+            )
+          } else this.report(reason)
           this.changed.fire(uri)
           throw reason
         },

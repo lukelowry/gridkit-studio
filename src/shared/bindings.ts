@@ -1,9 +1,5 @@
 /** The network's display channels, and which numeric field drives each. */
 
-import type { Id } from 'latkit'
-
-import type { RecordedField } from './data.js'
-
 /** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
@@ -40,19 +36,6 @@ export const NUMERIC: ReadonlySet<unknown> = new Set(['number', 'sampled'])
 
 const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
   a !== undefined && a.table === b.table && a.field === b.field
-
-/** Stable-ID coverage of a recorded field, independent of case row order. */
-export function recordedRows(
-  outputs: readonly RecordedField[],
-  field: FieldRef,
-  ids?: readonly Id[],
-): boolean {
-  const matching = outputs.filter(
-    (output) => output.table === field.table && output.field === field.field,
-  )
-  const held = new Set(matching.flatMap((output) => [...output.ids]))
-  return ids ? ids.every((id) => held.has(id)) : held.size > 0
-}
 
 /** The channels a type drawn as `placement` offers. */
 export function channelsFor(placement: 'vertex' | 'edge' | null): readonly Channel[] {

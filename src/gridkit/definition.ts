@@ -75,21 +75,21 @@ interface ClassSpec {
   readonly name: string
   readonly classes?: readonly string[]
   readonly label: string
-  readonly params: readonly {
+  readonly params?: readonly {
     readonly id: string
     readonly type: 'real' | 'integer' | 'flag' | 'text'
     readonly unit?: string
     readonly choices?: readonly string[]
   }[]
-  readonly init: readonly { readonly id: string; readonly unit?: string }[]
-  readonly ports: readonly {
+  readonly init?: readonly { readonly id: string; readonly unit?: string }[]
+  readonly ports?: readonly {
     readonly key?: PortKey
     readonly required?: boolean
     readonly name: string
     readonly kind: 'bus' | 'signal'
     readonly direction: 'in' | 'out' | 'both'
   }[]
-  readonly outputs: readonly { readonly id: string; readonly unit?: string }[]
+  readonly outputs?: readonly { readonly id: string; readonly unit?: string }[]
   readonly extension?: readonly {
     readonly id: string
     readonly type?: 'real' | 'flag' | 'route'
@@ -162,10 +162,17 @@ function shapeOf(
   bus: string,
   identifier: TextRule | undefined,
 ): Shape {
-  const parameters = new Set(spec.params.map((param) => param.id))
-  for (const port of spec.ports)
+  const { params = [], init = [], ports = [], outputs = [] } = spec
+  const parameters = new Set(params.map((param) => param.id))
+  for (const port of ports)
     if (parameters.has(port.name))
       throw problem('invalid-input', `${spec.name}.${port.name} is both a parameter and a port.`)
+  for (const param of params)
+    if (!Object.hasOwn(DECODES, param.type))
+      throw problem(
+        'invalid-input',
+        `${spec.name}.${param.id} is of type ${param.type}, which is not real, integer, flag or text.`,
+      )
   const keys = new Set(['number', 'id', 'name', 'class'])
   return compile(
     {
@@ -189,7 +196,7 @@ function shapeOf(
             },
           ]
         : []),
-      ...spec.params.map((param) => ({
+      ...params.map((param) => ({
         ...field(
           `params.${param.id}`,
           DECODES[param.type],
@@ -198,7 +205,7 @@ function shapeOf(
         ),
         ...(param.choices && { choices: param.choices }),
       })),
-      ...spec.init.map((init) =>
+      ...init.map((init) =>
         field(`init.${init.id}`, 'number', { kind: 'initial', name: init.id }, init.unit),
       ),
       ...(spec.extension ?? []).map((extension) => ({
@@ -210,7 +217,7 @@ function shapeOf(
         ),
         geographic: extension.geographic,
       })),
-      ...spec.outputs.map((output): FieldPlan => {
+      ...outputs.map((output): FieldPlan => {
         const name = keys.has(output.id) ? `mon.${output.id}` : output.id
         return {
           name,
@@ -224,7 +231,7 @@ function shapeOf(
           },
         }
       }),
-      ...spec.ports.map((port): PortPlan => {
+      ...ports.map((port): PortPlan => {
         const key = port.key ?? 'ports'
         const name = `${key}.${port.name}`
         return {

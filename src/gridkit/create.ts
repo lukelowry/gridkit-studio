@@ -5,6 +5,7 @@ import { type Entity, entityKey } from '../shared/document.js'
 import { problem } from '../shared/errors.js'
 import type { Mutation, SourceEdit } from '../shared/messages.js'
 import type { Case } from './case.js'
+import { isUint32 } from './columns.js'
 import type { ArrayName } from './definition.js'
 import {
   apply,
@@ -38,13 +39,10 @@ export function createRecords(
   for (const change of changes) {
     const shape = kase.catalog.shapes.get(change.type)
     if (!shape?.array)
-      throw problem('invalid-input', 'Choose a creatable type from inspect_case schema.')
+      throw problem('invalid-input', `A case has no records of type ${change.type}.`)
     const valid =
       shape.identity.type === 'unsigned'
-        ? typeof change.key === 'number' &&
-          Number.isInteger(change.key) &&
-          change.key >= 0 &&
-          change.key <= 0xffffffff
+        ? typeof change.key === 'number' && isUint32(change.key)
         : typeof change.key === 'string' && change.key.length > 0
     if (!valid)
       throw problem('invalid-input', `Use a ${shape.identity.type} identity for ${change.type}.`)

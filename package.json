@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -1329,7 +1329,7 @@
             "type": "number",
             "default": 256,
             "minimum": 0,
-            "description": "Decoded results kept in memory per window, in MiB. Past it, the least recently read are let go, and read again from the file when needed."
+            "description": "Memory per window for results no view shows, in MiB, so they open again at once. Past it, those unused longest are closed."
           }
         }
       },

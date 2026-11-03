@@ -226,23 +226,18 @@ async function runCase(input: ResultsApi['run']['input'], signal: AbortSignal): 
   let tell: ((now?: boolean) => void) | undefined
   try {
     send({ kind: 'run', run })
-    await simulate(
-      kase,
-      input,
-      { cache, stores },
-      {
-        signal,
-        reading: (file) => {
-          hold(input.results, file, false)
-          tell = teller(file)
-          tell(true)
-        },
-        progress: () => tell?.(),
-        log: log.line,
-        lifecycle: (process) => send({ kind: 'process', run: run.id, process }),
-        ...(options.runs && { runs: options.runs }),
+    await simulate(kase, input, stores, {
+      signal,
+      reading: (file) => {
+        hold(input.results, file, false)
+        tell = teller(file)
+        tell(true)
       },
-    )
+      progress: () => tell?.(),
+      log: log.line,
+      lifecycle: (process) => send({ kind: 'process', run: run.id, process }),
+      ...(options.runs && { runs: options.runs }),
+    })
     run.state = 'complete'
   } catch (error) {
     // Results let go of while the run writes them stop it, as cancelling it does.
@@ -291,7 +286,7 @@ async function openResults(
   if (stored) {
     let file: ResultsFile | undefined
     try {
-      file = await ResultsFile.stored(kase, cache, stored, reading)
+      file = await ResultsFile.stored(kase, stored, reading)
     } catch {
       // A store that does not read goes, and the file is read again from its CSV.
       await stores.discard(stored)
@@ -305,7 +300,7 @@ async function openResults(
       restored = file
     }
   }
-  const file = restored ?? new ResultsFile(kase, cache, await stores.create(path), reading)
+  const file = restored ?? new ResultsFile(kase, await stores.create(path), reading)
   const tell = teller(file)
   // Until it answers, letting go of the request stops the reading; after, letting go of the
   // results does.

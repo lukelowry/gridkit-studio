@@ -8,7 +8,6 @@ import { beforeAll, expect, it } from 'vitest'
 
 import { Case } from '../src/gridkit/case.js'
 import { catalog } from '../src/gridkit/definition.js'
-import { ResultCache } from '../src/results/cache.js'
 import { ResultsFile } from '../src/results/file.js'
 import { Store, Stores } from '../src/results/store.js'
 import { loadNative } from '../src/workers/native.js'
@@ -38,10 +37,9 @@ it('keeps sparse exact results, bounded native windows, recovery watermarks, and
     }),
     catalog,
   )
-  const cache = new ResultCache(96 << 20)
   const store = await stores.create(path)
   const reading = { path, revision: { uri: 'file:///case', version: 1 } }
-  const file = new ResultsFile(kase, cache, store, reading)
+  const file = new ResultsFile(kase, store, reading)
   let restored: ResultsFile | undefined
   let reopened: Store | undefined
   try {
@@ -89,7 +87,7 @@ it('keeps sparse exact results, bounded native windows, recovery watermarks, and
     await appendFile(join(store.folder, 'raw.bin'), new Uint8Array(100))
     await appendFile(join(store.folder, 'levels.bin'), new Uint8Array(100))
     reopened = new Store(store.folder, store.key, manifest)
-    restored = await ResultsFile.stored(kase, cache, reopened, reading)
+    restored = await ResultsFile.stored(kase, reopened, reading)
     expect(restored.progress.frames).toBe(1024)
     await writeFile(path, 'overwritten externally')
     const exported = join(folder, 'export.csv')
@@ -104,7 +102,7 @@ it('keeps sparse exact results, bounded native windows, recovery watermarks, and
   }
 })
 
-it('preserves NaN gaps and rejects float32 overflow only at visualization', async () => {
+it('preserves NaN gaps, and draws a value float32 cannot hold as a gap', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'studio-native-gap-'))
   const stores = new Stores(join(folder, 'cache'))
   await stores.sweep([])
@@ -112,7 +110,7 @@ it('preserves NaN gaps and rejects float32 overflow only at visualization', asyn
   await writeFile(path, 'time,Bus_A_Vm\n0,1\n0.1,NaN\n10,5\n20,1e100\n')
   const kase = await Case.parse('{"buses":[{"class":"Bus","number":7,"name":"A"}]}', catalog)
   const store = await stores.create(path)
-  const file = new ResultsFile(kase, new ResultCache(96 << 20), store, {
+  const file = new ResultsFile(kase, store, {
     path,
     revision: { uri: 'file:///case', version: 1 },
   })
@@ -129,19 +127,14 @@ it('preserves NaN gaps and rejects float32 overflow only at visualization', asyn
       (await file.sample({ results: 'r', table: 'Bus', field: 'Vm', id: 7, at: 0.1 }, signal))
         .value,
     ).toBeNull()
-    await expect(
-      file.frames(
-        {
-          results: 'r',
-          table: 'Bus',
-          field: 'Vm',
-          range: [0, 20],
-          purpose: 'plot',
-          columns: 100,
-        },
-        signal,
-      ),
-    ).rejects.toThrow('float32')
+    const page = await file.frames(
+      { results: 'r', table: 'Bus', field: 'Vm', range: [0, 20], purpose: 'plot', columns: 100 },
+      signal,
+    )
+    using data = new Data(page.source)
+    data.apply(page.bytes)
+    expect(data.get('Bus', 7, 'Vm', { at: 10 })).toBe(5)
+    expect(data.get('Bus', 7, 'Vm', { at: 20 })).toBeNull()
   } finally {
     await file.retire()
     await store.close()
@@ -167,7 +160,7 @@ it('refines isolated gaps without expanding whole disk blocks into raw samples',
   )
   const kase = await Case.parse('{"buses":[{"class":"Bus","number":7,"name":"A"}]}', catalog)
   const store = await stores.create(path)
-  const file = new ResultsFile(kase, new ResultCache(96 << 20), store, {
+  const file = new ResultsFile(kase, store, {
     path,
     revision: { uri: 'file:///case', version: 1 },
   })

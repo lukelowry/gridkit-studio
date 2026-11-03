@@ -75,43 +75,43 @@ async function show(bench: TestHost, path: string, map: FieldRef, channels: Chan
   return { uri, network, session: bench.studio.get(uri.toString())! }
 }
 
-/** Set the camera's projection from the view's own control. */
-async function project(shown: Awaited<ReturnType<typeof show>>, name: 'Tilt') {
-  await shown.network.getByRole('button', { name, exact: true }).click()
-  await until(
-    () =>
-      (shown.session.cameras.network as { projection?: string })?.projection === name.toLowerCase(),
-    name,
-  )
+/** Tilt the camera from the view's own control. */
+async function tilt({ network }: Awaited<ReturnType<typeof show>>) {
+  await network.getByRole('button', { name: 'Tilt', exact: true }).click()
+  await until(async () => {
+    const shown = await network.evaluate<{ camera: { pitch?: number } } | null>(
+      'gridkitSelection()',
+    )
+    return (shown?.camera.pitch ?? 0) > 0
+  }, 'tilted')
 }
 
 export async function run() {
   const bench = await testHost()
-  // No hover highlight under wherever the pointer was left, and vertices a size smaller; each
-  // picture has a colormap of its own.
+  // Vertices a size larger, and each picture a colormap and height of its own; every setting
+  // changed is put back after, the tilt the Network's own control sets too.
   const settings = vscode.workspace.getConfiguration('gridkitStudio')
-  const global = vscode.ConfigurationTarget.Global
-  const set = (key: string, value: unknown) => settings.update(key, value, global)
-  const SHOWN = {
-    'network.hover': 'off',
-    'diagram.hover': 'off',
-    'network.colormap': 'batlow',
-    'network.vertexRadiusPx': 2,
+  const changed = new Set(['network.tilt'])
+  const set = (key: string, value: unknown) => {
+    changed.add(key)
+    return settings.update(key, value, vscode.ConfigurationTarget.Global)
   }
-  for (const [key, value] of Object.entries(SHOWN)) await set(key, value)
+  await set('network.colormap', 'batlow')
+  await set('network.vertexRadius', 3)
   try {
     if (!(await bench.gridkit())) throw new Error('GridKit does not run here.')
     await mkdir(MEDIA, { recursive: true })
     await bench.page.setViewportSize(WINDOW)
 
-    // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, low over the
+    // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, high over the
     // map, its height.
     await set('network.labels', false)
+    await set('network.heightMeters', 250_000)
     const large = await show(bench, 'cases/ACTIVSg70k.case.json', KV, [
       'vertexColor',
       'vertexHeight',
     ])
-    await project(large, 'Tilt')
+    await tilt(large)
     await idle(large.network)
     await large.network.locator('canvas').hover()
     await bench.page.mouse.wheel(0, -240)
@@ -123,7 +123,7 @@ export async function run() {
     // color and height, so the buses the fault pulls down sink below the rest.
     await bench.reset()
     await set('network.colormap', 'spectral')
-    await set('network.zScale', 1.5)
+    await set('network.heightMeters', 150_000)
     const path = 'cases/ACTIVSg25k.case.json'
     const fault = await hub(path)
     const wide = await show(bench, path, VM, ['vertexColor', 'vertexHeight'])
@@ -138,7 +138,7 @@ export async function run() {
     })
     await vscode.commands.executeCommand('workbench.action.closePanel')
     wide.session.transport.seek(0.15)
-    await project(wide, 'Tilt')
+    await tilt(wide)
     // Fit the case, then close in over the fault, with the network it pulls down rising behind it.
     await vscode.commands.executeCommand('gridkitStudio.fit')
     await idle(wide.network)
@@ -156,6 +156,7 @@ export async function run() {
     for (let notch = 0; notch < FRAMING.notches; notch++) await bench.page.mouse.wheel(0, -120)
     await bench.page.mouse.move(0, WINDOW.height / 2)
     await shoot(bench, 'activsg25k', wide.network)
+    await set('network.tilt', undefined)
 
     // An IEEE39 generator in the diagram, framed on its exciter and stabilizer.
     await bench.reset()
@@ -163,29 +164,34 @@ export async function run() {
     const diagram = await bench.open('diagram')
     await vscode.commands.executeCommand('workbench.action.closePanel')
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
-    // The generator's own menu frames it, as the user does: the command alone frames the Network.
     const generator = { table: 'Genrou', id: '30_1_genrou' }
+    const drawn = async () => {
+      await idle(diagram)
+      const [x, y] = await until(
+        () =>
+          diagram.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(generator)})`),
+        'the generator drawn',
+      )
+      return { x, y }
+    }
+    // The generator's own menu frames it, as the user does: the command alone frames the Network.
+    // Then the wheel closes in on it, its exciter and stabilizer either side.
     await bench.menu(diagram.locator('canvas'), 'Zoom to Neighborhood', {
       on: generator,
-      at: async () => {
-        await idle(diagram)
-        const [x, y] = await until(
-          () =>
-            diagram.evaluate<[number, number] | null>(
-              `gridkitLocate(${JSON.stringify(generator)}, null)`,
-            ),
-          'the generator drawn',
-        )
-        return { x, y }
-      },
+      at: drawn,
     })
+    const box = (await diagram.locator('canvas').boundingBox())!
+    const { x: gx, y: gy } = await drawn()
+    await bench.page.mouse.move(box.x + gx, box.y + gy)
+    for (let notch = 0; notch < 4; notch++) await bench.page.mouse.wheel(0, -120)
+    await bench.page.mouse.move(0, WINDOW.height / 2)
     // Nothing selected, and no focus ring from the right-click.
     await diagram.locator('canvas').blur()
     bench.session.select()
     await shoot(bench, 'diagram', diagram)
 
     // IEEE39 during a fault at bus 16, as its solver file has one: every bus voltage on the network
-    // and in the Monitor, which colors it the same way.
+    // and in the Monitor.
     await bench.reset()
     await set('network.colormap', 'thermal')
     const ieee = await bench.open('network')
@@ -204,7 +210,7 @@ export async function run() {
     await shoot(bench, 'monitor', ieee)
     console.log('Screenshots written to ' + MEDIA)
   } finally {
-    for (const key of [...Object.keys(SHOWN), 'network.labels']) await set(key, undefined)
+    for (const key of changed) await set(key, undefined)
     await bench.browser.close()
   }
 }

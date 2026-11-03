@@ -39,7 +39,6 @@ describe('CSV results', () => {
       for await (const _ of csvMessages(
         Readable.from([Buffer.from('0,1\n1,2,3\n')]),
         ['t', 'a'],
-        undefined,
         1000,
       ));
     }
@@ -94,7 +93,6 @@ describe("GridKit's long layout", () => {
       for await (const message of csvMessages(
         Readable.from([Buffer.from(piece)]),
         names,
-        undefined,
         frames.length,
         held,
         ends && i === pieces.length - 1,

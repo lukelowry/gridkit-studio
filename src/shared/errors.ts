@@ -55,6 +55,15 @@ export interface Problem {
   /** Where in the source a parse failed. */
   readonly offset?: number
   readonly length?: number
+  /** Each place in the source a parse refused, and why, the first first. */
+  readonly problems?: readonly Placed[]
+}
+
+/** Why a parse refused a place in the source. */
+export interface Placed {
+  readonly message: string
+  readonly offset: number
+  readonly length: number
 }
 
 /** An error of `code` saying `message`, with `more` besides: the one way Studio makes one. */
@@ -75,8 +84,6 @@ export const superseded = () =>
 /** The codes of failures that are none: whoever asked let go, or another took its place, as results
  *  read again take the place of those lost. */
 const NONE: readonly Code[] = ['cancelled', 'superseded', 'results-closed', 'results-lost']
-/** The codes of failures a view outlives by starting again: its device or connection came back. */
-const PASSING: readonly Code[] = ['device-lost', 'timeout', 'unavailable']
 
 /** Whether `error` is a cancellation, as an AbortError or VS Code's Canceled is. */
 export function cancelled(error: unknown): boolean {
@@ -88,11 +95,6 @@ export function cancelled(error: unknown): boolean {
  *  these. */
 export function quiet(error: unknown): boolean {
   return cancelled(error) || NONE.some((code) => failedWith(error, code))
-}
-
-/** Whether a view that failed with `error` works again once it starts again. */
-export function passing(error: unknown): boolean {
-  return PASSING.some((code) => failedWith(error, code))
 }
 
 /** What the user is told of a defect; the log keeps the rest. */
@@ -128,7 +130,12 @@ export function detail(error: unknown): string {
 
 /** `error` as it crosses a boundary. */
 export function problemOf(error: unknown): Problem {
-  const value = error as { code?: unknown; offset?: unknown; length?: unknown } | null
+  const value = error as {
+    code?: unknown
+    offset?: unknown
+    length?: unknown
+    problems?: unknown
+  } | null
   const gone = cancelled(error)
   return {
     message: error instanceof Error ? error.message || error.name : String(error),
@@ -143,6 +150,7 @@ export function problemOf(error: unknown): Problem {
     ...(gone && { cancelled: true }),
     ...(typeof value?.offset === 'number' && { offset: value.offset }),
     ...(typeof value?.length === 'number' && { length: value.length }),
+    ...(Array.isArray(value?.problems) && { problems: value.problems as Placed[] }),
   }
 }
 

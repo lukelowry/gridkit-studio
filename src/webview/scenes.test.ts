@@ -121,7 +121,7 @@ it("frames whole case tables, and raises the highest mapped value a share of the
   expect(raised(plane, false)[1]).toBeCloseTo(0.2 * 4 * GAP)
 })
 
-it('draws buses over branches seen flat, and branches after buses where depth decides', () => {
+it('draws the map, then branches, then the buses over them, however the network is seen', () => {
   using data = new Data('case').replace('Bus', [1], { x: [0], y: [0] })
   const drawing = {
     geographic: true,
@@ -135,9 +135,8 @@ it('draws buses over branches seen flat, and branches after buses where depth de
     networkScene(data, drawing, settings, {}, [], [coast]).marks!.map((mark) =>
       'lines' in mark ? 'lines' : 'vertices' in mark ? 'vertices' : 'edges',
     )
-  expect(kinds(reader())).toEqual(['lines', 'edges', 'vertices'])
-  expect(kinds(reader({ 'network.tilt': 45 }))).toEqual(['lines', 'vertices', 'edges'])
-  expect(kinds(reader({ 'network.projection': 'globe' }))).toEqual(['lines', 'vertices', 'edges'])
+  for (const settings of [{}, { 'network.tilt': 45 }, { 'network.projection': 'globe' as const }])
+    expect(kinds(reader(settings))).toEqual(['lines', 'edges', 'vertices'])
 })
 
 it('scales dense case marks and their bindings together while preserving missing rows', () => {

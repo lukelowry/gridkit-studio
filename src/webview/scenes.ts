@@ -346,14 +346,6 @@ export function networkScene(
     radius: sizes.radius,
     ...channels(vertex.table, bindings, map, 'vertex', sizes, height),
   }))
-  // Seen flat, the drawing order alone decides what shows where marks overlap, so buses draw over
-  // the branches that meet them. Raised, where depth decides, latkit writes a stroke's depth only
-  // where the stroke is fully opaque, which a thin branch hardly ever is, so a later bus would still
-  // cover a branch in front of it: there buses draw first, their depth hiding what lies behind
-  // them, and the branches after them show wherever they are nearer. The map lies under both.
-  const raised =
-    settings.get('network.tilt') > 0 ||
-    (drawing.geographic && settings.get('network.projection') === 'globe')
   return {
     space: drawing.geographic
       ? {
@@ -367,7 +359,9 @@ export function networkScene(
     theme,
     ease: settings.get('network.ease'),
     controls: { ...controls(settings, 'network'), cycle: true },
-    marks: [...background, ...(raised ? [...vertices, ...edges] : [...edges, ...vertices])],
+    // Seen flat, buses draw over the branches that meet them, the map under both. Where depth
+    // varies, the nearest of whatever overlaps shows, whatever the order.
+    marks: [...background, ...edges, ...vertices],
   }
 }
 

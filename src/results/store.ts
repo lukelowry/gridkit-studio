@@ -391,7 +391,15 @@ export class Store {
     const files = await this.#handles()
     await writeAll(files[3], bytes, position)
   }
-  async checkpoint(value: Checkpoint): Promise<void> {
+  #checkpoints = Promise.resolve()
+  /** Writes the manifest `value` says, after any write before it: a file read again while the read
+   *  it replaces still ends writes into the same store. */
+  checkpoint(value: Checkpoint): Promise<void> {
+    const written = this.#checkpoints.then(() => this.#checkpoint(value))
+    this.#checkpoints = written.catch(() => {})
+    return written
+  }
+  async #checkpoint(value: Checkpoint): Promise<void> {
     const files = await this.#handles()
     await Promise.all(files.map((file) => file.sync()))
     const written: Manifest = {

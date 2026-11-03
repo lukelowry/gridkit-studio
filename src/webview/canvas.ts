@@ -544,13 +544,11 @@ function boot() {
   }
   document.addEventListener('visibilitychange', visibility)
   const hooks = window as Window & {
-    gridkitPick?: (point: [number, number], radius: number) => unknown
     gridkitLifecycle?: () => unknown
     gridkitStats?: () => unknown
     gridkitSelection?: () => unknown
-    gridkitLocate?: (entity: Entity) => unknown
+    gridkitLocate?: (entity: Entity, port?: string) => unknown
   }
-  hooks.gridkitPick = (point, radius) => host?.view.pick(point, { radius })
   hooks.gridkitLifecycle = () => ({
     closed,
     shown,
@@ -593,9 +591,12 @@ function boot() {
       ),
       camera: host.view.camera,
     }
-  hooks.gridkitLocate = (entity) =>
+  hooks.gridkitLocate = (entity, port) =>
     host && cases.slot.current
-      ? host.view.screenOf({ data: cases.slot.current.data.name, ...entity })
+      ? host.view.screenOf(
+          { data: cases.slot.current.data.name, ...entity },
+          { ...(port && { port }), signal: host.lifetime },
+        )
       : null
   window.addEventListener(
     'pagehide',

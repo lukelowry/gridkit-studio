@@ -12,7 +12,7 @@
   import { followPlayback } from '../playback.js'
   import { openGpu, startOver } from '../runtime.js'
   import { watchTheme } from '../theme.js'
-  import { monitorWindow, SETTLE_MS } from './plot.js'
+  import { monitorWindow, sameWindow, SETTLE_MS } from './plot.js'
   import Plot from './Plot.svelte'
 
   let app = $state.raw<ViewState>({})
@@ -33,7 +33,13 @@
   const active = $derived(visible && !hidden)
   const results = $derived(app.results)
   const plots = $derived(app.plots ?? [])
-  const shown = $derived(monitorWindow(results, chosen ?? app.window))
+  /** The window every plot shows, the same one while results arrive that leave it where it was: a
+   *  plot handed a window anew moves its camera, which starts latkit fitting its values again. */
+  let steady: TimeRange | undefined
+  const shown = $derived.by(() => {
+    const next = monitorWindow(results, chosen ?? app.window)
+    return (steady = sameWindow(steady, next) ? steady! : next)
+  })
   const clock = createClock((at) => {
     t = at
     if (active) for (const view of views) view.at = at

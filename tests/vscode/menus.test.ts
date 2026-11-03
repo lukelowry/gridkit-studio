@@ -317,18 +317,10 @@ suite('Diagram menus', () => {
         id + ' drawn',
       )
       if (!field) return { x, y }
-      const point = await diagram.evaluate<[number, number] | null>(`(async () => {
-        const center = [${x}, ${y}]
-        for (let dx = 10; dx <= 200; dx += 8) {
-          const probes = []
-          for (const side of [-1, 1]) for (let dy = -100; dy <= 100; dy += 8)
-            probes.push(gridkitPick([center[0] + side * dx, center[1] + dy], 5))
-          const hit = (await Promise.all(probes)).flat().find(hit => hit.row.table === 'Ieeest' && hit.row.id === ${JSON.stringify(id)} && hit.port === ${JSON.stringify(field)})
-          if (hit) return hit.point
-        }
-        return null
-      })()`)
-      assert.ok(point, 'The native picker locates the signal port')
+      const point = await diagram.evaluate<[number, number] | null>(
+        `gridkitLocate(${JSON.stringify({ table: 'Ieeest', id })}, ${JSON.stringify(field)})`,
+      )
+      assert.ok(point, 'The Diagram draws the signal port')
       return { x: point[0], y: point[1] }
     }
     await bench.menu(diagram.locator('canvas'), item, { on: { table: 'Ieeest', id }, at })

@@ -186,8 +186,10 @@ suite('Export', () => {
 
   test('plots a long run through bounded native visualization levels', async () => {
     const shown = await bench.results()
-    // Every bus's voltage over many frames. The run is short, so the video records a few of them.
+    // Every bus's voltage over many frames, played at 4×: the video records three of them, each
+    // drawing every trace, which takes a software GPU about ten seconds a frame at 720p.
     await bench.waveform('Streamed waveform.csv', 30_000, 0.3, 3)
+    bench.session.transport.setRate(4)
     // The Case panel takes the Monitor's place, which would draw the same plots beside the export:
     // on a software GPU that holds up every frame the window draws, for tens of seconds.
     await bench.show('case')
@@ -204,9 +206,10 @@ suite('Export', () => {
         const toggle = exporter.getByRole('switch', { name, exact: true })
         if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
       }
+      await exporter.locator('[data-testid="video-resolution"]').click()
+      await exporter.locator('[role="option"][data-value="720"]').click()
       await startExport(exporter)
       await bench.dialog(video.fsPath)
-      // Drawing every slice through the plots first takes about two minutes on a software GPU.
       await exported(exporter, 240_000)
       await mp4(video.fsPath)
       const { progress } = await exporter.evaluate<{ progress: { frames: number; total: number } }>(
@@ -214,6 +217,7 @@ suite('Export', () => {
       )
       assert.ok(progress.frames > 1 && progress.frames === progress.total)
     } finally {
+      bench.session.transport.setRate(1)
       await bench.session.load(shown.path)
     }
   }).timeout(300_000)

@@ -2,7 +2,7 @@
   import type { Data, Gpu, Id, View } from 'latkit'
   import { onMount, untrack } from 'svelte'
 
-  import type { ExactSample, TimeRange } from '../../shared/data.js'
+  import type { ExactSample, FrameRequest, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
   import { holdsPlot, plotName } from '../../shared/plots.js'
@@ -109,24 +109,53 @@
     }
   }
 
-  $effect(() => {
-    if (!enabled || settling || !columns || !results?.frames || !recorded) return
-    const controller = new AbortController()
+  /** The read under way of the window the plot shows. One runs at a time, each once the view has
+   *  drawn what it holds and of every frame recorded by then, so a run that records faster than
+   *  this page draws is plotted as often as the page can draw it. */
+  let fetching: { key: string; controller: AbortController; again: boolean } | undefined
+  function read(request: FrameRequest) {
+    const key = JSON.stringify(request)
+    if (fetching?.key === key) {
+      fetching.again = true
+      return
+    }
+    fetching?.controller.abort()
+    const current = (fetching = { key, controller: new AbortController(), again: false })
+    const { signal } = current.controller
     failed = false
-    void frames
-      .receive(plotRequest(results, plot, shown, columns), results.frames, controller.signal)
-      .then(
-        (changed) => {
-          if (changed && !controller.signal.aborted) source = frames.data
-        },
-        (error: unknown) => {
-          if (!controller.signal.aborted) {
-            failed = true
-            onerror(error)
-          }
-        },
-      )
-    return () => controller.abort()
+    void (async () => {
+      do {
+        current.again = false
+        // A view gone meanwhile has nothing left to draw.
+        await untrack(() => native)
+          ?.done({ signal })
+          .catch(() => signal.throwIfAborted())
+        const version = results?.frames
+        if (!version) return
+        if ((await frames.receive(request, version, signal)) && !signal.aborted)
+          source = frames.data
+      } while (current.again)
+    })().then(
+      () => {
+        if (fetching === current) fetching = undefined
+      },
+      (error: unknown) => {
+        if (fetching === current) fetching = undefined
+        if (!signal.aborted) {
+          failed = true
+          onerror(error)
+        }
+      },
+    )
+  }
+  function stop() {
+    fetching?.controller.abort()
+    fetching = undefined
+  }
+  $effect(() => {
+    if (enabled && !settling && columns && results?.frames && recorded)
+      read(plotRequest(results, plot, shown, columns))
+    else stop()
   })
   $effect(() => {
     if (native) native.camera = framed
@@ -254,7 +283,10 @@
     event.preventDefault()
     event.stopPropagation()
   }
-  onMount(() => () => frames.clear())
+  onMount(() => () => {
+    stop()
+    frames.clear()
+  })
 </script>
 
 <section class="lane" aria-label={title} {@attach observe}>

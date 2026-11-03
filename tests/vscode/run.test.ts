@@ -285,6 +285,11 @@ suite('Run', function () {
     assert.equal(bench.session.transport.state.follow, true)
     monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
+    // However slowly this page draws, the plot goes on drawing what the run records.
+    const drawn = () =>
+      monitor.evaluate<number>('document.querySelector("canvas").gridkitPlot().span[1]')
+    const reached = await drawn()
+    await until(async () => (await drawn()) > reached, 'the plot draws samples as they arrive')
     bench.session.transport.seek(0)
     const intervals = () =>
       monitor.evaluate<number[][]>(

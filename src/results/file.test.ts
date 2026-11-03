@@ -36,6 +36,10 @@ afterAll(async () => {
   }
   await rm(directory, { recursive: true, force: true })
 })
+const datasets: Data[] = []
+afterAll(() => {
+  for (const data of datasets) data.destroy()
+})
 const reading = (path: string) => ({ path, revision: { uri: 'file:///case', version: 1 } })
 async function create(name: string, csv: string, of = kase) {
   const path = join(directory, name + '.csv')
@@ -63,6 +67,25 @@ function following(file: ResultsFile, progress = () => {}) {
     },
   }
 }
+/** Every page of `request`, applied to `onto` or a dataset of their own, with the first page's key
+ *  and base, and their bytes. */
+async function plotted(file: ResultsFile, request: FrameRequest, onto?: Data) {
+  let next: string | undefined
+  let first: { key: string; base?: string } | undefined
+  let data = onto
+  let bytes = 0
+  do {
+    const page = await file.frames({ ...request, next }, signal)
+    first ??= page
+    if (!data) datasets.push((data = new Data(page.source)))
+    data.apply(page.bytes)
+    bytes += page.bytes.byteLength
+    next = page.next
+  } while (next)
+  return { ...first!, bytes, data: data! }
+}
+const envelope = (data: Data, range: TimeRange, spans = 60) =>
+  data.envelope({ table: 'Bus', field: 'Vm', range: [...range], spans })
 /** What a Network binding reads of `file`'s voltages around the playhead. */
 function request(
   file: ResultsFile,
@@ -216,43 +239,53 @@ describe('indexed scientific results', () => {
       columns: 100,
       ...(since && { since }),
     })
-    const made: Data[] = []
-    /** Every page of `request`, applied to `onto` or a dataset of their own, with the first page's
-     *  key and base, and their bytes. */
-    const read = async (request: FrameRequest, onto?: Data) => {
-      let next: string | undefined
-      let first: { key: string; base?: string } | undefined
-      let data = onto
-      let bytes = 0
-      do {
-        const page = await file.frames({ ...request, next }, signal)
-        first ??= page
-        if (!data) made.push((data = new Data(page.source)))
-        data.apply(page.bytes)
-        bytes += page.bytes.byteLength
-        next = page.next
-      } while (next)
-      return { ...first!, bytes, data: data! }
-    }
+    const whole = await plotted(file, plot([0, 30]))
+    // A page holding the first ten seconds is sent what the window grown to thirty adds.
+    const held = await plotted(file, plot([0, 10]))
+    const grown = await plotted(file, plot([0, 30], held.key), held.data)
+    expect(grown.base).toBe(held.key)
+    expect(grown.bytes).toBeLessThan(whole.bytes * 0.8)
+    expect(envelope(grown.data, [0, 30])).toEqual(envelope(whole.data, [0, 30]))
+    // A window it covers at least as finely, as a zoom into it is, lacks nothing.
+    const zoomed = await plotted(file, plot([12, 20], grown.key), grown.data)
+    expect(zoomed.base).toBe(grown.key)
+    expect(zoomed.bytes).toBeLessThan(1024)
+    expect(envelope(zoomed.data, [0, 30])).toEqual(envelope(whole.data, [0, 30]))
+    // A window past it is read whole.
+    expect((await plotted(file, plot([5, 40], grown.key))).base).toBeUndefined()
+  })
+  it('sends a live plot what its run adds to each level its page holds', async () => {
+    const rows = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => `${(from + i) / 100},${((from + i) * 7) % 13}\n`)
+    const file = await create('live-plot', HEADER + rows(0, 300).join(''))
+    const reader = following(file)
+    // Four columns plot 300 to 2047 frames in buckets of 64, ending in finer ones.
+    const plot = (since?: string): FrameRequest => ({
+      results: 'test',
+      table: 'Bus',
+      field: 'Vm',
+      range: [0, 50],
+      purpose: 'plot',
+      columns: 4,
+      ...(since && { since }),
+    })
     try {
-      const whole = await read(plot([0, 30]))
-      // A page holding the first ten seconds, as a live run's plot has, is sent what came since.
-      const held = await read(plot([0, 10]))
-      const grown = await read(plot([0, 30], held.key), held.data)
-      expect(grown.base).toBe(held.key)
-      expect(grown.bytes).toBeLessThan(whole.bytes * 0.8)
-      const envelope = (data: Data) =>
-        data.envelope({ table: 'Bus', field: 'Vm', range: [0, 30], spans: 60 })
-      expect(envelope(grown.data)).toEqual(envelope(whole.data))
-      // A window it covers at least as finely, as a zoom into it is, lacks nothing.
-      const zoomed = await read(plot([12, 20], grown.key), grown.data)
-      expect(zoomed.base).toBe(grown.key)
-      expect(zoomed.bytes).toBeLessThan(1024)
-      expect(envelope(zoomed.data)).toEqual(envelope(whole.data))
-      // A window past it is read whole.
-      expect((await read(plot([5, 40], grown.key))).base).toBeUndefined()
+      await reader.reach(300)
+      let held = await plotted(file, plot())
+      // Each append is stored as blocks of its own, so the finer tail a page holds comes to span
+      // several before buckets of 8, then of 64, take its place.
+      for (const frames of [303, 310, 318, 330, 400, 1000, 1001]) {
+        await appendFile(file.layout.path, rows(file.progress.frames, frames).join(''))
+        await reader.reach(frames)
+        const grown = await plotted(file, plot(held.key), held.data)
+        expect(grown.base).toBe(held.key)
+        held = grown
+      }
+      // Read whole, its first 960 frames are 15 buckets; the grown page holds the same.
+      const whole = await plotted(file, plot())
+      expect(envelope(held.data, [0, 9.6], 15)).toEqual(envelope(whole.data, [0, 9.6], 15))
     } finally {
-      for (const data of made) data.destroy()
+      await reader.end()
     }
   })
   it("reads GridKit's long layout as its wide one, an only sample whole once the file is", async () => {

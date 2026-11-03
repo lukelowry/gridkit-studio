@@ -28,12 +28,17 @@ export class ViewHost {
     drawn?: () => void,
   ): Promise<ViewHost> {
     const host = new ViewHost(await View.create(canvas, scene, options), canvas, scene, fail)
-    void host.view.done({ signal: host.#lifetime.signal }).then(() => {
+    void host.view.done({ signal: host.lifetime }).then(() => {
       canvas.dataset.rendered = 'true'
       drew()
       drawn?.()
     }, fail)
     return host
+  }
+
+  /** Aborts once the view ends: what its waits on latkit last for, however slowly it draws. */
+  get lifetime(): AbortSignal {
+    return this.#lifetime.signal
   }
 
   set scene(scene: Scene) {
@@ -45,7 +50,7 @@ export class ViewHost {
 
   /** Frames `fit` once its rows have their places, however long they take to arrive. */
   fit(fit?: Fit): void {
-    const fitting = this.view.fit(fit, { signal: this.#lifetime.signal })
+    const fitting = this.view.fit(fit, { signal: this.lifetime })
     this.#fitting = fitting.then(
       () => {},
       () => {},

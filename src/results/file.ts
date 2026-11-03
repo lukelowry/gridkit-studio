@@ -533,16 +533,16 @@ export class ResultsFile {
   }
   /** The entries of `plan` a page holding the plan `held` lacks, every stored entry being final once
    *  written: none when `held` covers the window at least as finely, as a zoom into it does; else,
-   *  for the same window grown, as a run's grows, those from the end of the last bucket of its
-   *  level `held` has. Undefined when `held` is another field's, window's or level's, or no plan
-   *  this file keeps, which the page reads whole instead. */
+   *  for the same window grown, as a run's grows, those of each level past the last `held` has of
+   *  that level. Undefined when `held` is another field's, window's or level's, or no plan this
+   *  file keeps, which the page reads whole instead. */
   #lacking(plan: FramePlan, held: string): readonly Interval[] | undefined {
     const key = `${plan.key}:${held}`
     const kept = this.#deltas.get(key)
     if (kept) return kept
     const was = this.#plans.get(held)
     if (!was || was.source !== plan.source || was.frames > plan.frames) return undefined
-    /** The frame past the last entry of `of`, of its own level alone with `level`. */
+    /** The frame past the last entry of `of`, of `level` alone when given. */
     const end = (of: FramePlan, level?: number) =>
       of.intervals.reduce(
         (stop, item) =>
@@ -560,9 +560,11 @@ export class ResultsFile {
     )
       lacking = []
     else if (was.level === plan.level && was.first === plan.first) {
-      const from = end(was, was.level)
+      // A run's growth only coarsens what came before, so what `held` has of each level is still
+      // drawn or covered by coarser buckets. latkit takes an entry again only at a level's end, and
+      // a page splits its runs where stored blocks do, so none is sent twice.
       lacking = plan.intervals.flatMap((item) => {
-        const first = Math.max(item.first, Math.floor(from / 8 ** item.level))
+        const first = Math.max(item.first, Math.ceil(end(was, item.level) / 8 ** item.level))
         const count = item.first + item.count - first
         return count > 0 ? [{ level: item.level, first, count }] : []
       })

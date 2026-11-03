@@ -298,11 +298,12 @@ export class TestHost {
     readonly browser: Browser,
     /** The VS Code window. */
     readonly page: Page,
-    readonly document: vscode.TextDocument,
+    document: vscode.TextDocument,
     /** Where screenshots and the report are written. */
     readonly output: string,
     solver: string,
   ) {
+    this.#document = document
     this.text = document.getText()
     this.solverText = solver
     this.source = JSON.parse(this.text)
@@ -346,8 +347,17 @@ export class TestHost {
   get studio(): Sessions {
     return this.extension.exports.studio
   }
+  #document: vscode.TextDocument
+  /** The case's document as VS Code holds it now. One no editor showed for a while VS Code closes,
+   *  and opens again as another. */
+  get document(): vscode.TextDocument {
+    const key = this.#document.uri.toString()
+    this.#document =
+      vscode.workspace.textDocuments.find((open) => open.uri.toString() === key) ?? this.#document
+    return this.#document
+  }
   get uri(): vscode.Uri {
-    return this.document.uri
+    return this.#document.uri
   }
   /** The case's key among the sessions. */
   get key(): string {
@@ -1051,6 +1061,8 @@ export class TestHost {
     console.error('Page errors:', this.errors)
     console.error('Studio failures:', this.studio.reporter.errors)
     console.error('Case state:', JSON.stringify(this.studio.state(this.key)).slice(0, 2000))
+    // A run the test left going would slow every test after it.
+    this.session?.stop()
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
     const { run, results } = this.session ?? {}

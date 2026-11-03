@@ -88,6 +88,17 @@ describe('the stores of the results files a worker reads', () => {
     await stores.release(store)
   })
 
+  it('writes manifests one after another, as a file read again while its last read ends does', async () => {
+    const stores = new Stores(root)
+    const path = join(root, 'a.csv')
+    const store = await stored(stores, path, 4)
+    // Asked for together, each manifest is written whole, and the last one asked for stays.
+    const asked = Array.from({ length: 16 }, (_, i) => 1 + (i % 4))
+    await Promise.all([...asked, 4].map((frames) => store.checkpoint(manifest(path, frames))))
+    await stores.release(store)
+    expect((await stores.find(path, stamp(4), 'case'))?.manifest?.frames).toBe(4)
+  })
+
   it('finds a store read through only of the same file, as it was, against the same case', async () => {
     const stores = new Stores(root)
     const path = join(root, 'a.csv')

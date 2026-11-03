@@ -14,7 +14,9 @@ import {
 import type { Target } from '../shared/contexts.js'
 import { fieldDefinition, leaf, networkRole } from '../shared/document.js'
 import { settingsOf, viewOf } from '../shared/ids.js'
+import { TILTED } from '../shared/preferences.js'
 import { askRange, type Commands, type Context } from './context.js'
+import { displayOf, setDisplay } from './settings.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
   /** The canvas a command acts on: the kind its menu was opened on, else the editor in front alone,
@@ -74,12 +76,13 @@ export function registerCanvases({ command, action, focus }: Commands) {
       })),
       { title: 'Map ' + leaf(field.field), canPickMany: true },
     )
-    if (picked)
-      context.session.bind(
-        field,
-        picked.map(({ channel }) => channel),
-        domainOf(bindings, field),
-      )
+    if (!picked) return
+    const channels = picked.map(({ channel }) => channel)
+    context.session.bind(field, channels, domainOf(bindings, field))
+    // A height shows only from the side: a flat Network tilts, as its Tilt button tilts it.
+    const { uri } = context.document
+    if (channels.includes('vertexHeight') && displayOf(uri)['network.tilt'] === 0)
+      await setDisplay(uri, 'network.tilt', TILTED)
   })
   command('mappingRange', async (context) => {
     const field = mappable(context)

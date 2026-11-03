@@ -106,6 +106,8 @@ const MOTION = [
   ['full', 'Full'],
   ['reduced', 'Reduced'],
 ] as const
+/** The tilt the Network's Tilt button sets, and a height mapped on a flat Network takes. */
+export const TILTED = 45
 export const SETTINGS = [
   category('network', 'Network', [
     group('View', [
@@ -133,11 +135,11 @@ export const SETTINGS = [
       choice('network.colormap', 'Colormap', 'viridis', COLORMAPS),
       num('network.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),
       num(
-        'network.heightMeters',
-        'Maximum elevation',
-        40000,
-        [0, 1000000, 1000],
-        'Geographic elevations are measured in meters.',
+        'network.height',
+        'Height',
+        0.2,
+        [0.01, 1, 0.01],
+        'How high the highest mapped value raises a vertex: a share of the distance across the case.',
       ),
     ]),
     group('Interaction', [

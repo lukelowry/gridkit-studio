@@ -1487,13 +1487,13 @@
             "minimum": 0,
             "maximum": 2
           },
-          "gridkitStudio.network.heightMeters": {
-            "default": 40000,
+          "gridkitStudio.network.height": {
+            "default": 0.2,
             "scope": "resource",
-            "markdownDescription": "View — Maximum elevation. Geographic elevations are measured in meters.",
+            "markdownDescription": "View — Height. How high the highest mapped value raises a vertex: a share of the distance across the case.",
             "type": "number",
-            "minimum": 0,
-            "maximum": 1000000
+            "minimum": 0.01,
+            "maximum": 1
           },
           "gridkitStudio.network.zoom": {
             "default": "wheel",

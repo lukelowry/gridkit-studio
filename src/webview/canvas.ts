@@ -8,7 +8,7 @@ import type { Bindings } from '../shared/bindings.js'
 import { type Entity, isEntity } from '../shared/document.js'
 import { quiet } from '../shared/errors.js'
 import { revisionOf, type Summary, type ViewState } from '../shared/messages.js'
-import { reader } from '../shared/preferences.js'
+import { reader, TILTED } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { DiagramEditor } from './diagram/edit.js'
@@ -65,7 +65,7 @@ function boot() {
             : {
                 'network.projection':
                   label === 'Globe' ? ('globe' as const) : ('mercator' as const),
-                'network.tilt': label === 'Tilt' ? 45 : 0,
+                'network.tilt': label === 'Tilt' ? TILTED : 0,
               }
         bridge.send({ kind: 'display', values })
       })

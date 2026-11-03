@@ -1,6 +1,6 @@
 ﻿import { createRequire } from 'node:module'
 
-import { Data, Expr, type Mark } from 'latkit'
+import { Data, Expr, type Mark, reference } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
@@ -8,7 +8,9 @@ import { defaults, reader } from '../shared/preferences.js'
 import { loadNative } from '../workers/native.js'
 import {
   caseFit,
+  caseSpan,
   diagramScene,
+  GAP,
   networkScene,
   plotScene,
   sampledFields,
@@ -20,7 +22,7 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   using data = new Data('case')
   const settings = reader()
   const network = networkScene(data, catalog.definition.drawing, settings, {}, [])
-  expect(network.layout).toBe('stress')
+  expect(network.layout).toEqual({ stress: { gap: GAP } })
   expect(network.controls).toMatchObject({ keyboard: true, motion: 'system' })
   const diagram = diagramScene(data, catalog.definition.drawing, settings, {}, true)
   expect(diagram.layout).toEqual({
@@ -83,30 +85,40 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
   expect(sampledFields(catalog.definition, both, results)).toEqual([['Bus', 'Vm']])
   expect(sampledFields(catalog.definition, both)).toEqual([])
 })
-it('frames whole case tables and raises geographic heights by meters', () => {
-  using data = new Data('case').replace('Bus', [1, 2], {
-    x: [0, 1],
-    y: [0, 1],
-    kv: [0, 10],
-  })
-  const drawing = {
-    geographic: true,
-    vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
-    edges: [],
-    blocks: [],
-    nets: [],
+it("frames whole case tables, and raises the highest mapped value a share of the case's span", () => {
+  const vertices = [{ table: 'Bus', position: ['x', 'y'] as [string, string] }]
+  const edges = [{ table: 'Line', ends: ['from', 'to'] as [string, string] }]
+  const drawing = (geographic: boolean) => ({ geographic, vertices, edges, blocks: [], nets: [] })
+  /** The heights of the lowest and highest of `v`, raised a fifth of the span. */
+  const raised = (data: Data, geographic: boolean) => {
+    const scene = networkScene(data, drawing(geographic), reader({ 'network.height': 0.2 }), {}, [
+      { table: 'Bus', field: 'v', placement: 'vertex', channel: 'elevation', domain: [0, 10] },
+    ])
+    const { elevation } = scene.marks!.find((mark) => 'vertices' in mark) as { elevation: Expr }
+    const values = data.query({ of: 'Bus', select: { elevation } }).fields.elevation as Float64Array
+    return [values[0], values.at(-1)]
   }
-  expect(JSON.parse(JSON.stringify(caseFit(data, drawing, 'network')))).toEqual({
-    tables: [['case', 'Bus']],
+  // On the earth, 3° east and 4° north of each other near the equator: 5° of arc across.
+  using earth = new Data('earth').replace('Bus', [1, 2], { x: [0, 3], y: [0, 4], v: [0, 10] })
+  expect(JSON.parse(JSON.stringify(caseFit(earth, drawing(true), 'network')))).toEqual({
+    tables: [
+      ['earth', 'Bus'],
+      ['earth', 'Line'],
+    ],
   })
-  // 111,194.93 meters is one degree of arc, the earth's unit of height.
-  const scene = networkScene(data, drawing, reader({ 'network.heightMeters': 111194.93 }), {}, [
-    { table: 'Bus', field: 'kv', placement: 'vertex', channel: 'elevation', domain: [0, 10] },
-  ])
-  const elevation = (scene.marks![0] as { elevation: Expr }).elevation
-  const values = data.query({ of: 'Bus', select: { elevation } }).fields.elevation as Float64Array
-  expect(values[0]).toBeCloseTo(0)
-  expect(values[1]).toBeCloseTo(1, 6)
+  const [ground, top] = raised(earth, true)
+  expect(ground).toBe(0)
+  expect(top).toBeCloseTo(0.2 * caseSpan(earth, drawing(true)))
+  expect(caseSpan(earth, drawing(true))).toBeCloseTo(5, 2)
+  // On a plane, five buses in a row, an island of one beside them: four links across the longest.
+  using plane = new Data('plane')
+    .replace('Bus', [1, 2, 3, 4, 5, 6], { v: [0, 0, 0, 0, 0, 10] })
+    .replace('Line', [1, 2, 3, 4], {
+      from: reference('Bus', [1, 2, 3, 4]),
+      to: reference('Bus', [2, 3, 4, 5]),
+    })
+  expect(caseSpan(plane, drawing(false))).toBe(4 * GAP)
+  expect(raised(plane, false)[1]).toBeCloseTo(0.2 * 4 * GAP)
 })
 
 it('draws buses over branches seen flat, and branches after buses where depth decides', () => {

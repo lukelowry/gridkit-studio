@@ -107,7 +107,6 @@ export async function run() {
     // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, high over the
     // map, its height.
     await set('network.labels', false)
-    await set('network.heightMeters', 250_000)
     const large = await show(bench, 'cases/ACTIVSg70k.case.json', KV, [
       'vertexColor',
       'vertexHeight',
@@ -124,7 +123,6 @@ export async function run() {
     // color and height, so the buses the fault pulls down sink below the rest.
     await bench.reset()
     await set('network.colormap', 'spectral')
-    await set('network.heightMeters', 150_000)
     const path = 'cases/ACTIVSg25k.case.json'
     const fault = await hub(path)
     const wide = await show(bench, path, VM, ['vertexColor', 'vertexHeight'])

@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import type { FrameRequest } from '../../src/shared/data.js'
-import { pause, renderer, replaying, testHost, until, visible } from '../vscode/harness.js'
+import { pause, renderer, replaying, testHost, until, visible } from '../e2e/harness.js'
 
 interface Plot {
   frames: number

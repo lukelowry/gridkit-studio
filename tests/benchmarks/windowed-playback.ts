@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import { type FrameRequest, PAYLOAD_BYTES } from '../../src/shared/data.js'
-import { pause, renderer, testHost, until, visible, VM } from '../vscode/harness.js'
+import { pause, renderer, testHost, until, visible, VM } from '../e2e/harness.js'
 
 export async function run() {
   const bench = await testHost()

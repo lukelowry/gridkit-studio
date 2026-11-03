@@ -19,12 +19,12 @@ export default defineConfig({
           clearMocks: true,
         },
       },
-      // GridKit's own DynamicSimulation, run where GridKit is installed or as GRIDKIT_IMAGE.
+      // What GridKit writes and says, run where GridKit is installed or as GRIDKIT_IMAGE.
       {
         test: {
-          name: 'simulation',
+          name: 'contract',
           environment: 'node',
-          include: ['tests/simulation/**/*.test.ts'],
+          include: ['tests/contract/**/*.test.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,
         },

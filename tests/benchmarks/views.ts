@@ -21,7 +21,7 @@ import {
   testHost,
   until,
   VM,
-} from '../vscode/harness.js'
+} from '../e2e/harness.js'
 
 /** Cases by bus count; compare.mjs reports time per bus across them. */
 const CASES = [

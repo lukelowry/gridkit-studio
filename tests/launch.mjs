@@ -1,6 +1,7 @@
-/** Run an entry inside VS Code with the extension and a case, in a throwaway profile: the VS Code
- *  suites, or the entry named on the command line. `--untrusted` leaves Workspace Trust on.
- *  VS Code's own routine log lines are left out; GRIDKIT_TEST_VERBOSE=1 keeps them. */
+/** Run an entry inside VS Code with the extension and a case, in a throwaway profile: the
+ *  extension-host suites, or the entry named on the command line, such as the end-to-end journeys.
+ *  `--untrusted` leaves Workspace Trust on. VS Code's own routine log lines are left out;
+ *  GRIDKIT_TEST_VERBOSE=1 keeps them. */
 
 import { spawn } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -11,11 +12,11 @@ import { fileURLToPath } from 'node:url'
 import { downloadAndUnzipVSCode } from '@vscode/test-electron'
 import { build } from 'esbuild'
 
-const root = fileURLToPath(new URL('../../', import.meta.url))
+const root = fileURLToPath(new URL('../', import.meta.url))
 const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
 const untrusted = process.argv.includes('--untrusted')
 const entry =
-  process.argv.slice(2).find((value) => !value.startsWith('--')) ?? 'tests/vscode/index.ts'
+  process.argv.slice(2).find((value) => !value.startsWith('--')) ?? 'tests/host/index.ts'
 /** VS Code's lines that say nothing about the run. */
 const NOISE = [
   /^\[main [^\]]+\] (StorageMainService|\[shared storage\]|update#|Extension host with pid \d+ exited with code: 0|CodeWindow: failed to load \(reason: [^)]*, code: -3\))/,
@@ -30,7 +31,14 @@ const NOISE = [
   /^\(Use `Code --trace-deprecation/,
 ]
 
-const extensionTestsPath = path.join(root, 'output/tests/vscode.cjs')
+const extensionTestsPath = path.join(
+  root,
+  'output/tests',
+  entry
+    .replace(/^tests[\\/]/, '')
+    .replace(/\.ts$/, '')
+    .replace(/[\\/]/g, '-') + '.cjs',
+)
 await build({
   entryPoints: [path.join(root, entry)],
   outfile: extensionTestsPath,

@@ -1,5 +1,5 @@
-/** Install the packaged VSIX into a VS Code of its own, check what it holds, and run the VS Code
- *  suites against it. */
+/** Install the packaged VSIX into a VS Code of its own, check what it holds, and run the
+ *  extension-host suites against it. */
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 
 import { downloadAndUnzipVSCode } from '@vscode/test-electron'
 
-const root = fileURLToPath(new URL('../../', import.meta.url))
+const root = fileURLToPath(new URL('../', import.meta.url))
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 const vsix = join(root, 'dist', manifest.name + '-' + manifest.version + '.vsix')
 await mkdir(join(root, 'output'), { recursive: true })
@@ -106,17 +106,16 @@ try {
   // Flags, such as --untrusted, go to each launch as they do to launch.mjs itself.
   const flags = process.argv.slice(2).filter((arg) => arg.startsWith('--'))
   const entries = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
-  if (!entries.length) entries.push('tests/vscode/index.ts')
+  if (!entries.length) entries.push('tests/host/index.ts')
   for (const entry of entries)
-    await run(process.execPath, [join(root, 'tests/vscode/launch.mjs'), ...flags, entry], {
+    await run(process.execPath, [join(root, 'tests/launch.mjs'), ...flags, entry], {
       ELECTRON_RUN_AS_NODE: undefined,
       GRIDKIT_TEST_EXTENSION_PATH: target,
       GRIDKIT_TEST_OUTPUT: scratch,
     })
   console.log('Installed VSIX verified:', vsix)
-  console.log('VS Code report:', join(scratch, 'tests', 'vscode-report.json'))
 } finally {
-  // Keep the screenshots and report; drop the installed copy and its profile.
+  // Drop the installed copy and its profile.
   for (const directory of [extensions, profile])
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
       (error) => console.warn('Kept ' + directory + ': ' + error.message),

@@ -40,7 +40,9 @@ jobs:
           name: gridkit-studio
           path: dist/gridkit-studio-*.vsix
           if-no-files-found: error
-  # The VSIX against real GridKit, from Studio's default image, in the oldest and newest VS Code.
+  # Real GridKit, from Studio's default image: what it writes and says, then the VSIX in the oldest
+  # and newest VS Code, driven through its commands. Nothing here reads what a window draws; the
+  # views a suite opens draw on the software GPU, unwatched.
   gridkit:
     needs: check
     runs-on: ubuntu-latest
@@ -74,18 +76,15 @@ jobs:
       # The image Studio runs GridKit from by default. Studio never pulls; the runner does, as a
       # user would.
       - run: docker pull "$(jq -r '.contributes.configuration[].properties["gridkitStudio.gridkitImage"].default // empty' package.json)"
-      - run: pnpm test:simulation
+      - run: pnpm test:contract
       - run: dbus-run-session -- xvfb-run -a pnpm test:package
       # Workspace Trust, against the same VSIX.
-      - run: dbus-run-session -- xvfb-run -a pnpm test:package --untrusted tests/vscode/trust.ts
+      - run: dbus-run-session -- xvfb-run -a pnpm test:package --untrusted tests/host/trust.ts
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: gridkit-${{ matrix.vscode }}
-          path: |
-            output/simulation
-            output/packaged-*/playwright
-            output/packaged-*/tests
+          path: output/simulation
   # The one check main's branch protection requires: every job above passed. Its name stays the
   # same when the jobs or their matrices change.
   required:

@@ -13,7 +13,6 @@ import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
-import type { Entity } from '../../src/shared/document.js'
 import { contextKey } from '../../src/shared/ids.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
@@ -40,90 +39,11 @@ export const solverText = (name: string, solver: Solver) =>
     4,
   ) + '\n'
 
-/** What a right-click on a canvas view aims at: the element `on`, where the view draws it now. That
- *  is found again before each try, as a view may move between finding it and the click. */
-export interface Aim {
-  readonly on: Entity
-  readonly at: () => Promise<{ x: number; y: number }>
-}
-
-/** A label `name` starts with, as a pattern. */
-const starting = (name: string) => new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-
-/** What the probe touches in a page, which the host's own code has no DOM library to name. */
-interface Probed {
-  closest(selector: string): Probed | null
-  readonly parentElement: Probed | null
-  readonly dataset: Readonly<Record<string, string | undefined>>
-  readonly ownerDocument: {
-    readonly defaultView: unknown
-    addEventListener(
-      type: 'contextmenu',
-      listener: (event: {
-        readonly target: Probed | null
-        preventDefault(): void
-        stopPropagation(): void
-      }) => void,
-      capture: boolean,
-    ): void
-  }
-}
-/** The probe's state, on the page's window: the menus caught since it was armed. */
-interface Probing {
-  gridkitMenus?: Record<string, unknown>[]
-  gridkitProbe?: boolean
-  gridkitProbing?: boolean
-}
-
-/** Catch the menus right-clicks in the page of `node` open, as VS Code reads them, and keep VS Code
- *  from opening any while armed, so none is left open over the views. Run in the page: it reaches
- *  for nothing outside itself. */
-const probe = (node: Probed) => {
-  const page = node.ownerDocument.defaultView as Probing
-  page.gridkitMenus = []
-  page.gridkitProbing = true
-  if (page.gridkitProbe) return
-  page.gridkitProbe = true
-  node.ownerDocument.addEventListener(
-    'contextmenu',
-    (event) => {
-      if (!page.gridkitProbing) return
-      // Each element's context up the tree, the nearest winning, as VS Code merges them.
-      let context: Record<string, unknown> = {}
-      for (
-        let at = event.target?.closest('[data-vscode-context]');
-        at;
-        at = at.parentElement?.closest('[data-vscode-context]')
-      )
-        context = { ...JSON.parse(at.dataset.vscodeContext!), ...context }
-      // A canvas's own right-click carries nothing: its view opens the menu once it has found
-      // what lies under the pointer.
-      if (!('gridkitTarget' in context)) return
-      // VS Code leaves a menu someone handled to them, and never hears of one gone no further.
-      event.preventDefault()
-      event.stopPropagation()
-      page.gridkitMenus?.push(context)
-    },
-    true,
-  )
-}
-
 /** The window size every suite starts from. */
 export const VIEWPORT = { width: 1600, height: 1000 }
 
 /** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
 export const VM = { table: 'Bus', field: 'Vm' } as const
-
-/** The text on the clipboard. */
-export const clipboard = () => vscode.env.clipboard.readText()
-
-/** The custom editor in front: its kind and file. */
-export function custom(): { viewType: string; path: string } | undefined {
-  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-  return input instanceof vscode.TabInputCustom
-    ? { viewType: input.viewType, path: input.uri.path.toLowerCase() }
-    : undefined
-}
 
 /** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
  *  once the wait fails, what it found instead. */
@@ -240,12 +160,6 @@ export const simpleDialog = (on: true | undefined) =>
     .getConfiguration()
     .update('files.simpleDialog.enable', on, vscode.ConfigurationTarget.Global)
 
-/** Set the color theme for the whole profile; `undefined` restores the default. */
-export const theme = (name: string | undefined) =>
-  vscode.workspace
-    .getConfiguration()
-    .update('workbench.colorTheme', name, vscode.ConfigurationTarget.Global)
-
 /** The test workspace folder, which holds the case. */
 export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
 
@@ -282,7 +196,7 @@ export class TestHost {
   /** That source, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
-    devices: { extension?: { diagram?: unknown } }[]
+    devices: { class: string; id: string; extension?: { diagram?: unknown } }[]
   }
   /** What the run measured, written beside the screenshots when it ends. */
   readonly report: Record<string, unknown>
@@ -471,52 +385,6 @@ export class TestHost {
     return file
   }
 
-  /** Monitored Signals, the native tree of what the case records, once it shows. Unless `reveal`
-   *  is false, its own command shows it first. */
-  async signals({ reveal = true } = {}): Promise<Locator> {
-    if (reveal) await vscode.commands.executeCommand('gridkitStudio.signals.focus')
-    const pane = this.page.locator('.pane', {
-      has: this.page.locator('.pane-header', { hasText: /monitored signals/i }),
-    })
-    await pane.getByRole('treeitem').first().waitFor({ state: 'visible', timeout: TIMEOUT })
-    return pane
-  }
-
-  /** The row of `type`'s `field` in Monitored Signals, its type opened to show it. */
-  async signalLine(type: string, field: string): Promise<Locator> {
-    const signals = await this.signals()
-    const group = signals.getByRole('treeitem', { name: new RegExp(`^${type},`) })
-    if ((await group.getAttribute('aria-expanded')) !== 'true') {
-      await group.locator('.monaco-tl-twistie').click()
-      await until(
-        async () => (await group.getAttribute('aria-expanded')) === 'true',
-        type + ' open',
-      )
-    }
-    return signals.getByRole('treeitem', { name: new RegExp(`^${type} ${field}\\b`) })
-  }
-
-  /** Check or uncheck `field` of `type` in Monitored Signals as the user does: open its type,
-   *  then click its box. */
-  async toggleSignal(type: string, field: string): Promise<void> {
-    const box = (await this.signalLine(type, field)).getByRole('checkbox')
-    // Done once what the case records changes, not once the box looks it: a tree drawn again for
-    // another case can change the box when no click took.
-    const recorded = () => this.recorded(type, field)
-    const was = recorded()
-    // A box the pointer rests on shows its state in a hover over the row below: the pointer leaves
-    // before and after each click, so no hover covers the next box.
-    await again(
-      async () => {
-        await this.page.mouse.move(0, 0)
-        await box.click({ timeout: 2000 }).catch(() => {})
-        await this.page.mouse.move(0, 0)
-      },
-      () => recorded() !== was,
-      `${type} ${field} ${was ? 'no longer recorded' : 'recorded'}`,
-    )
-  }
-
   /** A playback item of the status bar by the start of its name: Previous sample, Play, Pause,
    *  Replay, Next sample, Time, Speed, Go to end or Go live. */
   playback(name: string): Locator {
@@ -525,28 +393,10 @@ export class TestHost {
       .getByRole('button', { name: new RegExp('^' + name) })
   }
 
-  /** The times the status bar's playback shows: the playhead, then the end. */
-  async times(): Promise<number[]> {
-    const text = await this.playback('Time').innerText()
-    return (text.match(/-?\d+(?:\.\d+)?(?:e[-+]?\d+)?/gi) ?? []).map(Number)
-  }
-
-  /** The button `action` on a notification on show. */
-  notice(action: string): Locator {
-    return this.page
-      .locator('.notifications-toasts .notification-list-item')
-      .getByRole('button', { name: action })
-      .first()
-  }
-
   // ── Commands, from where the user finds them ──
   //
-  // A view decides what its menus carry, the manifest decides what each place offers, and the
-  // command decides what it does: those are Studio's, and the suites check them all here. Drawing
-  // a popup and calling the command with what it carries are VS Code's, which the Native menus
-  // suite checks against the manifest. So a right-click here is the user's own, on the thing
-  // itself, but what it opens is read as VS Code reads it, and its item is run as VS Code runs
-  // it, without waiting on a popup VS Code may drop.
+  // The manifest decides what each title bar and menu offers, and the command runs with what
+  // VS Code passes it there, without waiting on a popup VS Code may drop.
 
   /** The context keys VS Code holds for title bars and the Command Palette: Studio's own, and the
    *  workspace's trust. */
@@ -557,91 +407,6 @@ export class TestHost {
       ),
       isWorkspaceTrusted: vscode.workspace.isTrusted,
     }
-  }
-
-  /** What a right-click on `target`, or on what `aim` points at in it, carries to VS Code's menu:
-   *  its `data-vscode-context` merged up the tree, or what a canvas view found under the pointer.
-   *  A right-click VS Code dropped while busy, or one that missed what it aimed at, is made again:
-   *  the probe keeps the menu of each try from VS Code. */
-  async carried(target: Locator, aim?: Aim): Promise<Record<string, unknown>> {
-    const caught = () =>
-      target.evaluate(
-        (node: Probed) => (node.ownerDocument.defaultView as Probing).gridkitMenus ?? [],
-      )
-    // On what it aimed at: among what lies under the pointer, as overlapping elements all are.
-    const aimed = (context: Record<string, unknown>) =>
-      !aim ||
-      !!(context.gridkitTarget as { items?: Entity[] }).items?.some(
-        (item) => item.id === aim.on.id && item.table === aim.on.table,
-      )
-    await target.evaluate(probe)
-    await again(
-      async () => {
-        const position = aim && (await aim.at())
-        await target.click({ button: 'right', position, timeout: 2000 }).catch(() => {})
-      },
-      async () => (await caught()).some(aimed),
-      async () => {
-        const got = (await caught()).map((context) =>
-          ((context.gridkitTarget as { items?: Entity[] }).items ?? [])
-            .map((item) => item.id)
-            .join(' and '),
-        )
-        return `a menu on ${aim?.on ?? target}${got.length ? `, not on ${got.join(', ')}` : ''}`
-      },
-    )
-    return (await caught()).find(aimed)!
-  }
-
-  /** Let VS Code open the menus right-clicks open again, in every page the probe watches. */
-  async #unprobe(): Promise<void> {
-    for (const frame of this.#frames())
-      await frame
-        .evaluate(() => {
-          ;(globalThis as Probing).gridkitProbing = false
-        })
-        .catch(() => {})
-  }
-
-  /** The titles of what a right-click on `target` offers, as VS Code would show them. */
-  async offered(target: Locator, aim?: Aim): Promise<string[]> {
-    const context = await this.carried(target, aim)
-    return this.menus.offered('webview/context', context).map((each) => each.title)
-  }
-
-  /** Right-click `target`, or what `aim` points at in it, and choose `item` from what it offers. */
-  async menu(target: Locator, item: string, aim?: Aim): Promise<void> {
-    const context = await this.carried(target, aim)
-    const { command } = this.menus.find('webview/context', item, context)
-    assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
-    const origin = context.gridkitOrigin as string
-    this.#run(command, { ...context, webview: 'gridkitStudio.' + origin })
-  }
-
-  /** Choose `item` for `type`'s `field` in Monitored Signals: from the actions its row shows at its
-   *  right with `inline`, else from its right-click menu. */
-  signalMenu(type: string, field: string, item: string, inline = false): void {
-    const row = this.studio.signalRow?.(type, field)
-    assert.ok(row?.contextValue, `Monitored Signals lists ${type} ${field}`)
-    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row.contextValue }
-    const { command } = this.menus.find(
-      'view/item/context',
-      item,
-      keys,
-      (group) => (group?.startsWith('inline') ?? false) === inline,
-    )
-    assert.ok(this.menus.enabled(command, keys), item + ' enabled')
-    this.#run(command, row)
-  }
-
-  /** What the right-click menu of `type`'s `field` in Monitored Signals offers. */
-  signalOffered(type: string, field: string): string[] {
-    const row = this.studio.signalRow?.(type, field)
-    const keys = { ...this.keys(), view: 'gridkitStudio.signals', viewItem: row?.contextValue }
-    return this.menus
-      .offered('view/item/context', keys)
-      .filter(({ group }) => !group?.startsWith('inline'))
-      .map(({ title }) => title)
   }
 
   /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
@@ -681,23 +446,10 @@ export class TestHost {
     else this.#run(command)
   }
 
-  /** Show the elements of `type` in the Case panel, from its title bar, and wait for the panel to
-   *  say it shows them: what the panel shows is what its title bar's commands act on. */
-  async caseType(type: string): Promise<void> {
-    await this.title('case', 'Choose Type')
-    await this.pick(new RegExp('^' + type, 'i'), type)
-    await until(() => this.session.table.type === type, 'the Case panel shows ' + type)
-  }
-
   /** Run the solver file `solver` from its Explorer menu, as `item` names the program: what a user
    *  does to run GridKit. What keeps a run from starting is said in a notification. */
   run(item = 'Run Dynamic Simulation', solver = this.solver): void {
     this.explorer(solver, item)
-  }
-
-  /** Stop the run from the Monitor's title bar. */
-  stop(): Promise<void> {
-    return this.title('monitor', 'Stop Simulation')
   }
 
   /** Choose `item` from the Explorer's menu on the file `uri`. */
@@ -705,13 +457,6 @@ export class TestHost {
     const keys = { ...this.keys(), resourceFilename: basename(uri.path) }
     const { command } = this.menus.find('explorer/context', item, keys)
     this.#run(command, uri, [uri])
-  }
-
-  /** Run the command titled `title` from the Command Palette, once it is enabled. */
-  async palette(title: string): Promise<void> {
-    const { command } = this.menus.palette(title, this.keys())
-    await until(() => this.menus.enabled(command, this.keys()), title + ' enabled')
-    this.#run(command)
   }
 
   /** Run `command` as VS Code does from a menu: without waiting on it, as one that asks something
@@ -763,63 +508,6 @@ export class TestHost {
     )
   }
 
-  /** Answer the quick pick on show with its item whose label starts with `label`, or whose whole
-   *  row, its description included, matches the pattern `label`: `typed` filters the list, the item
-   *  is made the active one, and Enter takes it. */
-  async pick(
-    label: string | RegExp,
-    typed = typeof label === 'string' ? label : '',
-  ): Promise<void> {
-    const { widget, input } = this.#prompt()
-    const asked = await this.#asked()
-    await input.fill(typed)
-    const rows =
-      typeof label === 'string'
-        ? widget.locator('.monaco-list-row', {
-            has: this.page.locator('.label-name', { hasText: starting(label) }),
-          })
-        : widget.locator('.monaco-list-row', { hasText: label })
-    const active = rows.and(widget.locator('.monaco-list-row.focused'))
-    // Typing makes the first match active; one further down is reached with the arrow keys.
-    await until(async () => {
-      if (await active.count()) return true
-      if (await rows.count()) await input.press('ArrowDown')
-      return false
-    }, `${label} offered`)
-    await this.#take(asked, typed)
-  }
-
-  /** Check each of `labels` in the multiple-choice pick on show, or uncheck it, then take the
-   *  choice. Typing finds each, as a long list draws only the rows in view. */
-  async check(labels: readonly string[], checked = true): Promise<void> {
-    const { widget, input } = this.#prompt()
-    const asked = await this.#asked()
-    for (const label of labels) {
-      await input.fill(label)
-      const box = widget
-        .locator('.monaco-list-row', {
-          has: this.page.locator('.label-name', { hasText: starting(label) }),
-        })
-        .getByRole('checkbox')
-        .first()
-      // Done once the box shows it, which is what Enter takes.
-      await again(
-        () => box.click({ timeout: 2000 }).catch(() => {}),
-        async () => (await box.isChecked({ timeout: 1000 }).catch(() => !checked)) === checked,
-        `${label} ${checked ? 'checked' : 'unchecked'}`,
-      )
-    }
-    await this.#take(asked, labels.at(-1) ?? '')
-  }
-
-  /** Answer the input box on show with `text`. */
-  async answer(text: string): Promise<void> {
-    const { input } = this.#prompt()
-    const asked = await this.#asked()
-    await input.fill(text)
-    await this.#take(asked, text)
-  }
-
   /** Answer the file dialog on show, VS Code's own, with `path`. */
   async dialog(path: string): Promise<void> {
     const { input } = this.#prompt()
@@ -833,82 +521,11 @@ export class TestHost {
     await this.#take(asked, path)
   }
 
-  /** Wait for the Settings editor to search for `query`, then close it. */
-  async settings(query: RegExp): Promise<void> {
-    const search = this.page.locator('.settings-editor .search-container .view-lines')
-    await until(
-      async () => query.test(await search.innerText().catch(() => '')),
-      'Settings searching ' + query,
-    )
-    await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
-    await search.waitFor({ state: 'detached' })
-  }
-
-  /** The name of the bottom panel's view on show. */
-  async panelShown(): Promise<string> {
-    return (
-      await this.page
-        .locator('.part.panel .composite-bar .action-item.checked')
-        .first()
-        .innerText()
-        .catch(() => '')
-    ).trim()
-  }
-
-  /**
-   * Choose `item` from the popup VS Code opens when `open` runs, as the user does, until `done`
-   * holds, and say what the popup offered. Only the Native menus suite goes through VS Code's own
-   * popups: VS Code may drop the click that opens one, or close one unasked, so the whole gesture
-   * starts over until it takes, which only an item that does the same each time allows.
-   */
-  async native(
-    open: () => Promise<unknown>,
-    item: string,
-    done: () => Promise<boolean> | boolean,
-  ): Promise<string[]> {
-    await this.#unprobe()
-    // The popup's items, not the menu bar's, which are menu items too.
-    const items = this.page.locator('.context-view').getByRole('menuitem')
-    const entry = items.filter({ hasText: starting(item) }).first()
-    let shown: string[] = []
-    await again(
-      async () => {
-        // No popup left from a try before.
-        if (await items.first().isVisible()) await this.page.keyboard.press('Escape')
-        await open()
-        const opened = await entry.waitFor({ state: 'visible', timeout: 5000 }).then(
-          () => true,
-          () => false,
-        )
-        if (!opened) return
-        // Each item's title, without the keys that run it.
-        shown = await items.evaluateAll((all) =>
-          all.map((each) =>
-            (each.querySelector('.action-label')?.textContent ?? each.textContent ?? '').trim(),
-          ),
-        )
-        // An item hears the click that chooses it only 100 ms after it shows, so the release of
-        // the click that opened its menu chooses nothing: a timer that long, set in the same page
-        // now, ends after the item's own.
-        await this.page.evaluate('new Promise((resolve) => setTimeout(resolve, 100))')
-        await entry.click({ timeout: 2000 }).catch(() => {})
-      },
-      done,
-      item + ' chosen from its popup',
-    )
-    return shown
-  }
-
   /** Save a picture of the whole VS Code window. */
   async capture(name: string): Promise<void> {
     await vscode.commands.executeCommand('notifications.clearAll')
     await pause(300)
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
-  }
-
-  /** The case as the worker last read it. */
-  current() {
-    return this.studio.documents.ensure(this.document)
   }
 
   /** Wait for the views' case to be the document's own revision. */
@@ -924,14 +541,6 @@ export class TestHost {
     const edit = new vscode.WorkspaceEdit()
     edit.replace(this.uri, new vscode.Range(0, 0, this.document.lineCount, 0), text)
     await vscode.workspace.applyEdit(edit)
-  }
-
-  /** Undo natively in the case's source, back to how the suites found it. */
-  async undo(label: string): Promise<void> {
-    await vscode.window.showTextDocument(this.document)
-    await vscode.commands.executeCommand('undo')
-    await until(() => this.document.getText() === this.text, label)
-    await this.settled()
   }
 
   /** Results to play: a second of every bus's voltage, each a little out of step with the last,
@@ -1140,13 +749,6 @@ export async function notifications(): Promise<string[]> {
   if (said.length) await vscode.commands.executeCommand('notifications.clearAll')
   return said
 }
-
-/** Wait for VS Code to show notifications, then clear them. */
-export const notified = (label: string) =>
-  until(async () => {
-    const found = await notifications()
-    return found.length ? found : undefined
-  }, label)
 
 /** Keep what VS Code showed when `test` failed. */
 export async function failed(test: string): Promise<void> {

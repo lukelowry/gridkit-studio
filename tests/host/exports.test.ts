@@ -8,7 +8,7 @@ import { setup, suite, teardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { ExportFile } from '../../src/extension/exports.js'
-import { folder } from './harness.js'
+import { folder } from './studio.js'
 
 suite('Export files', () => {
   let directory: string

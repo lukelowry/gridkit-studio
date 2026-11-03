@@ -2,7 +2,7 @@
   import type { Data, Gpu, Id, View } from 'latkit'
   import { onMount, untrack } from 'svelte'
 
-  import type { ExactSample, FrameRequest, TimeRange } from '../../shared/data.js'
+  import type { ExactSample, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
   import { holdsPlot, plotName } from '../../shared/plots.js'
@@ -17,6 +17,7 @@
   import { nativeTheme } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
   import LatkitCanvas from '../ui/LatkitCanvas.svelte'
+  import { PlotFeed } from './feed.js'
   import { plotCamera, plotRequest, sameWindow, SETTLE_MS } from './plot.js'
 
   let {
@@ -109,53 +110,23 @@
     }
   }
 
-  /** The read under way of the window the plot shows. One runs at a time, each once the view has
-   *  drawn what it holds and of every frame recorded by then, so a run that records faster than
-   *  this page draws is plotted as often as the page can draw it. */
-  let fetching: { key: string; controller: AbortController; again: boolean } | undefined
-  function read(request: FrameRequest) {
-    const key = JSON.stringify(request)
-    if (fetching?.key === key) {
-      fetching.again = true
-      return
-    }
-    fetching?.controller.abort()
-    const current = (fetching = { key, controller: new AbortController(), again: false })
-    const { signal } = current.controller
-    failed = false
-    void (async () => {
-      do {
-        current.again = false
-        // A view gone meanwhile has nothing left to draw.
-        await untrack(() => native)
-          ?.done({ signal })
-          .catch(() => signal.throwIfAborted())
-        const version = results?.frames
-        if (!version) return
-        if ((await frames.receive(request, version, signal)) && !signal.aborted)
-          source = frames.data
-      } while (current.again)
-    })().then(
-      () => {
-        if (fetching === current) fetching = undefined
-      },
-      (error: unknown) => {
-        if (fetching === current) fetching = undefined
-        if (!signal.aborted) {
-          failed = true
-          onerror(error)
-        }
-      },
-    )
-  }
-  function stop() {
-    fetching?.controller.abort()
-    fetching = undefined
-  }
+  const feed = new PlotFeed({
+    read: (request, version, signal) => frames.receive(request, version, signal),
+    drawn: (signal) => untrack(() => native)?.done({ signal }),
+    version: () => results?.frames,
+    received() {
+      failed = false
+      source = frames.data
+    },
+    failed(error) {
+      failed = true
+      onerror(error)
+    },
+  })
   $effect(() => {
     if (enabled && !settling && columns && results?.frames && recorded)
-      read(plotRequest(results, plot, shown, columns))
-    else stop()
+      feed.want(plotRequest(results, plot, shown, columns))
+    else feed.stop()
   })
   $effect(() => {
     if (native) native.camera = framed
@@ -284,7 +255,7 @@
     event.stopPropagation()
   }
   onMount(() => () => {
-    stop()
+    feed.stop()
     frames.clear()
   })
 </script>

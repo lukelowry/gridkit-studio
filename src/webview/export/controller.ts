@@ -136,7 +136,8 @@ export async function renderVideo(
           sampled: (table, field) => sampled.get(JSON.stringify([table, field]))?.data,
           background: background.marks,
         })
-        if (kind === 'network' && background.attribution) scene.subtitle = background.attribution
+        if (kind === 'network' && background.attribution)
+          scene.title = { text: background.attribution, place: 'bottom-right' }
         const view = await View.create(null, scene, {
           gpu,
           sources: sources(),

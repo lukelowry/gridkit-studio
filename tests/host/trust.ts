@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 
 import * as vscode from 'vscode'
 
-import { extension, folder } from './harness.js'
+import { extension, folder } from './studio.js'
 
 export async function run(): Promise<void> {
   assert.equal(vscode.workspace.isTrusted, false, 'The fixture must be an untrusted workspace')

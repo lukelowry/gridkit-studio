@@ -7,6 +7,7 @@ import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import type { Channel, FieldRef } from '../../src/shared/bindings.js'
+import { menuContext } from '../../src/shared/contexts.js'
 import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 const ROOT = process.env.GRIDKIT_TEST_ROOT!
@@ -174,11 +175,16 @@ export async function run() {
       )
       return { x, y }
     }
-    // The generator's own menu frames it, as the user does: the command alone frames the Network.
-    // Then the wheel closes in on it, its exciter and stabilizer either side.
-    await bench.menu(diagram.locator('canvas'), 'Zoom to Neighborhood', {
-      on: generator,
-      at: drawn,
+    // The generator's own menu frames it: the command alone frames the Network. Then the wheel
+    // closes in on it, its exciter and stabilizer either side.
+    const { summary, bindings } = bench.studio.state(bench.key)
+    await vscode.commands.executeCommand('gridkitStudio.zoomToNeighborhood', {
+      ...menuContext(
+        summary!,
+        { uri: bench.key, version: summary!.version, origin: 'diagram', element: generator },
+        bindings,
+      ),
+      webview: 'gridkitStudio.diagram',
     })
     const box = (await diagram.locator('canvas').boundingBox())!
     const { x: gx, y: gy } = await drawn()

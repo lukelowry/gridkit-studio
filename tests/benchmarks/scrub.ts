@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import { pause, testHost, until, visible } from '../vscode/harness.js'
+import { pause, testHost, until, visible } from '../e2e/harness.js'
 
 /** A playhead drag at the display's pace. */
 const STEP_MS = 16

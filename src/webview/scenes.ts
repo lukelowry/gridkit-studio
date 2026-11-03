@@ -303,9 +303,9 @@ export function diagramScene(
 }
 
 /** A plot of `plot`'s field over the times its camera shows, each trace in its own color by its
- *  place among them (`series`). Its axes carry ticks alone: every plot shares the time axis, which
- *  is seconds, and the Monitor names each plot in its lane. A picture has no lanes, so it passes
- *  `name` for the plot to name itself on its value axis. */
+ *  place among them (`series`). Its axes carry ticks alone: every plot shares the time axis, whose
+ *  last tick says it is seconds, and the Monitor names each plot in its lane. A picture has no
+ *  lanes, so it passes `name` for the plot to name itself on its value axis. */
 export function plotScene(
   source: Source,
   plot: Plot,
@@ -314,7 +314,7 @@ export function plotScene(
   name?: string,
 ): Scene {
   return {
-    space: { plot: { y: { label: name ?? null } } },
+    space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
     theme,
     ease: 0,
     controls: controls(settings, 'monitor'),

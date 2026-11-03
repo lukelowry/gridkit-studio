@@ -30,6 +30,10 @@ export function bindInteractions(view: View, actions: InteractionActions): () =>
     view.on('menu', ({ hits, trigger }) => actions.menu(trigger.point, hits.map(elementOf))),
     view.on('camera', actions.camera),
     view.on('error', actions.error),
+    // A scene of Studio's that draws an option as unset, or a mark not at all, is a defect.
+    view.on('failures', ([failure]) => {
+      if (failure) actions.error(failure)
+    }),
   ]
   return () => {
     for (const unsubscribe of stop) unsubscribe()

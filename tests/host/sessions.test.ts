@@ -14,7 +14,7 @@ import type { Sessions } from '../../src/extension/sessions.js'
 import { savedKey } from '../../src/shared/ids.js'
 import type { Results } from '../../src/shared/messages.js'
 import { plotsFor } from '../../src/shared/plots.js'
-import { extension, folder, until } from './harness.js'
+import { extension, folder, until } from './studio.js'
 
 suite('Sessions', () => {
   let studio: Sessions

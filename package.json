@@ -51,22 +51,23 @@
     "settings:check": "node scripts/settings.mjs --check",
     "test": "vitest run --project unit",
     "coverage": "vitest run --project unit --coverage --testTimeout=60000",
-    "test:simulation": "vitest run --project simulation",
-    "test:playback": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/playback.ts",
-    "test:windowed": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/windowed-playback.ts",
-    "test:scrub": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/scrub.ts",
-    "test:vscode": "pnpm build && node tests/vscode/launch.mjs",
-    "test:package": "node tests/vscode/package.mjs",
-    "test:trust": "pnpm build && node tests/vscode/launch.mjs --untrusted tests/vscode/trust.ts",
-    "bench": "pnpm build && node tests/vscode/launch.mjs tests/benchmarks/views.ts",
+    "test:contract": "vitest run --project contract",
+    "test:host": "pnpm build && node tests/launch.mjs",
+    "test:trust": "pnpm build && node tests/launch.mjs --untrusted tests/host/trust.ts",
+    "test:package": "node tests/package.mjs",
+    "test:e2e": "pnpm build && node tests/launch.mjs tests/e2e/index.ts",
+    "bench": "pnpm build && node tests/launch.mjs tests/benchmarks/views.ts",
+    "bench:playback": "pnpm build && node tests/launch.mjs tests/benchmarks/playback.ts",
+    "bench:windowed": "pnpm build && node tests/launch.mjs tests/benchmarks/windowed-playback.ts",
+    "bench:scrub": "pnpm build && node tests/launch.mjs tests/benchmarks/scrub.ts",
     "bench:compare": "node tests/benchmarks/compare.mjs output/bench/base.json output/bench/head.json",
-    "screenshots": "pnpm build && node tests/vscode/launch.mjs tests/vscode/screenshots.ts",
+    "screenshots": "pnpm build && node tests/launch.mjs tests/e2e/screenshots.ts",
     "package": "pnpm exec vsce package --no-dependencies --out dist/",
     "vscode:prepublish": "node esbuild.mjs"
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "latkit": "0.4.2"
+    "latkit": "0.5.0"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",

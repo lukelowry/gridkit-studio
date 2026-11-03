@@ -42,10 +42,11 @@ it('builds native scenes and projects only mark fields with separate sampled sou
     { trace: 'Vm', interpolation: 'linear', width: settings.get('monitor.lineWidth') },
   ])
   // The Monitor's lanes name their plots, whose axes carry ticks alone; a picture's plot, which
-  // has no lane, names itself on its value axis. Neither titles the time axis.
-  expect(monitored.space).toEqual({ plot: { y: { label: null } } })
+  // has no lane, names itself on its value axis. Neither titles the time axis: its last tick says
+  // it is seconds.
+  expect(monitored.space).toEqual({ plot: { x: { unit: ' s' }, y: { label: null } } })
   expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
-    plot: { y: { label: 'Bus · Vm' } },
+    plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm' } },
   })
 })
 it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {

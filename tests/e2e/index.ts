@@ -1,4 +1,4 @@
-/** The Mocha entry for the VS Code suites, run inside the VS Code that holds the extension. */
+/** The Mocha entry for the end-to-end journeys, run inside the VS Code that holds the extension. */
 
 import Mocha from 'mocha'
 
@@ -9,7 +9,7 @@ export async function run(): Promise<void> {
     ui: 'tdd',
     color: true,
     timeout: 60_000,
-    // One suite or test by name, such as GRIDKIT_TEST_GREP=Monitor; never `.only`, which would let
+    // One journey by name, such as GRIDKIT_TEST_GREP=Runs; never `.only`, which would let
     // a run pass on the tests it left out.
     grep: process.env.GRIDKIT_TEST_GREP,
     forbidOnly: true,
@@ -31,7 +31,7 @@ export async function run(): Promise<void> {
   })
   // Suites register as their modules load, so Mocha's globals must exist first.
   mocha.suite.emit('pre-require', globalThis, 'VS Code', mocha)
-  await import('./suites.js')
+  await import('./journeys.test.js')
   let pending = 0
   let passed = 0
   const failures = await new Promise<number>((resolve) =>
@@ -42,6 +42,6 @@ export async function run(): Promise<void> {
   )
   // A required run allows no skips, so the GridKit suites cannot pass by skipping.
   if (process.env.GRIDKIT_TEST_REQUIRED === '1' && (pending || !passed))
-    throw new Error(`Required VS Code suite: ${pending} skipped, ${passed} passed.`)
+    throw new Error(`Required journeys: ${pending} skipped, ${passed} passed.`)
   if (failures) throw new Error(failures + (failures === 1 ? ' test' : ' tests') + ' failed.')
 }

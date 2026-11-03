@@ -211,6 +211,30 @@ export function networkScene(
   const sizes = networkSizes(data, drawing, settings)
   const height = drawing.geographic ? meters(settings.get('network.heightMeters')) : 1
   const map = settings.get('network.colormap')
+  const edges = drawing.edges.map((edge): Mark => ({
+    edges: [data.name, edge.table],
+    name: edge.table,
+    ...(edge.ends ? { ends: edge.ends } : {}),
+    ...(edge.bends ? { bends: edge.bends } : {}),
+    width: sizes.width,
+    ...channels(edge.table, bindings, map, 'edge', sizes, height),
+  }))
+  const vertices = drawing.vertices.map((vertex): Mark => ({
+    vertices: [data.name, vertex.table],
+    name: vertex.table,
+    position: [field(vertex.position[0]), field(vertex.position[1])],
+    label: settings.get('network.labels') && vertex.label ? field(vertex.label) : null,
+    radius: sizes.radius,
+    ...channels(vertex.table, bindings, map, 'vertex', sizes, height),
+  }))
+  // Seen flat, the drawing order alone decides what shows where marks overlap, so buses draw over
+  // the branches that meet them. Raised, where depth decides, latkit writes a stroke's depth only
+  // where the stroke is fully opaque, which a thin branch hardly ever is, so a later bus would still
+  // cover a branch in front of it: there buses draw first, their depth hiding what lies behind
+  // them, and the branches after them show wherever they are nearer. The map lies under both.
+  const raised =
+    settings.get('network.tilt') > 0 ||
+    (drawing.geographic && settings.get('network.projection') === 'globe')
   return {
     space: drawing.geographic
       ? {
@@ -224,25 +248,7 @@ export function networkScene(
     theme,
     ease: settings.get('network.ease'),
     controls: { ...controls(settings, 'network'), cycle: true },
-    marks: [
-      ...background,
-      ...drawing.edges.map((edge): Mark => ({
-        edges: [data.name, edge.table],
-        name: edge.table,
-        ...(edge.ends ? { ends: edge.ends } : {}),
-        ...(edge.bends ? { bends: edge.bends } : {}),
-        width: sizes.width,
-        ...channels(edge.table, bindings, map, 'edge', sizes, height),
-      })),
-      ...drawing.vertices.map((vertex): Mark => ({
-        vertices: [data.name, vertex.table],
-        name: vertex.table,
-        position: [field(vertex.position[0]), field(vertex.position[1])],
-        label: settings.get('network.labels') && vertex.label ? field(vertex.label) : null,
-        radius: sizes.radius,
-        ...channels(vertex.table, bindings, map, 'vertex', sizes, height),
-      })),
-    ],
+    marks: [...background, ...(raised ? [...vertices, ...edges] : [...edges, ...vertices])],
   }
 }
 

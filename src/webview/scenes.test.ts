@@ -1,6 +1,6 @@
 ﻿import { createRequire } from 'node:module'
 
-import { Data, Expr } from 'latkit'
+import { Data, Expr, type Mark } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
@@ -106,6 +106,25 @@ it('frames whole case tables and raises geographic heights by meters', () => {
   const values = data.query({ of: 'Bus', select: { elevation } }).fields.elevation as Float64Array
   expect(values[0]).toBeCloseTo(0)
   expect(values[1]).toBeCloseTo(1, 6)
+})
+
+it('draws buses over branches seen flat, and branches after buses where depth decides', () => {
+  using data = new Data('case').replace('Bus', [1], { x: [0], y: [0] })
+  const drawing = {
+    geographic: true,
+    vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
+    edges: [{ table: 'Branch' }],
+    blocks: [],
+    nets: [],
+  }
+  const coast: Mark = { lines: ['map:coastline', 'lines'], name: 'map:coastline' }
+  const kinds = (settings: ReturnType<typeof reader>) =>
+    networkScene(data, drawing, settings, {}, [], [coast]).marks!.map((mark) =>
+      'lines' in mark ? 'lines' : 'vertices' in mark ? 'vertices' : 'edges',
+    )
+  expect(kinds(reader())).toEqual(['lines', 'edges', 'vertices'])
+  expect(kinds(reader({ 'network.tilt': 45 }))).toEqual(['lines', 'vertices', 'edges'])
+  expect(kinds(reader({ 'network.projection': 'globe' }))).toEqual(['lines', 'vertices', 'edges'])
 })
 
 it('scales dense case marks and their bindings together while preserving missing rows', () => {

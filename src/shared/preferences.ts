@@ -3,8 +3,8 @@
 
 import { type ColormapName, colormaps } from 'latkit'
 
-/** One setting: the default a reset restores and the values it takes. Null leaves a number or
- *  color to the view. */
+/** One setting: the default a reset restores and the values it takes. Null leaves a color to the
+ *  theme. */
 type Setting = {
   readonly id: string
   readonly label: string
@@ -19,7 +19,7 @@ type Setting = {
     }
   | {
       readonly kind: 'number'
-      readonly default: number | null
+      readonly default: number
       readonly min: number
       readonly max: number
       /** A step of 1 takes integers only. */
@@ -36,11 +36,10 @@ type Options<V> = readonly (readonly [value: V, label: string])[]
 const bool = <const I extends string>(id: I, label: string, value: boolean, description?: string) =>
   ({ kind: 'boolean', id, label, description, default: value }) as const
 
-/** Only a null default makes null a valid value. */
-const num = <const I extends string, D extends number | null>(
+const num = <const I extends string>(
   id: I,
   label: string,
-  value: D,
+  value: number,
   [min, max, step]: readonly [min: number, max: number, step: number],
   description?: string,
 ) => ({ kind: 'number', id, label, description, default: value, min, max, step }) as const
@@ -207,10 +206,8 @@ export const SETTINGS = [
 ] as const
 
 type Definition = (typeof SETTINGS)[number]['groups'][number]['settings'][number]
-/** A setting's value takes its default's type, widened for a number, whose default is a literal. */
-type ValueOf<D extends Definition> = D extends { kind: 'number' }
-  ? number | Extract<D['default'], null>
-  : D['default']
+/** A setting's value takes its default's type. */
+type ValueOf<D extends Definition> = D['default']
 
 export type SettingsValues = { [D in Definition as D['id']]: ValueOf<D> }
 type SettingKey = keyof SettingsValues
@@ -245,13 +242,11 @@ export function validateSettings(input: unknown): SettingsDocument {
         break
       case 'number':
         valid =
-          value === null
-            ? setting.default === null
-            : typeof value === 'number' &&
-              Number.isFinite(value) &&
-              value >= setting.min &&
-              value <= setting.max &&
-              (setting.step !== 1 || Number.isInteger(value))
+          typeof value === 'number' &&
+          Number.isFinite(value) &&
+          value >= setting.min &&
+          value <= setting.max &&
+          (setting.step !== 1 || Number.isInteger(value))
         break
       case 'color':
         valid =

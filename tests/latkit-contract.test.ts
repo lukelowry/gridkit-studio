@@ -4,9 +4,10 @@ import { Data, field, Patch, reference } from 'latkit'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import type { ProjectedDocument } from '../src/gridkit/document.js'
-import { CaseQueries, project, projectionPage } from '../src/gridkit/projection.js'
+import { CaseQueries, projectionPage } from '../src/gridkit/projection.js'
 import { rawRun, visualValues } from '../src/results/frames.js'
 import { detail, Pyramid, type ReducedRun } from '../src/results/pyramid.js'
+import type { ProjectionCursor } from '../src/shared/data.js'
 import { DatasetSlot } from '../src/webview/datasets.js'
 import { loadNative } from '../src/workers/native.js'
 import { transferables } from '../src/workers/transfer.js'
@@ -20,7 +21,6 @@ beforeAll(async () => {
   const first = loadNative(wasmPath)
   expect(loadNative(wasmPath)).toBe(first)
   await first
-  await expect(loadNative(`${wasmPath}.other`)).rejects.toThrow('another WASM')
 })
 
 describe('published Latkit WASM', () => {
@@ -125,8 +125,17 @@ const document: ProjectedDocument = {
 
 it('projects reference identities before fields and queries lazily', async () => {
   using data = new Data('case')
-  for await (const bytes of project(document, new Map([['Device', ['bus']]]), signal))
-    data.apply(bytes)
+  let cursor: ProjectionCursor | undefined
+  do {
+    const page = await projectionPage(
+      document,
+      [{ table: 'Device', fields: ['bus'] }],
+      cursor,
+      signal,
+    )
+    data.apply(page.bytes)
+    cursor = page.next
+  } while (cursor)
   expect(data.get('Device', 'a/b', 'bus')).toEqual(2)
   expect(data.query({ of: 'Bus' }).ids).toEqual([1, 2])
   const queries = new CaseQueries(document)

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { nextMatch, Typeahead } from './typeahead.js'
+import { nextMatch, PAUSE_MS, Typeahead } from './typeahead.js'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -11,9 +11,9 @@ describe('Typeahead', () => {
     vi.useFakeTimers()
     const typeahead = new Typeahead()
     expect(typeahead.type('B')).toBe('b')
-    vi.advanceTimersByTime(400)
+    vi.advanceTimersByTime(PAUSE_MS / 2)
     expect(typeahead.type('u')).toBe('bu')
-    vi.advanceTimersByTime(500)
+    vi.advanceTimersByTime(PAUSE_MS)
     expect(typeahead.type('s')).toBe('s')
     typeahead.reset()
     expect(typeahead.type('x')).toBe('x')

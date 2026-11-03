@@ -22,7 +22,12 @@ import {
   type VisualizationRun,
 } from '../shared/data.js'
 import { message, problem } from '../shared/errors.js'
-import type { ResultsLayout, ResultsProgress, Revision } from '../shared/messages.js'
+import {
+  type ResultsLayout,
+  type ResultsProgress,
+  type Revision,
+  revisionOf,
+} from '../shared/messages.js'
 import { longReading } from './csv.js'
 import {
   type Decoded,
@@ -104,7 +109,7 @@ export class ResultsFile {
     { revision, path, solver, span }: Reading,
   ) {
     this.#layout = {
-      revision: { ...revision },
+      revision: revisionOf(revision),
       fingerprint: kase.version,
       name: basename(path),
       path,
@@ -205,7 +210,7 @@ export class ResultsFile {
           y.bytesRead !== length ||
           !a.subarray(0, length).equals(b.subarray(0, length))
         )
-          throw new Error('The results changed before the committed watermark; reopen the file.')
+          throw lost(this.#layout.name, new Error('The file changed before what was kept of it.'))
         at += length
       }
     } finally {

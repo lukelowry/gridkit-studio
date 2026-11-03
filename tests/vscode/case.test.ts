@@ -23,7 +23,6 @@ suite('Case', () => {
   })
 
   test('sits in the bottom panel, each row known by its own id under one header row', async () => {
-    assert.equal(await view.locator('.toolbar').count(), 0)
     const panel = await bench.page.locator('.part.panel').boundingBox()
     const cell = await view.locator('tbody .cell').first().boundingBox()
     assert.ok(panel && cell && cell.y >= panel.y, 'Case must be in the native bottom panel')
@@ -32,7 +31,6 @@ suite('Case', () => {
       (await view.locator('tbody th[scope="row"]').first().innerText()).trim(),
       String(bench.source.buses[0]!.number),
     )
-    assert.equal(await view.locator('thead th', { hasText: /^Element$/ }).count(), 0)
     assert.equal(await view.locator('thead tr').count(), 1)
     await visible(view, `thead th[data-field="init.Vr"]`)
     await bench.capture('case-vscode')

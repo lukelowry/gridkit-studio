@@ -47,7 +47,6 @@ export function registerNavigation(studio: Sessions) {
           return completions.map((field) => {
             const item = new vscode.CompletionItem(field.name, vscode.CompletionItemKind.Field)
             item.detail = field.detail
-            item.documentation = field.description
             return item
           })
         },

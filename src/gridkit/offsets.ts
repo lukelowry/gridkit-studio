@@ -3,6 +3,10 @@
 
 import { isAscii } from 'node:buffer'
 
+/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
+export const leads = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
+export const trails = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
+
 const decoder = new TextDecoder()
 /** How far apart checkpoints are, at least, in bytes. */
 const STEP = 4096

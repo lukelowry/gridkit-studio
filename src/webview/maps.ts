@@ -46,10 +46,7 @@ export async function borderMaps(
     if (failure) throw failure.reason
     signal.throwIfAborted()
   }
-  const data = results.map((result) => {
-    if (result.status !== 'fulfilled') throw new Error('Map loading failed.')
-    return result.value
-  })
+  const data = results.map((result) => (result as PromiseFulfilledResult<Data>).value)
   return {
     data,
     marks: data.map((source, index): Mark => ({

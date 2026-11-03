@@ -3,16 +3,16 @@
 
 import { workerData } from 'node:worker_threads'
 
-import { Case } from '../gridkit/case.js'
 import { deltaProjectionPage } from '../gridkit/deltas.js'
 import type { ProjectedDocument } from '../gridkit/document.js'
-import { diagnose } from '../gridkit/edits.js'
 import {
   applyChanges,
+  Case,
   catalog as bundled,
   catalogOf,
   completionsAt,
   delivered,
+  diagnose,
   outline,
   sourceContext,
   sourceRange,
@@ -93,7 +93,6 @@ serve<CaseApi>(
       // The last case read of this document answers for its own revision until this one reads.
       const read = known && known.attachmentId === attachmentId ? known.read : undefined
       documents.set(uri, { attachmentId, source: { version, text }, parsing, read })
-      const started = performance.now()
       const name = nameOf(uri)
       // The same text again, as when the extension sends it whole once more, is the case read. A
       // document opened, whose whole text may have been read before, is found by its hash, unless
@@ -125,11 +124,7 @@ serve<CaseApi>(
       signal.throwIfAborted()
       const document = documents.get(uri)
       if (document?.parsing !== parsing) throw superseded()
-      const summary = await summarize(
-        kase,
-        { uri, version, attachmentId },
-        { parseMs: performance.now() - started, signal },
-      )
+      const summary = await summarize(kase, { uri, version, attachmentId }, signal)
       // A parse begun meanwhile replaced the document this one began with.
       if (documents.get(uri) !== document) throw superseded()
       document.read?.queries?.destroy()
@@ -140,7 +135,6 @@ serve<CaseApi>(
       const read = latest(revision)
       const issues = await diagnose(read.kase, signal)
       if (latest(revision) !== read) throw superseded()
-      read.summary = { ...read.summary, issues, validation: 'complete' }
       return issues
     },
     anchors: async (input, signal) => anchors(latest(input).kase, input, signal),
@@ -159,7 +153,6 @@ serve<CaseApi>(
     locate: async (input) => sourceRange(latest(input).kase, input, input.field),
     // As VS Code takes them in least time, from the text they are of.
     transact: async (input) => {
-      if (documents.get(input.uri)?.source.version !== input.version) throw superseded()
       const { kase, text } = latest(input)
       return delivered(text, transaction(kase, input.mutations))
     },

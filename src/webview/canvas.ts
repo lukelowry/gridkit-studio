@@ -54,7 +54,7 @@ function boot() {
       ['Auto-rotate', 'orbit'],
     ] as const) {
       const button = document.createElement('button')
-      button.className = 'c-icon-button'
+      button.className = 'c-icon-btn'
       button.setAttribute('aria-label', label)
       button.title = label
       button.innerHTML = icon(glyph as IconName)
@@ -176,7 +176,7 @@ function boot() {
   /** What the view draws now: the bindings whose fields it holds, and the map. */
   function scene(data: Data, summary: Summary): Scene {
     const settings = reader(state.settings)
-    const requested = sceneFields(summary.definition, kind, state.bindings)
+    const requested = sceneFields(summary.definition, [kind], state.bindings)
     if (
       requested.every(({ table, fields }) =>
         fields.every((field) => heldFields.get(table)?.has(field)),
@@ -354,7 +354,12 @@ function boot() {
       kind === 'network' && summary?.definition.drawing.geographic
         ? settings.get('network.map.source')
         : 'none'
-    const key = JSON.stringify([mode, settings.get('network.map.tilesUrl'), theme().palette])
+    const key = JSON.stringify([
+      mode,
+      settings.get('network.map.tilesUrl'),
+      settings.get('network.map.attribution'),
+      theme().palette,
+    ])
     if (mapKey === key) return
     mapKey = key
     mapController?.abort()
@@ -390,12 +395,11 @@ function boot() {
     creating = true
     const generation = epoch
     try {
-      const pending = (opening ??= openGpu())
-      const device = await pending
-      if (opening !== pending) {
-        device.destroy()
-        return
-      }
+      const device = await (opening ??= openGpu().catch((error: unknown) => {
+        // A device that did not open is asked for again by the next render, as Reload View's.
+        opening = undefined
+        throw error
+      }))
       if (closed || generation !== epoch) {
         if (closed) device.destroy()
         return
@@ -474,7 +478,7 @@ function boot() {
       }
       const next = state.summary
       if (next && !state.stale) {
-        const fields = sceneFields(next.definition, kind, state.bindings)
+        const fields = sceneFields(next.definition, [kind], state.bindings)
         void cases
           .receive({ revision: revisionOf(next), fields }, fields)
           .then((changed) => {
@@ -520,8 +524,14 @@ function boot() {
             ],
           })
         }
-      } else if (message.command === 'exportImage' && host && summary && state.uri)
-        void saveImage(viewShot(host.view), state.uri, summary.name, kind, page.signal).catch(fail)
+      } else if (message.command === 'exportImage' && host && summary && state.uri) {
+        const [shown, uri, name] = [host, state.uri, summary.name]
+        // The picture shows the view as framed, never its background before its first fit.
+        void shown
+          .framed()
+          .then(() => saveImage(viewShot(shown.view), uri, name, kind, page.signal))
+          .catch(fail)
+      }
     }
   })
   const unwatch = watchTheme(() => {
@@ -550,7 +560,7 @@ function boot() {
     summary: summary?.version,
     projection: cases.slot.current?.key,
     view: !!host,
-    pending: !!opening,
+    gpu: !!gpu,
   })
   hooks.gridkitStats = () => {
     if (!host || !gpu) return undefined

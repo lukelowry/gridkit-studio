@@ -1,4 +1,4 @@
-import type { Entity } from '../shared/document.js'
+import { type Entity, entityLabel } from '../shared/document.js'
 import type { Case, Table } from './case.js'
 import { isValid } from './columns.js'
 import { STEP_RECORDS, Turns } from './turns.js'
@@ -89,7 +89,7 @@ export async function anchors(
   signal: AbortSignal,
 ): Promise<Entity[]> {
   const located = kase.locate(input.entity)
-  if (!located) throw new Error('Unknown element: ' + input.entity)
+  if (!located) throw new Error('Unknown element: ' + entityLabel(input.entity))
   if (input.drawn.includes(input.entity.table)) return []
   const adjacency = await new Turns(signal).wait(adjacencyOf(kase))
   const { tables, starts } = adjacency

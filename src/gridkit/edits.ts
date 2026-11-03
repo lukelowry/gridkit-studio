@@ -10,7 +10,7 @@ import type { Issue, SourceEdit, SourceRange } from '../shared/messages.js'
 import type { Case, Table } from './case.js'
 import { type Column, isInt32, isUint32, isValid, valueAt } from './columns.js'
 import { CASE, type FieldPlan } from './definition.js'
-import { charsAt, charsWalk } from './offsets.js'
+import { charsAt, charsWalk, leads, trails } from './offsets.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
 const decoder = new TextDecoder()
@@ -63,10 +63,6 @@ export function withValue(text: string, path: JSONPath, value: unknown): string 
     })),
   )
 }
-
-/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
-const leads = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
-const trails = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
 
 /** The one edit that turns `before`, at `offset`, into `after`: the span where they differ, widened
  *  to whole characters, so neither end splits a surrogate pair. */
@@ -253,24 +249,20 @@ function edited(place: Place, plan: FieldPlan, value: unknown): SourceEdit {
   return minimal(text, next, offset)
 }
 
-/** The edit setting `field` of row `id` to `input`; against `recordText`, at offset 0, if given. */
+/** The edit setting `field` of row `id` to `input`, against `recordText`, its record as a transaction
+ *  has made it so far, at offset 0. */
 export function editField(
   kase: Case,
   id: Entity,
   field: string,
   input: Value,
-  recordText?: string,
-  resolve?: (entity: Entity) => Id | undefined,
-): SourceEdit[] {
+  recordText: string,
+  resolve: (entity: Entity) => Id | undefined,
+): SourceEdit {
   const located = kase.locate(id)
   if (!located) throw problem('invalid-input', 'This element no longer exists.')
-  if (located.table.shape.array === null) return editCase(kase, new Map([[field, input]]), resolve)
   const { plan, value } = valueFor(kase, located.table.shape.plan.get(field), input, resolve)
-  const place =
-    recordText === undefined
-      ? placeOf(kase, located.table, located.row, plan)!
-      : { text: recordText, offset: 0, path: nativePath(plan) }
-  return [edited(place, plan, value)]
+  return edited({ text: recordText, offset: 0, path: nativePath(plan) }, plan, value)
 }
 
 /** The edits setting the case's own fields to `values`: each of its objects they are in, header or
@@ -310,7 +302,7 @@ export function editCase(
 
 /** The edit that writes `made`, members of the case's own object, first among its members, as
  *  indented as the one they go before; in a case with none, between its braces. */
-function membersMade(kase: Case, made: readonly string[]): SourceEdit {
+export function membersMade(kase: Case, made: readonly string[]): SourceEdit {
   const [first] = kase.members
   if (!first) return { offset: textOffset(kase, kase.close), length: 0, text: made.join(', ') }
   let indent = first.start
@@ -500,8 +492,8 @@ function unallowed(column: Column, pattern: RegExp): number[] {
   return rows
 }
 
-/** Shared validation for existing fields and newly created records. */
-export function fieldValue(
+/** `input` as field `plan` writes it, checked, with a reference resolved by `resolve`. */
+function fieldValue(
   plan: FieldPlan,
   input: Value,
   resolve: (entity: Entity) => Id | undefined,
@@ -538,7 +530,7 @@ export function fieldValue(
     return input
   }
   const valid =
-    definition.kind === 'text' || definition.kind === 'json'
+    definition.kind === 'text'
       ? typeof input === 'string'
       : definition.kind === 'boolean'
         ? typeof input === 'boolean'

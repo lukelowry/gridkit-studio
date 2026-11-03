@@ -1,4 +1,4 @@
-﻿import { appendFile, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, truncate, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import { Data } from 'latkit'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
-import type { FrameRequest, TimeRange } from '../shared/data.js'
+import { type FrameRequest, PAGE_BYTES, type TimeRange } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
@@ -87,7 +87,7 @@ async function capture(file: ResultsFile, input = request(file)) {
       const page = await file.frames({ ...input, next }, signal)
       data ??= new Data(page.source)
       data.apply(page.bytes)
-      expect(page.bytes.byteLength).toBeLessThanOrEqual(4 << 20)
+      expect(page.bytes.byteLength).toBeLessThanOrEqual(PAGE_BYTES)
       bytes += page.bytes.byteLength
       next = page.next
     } while (next)
@@ -142,10 +142,7 @@ describe('indexed scientific results', () => {
       { table: 'Bus', field: 'Va', ids: [1] },
     ])
     const read = vi.spyOn(file.store, 'readRaw')
-    const { data } = await capture(file, request(file, { ids: [3] }))
-    using held = data
-    expect(held.name).toBeTruthy()
-    expect(held.name).toBe(data.name)
+    using data = (await capture(file, request(file, { ids: [3] }))).data
     expect(data.query({ of: 'Bus' }).ids).toEqual([3])
     expect(data.get('Bus', 3, 'Vm', { at: 0 })).toBe(Math.fround(1.3))
     expect(read.mock.calls.every(([, , rows]) => JSON.stringify(rows) === '[1]')).toBe(true)

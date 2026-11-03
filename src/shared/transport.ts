@@ -47,8 +47,6 @@ export function advance(state: ClockState, elapsed: number): Played {
 interface SpanOptions {
   /** Whether frames are arriving, so the playhead follows the head. */
   readonly live?: boolean
-  /** How near the head a seek counts as at the head: about one frame. */
-  readonly headTolerance?: number
 }
 
 /** How long past the computed end the end timer fires, so it never lands short of the edge. */
@@ -65,7 +63,6 @@ export class Transport {
   #live = false
   /** Where the result's head was last seen. */
   #head = 0
-  #tolerance = Number.EPSILON
   #alarm: ReturnType<typeof setTimeout> | null = null
 
   /** Reports every change to `changed`; `now` reads the wall clock in milliseconds. */
@@ -102,12 +99,8 @@ export class Transport {
 
   /** Starts `span` in a new epoch: paused at its start, at the speed it played at before, following
    *  when live. */
-  setSpan(
-    span: readonly [number, number],
-    { live = false, headTolerance = Number.EPSILON }: SpanOptions = {},
-  ): void {
+  setSpan(span: readonly [number, number], { live = false }: SpanOptions = {}): void {
     this.#live = live
-    this.#tolerance = headTolerance
     this.#head = span[0]
     this.#commit({
       epoch: this.#state.epoch + 1,
@@ -145,7 +138,7 @@ export class Transport {
   seek(t: number): void {
     if (this.#state.status === 'idle') return
     const target = clamp(t, this.#state.span)
-    const follow = this.#live && target >= this.#head - this.#tolerance
+    const follow = this.#live && target >= this.#head - Number.EPSILON
     this.#commit({
       ...this.#state,
       t: follow ? clamp(this.#head, this.#state.span) : target,

@@ -37,7 +37,8 @@ suite('Case source', () => {
       await until(() => vscode.languages.getDiagnostics(bench.uri).length > 0, 'Problems lists why')
       // The rows stay, and nothing in the panel speaks of the problem.
       await visible(table, 'tbody .cell')
-      assert.equal(await table.locator('.c-note').count(), 0)
+      const [said] = vscode.languages.getDiagnostics(bench.uri)
+      assert.ok(!(await table.locator('body').innerText()).includes(said!.message))
       // A command that reads the case says nothing more of why it cannot: Problems says it
       // already, and a notification the test did not expect fails it.
       await vscode.commands.executeCommand('gridkitStudio.copyId', bench.uri)
@@ -82,7 +83,9 @@ suite('Case source', () => {
     await bench.document.save()
     const diff = await git('diff', '--', 'IEEE39.case.json')
     assert.match(diff.stdout, /\+.*kv/)
-    assert.ok(diff.stdout.length < 3000, 'A field edit should not reserialize the case')
+    // One line out, one line in: the case is never written again whole.
+    const lines = await git('diff', '--numstat', '--', 'IEEE39.case.json')
+    assert.match(lines.stdout, /^1\t1\t/, 'A field edit should not reserialize the case')
     bench.report.gitDiffBytes = diff.stdout.length
     await bench.undo('the edit undone')
     await bench.document.save()

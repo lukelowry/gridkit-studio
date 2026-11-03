@@ -75,7 +75,8 @@ it('keeps sparse exact results, bounded native windows, recovery watermarks, and
         payload += page.bytes.byteLength
         next = page.next
       } while (next)
-      expect(payload).toBeLessThan(4096)
+      // A level of buckets across the columns, well short of the 1,024 frames' time and value.
+      expect(payload).toBeLessThan((1024 * 12) / 2)
       expect(
         data!.envelope({ table: 'Bus', field: 'Vm', range: [0, 511 ** 2], spans: 1 }).greatest[0],
       ).toBe(10000)
@@ -191,7 +192,8 @@ it('refines isolated gaps without expanding whole disk blocks into raw samples',
       payload += page.bytes.byteLength
       next = page.next
     } while (next)
-    expect(payload).toBeLessThan(32 << 10)
+    // Buckets across 512 columns and the few frames around the gap: a sliver of every frame.
+    expect(payload).toBeLessThan((count * 12) / 100)
     expect(data!.get('Bus', 7, 'Vm', { at: missing })).toBeNull()
     expect(
       data!.envelope({ table: 'Bus', field: 'Vm', range: [0, count - 1], spans: 1 }).greatest[0],

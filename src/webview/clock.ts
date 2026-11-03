@@ -7,8 +7,6 @@ import { bridge } from './bridge.js'
 export interface Clock {
   /** The clock as of its last change. */
   readonly state: ClockState
-  /** Whether the shown run is receiving frames. */
-  readonly live: boolean
   /** The current playhead. */
   now(): number
   /** Moves the playhead here at once, and in every view once the extension relays it. */
@@ -21,7 +19,6 @@ export interface Clock {
 /** Calls `paint` with the playhead whenever it moves, and `changed` when the clock state does. */
 export function createClock(paint: (t: number) => void, changed: () => void = () => {}): Clock {
   let state: ClockState = IDLE
-  let live = false
   /** `performance.now()` when `state` arrived. */
   let since = 0
   /** This view's latest action in the showing it counts them in, which the extension counts alike
@@ -55,16 +52,12 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     }
     // Skip a clock of another showing, and answers to actions this view has since superseded.
     if (message.kind !== 'clock' || message.of.showing !== counted || message.seq < seq) return
-    live = message.live
     set(message.clock)
     changed()
   })
   return {
     get state() {
       return state
-    },
-    get live() {
-      return live
     },
     now,
     seek(t) {

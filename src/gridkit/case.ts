@@ -1,4 +1,4 @@
-/** A loaded case: its tables as column chunks, the Data a host reads, and the file as read. */
+/** A loaded case: its tables as column chunks, what views project of them, and the file as read. */
 import { createHash, type Hash } from 'node:crypto'
 
 import { printParseErrorCode, visit } from 'jsonc-parser'
@@ -38,7 +38,7 @@ import {
   withFound,
 } from './definition.js'
 import type { ProjectedDocument, ProjectedTable } from './document.js'
-import { bytesAt, carryOffsets, charsAt } from './offsets.js'
+import { bytesAt, carryOffsets, charsAt, leads, trails } from './offsets.js'
 import {
   ARRAYS,
   type Coding,
@@ -621,8 +621,8 @@ function spliced(
   let head = Math.min(prefix, length, text.length)
   let tail = Math.min(suffix, length - head, text.length - head)
   // A pair of surrogates is never split: what starts or ends one goes with the rest of it.
-  if (head > 0 && isLead(text.charCodeAt(head - 1))) head--
-  if (tail > 0 && isTrail(text.charCodeAt(text.length - tail))) tail--
+  if (head > 0 && leads(text.charCodeAt(head - 1))) head--
+  if (tail > 0 && trails(text.charCodeAt(text.length - tail))) tail--
   const start = bytesAt(before, head)
   const end = bytesAt(before, length - tail)
   const middle = UTF8.encode(text.slice(head, text.length - tail))
@@ -632,10 +632,6 @@ function spliced(
   file.set(before.subarray(end), start + middle.length)
   return { file, edit: { start, before: end, after: start + middle.length } }
 }
-
-/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
-const isLead = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
-const isTrail = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
 
 /** How many bytes are compared at once, natively, as two files are told apart. */
 const COMPARED_BYTES = 1 << 16
@@ -1010,8 +1006,7 @@ function foundColumns(
   return firsts
 }
 
-/** The Case table's one row: the header's and system parameters' members. Its one row is always
- *  numbered alike, in the row space of `source`, its catalog's. */
+/** The Case table's one row: the header's and system parameters' members. */
 function caseTable(file: Uint8Array, layout: Layout, shape: Shape): Table {
   const values = new Map<string, Value>()
   /** The fields the file writes a value for, whether or not it reads as one. */

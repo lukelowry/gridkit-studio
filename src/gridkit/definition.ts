@@ -1,6 +1,4 @@
 /** GridKit catalog semantics and source decoding rules, independent of native dataset storage. */
-import { createHash } from 'node:crypto'
-
 import type { Port } from 'latkit'
 
 import {
@@ -25,6 +23,13 @@ export const CASE_ROW = 'case'
 /** The member of a record a port is written under: a device's `ports`, a bus's `ports_in` and
  *  `ports_out`. */
 export type PortKey = 'ports' | 'ports_in' | 'ports_out'
+type Identity = Shape['identity']
+/** The member each array's records are known by, as GridKit names it. */
+export const IDENTITY: Readonly<Record<ArrayName, Identity>> = {
+  buses: { name: 'number', type: 'unsigned' },
+  signals: { name: 'signal_id', type: 'unsigned' },
+  devices: { name: 'id', type: 'text' },
+}
 type FieldSource =
   | {
       readonly kind:
@@ -65,7 +70,6 @@ export interface Shape {
 }
 export interface Catalog {
   readonly text: string
-  readonly version: string
   readonly bus: string
   readonly shapes: ReadonlyMap<string, Shape>
   readonly codes: readonly Shape[]
@@ -135,7 +139,6 @@ export function catalogOf(json: unknown): Catalog {
   }
   return {
     text,
-    version: createHash('sha256').update(text).digest('hex').slice(0, 32),
     bus: raw.bus.name,
     codes,
     shapes,
@@ -179,8 +182,7 @@ function shapeOf(
       type: spec.name,
       kind,
       array: kind === 'bus' ? 'buses' : 'devices',
-      identity:
-        kind === 'bus' ? { name: 'number', type: 'unsigned' } : { name: 'id', type: 'text' },
+      identity: IDENTITY[kind === 'bus' ? 'buses' : 'devices'],
     },
     spec.label,
     [
@@ -260,7 +262,7 @@ function signalShape(): Shape {
       type: SIGNAL,
       kind: 'signal',
       array: 'signals',
-      identity: { name: 'signal_id', type: 'unsigned' },
+      identity: IDENTITY.signals,
     },
     SIGNAL,
     [field('name', 'text', { kind: 'record', name: 'name' })],
@@ -281,11 +283,7 @@ function caseShape(): Shape {
   )
 }
 export function unknownShape(type: string): Shape {
-  return compile(
-    { type, kind: 'device', array: 'devices', identity: { name: 'id', type: 'text' } },
-    type,
-    [],
-  )
+  return compile({ type, kind: 'device', array: 'devices', identity: IDENTITY.devices }, type, [])
 }
 export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
   const taken = new Set(found.map(({ name }) => name))

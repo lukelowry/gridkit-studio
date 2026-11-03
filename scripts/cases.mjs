@@ -4,6 +4,10 @@
  *  ACTIVSg70k, are kept in cases/ as they are, apart from this.
  *
  *    node scripts/cases.mjs ../GridKit 01d7543e4d2028a6b4ee0b530b16277ee1278336
+ *
+ *  The cases in cases/ list more in their `mon` lists than GridKit's do, which a copy would undo:
+ *  to follow a newer GridKit, apply its own diff of each case instead, as `git diff` of the two refs
+ *  gives it, and keep this for a case cases/ does not have yet.
  */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'

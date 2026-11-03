@@ -146,16 +146,14 @@ suite('Run', function () {
           .locator('canvas')
           .first()
           .evaluate((canvas) =>
-            (
-              canvas as unknown as { gridkitPlot(): { at?: number; paused: boolean } }
-            ).gridkitPlot(),
+            (canvas as unknown as { gridkitPlot(): { at?: number } }).gridkitPlot(),
           )
         const live = await monitor.locator('.lane__reading').getAttribute('aria-live')
         const focused = (name: string) =>
           `(document.hasFocus() ? 'has' : 'lacks') + ' focus on ' + document.activeElement?.${name}`
         const focus = await monitor.evaluate<string>(focused('tagName'))
         const page = await bench.page.evaluate<string>(focused('className'))
-        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''} at ${bench.session.transport.currentT()}, the plot at ${plot.at}${plot.paused ? ' paused' : ''} with its reading ${live === 'off' ? 'off' : 'on'}, the Monitor ${focus}, the window ${page}, the results ${JSON.stringify({ frames: session.results?.frames, domain: session.results?.domain })}`
+        return `the plotted trace reads a native voltage: it read "${await reading()}", the clock ${status}${follow ? ' and following' : ''} at ${bench.session.transport.currentT()}, the plot at ${plot.at} with its reading ${live === 'off' ? 'off' : 'on'}, the Monitor ${focus}, the window ${page}, the results ${JSON.stringify({ frames: session.results?.frames, domain: session.results?.domain })}`
       },
     )
     assert.ok(followed, 'The playhead follows a run as it arrives')
@@ -252,7 +250,8 @@ suite('Run', function () {
       await readFile(join(process.env.GRIDKIT_TEST_ROOT!, 'cases/TwoArea.case.json'), 'utf8'),
     )
     await bench.settled()
-    assert.deepEqual((await bench.current()).issues, [])
+    await bench.studio.documents.validate(bench.document)
+    assert.deepEqual(bench.studio.documents.diagnostics.get(bench.uri), [])
     if (!bench.recorded('Bus', 'Vm')) await bench.toggleSignal('Bus', 'Vm')
     await bench.writeSolver({ tmax: 2, dt_monitor: 0.01, events: [] })
     const previous = bench.session.run!.id

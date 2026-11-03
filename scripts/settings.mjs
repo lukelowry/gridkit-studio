@@ -37,15 +37,13 @@ function property(group, setting) {
         enum: setting.options.map((option) => option.value),
         enumDescriptions: setting.options.map((option) => option.label),
       }
-    case 'number': {
-      const type = setting.step === 1 ? 'integer' : 'number'
+    case 'number':
       return {
         ...base,
-        type: setting.default === null ? [type, 'null'] : type,
+        type: setting.step === 1 ? 'integer' : 'number',
         minimum: setting.min,
         maximum: setting.max,
       }
-    }
     case 'color':
       return {
         ...base,

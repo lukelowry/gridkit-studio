@@ -9,8 +9,9 @@ export function visualValues(values: Float64Array): Float32Array {
   return result
 }
 
-export function rawRun(block: FrameBlock): VisualizationRun {
-  if (block.values.length !== block.at.length * block.rows)
-    throw new Error('Result frame dimensions do not match.')
-  return { level: 0, first: block.first, at: block.at, values: visualValues(block.values) }
-}
+export const rawRun = (block: FrameBlock): VisualizationRun => ({
+  level: 0,
+  first: block.first,
+  at: block.at,
+  values: visualValues(block.values),
+})

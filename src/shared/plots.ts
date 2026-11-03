@@ -1,6 +1,6 @@
 /** What the Monitor plots: a recorded field of a type, of every element or of the one `id` names. */
 
-import { type CaseDefinition, fieldDefinition, fieldLabel, tableDefinition } from './document.js'
+import { type CaseDefinition, fieldDefinition, fieldLabel, tableLabel } from './document.js'
 import type { Plot } from './messages.js'
 import type { Results } from './simulation.js'
 
@@ -36,9 +36,6 @@ export function plotName(document: CaseDefinition | undefined, plot: Plot): stri
   const element = plot.id === undefined ? '' : ' ' + String(plot.id)
   const field = fieldDefinition(document, plot.from, plot.field)
   return (
-    (tableDefinition(document, plot.from)?.label ?? plot.from) +
-    element +
-    ' · ' +
-    (field ? fieldLabel(field) : plot.field)
+    tableLabel(document, plot.from) + element + ' · ' + (field ? fieldLabel(field) : plot.field)
   )
 }

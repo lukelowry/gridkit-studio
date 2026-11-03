@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import * as vscode from 'vscode'
 
 import { shownType } from '../shared/cells.js'
+import { isRange } from '../shared/data.js'
 import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
@@ -26,6 +27,8 @@ import { drawnOf } from '../shared/simulation.js'
 import { ExportFiles } from './exports.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
+import { setDisplay } from './settings.js'
+import { nameOf } from './solvers.js'
 
 /** The views a clock moves, and an export, which plays at its speed. */
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor', 'export'])
@@ -37,7 +40,7 @@ const PANELS = ['case', 'monitor', 'export'] as const
  *  panels. */
 function describe(studio: Sessions, kind: ViewKind, uri: string): string {
   const { summary, table, results } = studio.state(uri)
-  const parts = [summary?.name ?? vscode.Uri.parse(uri).path.split('/').at(-1)]
+  const parts = [summary?.name ?? nameOf(vscode.Uri.parse(uri))]
   const type = summary && shownType(summary, table)
   if (kind === 'case' && summary && type) {
     parts.push(tableLabel(summary.definition, type))
@@ -313,7 +316,6 @@ class View {
       kind: 'clock',
       of: this.#of,
       clock: session.transport.snapshot(),
-      live: session.live,
       seq: this.#seq,
     })
   }
@@ -381,16 +383,14 @@ class View {
         return
       case 'window': {
         const bounds = message.bounds
-        if (this.kind !== 'monitor' || !session || bounds?.length !== 2) return
-        if (!bounds.every(Number.isFinite) || !(bounds[0] < bounds[1])) return
+        if (this.kind !== 'monitor' || !session || !isRange(bounds)) return
         session.setWindow(bounds)
         return
       }
       case 'range': {
         const range = message.range
         if (this.kind !== 'monitor' || !session) return
-        if (range && !(range.length === 2 && range.every(Number.isFinite) && range[0] < range[1]))
-          return
+        if (range && !isRange(range)) return
         session.plotRange(message.plot, range ?? undefined)
         return
       }
@@ -403,12 +403,8 @@ class View {
         const values = validateSettings(message.values)
         const allowed = new Set(['network.projection', 'network.tilt', 'network.orbit'])
         if (Object.keys(values).some((key) => !allowed.has(key))) return
-        const configuration = vscode.workspace.getConfiguration(
-          'gridkitStudio',
-          vscode.Uri.parse(uri),
-        )
         for (const [key, value] of Object.entries(values))
-          await configuration.update(key, value, vscode.ConfigurationTarget.Global)
+          await setDisplay(vscode.Uri.parse(uri), key, value)
         return
       }
       case 'transport': {
@@ -435,10 +431,7 @@ class View {
       case 'command':
         if (VIEW_COMMANDS.includes(message.command) && uri && followed(uri)) {
           this.studio.activate(uri)
-          await vscode.commands.executeCommand(commandId(message.command), message.value, {
-            uri,
-            view: this.kind,
-          })
+          await vscode.commands.executeCommand(commandId(message.command), message.value, { uri })
         }
         return
     }

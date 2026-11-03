@@ -94,8 +94,6 @@ export async function readResults(
       }
       if (!plan) throw problem('io', 'The results hold rows before their header.')
       const { length, values: cells, width } = message
-      if (!Number.isSafeInteger(received + length))
-        throw problem('limit', 'The results contain too many frames.')
       for (let from = 0, count = 0; from < length; from += count) {
         reading.signal.throwIfAborted()
         // Up to the next chunk's first frame.
@@ -126,8 +124,6 @@ export async function readResults(
         yielded = performance.now()
       }
     }
-    // A long layout's header waits on its first sample.
-    if (!plan && !layout.long) throw problem('io', 'The results contain no header.')
   } catch (error) {
     reading.signal.throwIfAborted()
     throw error
@@ -182,7 +178,6 @@ export const layoutFrom = (names: readonly string[], kase: Case): Layout => ({
  *  their rows reads. A name that repeats matches its rows in turn. A column the case has no output
  *  for is left unread. */
 function layoutOf(header: readonly string[], kase: Case): { fields: readonly Field[]; plan: Plan } {
-  if (header.length === 0) throw problem('io', 'The results do not start with a time column.')
   const named = new Map<string, number[]>()
   header.forEach((name, column) => {
     if (column === 0) return

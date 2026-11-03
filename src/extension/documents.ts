@@ -12,7 +12,7 @@ import {
   type Value,
 } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
-import { type Client, CRASHES } from './client.js'
+import { type Client, unsteady } from './client.js'
 import { diagnosed } from './report.js'
 
 /** Whether `document` can be edited; a file system VS Code does not know counts as writable. */
@@ -67,7 +67,9 @@ interface Entry extends CaseDocument {
   attachmentId: string
   summary?: Summary
   pending?: Promise<Summary>
-  validation?: Promise<Summary>
+  validation?: Promise<void>
+  /** The summary whose issues Problems lists. */
+  validated?: Summary
   controller?: AbortController
   timer?: ReturnType<typeof setTimeout>
   /** The version the worker's source mirror holds. */
@@ -158,10 +160,7 @@ export class Documents implements vscode.Disposable {
    *  say once. */
   restart(error: Error): Error {
     const retry = this.client.cases.steady
-    const why = new Error(
-      `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads each case ` +
-        'again once you edit or reopen it.',
-    )
+    const why = unsteady(error, 'reads each case again once you edit or reopen it.')
     for (const [uri, entry] of this.#entries) {
       entry.controller?.abort()
       clearTimeout(entry.timer)
@@ -302,13 +301,15 @@ export class Documents implements vscode.Disposable {
     return pending
   }
 
-  async validate(document: vscode.TextDocument): Promise<Summary> {
+  /** Finds what is wrong with the case `document` holds as it reads now, once a revision, and says
+   *  it in Problems. */
+  async validate(document: vscode.TextDocument): Promise<void> {
     const summary = await this.ensure(document)
     const uri = document.uri.toString()
     const entry = this.#entries.get(uri)
     if (!entry || entry.stale || entry.summary !== summary || document.version !== summary.version)
       throw superseded()
-    if (summary.validation === 'complete') return summary
+    if (entry.validated === summary) return
     if (entry.validation) return entry.validation
     const signal = entry.controller!.signal
     const pending = this.client.cases
@@ -317,8 +318,7 @@ export class Documents implements vscode.Disposable {
         signal.throwIfAborted()
         if (this.#entries.get(uri) !== entry || document.version !== summary.version)
           throw superseded()
-        const validated: Summary = { ...summary, issues, validation: 'complete' }
-        entry.summary = validated
+        entry.validated = summary
         this.diagnostics.set(
           document.uri,
           issues.map((issue) => {
@@ -333,8 +333,6 @@ export class Documents implements vscode.Disposable {
             return diagnostic
           }),
         )
-        this.changed.fire(uri)
-        return validated
       })
       .finally(() => {
         if (entry.validation === pending) entry.validation = undefined

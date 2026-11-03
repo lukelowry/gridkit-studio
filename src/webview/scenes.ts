@@ -30,6 +30,8 @@ export function caseFit(data: Data, drawing: Drawing, kind: 'network' | 'diagram
 export interface Binding {
   readonly table: string
   readonly field: string
+  /** The marks it styles, and which of their options, as its channel in CHANNELS says. */
+  readonly placement: 'vertex' | 'edge'
   readonly channel: 'color' | 'radius' | 'elevation' | 'width' | 'dash'
   readonly source?: TableInput
   readonly domain?: readonly [number, number]
@@ -103,14 +105,13 @@ function channels(
   table: string,
   bindings: readonly Binding[],
   map: ColormapName,
-  vertex: boolean,
+  placement: Binding['placement'],
   sizes: NetworkSizes,
   height: number | Expr,
 ): Record<string, Expr> {
-  const allowed = vertex ? ['color', 'radius', 'elevation'] : ['color', 'width', 'dash']
   return Object.fromEntries(
     bindings
-      .filter((binding) => binding.table === table && allowed.includes(binding.channel))
+      .filter((binding) => binding.table === table && binding.placement === placement)
       .map((binding) => [binding.channel, mapped(binding, map, sizes, height)]),
   )
 }
@@ -122,7 +123,7 @@ export function sceneBindings(
   sampled: (table: string, field: string) => Source | undefined,
 ): Binding[] {
   return Object.entries(bindings).flatMap(([key, binding]) => {
-    const channel = CHANNELS[key as Channel].option
+    const { option: channel, placement } = CHANNELS[key as Channel]
     const recorded = outputs.find(
       (output) => output.table === binding.table && output.field === binding.field,
     )
@@ -132,6 +133,7 @@ export function sceneBindings(
     return [
       {
         ...binding,
+        placement,
         channel,
         ...(source && { source: [source.name, binding.table] as const }),
         ...(binding.domain || recorded?.domain
@@ -230,7 +232,7 @@ export function networkScene(
         ...(edge.ends ? { ends: edge.ends } : {}),
         ...(edge.bends ? { bends: edge.bends } : {}),
         width: sizes.width,
-        ...channels(edge.table, bindings, map, false, sizes, height),
+        ...channels(edge.table, bindings, map, 'edge', sizes, height),
       })),
       ...drawing.vertices.map((vertex): Mark => ({
         vertices: [data.name, vertex.table],
@@ -238,7 +240,7 @@ export function networkScene(
         position: [field(vertex.position[0]), field(vertex.position[1])],
         label: settings.get('network.labels') && vertex.label ? field(vertex.label) : null,
         radius: sizes.radius,
-        ...channels(vertex.table, bindings, map, true, sizes, height),
+        ...channels(vertex.table, bindings, map, 'vertex', sizes, height),
       })),
     ],
   }
@@ -323,10 +325,10 @@ export function plotScene(
   }
 }
 
-/** Only fields needed by marks; sampled fields live in their own bounded sources. */
+/** Only fields needed by the marks of `kinds`; sampled fields live in their own bounded sources. */
 export function sceneFields(
   definition: CaseDefinition,
-  kind: 'network' | 'diagram',
+  kinds: readonly ('network' | 'diagram')[],
   bindings: Bindings = {},
 ): ProjectionSelection[] {
   const selected = new Map<string, Set<string>>()
@@ -336,7 +338,7 @@ export function sceneFields(
     selected.set(table, held)
   }
   const drawing = definition.drawing
-  if (kind === 'network') {
+  if (kinds.includes('network')) {
     for (const vertex of drawing.vertices)
       add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
     for (const edge of drawing.edges)
@@ -344,7 +346,8 @@ export function sceneFields(
     for (const binding of Object.values(bindings))
       if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled')
         add(binding.table, [binding.field])
-  } else {
+  }
+  if (kinds.includes('diagram')) {
     for (const block of drawing.blocks)
       add(block.table, [
         ...block.position,

@@ -64,6 +64,20 @@ export function cacheBytes(): number {
   return Math.max(0, Number.isFinite(mib) ? mib : fallback) * MIB
 }
 
+/** Sets how the views of the case at `uri` look, `id` to `value`, where it takes effect: in the
+ *  most specific place that sets it now, else for the user. */
+export async function setDisplay(uri: vscode.Uri, id: string, value: unknown): Promise<void> {
+  const configuration = vscode.workspace.getConfiguration(PREFIX, uri)
+  const set = configuration.inspect(id)
+  const target =
+    set?.workspaceFolderValue !== undefined
+      ? vscode.ConfigurationTarget.WorkspaceFolder
+      : set?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global
+  await configuration.update(id, value, target)
+}
+
 /** How the views of the case at `uri` look; a value that is not valid keeps its default. */
 export function displayOf(uri: vscode.Uri): SettingsValues {
   const configuration = vscode.workspace.getConfiguration(PREFIX, uri)

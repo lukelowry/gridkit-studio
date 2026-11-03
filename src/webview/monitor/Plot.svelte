@@ -1,5 +1,5 @@
 ﻿<script lang="ts">
-  import type { Camera, Data, Gpu, Id, View } from 'latkit'
+  import type { Data, Gpu, Id, View } from 'latkit'
   import { onMount, untrack } from 'svelte'
 
   import type { ExactSample, TimeRange } from '../../shared/data.js'
@@ -17,11 +17,10 @@
   import { nativeTheme } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
   import LatkitCanvas from '../ui/LatkitCanvas.svelte'
-  import { type PlotState, sameWindow, SETTLE_MS } from './plot.js'
+  import { plotCamera, plotRequest, sameWindow, SETTLE_MS } from './plot.js'
 
   let {
     plot,
-    kept,
     app,
     gpu,
     reads,
@@ -36,7 +35,6 @@
     onerror,
   }: {
     plot: Plotted
-    kept: PlotState
     app: ViewState
     gpu: Gpu
     reads: FrameReads
@@ -58,7 +56,6 @@
    *  lane is laid out. */
   let columns = $state(0)
   let visible = $state(true)
-  let camera = $state.raw<Camera | undefined>(untrack(() => kept.camera))
   let inspected = $state<Id>()
   let trace = $state(0)
   let exact = $state.raw<ExactSample>()
@@ -77,8 +74,7 @@
     void themeVersion
     return source ? plotScene(source, plot, settings, nativeTheme(settings, 'monitor')) : undefined
   })
-  /** The times the Monitor shows, over the values the plot was given or those it shows. */
-  const framed = $derived<Camera>({ x: [...shown], y: plot.range ? [...plot.range] : null })
+  const framed = $derived(plotCamera(plot, shown))
   const sampleId = $derived(inspected ?? plot.id ?? ids[Math.min(trace, ids.length - 1)])
   const unit = $derived(
     app.summary ? fieldDefinition(app.summary.definition, plot.from, plot.field)?.unit : undefined,
@@ -118,19 +114,7 @@
     const controller = new AbortController()
     failed = false
     void frames
-      .receive(
-        {
-          results: results.id,
-          table: plot.from,
-          field: plot.field,
-          ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
-          range: shown,
-          purpose: 'plot',
-          columns,
-        },
-        results.frames,
-        controller.signal,
-      )
+      .receive(plotRequest(results, plot, shown, columns), results.frames, controller.signal)
       .then(
         (changed) => {
           if (changed && !controller.signal.aborted) source = frames.data
@@ -184,7 +168,6 @@
 
   function ready(view: View, canvas: HTMLCanvasElement) {
     native = view
-    view.camera = framed
     const unregister = register(view)
     const disconnect = bindInteractions(view, {
       select(element) {
@@ -204,8 +187,6 @@
           plot,
         ),
       camera(next) {
-        camera = next
-        kept.camera = next
         if ('x' in next && !sameWindow(next.x, shown)) onwindow(next.x)
       },
       error: onerror,
@@ -248,7 +229,6 @@
     hooks.gridkitPoint = (at, value) => view.screen([at, value, 0])
     hooks.gridkitRead = (point) => view.pick(point)
     return () => {
-      kept.camera = camera
       unregister()
       disconnect()
       hover()
@@ -284,7 +264,7 @@
       {reading}
     </output>
     <button
-      class="c-icon-button lane__close"
+      class="c-icon-btn lane__close"
       title="Remove plot"
       aria-label={`Remove ${title}`}
       onclick={() =>
@@ -312,7 +292,7 @@
         sources={[source]}
         at={t}
         active={enabled}
-        {camera}
+        camera={framed}
         onready={ready}
         {onerror}
         label={`${title}. Page Up and Page Down read traces. Space plays or pauses. Left and Right step samples.`}

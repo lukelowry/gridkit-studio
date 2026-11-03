@@ -224,11 +224,6 @@
     min-inline-size: 0;
   }
 
-  .export :global(.c-input) {
-    inline-size: 8rem;
-    max-inline-size: 100%;
-  }
-
   .export__fields:disabled {
     opacity: 0.7;
   }

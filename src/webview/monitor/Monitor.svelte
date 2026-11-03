@@ -12,7 +12,7 @@
   import { followPlayback } from '../playback.js'
   import { openGpu, startOver } from '../runtime.js'
   import { watchTheme } from '../theme.js'
-  import { monitorWindow, type PlotState, SETTLE_MS } from './plot.js'
+  import { monitorWindow, SETTLE_MS } from './plot.js'
   import Plot from './Plot.svelte'
 
   let app = $state.raw<ViewState>({})
@@ -26,18 +26,6 @@
   const views = new Set<View>()
   /** Lets go of an image being drawn once the page goes. */
   const lifetime = new AbortController()
-  const retained = new Map<string, PlotState>()
-  function plotState(key: string): PlotState {
-    const state = retained.get(key) ?? {}
-    retained.set(key, state)
-    return state
-  }
-  $effect(() => {
-    const keys = new Set(
-      plots.map((plot) => JSON.stringify([results?.id, plot.from, plot.field, plot.id])),
-    )
-    for (const key of retained.keys()) if (!keys.has(key)) retained.delete(key)
-  })
   let closed = false
   let generation = 0
   let following: (() => void) | undefined
@@ -158,6 +146,9 @@
           reads.clear()
           void device().catch(fail)
         } else if (message.command === 'fit') {
+          // A zoom or pan still settling would take Fit's place once it settled.
+          clearTimeout(telling)
+          settling = false
           chosen = undefined
           bridge.send({ kind: 'window', bounds: monitorWindow(results) })
         } else if (message.command === 'exportImage') void exportImage().catch(fail)
@@ -214,7 +205,6 @@
       {#each plots as plot (JSON.stringify([results.id, plot.from, plot.field, plot.id]))}
         <Plot
           {plot}
-          kept={plotState(JSON.stringify([results.id, plot.from, plot.field, plot.id]))}
           {app}
           {gpu}
           {reads}

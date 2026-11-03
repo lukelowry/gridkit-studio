@@ -19,7 +19,6 @@ export interface ReducedRun extends VisualizationRun {
 export interface PyramidState {
   readonly rows: number
   readonly next: number
-  readonly last: number | null
   readonly levels: readonly (null | {
     readonly index: number
     readonly start: number
@@ -45,7 +44,6 @@ export function detail(frames: number, columns: number): number {
 export class Pyramid {
   readonly #levels: Array<Bucket | undefined> = []
   #next = 0
-  #last = -Infinity
 
   constructor(
     private readonly rows: number,
@@ -55,20 +53,10 @@ export class Pyramid {
       throw new Error('A pyramid needs a positive row count.')
   }
 
-  get next(): number {
-    return this.#next
-  }
-
+  /** Reduces `at.length` frames from frame `first` on, whose times the results file has checked. */
   push(first: number, at: Float64Array, input: Float64Array): void {
     if (first !== this.#next || input.length !== at.length * this.rows) {
       throw new Error('Pyramid input must contain consecutive complete frames.')
-    }
-    // Validate the entire block before mutating reducer state.
-    let previous = this.#last
-    for (const time of at) {
-      if (!Number.isFinite(time) || time < previous)
-        throw new Error('Result times must be finite and nondecreasing.')
-      previous = time
     }
     const values = visualValues(input)
     for (let frame = 0; frame < at.length; frame++) {
@@ -78,14 +66,12 @@ export class Pyramid {
       this.#add(1, first + frame, at[frame]!, at[frame]!, rowValues, rowValues, gaps)
     }
     this.#next += at.length
-    this.#last = previous
   }
 
   snapshot(): PyramidState {
     return {
       rows: this.rows,
       next: this.#next,
-      last: Number.isFinite(this.#last) ? this.#last : null,
       levels: Array.from(this.#levels, (bucket) =>
         bucket
           ? {
@@ -136,7 +122,6 @@ export class Pyramid {
     })
     this.#levels.push(...levels)
     this.#next = state.next
-    this.#last = state.last ?? -Infinity
   }
 
   #add(

@@ -176,7 +176,7 @@ export async function visible(frame: Frame, selector: string): Promise<void> {
   }
 }
 
-/** A page's text, and each canvas's size, whether it drew, and whether its plot was paused. */
+/** A page's text, and each canvas's size and whether it drew. */
 const held = (frame: Frame) =>
   frame
     .evaluate<string>(
@@ -186,7 +186,6 @@ const held = (frame: Frame) =>
         canvases: Array.from(document.querySelectorAll('canvas'), (canvas) => ({
           rendered: canvas.dataset.rendered === 'true',
           size: [canvas.clientWidth, canvas.clientHeight],
-          paused: canvas.gridkitPlot?.().paused,
         })),
       })`,
     )
@@ -414,8 +413,7 @@ export class TestHost {
 
   /** Show one of the case's panel views. */
   async show(kind: keyof typeof PANELS): Promise<Frame> {
-    const command = PANELS[kind]
-    await vscode.commands.executeCommand(command, ...(command.endsWith('.focus') ? [] : [this.uri]))
+    await vscode.commands.executeCommand(PANELS[kind], this.uri)
     return this.view(kind)
   }
 

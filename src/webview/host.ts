@@ -7,6 +7,7 @@ import { drew } from './runtime.js'
  *  it lasts, and hands latkit a scene only when it draws differently from the last. */
 export class ViewHost {
   readonly #lifetime = new AbortController()
+  #fitting = Promise.resolve()
   #drawn: string
 
   private constructor(
@@ -44,7 +45,18 @@ export class ViewHost {
 
   /** Frames `fit` once its rows have their places, however long they take to arrive. */
   fit(fit?: Fit): void {
-    void this.view.fit(fit, { signal: this.#lifetime.signal }).catch(this.fail)
+    const fitting = this.view.fit(fit, { signal: this.#lifetime.signal })
+    this.#fitting = fitting.then(
+      () => {},
+      () => {},
+    )
+    void fitting.catch(this.fail)
+  }
+
+  /** Resolves once the last fit asked for applies: until a view's first fit does, it shows only its
+   *  background, so a picture taken sooner would too. */
+  framed(): Promise<void> {
+    return this.#fitting
   }
 
   destroy(): void {

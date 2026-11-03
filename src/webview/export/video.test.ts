@@ -25,15 +25,20 @@ describe('a video', () => {
     expect(videoTimes({ results: results([0, 2]), window: [3, 4] })).toBeUndefined()
   })
 
-  it('exports once it has times, a view, an even size and a speed', () => {
+  it('exports once it has times, a view, a size and a speed', () => {
     const state: ViewState = { summary, results: results([0, 2]) }
     const job = { ...DEFAULTS, timeRange: [0, 2] as [number, number], rate: 1 }
     expect(exportable(job, state)).toBe(true)
     expect(exportable(undefined, state)).toBe(false)
     expect(exportable({ ...job, views: [] }, state)).toBe(false)
-    expect(exportable({ ...job, width: 1279 }, state)).toBe(false)
+    // latkit rounds a size to the encoder's blocks, so one of none is all it refuses.
+    expect(exportable({ ...job, width: 1279 }, state)).toBe(true)
+    expect(exportable({ ...job, width: 2 }, state)).toBe(false)
     expect(exportable({ ...job, rate: 0 }, state)).toBe(false)
     // The Monitor's part needs a plot the results hold.
-    expect(exportable({ ...job, views: ['monitor'] }, state)).toBe(false)
+    const plotted: ViewState = { ...state, plots: [{ from: 'Bus', field: 'Vm' }] }
+    expect(exportable({ ...job, views: ['monitor'] }, plotted)).toBe(false)
+    const held = { ...results([0, 2]), outputs: [{ table: 'Bus', field: 'Vm', ids: [1] }] }
+    expect(exportable({ ...job, views: ['monitor'] }, { ...plotted, results: held })).toBe(true)
   })
 })

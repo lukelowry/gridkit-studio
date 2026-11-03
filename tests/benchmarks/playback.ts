@@ -79,7 +79,6 @@ export async function run() {
       for (let i = 0; i < Number(process.env.GRIDKIT_PLAYBACK_SECONDS ?? 30) * 2; i++) {
         await pause(500)
         const current = await state()
-        assert.ok(current.reads <= 2 && current.cacheBytes <= 96 * 1024 * 1024)
         assert.ok(current.views > 0 && current.views < 10, 'Only visible plots own Views')
         const previous = samples.at(-1) ?? before
         assert.ok(

@@ -69,14 +69,9 @@ function dirty(before: Case, after: Case): Map<string, DirtyTable> {
   return plan
 }
 
+/** The one value `values` holds; a case's references are always built from a list of ids. */
 function scalar(values: Values | Reference): unknown {
-  return 'reference' in values
-    ? 'count' in values.ids
-      ? values.ids.count
-        ? 0
-        : null
-      : values.ids[0]
-    : values[0]
+  return 'reference' in values ? (values.ids as readonly unknown[])[0] : values[0]
 }
 function same(a: unknown, b: unknown): boolean {
   return (

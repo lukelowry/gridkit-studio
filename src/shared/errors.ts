@@ -24,8 +24,6 @@ export type Code =
   /** A failure with no code of its own. */
   | 'operation-failed'
   | 'invalid-input'
-  | 'internal'
-  | 'unavailable'
   | LatkitError['code']
 
 /** Source diagnostics retain source paths, independently of native runtime errors. */

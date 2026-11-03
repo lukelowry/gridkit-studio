@@ -77,7 +77,7 @@ export type Command = (typeof COMMANDS)[number]
 export type ViewCommandName = Extract<Command, 'revealInSource' | 'removePlot'>
 export const VIEW_COMMANDS: readonly ViewCommandName[] = ['revealInSource', 'removePlot']
 
-/** The views Studio contributes: its two canvas editors, its three webview panels, and Recorded
+/** The views Studio contributes: its two canvas editors, its three webview panels, and Monitored
  *  Signals. */
 export const VIEWS = ['network', 'diagram', 'case', 'monitor', 'export', 'signals'] as const
 export type View = (typeof VIEWS)[number]

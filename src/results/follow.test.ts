@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { follow, type Piece, type Writer } from './follow.js'
+import { follow, type Piece, POLL_MS, type Writer } from './follow.js'
 import { SEGMENT_BYTES } from './limits.js'
 import { same, type Stamp, stampAt } from './stamp.js'
 
@@ -121,7 +121,7 @@ describe('a results file followed as it is written', () => {
     const path = join(directory, 'later.csv')
     let writer: Writer = 'writing'
     const reading = pieces(path, () => writer)
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await new Promise((resolve) => setTimeout(resolve, 3 * POLL_MS))
     await writeFile(path, 'time,Bus_A_Vm\n0,1\n')
     writer = 'done'
     const all = await reading
@@ -139,7 +139,7 @@ describe('a results file followed as it is written', () => {
     })
     let writer: Writer = 'writing'
     const reading = pieces(path, () => writer, undefined, last)
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await new Promise((resolve) => setTimeout(resolve, 3 * POLL_MS))
     // Written over in place, as GridKit opens its output, the file is the writer's.
     await writeFile(path, 'time,Bus_A_Vm\n0,2\n')
     writer = 'done'

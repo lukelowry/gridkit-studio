@@ -1,7 +1,7 @@
 /** Typeahead: quick keystrokes spell a prefix, and the cursor jumps to the next entry with it. */
 
 /** How long typing may pause before the prefix restarts. */
-const PAUSE_MS = 500
+export const PAUSE_MS = 500
 
 export class Typeahead {
   #prefix = ''

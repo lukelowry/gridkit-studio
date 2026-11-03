@@ -92,22 +92,22 @@ export interface Summary extends Revision {
     anything: boolean
     monitor?: Sink
   }
-  issues: Issue[]
-  /** Pending diagnostics never mean that the model has passed validation. */
-  validation: 'pending' | 'complete'
-  parseMs: number
 }
 
 export interface SourceContext {
   element?: Element
   range?: SourceRange
   type?: string
-  completions: { name: string; detail: string; description?: string }[]
   reference?: Entity
 }
 
+/** A field that completes where the cursor is: its key, and its type and unit. */
+export interface Completion {
+  name: string
+  detail: string
+}
+
 export type Mutation =
-  | { kind: 'add'; type: string; key: string | number; fields: Record<string, Value> }
   | { kind: 'remove'; entities: readonly Entity[] }
   | { kind: 'set'; entity: Entity; field: string; value: Value }
   | { kind: 'move'; entity: Entity; position: readonly [number, number] | null }
@@ -152,7 +152,7 @@ export interface CaseApi {
   anchors: { input: Revision & { entity: Entity; drawn: readonly string[] }; output: Entity[] }
   complete: {
     input: Revision & SourceDelta & { offset: number }
-    output: SourceContext['completions']
+    output: Completion[]
   }
   context: { input: Revision & { offset: number }; output: SourceContext }
   /** The outline, listing up to `limit` records. */
@@ -182,8 +182,7 @@ export interface WorkerOptions {
 
 /** What the extension starts the results worker with. */
 export interface ResultsOptions extends WorkerOptions {
-  /** How many bytes of decoded frames, and of results files nothing holds, stay read past what
-   *  views read now. */
+  /** How many bytes of results files nothing holds stay open, so they open again at once. */
   readonly cacheBytes: number
   /** The folder the results files read are kept in, decoded, so a window opened again reads them
    *  from there. */
@@ -213,7 +212,7 @@ export interface ResultsApi {
   share: { input: OfResults & { as: string }; output: Results }
   /** Lets go of `results`; asked of again, they answer `results-closed`. Their file stays. */
   close: { input: OfResults; output: null }
-  /** How many bytes of decoded frames stay read past what views read now. */
+  /** How many bytes of results files nothing holds stay open. */
   configure: { input: { cacheBytes: number }; output: null }
   /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
@@ -331,8 +330,7 @@ export interface Cameras {
 }
 
 /** What a command asks of a view. */
-export type ViewAction =
-  'fit' | 'reloadView' | 'neighborhood' | 'diagramEditing' | 'arrangeDiagram' | 'exportImage'
+export type ViewAction = 'fit' | 'reloadView' | 'neighborhood' | 'arrangeDiagram' | 'exportImage'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -357,7 +355,7 @@ export type ToView =
   | ({ of: Of } & (
       | { kind: 'state'; state: SentState }
       /** The clock settled at send time; `seq` is the last of this showing's changes it reflects. */
-      | { kind: 'clock'; clock: ClockState; live: boolean; seq: number }
+      | { kind: 'clock'; clock: ClockState; seq: number }
       | { kind: 'action'; command: ViewAction; value?: unknown }
       | Reply
     ))

@@ -77,7 +77,6 @@ export function changedTable(
     if (next[key] === undefined || next[key] === '') delete next[key]
   return next as TableState
 }
-export const leaf = (field: string): string => field.slice(field.indexOf('.') + 1)
 export function display(value: unknown, { native: short = false } = {}): string {
   if (value && typeof value === 'object' && 'table' in value && 'id' in value)
     return short ? String(value.id) : entityLabel(value as Entity)

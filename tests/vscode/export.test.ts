@@ -69,7 +69,6 @@ suite('Export', () => {
     const exporter = await bench.show('export')
     await visible(exporter, '[data-testid="video-export"]')
     await exporter.getByRole('switch', { name: 'Monitor' }).click()
-    assert.equal(await exporter.locator('[data-testid="video-format"]').count(), 0)
     await exporter.locator('[data-testid="video-resolution"]').click()
     await exporter.locator('[role="option"][data-value="720"]').click()
     await startExport(exporter)
@@ -77,6 +76,26 @@ suite('Export', () => {
     await exported(exporter)
     bench.report.videoBytes = await mp4(video.fsPath)
     await bench.capture('export-vscode')
+  }).timeout(180_000)
+
+  test('writes a video of the Diagram beside the Network', async () => {
+    const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 diagram.mp4')
+    const exporter = await bench.show('export')
+    await visible(exporter, '[data-testid="video-export"]')
+    for (const [name, on] of [
+      ['Network', true],
+      ['Diagram', true],
+      ['Monitor', false],
+    ] as const) {
+      const toggle = exporter.getByRole('switch', { name, exact: true })
+      if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
+    }
+    await exporter.locator('[data-testid="video-resolution"]').click()
+    await exporter.locator('[role="option"][data-value="720"]').click()
+    await startExport(exporter)
+    await bench.dialog(video.fsPath)
+    await exported(exporter)
+    await mp4(video.fsPath)
   }).timeout(180_000)
 
   test('saves an image of a canvas, and of the Monitor plots, where the user picks', async () => {
@@ -97,17 +116,19 @@ suite('Export', () => {
       for (let at = 0; at < png.data.length; at += 4) colors.add(png.data.readUInt32BE(at))
       assert.ok(colors.size > 1, 'the image draws more than its background')
     }
-    const network = await bench.open('network')
-    const image = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 network.png')
-    await rm(image.fsPath, { force: true })
-    await bench.title('editor', 'Export Image')
-    await bench.dialog(image.fsPath)
-    // The Network as its canvas shows it.
-    await saved(
-      image.fsPath,
-      network,
-      '(({ width, height }) => ({ width, height }))(document.querySelector("canvas").getBoundingClientRect())',
-    )
+    // The Network and the Diagram as their canvases show them.
+    for (const kind of ['network', 'diagram'] as const) {
+      const canvas = await bench.open(kind)
+      const image = vscode.Uri.joinPath(bench.uri, '..', `IEEE39 ${kind}.png`)
+      await rm(image.fsPath, { force: true })
+      await bench.title('editor', 'Export Image')
+      await bench.dialog(image.fsPath)
+      await saved(
+        image.fsPath,
+        canvas,
+        '(({ width, height }) => ({ width, height }))(document.querySelector("canvas").getBoundingClientRect())',
+      )
+    }
 
     const monitor = await bench.show('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

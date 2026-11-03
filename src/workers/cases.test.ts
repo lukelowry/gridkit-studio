@@ -20,7 +20,6 @@ describe('the case worker', () => {
         ...revision,
         text: '{"buses":[{"class":"Bus","number":1,"name":"one","mon":["Vm"]}]}',
       })
-      expect(summary.validation).toBe('pending')
       expect(summary.recording).toEqual({ listed: { Bus: { Vm: 1 } }, anything: true })
       const rows = await rig.call('page', {
         ...revision,
@@ -144,12 +143,12 @@ describe('the case worker', () => {
   it('says where in the source a case fails to parse', async () => {
     const rig = await start<CaseApi>(script)
     try {
+      const text = '{"buses": ['
       const failed = await rig
-        .call('parse', { uri: 'file:///broken.case.json', version: 1, text: '{"buses": [' })
+        .call('parse', { uri: 'file:///broken.case.json', version: 1, text })
         .catch((error: unknown) => error)
-      expect(failed).toBeInstanceOf(Error)
-      expect(failed).toHaveProperty('offset')
-      expect(failed).toHaveProperty('detail')
+      // Where the text ends, short of closing what it opened.
+      expect(failed).toMatchObject({ code: 'invalid-input', offset: text.length })
     } finally {
       await rig.stop()
     }

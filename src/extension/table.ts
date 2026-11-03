@@ -5,8 +5,8 @@
 
 import * as vscode from 'vscode'
 
-import { leaf, shownColumns, shownType, tableFields } from '../shared/cells.js'
-import { fieldDefinition, tableDefinition, tableLabel } from '../shared/document.js'
+import { shownColumns, shownType, tableFields } from '../shared/cells.js'
+import { fieldDefinition, leaf, tableDefinition, tableLabel } from '../shared/document.js'
 import type { Commands, Context } from './context.js'
 
 export function registerTable({ command, valueOf }: Commands) {
@@ -19,16 +19,14 @@ export function registerTable({ command, valueOf }: Commands) {
   }
   command('chooseType', (context) => {
     const { definition, counts } = context.summary
-    type Item = vscode.QuickPickItem & { type?: string }
-    const items: Item[] = []
-    let group: string | undefined
-    for (const [type, count] of Object.entries(counts)) {
-      if (!count) continue
-      const description = tableLabel(definition, type)
-      if (description !== group)
-        items.push({ label: (group = description), kind: vscode.QuickPickItemKind.Separator })
-      items.push({ label: tableLabel(definition, type), description: count.toLocaleString(), type })
-    }
+    type Item = vscode.QuickPickItem & { type: string }
+    const items: Item[] = Object.entries(counts)
+      .filter(([, count]) => count)
+      .map(([type, count]) => ({
+        label: tableLabel(definition, type),
+        description: count.toLocaleString(),
+        type,
+      }))
     const picker = vscode.window.createQuickPick<Item>()
     picker.title = 'Show in Case'
     picker.placeholder = 'Element type'

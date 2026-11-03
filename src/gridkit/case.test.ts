@@ -5,14 +5,16 @@ import { Data } from 'latkit'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { rowsOf } from '../shared/cells.js'
-import { fieldDefinition, tableDefinition } from '../shared/document.js'
+import type { ProjectionCursor } from '../shared/data.js'
+import { type Entity, fieldDefinition, tableDefinition } from '../shared/document.js'
 import type { Value } from '../shared/messages.js'
 import { loadNative } from '../workers/native.js'
 import { Case } from './case.js'
 import { catalog, catalogOf } from './definition.js'
-import { diagnose, editCase, editField, minimal, sourceRange } from './edits.js'
+import { apply, diagnose, editCase, minimal, sourceRange } from './edits.js'
 import { completionsAt, outline, sourceContext } from './navigation.js'
-import { CaseQueries, project } from './projection.js'
+import { CaseQueries, projectionPage } from './projection.js'
+import { transaction } from './transactions.js'
 
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 
@@ -30,14 +32,9 @@ const source = `{
   {"class":"GenClassical","id":"disconnected","ports":{"bus":7}}
  ]
 }`
-const apply = (text: string, edits: ReturnType<typeof editField>) =>
-  edits
-    .sort((a, b) => b.offset - a.offset)
-    .reduce(
-      (text, edit) =>
-        text.slice(0, edit.offset) + edit.text + text.slice(edit.offset + edit.length),
-      text,
-    )
+/** The edits setting `field` of `entity` to `value`, as a transaction plans them. */
+const set = (kase: Case, entity: Entity, field: string, value: Value) =>
+  transaction(kase, [{ kind: 'set', entity, field, value }])
 describe('single catalog and source ownership', () => {
   it('compiles GridKit metadata and native reference semantics', () => {
     expect(fieldDefinition(catalog.definition, 'GenClassical', 'ports.pmech')).toMatchObject({
@@ -76,12 +73,14 @@ describe('single catalog and source ownership', () => {
       expect(rowsOf(page).map((row) => row.id)).toEqual([42, 7])
       expect(rowsOf(page).map((row) => row.values['extension.longitude'])).toEqual([-100, null])
       expect(kase.locate({ table: 'Bus', id: 7 })?.row).toBe(1)
-      for await (const bytes of project(
-        projected,
-        new Map([['Bus', ['name']]]),
-        AbortSignal.any([]),
-      ))
-        data.apply(bytes)
+      // Page after page, as a view reads it.
+      const selection = [{ table: 'Bus', fields: ['name'] }]
+      let cursor: ProjectionCursor | undefined
+      do {
+        const page = await projectionPage(projected, selection, cursor, AbortSignal.any([]))
+        data.apply(page.bytes)
+        cursor = page.next
+      } while (cursor)
       expect(data.query({ of: 'Bus' }).ids).toEqual([42, 7])
     } finally {
       queries.destroy()
@@ -92,7 +91,7 @@ describe('single catalog and source ownership', () => {
     const kase = await Case.parse(source, catalog)
     const range = sourceRange(kase, { table: 'Signal', id: 1 }, 'name')
     expect(source.slice(range.offset, range.offset + range.length)).toBe('"setpoint 😀"')
-    const next = apply(source, editField(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
+    const next = apply(source, set(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
     expect(next).toContain('"kv":138.0')
     expect(next).toContain('"kv":230.000')
     expect(next).toContain('"keep":1.000')
@@ -105,8 +104,8 @@ describe('single catalog and source ownership', () => {
     expect(
       (await diagnose(kase, AbortSignal.any([]))).filter(({ severity }) => severity === 'error'),
     ).toEqual([])
-    expect(() => editField(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 99)).toThrow()
-    const next = apply(source, editField(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42))
+    expect(() => set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 99)).toThrow()
+    const next = apply(source, set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42))
     expect(JSON.parse(next).devices[0].ports.bus2).toBe(42)
     const invalid = await Case.parse(source.replace('"bus2":7', '"bus2":999'), catalog)
     expect(
@@ -221,7 +220,7 @@ describe('single catalog and source ownership', () => {
     const tooDeep = { code: 'invalid-input', message: expect.stringMatching(/too deeply/) }
     for (const read of [
       () => sourceRange(kase, { table: 'Branch', id: 'line' }, 'ports.bus1'),
-      () => editField(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42),
+      () => set(kase, { table: 'Branch', id: 'line' }, 'ports.bus2', 42),
       () => sourceContext(kase, text.indexOf('"bus1"')),
     ]) {
       const error = (() => {
@@ -337,7 +336,7 @@ describe('single catalog and source ownership', () => {
   it('inserts native real-valued tokens without rewriting unrelated numbers', async () => {
     const text = source.replace('\"kv\":115.0', '')
     const kase = await Case.parse(text, catalog)
-    const changed = apply(text, editField(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
+    const changed = apply(text, set(kase, { table: 'Bus', id: 7 }, 'params.kv', 138))
     expect(changed).toMatch(/"kv":\s*138\.0/)
     expect(changed).toContain('230.000')
   })
@@ -408,10 +407,7 @@ describe('single catalog and source ownership', () => {
     expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
     expect(fieldDefinition(catalog.definition, 'Ieeet1', 'params.Ispdlim')!.kind).toBe('number')
     const id = kase.entity(kase.table('Ieeet1'), 0)
-    const changed = apply(
-      new TextDecoder().decode(kase.file),
-      editField(kase, id, 'params.Ispdlim', 1),
-    )
+    const changed = apply(new TextDecoder().decode(kase.file), set(kase, id, 'params.Ispdlim', 1))
     expect(changed).toMatch(/"Ispdlim":\s*1\.0/)
     const invalid = await Case.parse(
       changed.replace(/"Ispdlim":\s*1\.0/, '"Ispdlim":false'),
@@ -434,7 +430,7 @@ describe('single catalog and source ownership', () => {
     expect(kase.cell(kase.table('Future'), 'params.gain', 0)).toBe(2.5)
     // An object is kept as its JSON text, and not edited in place.
     expect(kase.cell(kase.table('Branch'), 'unknown', 0)).toBe('{"keep":1}')
-    expect(() => editField(kase, { table: 'Branch', id: 'line' }, 'unknown', '{}')).toThrow()
+    expect(() => set(kase, { table: 'Branch', id: 'line' }, 'unknown', '{}')).toThrow()
     expect(
       (await diagnose(kase, AbortSignal.any([]))).map(({ severity, message }) => [
         severity,
@@ -446,7 +442,7 @@ describe('single catalog and source ownership', () => {
         ['warning', expect.stringMatching(/^params\.kz is not a Bus field/)],
       ]),
     )
-    const next = apply(text, editField(kase, { table: 'Bus', id: 7 }, 'params.kz', 4))
+    const next = apply(text, set(kase, { table: 'Bus', id: 7 }, 'params.kz', 4))
     expect(JSON.parse(next).buses[1].params.kz).toBe(4)
   })
   it('says a bus name or device id GridKit refuses is an error, and never writes one', async () => {
@@ -464,7 +460,7 @@ describe('single catalog and source ownership', () => {
         { entity: { table: 'Branch', id: 'line:1' }, message: `id may contain ${rule}.` },
       ]),
     )
-    expect(() => editField(kase, { table: 'Bus', id: 42 }, 'name', 'Tokyo/1')).toThrow(rule)
+    expect(() => set(kase, { table: 'Bus', id: 42 }, 'name', 'Tokyo/1')).toThrow(rule)
     // A signal's name is the case's own, which GridKit takes as it is.
     expect(said.some(({ entity }) => entity?.table === 'Signal')).toBe(false)
   })
@@ -479,8 +475,7 @@ describe('single catalog and source ownership', () => {
       'BusDC is not a Bus class GridKit Studio knows; it is kept as written.',
     )
     expect(
-      JSON.parse(apply(text, editField(kase, { table: 'Bus', id: 7 }, 'class', 'Bus'))).buses[1]
-        .class,
+      JSON.parse(apply(text, set(kase, { table: 'Bus', id: 7 }, 'class', 'Bus'))).buses[1].class,
     ).toBe('Bus')
     // A catalog that gives the class, as one for a later GridKit would, reads it as any other.
     const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
@@ -539,11 +534,7 @@ describe('single catalog and source ownership', () => {
     const buses = kase.table('Bus')
     expect([kase.cell(buses, 'spare', 0), kase.cell(buses, 'spare', 1)]).toEqual([2, null])
     // An integer it holds stays one: GridKit may read an integer there.
-    expect(apply(text, editField(kase, { table: 'Bus', id: 42 }, 'spare', 4))).toContain(
-      '"spare":4,',
-    )
-    expect(apply(text, editField(kase, { table: 'Bus', id: 7 }, 'Vm', 1.05))).toContain(
-      '"Vm":1.05,',
-    )
+    expect(apply(text, set(kase, { table: 'Bus', id: 42 }, 'spare', 4))).toContain('"spare":4,')
+    expect(apply(text, set(kase, { table: 'Bus', id: 7 }, 'Vm', 1.05))).toContain('"Vm":1.05,')
   })
 })

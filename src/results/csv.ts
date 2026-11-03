@@ -1,6 +1,6 @@
-import { problem } from '../shared/errors.js'
 /** GridKit's numeric CSV results, under a header of UTF-8 names: a column per variable (its wide
  *  layout), or a row per variable and sample (its long layout), read as the wide. */
+import { problem } from '../shared/errors.js'
 import { BATCH_BYTES } from './limits.js'
 
 /** The columns of GridKit's long layout, which a header names in any order among others. */

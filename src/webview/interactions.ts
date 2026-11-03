@@ -17,8 +17,8 @@ export function elementOf(hit: Hit): Element {
 export function bindInteractions(view: View, actions: InteractionActions): () => void {
   const stop = [
     view.on('selection', ({ rows, trigger }) => {
-      // Source replacement and application-driven selection also emit this event.
-      // Only a user gesture changes the document session's selection.
+      // Data that drops selected rows says so with no trigger: only a user gesture changes the
+      // session's selection.
       if (!trigger) return
       const first = rows.find((group) => group.ids.length > 0)
       actions.select(first ? { table: first.table, id: first.ids[0]! } : null)

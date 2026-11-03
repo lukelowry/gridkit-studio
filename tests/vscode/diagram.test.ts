@@ -117,32 +117,6 @@ suite('Diagram', () => {
     await bench.settled()
   })
 
-  test('keeps visibility and detailed native settings independent', async () => {
-    const settings = vscode.workspace.getConfiguration('gridkitStudio', bench.uri)
-    const values = {
-      'diagram.labels': false,
-      'diagram.rankGap': 140,
-      'diagram.direction': 'down',
-      'monitor.lineWidth': 3,
-      'monitor.motion': 'reduced',
-      'monitor.interpolation': 'step',
-    } as const
-    const keys = Object.keys(values) as (keyof typeof values)[]
-    try {
-      for (const key of keys)
-        await settings.update(key, values[key], vscode.ConfigurationTarget.Workspace)
-      await until(
-        () => keys.every((key) => bench.studio.current().settings[key] === values[key]),
-        'visibility and detail settings reach the case together',
-      )
-      const actual = vscode.workspace.getConfiguration('gridkitStudio', bench.uri)
-      for (const key of keys) assert.equal(actual.get(key), values[key], key)
-    } finally {
-      for (const key of keys)
-        await settings.update(key, undefined, vscode.ConfigurationTarget.Workspace)
-    }
-  })
-
   test('finishes editing from its title bar', async () => {
     // Undo brought the case's text to the front.
     await bench.open('diagram', vscode.ViewColumn.Beside)

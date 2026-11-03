@@ -8,7 +8,7 @@ import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
 import { same, type Stamp, stampOf } from './stamp.js'
 
 /** How long a follower waits before it looks again for a file, or for more of it. */
-const POLL_MS = 40
+export const POLL_MS = 40
 const QUOTE = 0x22
 const COMMA = 0x2c
 const RETURN = 0x0d
@@ -70,7 +70,7 @@ export async function* follow(
     let to = 0
     /** How far the file has been read. */
     if (resume && (opened.file !== resume.stamp.file || opened.size < resume.offset))
-      throw new Error('The results file changed before its committed watermark.')
+      throw problem('results-lost', `${basename(path)} changed before what was kept of it.`)
     let at = resume?.offset ?? 0
     let header = !!resume
     /** Where the search for the header's end, or a segment's, resumes in `buffer`. */

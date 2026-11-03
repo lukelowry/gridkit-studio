@@ -4,6 +4,7 @@
 import type { SourceEdit, Summary } from '../shared/messages.js'
 import type { Sink } from '../shared/study.js'
 import type { Case, Part, Table } from './case.js'
+import type { Shape } from './definition.js'
 import { textOffsets } from './edits.js'
 import { NONE, type Parsed } from './parse.js'
 import { Turns } from './turns.js'
@@ -16,6 +17,10 @@ export function outputName(table: Table, field: string): string {
   return source?.kind === 'output' ? source.name : field
 }
 
+/** `name` in a `mon` list of a record of `shape`, as GridKit matches it: a bus's in any case, as its
+ *  BusDataJSONParser reads it, a device's as written. */
+const monKey = (shape: Shape, name: string) => (shape.kind === 'bus' ? name.toLowerCase() : name)
+
 /** The outputs row `row` of `table` lists, as its file writes them. */
 function listed(kase: Case, table: Table, row: number): string[] {
   const mons = kase.arrays[table.shape.array!]!.mons
@@ -26,9 +31,9 @@ function listed(kase: Case, table: Table, row: number): string[] {
   return Array.isArray(list) ? list.filter((name): name is string => typeof name === 'string') : []
 }
 
-/** How many records of each table, by its code, list each output, by the name the file writes it
- *  under, in each range read: a list that names an output twice counts once. Counted once for each
- *  range, which a revision keeps where an edit leaves it alone. */
+/** How many records of each table, by its code, list each output, by its `monKey`, in each range
+ *  read: a list that names an output twice counts once. Counted once for each range, which a
+ *  revision keeps where an edit leaves it alone. */
 const counted = new WeakMap<Parsed, Map<number, Map<string, number>>>()
 
 function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, number>> {
@@ -46,8 +51,11 @@ function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, 
     if (!Array.isArray(list)) continue
     let named = counts.get(code)
     if (!named) counts.set(code, (named = new Map()))
-    for (const name of new Set(list))
-      if (typeof name === 'string') named.set(name, (named.get(name) ?? 0) + 1)
+    const shape = kase.coding.shapes[code]!
+    for (const name of new Set(
+      list.filter((name) => typeof name === 'string').map((name) => monKey(shape, name)),
+    ))
+      named.set(name, (named.get(name) ?? 0) + 1)
   }
   counted.set(parsed, counts)
   return counts
@@ -81,7 +89,7 @@ export async function recordingOf(
     const counts = named.get(table)
     if (!counts) continue
     for (const field of table.shape.outputOrder.keys()) {
-      const count = counts.get(outputName(table, field))
+      const count = counts.get(monKey(table.shape, outputName(table, field)))
       if (count) (listed[table.shape.type] ??= {})[field] = count
     }
   }
@@ -125,12 +133,14 @@ export function recordEdits(kase: Case, recordings: readonly Recording[]): Sourc
     const table = kase.table(type)
     const array = table.shape.array && kase.arrays[table.shape.array]
     if (!array) continue
+    const key = (name: string) => monKey(table.shape, name)
     const adding = add.map((field) => outputName(table, field))
-    const removing = remove.map((field) => outputName(table, field))
+    const removing = new Set(remove.map((field) => key(outputName(table, field))))
     for (let row = 0; row < table.records.length; row++) {
       const before = listed(kase, table, row)
-      const kept = before.filter((name) => !removing.includes(name))
-      const after = [...kept, ...adding.filter((name) => !kept.includes(name))]
+      const kept = before.filter((name) => !removing.has(key(name)))
+      const held = new Set(kept.map(key))
+      const after = [...kept, ...adding.filter((name) => !held.has(key(name)))]
       if (after.length === before.length && after.every((name, n) => name === before[n])) continue
       const record = table.records[row]!
       const from = array.mons[2 * record]!

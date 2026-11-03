@@ -11,9 +11,8 @@ import {
   type FieldRef,
   NUMERIC,
 } from '../shared/bindings.js'
-import { leaf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
-import { fieldDefinition, networkRole } from '../shared/document.js'
+import { fieldDefinition, leaf, networkRole } from '../shared/document.js'
 import { settingsOf, viewOf } from '../shared/ids.js'
 import { askRange, type Commands, type Context } from './context.js'
 
@@ -54,7 +53,6 @@ export function registerCanvases({ command, action, focus }: Commands) {
     command(id, (context) => {
       if (context.session.diagramEditing === editing) return
       context.session.setEditing(editing)
-      action(context, 'diagramEditing', editing, 'diagram')
     })
   command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
 

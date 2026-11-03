@@ -58,15 +58,8 @@ export async function renderVideo(
     const cameras: Cameras = await bridge.request('cameras', { uri: shown.uri }, signal)
     gpu = await openGpu()
     signal.throwIfAborted()
-    const fields = new Map<string, Set<string>>()
-    for (const kind of job.views)
-      if (kind !== 'monitor')
-        for (const selection of sceneFields(definition, kind, app.bindings)) {
-          const held = fields.get(selection.table) ?? new Set<string>()
-          for (const field of selection.fields) held.add(field)
-          fields.set(selection.table, held)
-        }
-    const selection = [...fields].map(([table, fields]) => ({ table, fields: [...fields] }))
+    const canvases = job.views.filter((kind) => kind !== 'monitor')
+    const selection = sceneFields(definition, canvases, app.bindings)
     await projection.receive({ results: results.id, fields: selection }, selection, signal)
     const data = projection.slot.current!.data
     if (job.views.includes('network') && definition.drawing.geographic)
@@ -162,7 +155,7 @@ export async function renderVideo(
         signal.throwIfAborted()
       }
     }
-    await exportVideo(job, placed, views, output, prepare, signal, progress)
+    await exportVideo(job, placed, output, prepare, signal, progress)
     return saved
   } catch (error) {
     if (output && !output.locked) await output.abort(error).catch(() => {})

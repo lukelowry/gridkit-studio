@@ -6,7 +6,7 @@ import * as vscode from 'vscode'
 
 import { display, rowsOf } from '../shared/cells.js'
 import type { Target } from '../shared/contexts.js'
-import type { TableRequest } from '../shared/data.js'
+import { isRange, type TableRequest } from '../shared/data.js'
 import {
   type CaseDefinition,
   type Entity,
@@ -53,9 +53,9 @@ export function localPath(uri: vscode.Uri): string {
 /** `low, high` as a range: two finite numbers, low first, apart by a comma, spaces, or both. */
 function boundsOf(text: string): [number, number] | undefined {
   const parts = text.trim().split(/\s*,\s*|\s+/)
-  if (parts.length !== 2 || parts.includes('')) return undefined
-  const [low, high] = parts.map(Number) as [number, number]
-  return Number.isFinite(low) && Number.isFinite(high) && low < high ? [low, high] : undefined
+  if (parts.includes('')) return undefined
+  const range = parts.map(Number)
+  return isRange(range) ? range : undefined
 }
 
 /** Asks for a range, checked as it is typed, starting from `value`. Left empty, it is none, which
@@ -271,7 +271,6 @@ export function commandsOf(studio: Sessions) {
     onSession,
     action,
     focus,
-    rows,
     valuesOf,
     valueOf,
     referred,

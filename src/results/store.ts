@@ -88,6 +88,9 @@ async function writeAll(file: FileHandle, bytes: Uint8Array, position: number): 
     written += bytesWritten
   }
 }
+/** Removes `folder`, as far as the system lets it now: one held open, as Windows holds a file
+ *  another process reads, stays for a later sweep. */
+const removed = (folder: string) => rm(folder, { recursive: true, force: true }).catch(() => {})
 async function manifestOf(folder: string): Promise<Manifest | undefined> {
   try {
     const manifest = JSON.parse(await readFile(join(folder, 'manifest.json'), 'utf8')) as Manifest
@@ -405,21 +408,13 @@ export class Store {
     this.#manifest = written
     await this.owner?.finished(this)
   }
-  async intact(): Promise<boolean> {
-    try {
-      await this.restore()
-      return true
-    } catch {
-      return false
-    }
-  }
   async close(remove = false): Promise<void> {
     const files = this.#files
     this.#files = undefined
     await files
       ?.then((handles) => Promise.allSettled(handles.map((file) => file.close())))
       .catch(() => {})
-    if (remove) await rm(this.folder, { recursive: true, force: true })
+    if (remove) await removed(this.folder)
   }
 }
 
@@ -455,7 +450,7 @@ export class Stores {
     // Stores of another format are no stores of this Studio's.
     const formats = dirname(this.root)
     for (const name of await readdir(formats).catch(() => []))
-      if (name !== FORMAT) await rm(join(formats, name), { recursive: true, force: true })
+      if (name !== FORMAT) await removed(join(formats, name))
     for (const name of await readdir(this.root).catch(() => [])) {
       const folder = join(this.root, name)
       const window = /^\d+$/.test(name) ? Number(name) : undefined
@@ -465,7 +460,7 @@ export class Stores {
       if (window !== undefined)
         for (const store of await readdir(folder).catch(() => []))
           await rename(join(folder, store), join(this.#own, store)).catch(() => {})
-      await rm(folder, { recursive: true, force: true })
+      await removed(folder)
     }
     const names = await readdir(this.#own).catch(() => [])
     const found = await Promise.all(
@@ -474,22 +469,22 @@ export class Stores {
         return { folder, manifest: await manifestOf(folder) }
       }),
     )
-    const removed: string[] = []
+    const gone: string[] = []
     for (const { folder, manifest } of found) {
       const key = manifest && fileKey(manifest.path)
       if (!key || !named.has(key)) {
-        removed.push(folder)
+        gone.push(folder)
         continue
       }
       const latest = this.#latest.get(key)
       if (latest && BigInt(latest.manifest!.stamp.modified) >= BigInt(manifest.stamp.modified))
-        removed.push(folder)
+        gone.push(folder)
       else {
-        if (latest) removed.push(latest.folder)
+        if (latest) gone.push(latest.folder)
         this.#latest.set(key, new Store(folder, key, manifest, this))
       }
     }
-    await Promise.all(removed.map((folder) => rm(folder, { recursive: true, force: true })))
+    await Promise.all(gone.map(removed))
   }
 
   #use(store: Store): Store {

@@ -4,6 +4,10 @@ import type { Entity } from './document.js'
 
 export type TimeRange = readonly [number, number]
 
+/** Whether `range` is two finite numbers, the low first. */
+export const isRange = (range: unknown): range is [number, number] =>
+  Array.isArray(range) && range.length === 2 && range.every(Number.isFinite) && range[0] < range[1]
+
 export interface ProjectionSelection {
   readonly table: string
   readonly fields: readonly string[]

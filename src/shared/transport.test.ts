@@ -98,7 +98,7 @@ describe('Transport', () => {
 
   it('follows a live head, lets go on a seek back, and latches again at the head', () => {
     const { transport, changes } = rig()
-    transport.setSpan([0, 1], { live: true, headTolerance: 0.25 })
+    transport.setSpan([0, 1], { live: true })
     transport.grow(0.75)
     expect(transport.state.t).toBe(0.75)
     expect(changes).toHaveLength(2)
@@ -110,7 +110,7 @@ describe('Transport', () => {
     expect(transport.state.t).toBe(0.2)
     expect(changes).toHaveLength(3)
 
-    transport.seek(0.7)
+    transport.seek(0.9)
     expect(transport.state).toMatchObject({ t: 0.9, follow: true, status: 'paused' })
     transport.setLive(true)
     expect(changes).toHaveLength(4)
@@ -292,11 +292,12 @@ describe('Transport', () => {
     transport.dispose()
   })
 
-  it('reads the wall clock by default', () => {
+  it('reads the wall clock by default', async () => {
     const transport = new Transport(() => {})
     transport.setSpan([0, 1000])
     transport.play()
-    expect(transport.currentT()).toBeGreaterThanOrEqual(0)
+    await new Promise((done) => setTimeout(done, 20))
+    expect(transport.currentT()).toBeGreaterThan(0)
     transport.dispose()
   })
 })

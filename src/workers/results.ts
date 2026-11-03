@@ -39,8 +39,9 @@ await loadNative(options.wasmPath)
 const catalog = options.catalog === undefined ? bundled : catalogOf(options.catalog)
 const cache = new ResultCache(options.cacheBytes)
 const stores = new Stores(options.store)
-// What windows before left behind: stores no saved session names, and runs a window died during.
-void stores.sweep(options.saved)
+// What windows before left behind: stores no saved session names, and runs a window died during. A
+// sweep that fails says so to each read that then makes or finds a store.
+stores.sweep(options.saved).catch(() => {})
 if (options.runs) void sweepOrphans(options.runs)
 
 /** The results the extension holds, by the id it chose for each, and the file each holds. */
@@ -326,7 +327,10 @@ async function openResults(
     // From here to the answer nothing waits: a request let go of by now holds nothing.
     signal.throwIfAborted()
   } catch (error) {
-    await retire(file)
+    // What a store kept of a file that has since changed goes, and the file is read again whole.
+    const stale = restored !== undefined && failedWith(error, 'results-lost')
+    await retire(file, stale)
+    if (stale) return openResults({ results, path, ...(solver && { solver }), ...source }, signal)
     throw error
   } finally {
     signal.removeEventListener('abort', abandon)
@@ -356,7 +360,7 @@ serve<ResultsApi>(
     // The views read the case's schema and counts; its issues are the case worker's to say.
     async describe({ results }, signal) {
       const file = fileOf(results)
-      return summarize(file.kase, file.layout.revision, { signal })
+      return summarize(file.kase, file.layout.revision, signal)
     },
     project: (input, signal) =>
       using(input.results, signal, (file, s) =>

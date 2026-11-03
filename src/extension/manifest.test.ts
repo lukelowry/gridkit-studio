@@ -69,10 +69,13 @@ describe('native VS Code contract', () => {
         scope: 'resource',
       })
     }
-    expect(settings['gridkitStudio.appearance.theme']).toBeUndefined()
-    expect(() => validateSettings({ 'network.vertexRadiusPx': NaN })).toThrow()
-    expect(() => validateSettings({ 'diagram.fontSizePx': -1 })).toThrow()
-    expect(() => validateSettings({ 'monitor.axisColor': 'red' })).toThrow()
+    // Each setting takes only the values of its kind and range.
+    expect(validateSettings({ 'network.vertexRadius': 4 })).toEqual({ 'network.vertexRadius': 4 })
+    expect(() => validateSettings({ 'network.vertexRadius': NaN })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.tilt': 2.5 })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.colormap': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.map.ground': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'network.unknown': 1 })).toThrow('Unknown setting')
   })
   it('keeps scalar settings separate from nested settings', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
@@ -85,7 +88,7 @@ describe('native VS Code contract', () => {
         key,
       ).toEqual([])
   })
-  it('places Monitor and Case in native panels and exposes no compatibility commands', async () => {
+  it('places Monitor and Case in native panels', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
     expect(
       manifest.contributes.viewsContainers.panel.map((view: { id: string }) => view.id),
@@ -93,11 +96,6 @@ describe('native VS Code contract', () => {
     expect(
       manifest.contributes.customEditors.map((editor: { viewType: string }) => editor.viewType),
     ).toEqual(['gridkitStudio.network', 'gridkitStudio.diagram'])
-    expect(
-      manifest.contributes.commands.some(
-        (command: { command: string }) => command.command === 'gridkitStudio.chooseConfiguration',
-      ),
-    ).toBe(false)
     // The side bar holds what the case records and its video; Monitored Signals is a native tree,
     // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
@@ -120,7 +118,6 @@ describe('native VS Code contract', () => {
         expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
       )
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
-    expect(manifest.contributes.taskDefinitions).toBeUndefined()
     // Playback lives in the status bar, not the title bars; Fit is the canvas editors' own title
     // action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
@@ -152,7 +149,7 @@ describe('native VS Code contract', () => {
     const registering: string[] = []
     for (const path of sources) {
       const text = await readFile(path, 'utf8')
-      if (/show(Error|Warning|Information)Message|kind: 'notify'/.test(text)) notifying.push(path)
+      if (/show(Error|Warning|Information)Message/.test(text)) notifying.push(path)
       if (/commands\.registerCommand/.test(text)) registering.push(path)
     }
     // The Reporter tells the user why what they asked for failed; the rest shows in the views.

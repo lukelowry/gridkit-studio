@@ -2,11 +2,9 @@
 
 import { createHash } from 'node:crypto'
 
-import { Case } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
-import { editable } from '../gridkit/edits.js'
-import { recordingOf } from '../gridkit/recording.js'
-import type { Revision, Summary } from '../shared/messages.js'
+import { Case, editable, recordingOf } from '../gridkit/index.js'
+import { type Revision, revisionOf, type Summary } from '../shared/messages.js'
 
 /** The name of the case at `uri` when its header gives none: its file's, as the Explorer shows it. */
 export const nameOf = (uri: string) => decodeURIComponent(uri.split('/').at(-1) || 'Case')
@@ -68,14 +66,14 @@ export class TextCases {
 }
 
 /** What the extension is told of `kase`, read at `revision`: what it counts, and what it records,
- *  read until `signal` lets go. Its issues are found after, by validation. */
+ *  read until `signal` lets go. Its issues are found apart, by validation. */
 export async function summarize(
   kase: Case,
   revision: Revision,
-  { parseMs = 0, signal }: { parseMs?: number; signal?: AbortSignal } = {},
+  signal?: AbortSignal,
 ): Promise<Summary> {
   return {
-    ...revision,
+    ...revisionOf(revision),
     name: kase.name,
     fingerprint: kase.version,
     definition: kase.definition,
@@ -92,8 +90,5 @@ export async function summarize(
       [...kase.tables].map(([type, table]) => [type, table.starts.at(-1)!]),
     ),
     recording: await recordingOf(kase, signal),
-    issues: [],
-    validation: 'pending',
-    parseMs,
   }
 }

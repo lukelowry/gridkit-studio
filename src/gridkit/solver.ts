@@ -16,15 +16,10 @@ export const clipped = (line: string) =>
     ? line
     : `${line.slice(0, LINE_CHARS)}… (${(line.length - LINE_CHARS).toLocaleString()} more characters)`
 
-/** A level, then any bracketed parts, then what the line says. GridKit's summary of a run is info. */
-const PRINTED = /^\[(ERROR|WARNING|INFO|SUMMARY|DEBUG)\](?:\[[^\]]*\])*\s*(.*)$/
-const LEVELS = {
-  ERROR: 'error',
-  WARNING: 'warn',
-  INFO: 'info',
-  SUMMARY: 'info',
-  DEBUG: 'debug',
-} as const
+/** A level, then any bracketed parts, then what the line says: GridKit's Logger prints these four.
+ *  Its summary of a run and its other messages are info. */
+const PRINTED = /^\[(ERROR|WARNING|SUMMARY|MESSAGE)\](?:\[[^\]]*\])*\s*(.*)$/
+const LEVELS = { ERROR: 'error', WARNING: 'warn', SUMMARY: 'info', MESSAGE: 'info' } as const
 
 /** Read one line GridKit printed. A line without a level is GridKit's own account, as info. */
 export function readSolverLine(raw: string): SolverLine {

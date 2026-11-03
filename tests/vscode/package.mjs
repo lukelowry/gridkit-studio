@@ -85,8 +85,6 @@ try {
   assert.deepEqual(packaged.dependencies, manifest.dependencies)
   assert.equal(packaged.version, manifest.version)
   assert.equal(packaged.engines.vscode, manifest.engines.vscode)
-  assert.equal(packaged.contributes.languageModelTools, undefined)
-  assert.equal(packaged.contributes.mcpServerDefinitionProviders, undefined)
   await verify(target)
   assert.deepEqual(
     (await readdir(join(target, 'dist'))).filter((name) => /\.(cjs|mjs)$/.test(name)).sort(),

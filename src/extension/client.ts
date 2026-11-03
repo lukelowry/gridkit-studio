@@ -61,8 +61,12 @@ interface Owner {
 
 /** A worker that stops this many times within `CRASH_MS` is unsteady: what it held is read again
  *  only once the user asks, so what may stop it does not stop it over and over. */
-export const CRASHES = 3
+const CRASHES = 3
 const CRASH_MS = 60_000
+
+/** `error`, of a worker that stopped CRASHES times in a minute, saying what Studio does `instead`. */
+export const unsteady = (error: Error, instead: string) =>
+  new Error(`${error.message} It stopped ${CRASHES} times in a minute, so Studio ${instead}`)
 
 /** A worker of the extension's, started when first asked and again after it stops. */
 class Thread<A extends Api<A>> {

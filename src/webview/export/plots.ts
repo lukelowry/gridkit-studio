@@ -5,6 +5,7 @@ import type { Results, ViewState } from '../../shared/messages.js'
 import { holdsPlot, plotName } from '../../shared/plots.js'
 import { reader } from '../../shared/preferences.js'
 import { type FrameReads, FrameWindow } from '../frames.js'
+import { plotCamera, plotRequest } from '../monitor/plot.js'
 import { plotScene } from '../scenes.js'
 import { nativeTheme } from '../theme.js'
 
@@ -43,15 +44,7 @@ export async function plotViews(
       const frame = new FrameWindow(reads)
       frames.push(frame)
       await frame.receive(
-        {
-          results: results.id,
-          table: plot.from,
-          field: plot.field,
-          ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
-          range,
-          purpose: 'plot',
-          columns: Math.ceil(columns * region[2]),
-        },
+        plotRequest(results, plot, range, Math.ceil(columns * region[2])),
         results.frames,
         signal,
       )
@@ -66,7 +59,7 @@ export async function plotViews(
       const view = await View.create(null, scene, {
         gpu,
         sources: [source],
-        camera: { x: [...range], y: plot.range ? [...plot.range] : null },
+        camera: plotCamera(plot, range),
         signal,
       })
       const height = region[3] / plots.length

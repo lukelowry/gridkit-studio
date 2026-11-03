@@ -28,6 +28,17 @@ it('fails qualifying regressions, filters busy rounds, and keeps native counters
     expect(regression.status).toBe(1)
     expect(regression.stdout).toContain('slower network 39 buses > open')
     expect(regression.stdout).not.toContain('work network')
+    // Work changed under one renderer is reported.
+    await writeFile(base, JSON.stringify(report(100, 100, 'native')))
+    await writeFile(
+      head,
+      JSON.stringify({
+        ...report(100, 100, 'native'),
+        work: { 'network 39 buses > open': { uploaded: 300 } },
+      }),
+    )
+    expect(run(base, head).stdout).toContain('work network 39 buses > open: uploaded 100 → 300')
+    await writeFile(base, JSON.stringify(report(100, 100, 'previous')))
     await writeFile(head, JSON.stringify(report(120, 100, 'native')))
     expect(run(base, head).status).toBe(0)
     expect(run(join(folder, 'missing.json'), head).status).toBe(1)

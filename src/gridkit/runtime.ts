@@ -151,7 +151,8 @@ export async function sweepOrphans(folder: string): Promise<void> {
       } catch {
         // Unreadable, or ended as it was swept: either way, done with.
       }
-      await rm(path, { force: true })
+      // One the system holds open now goes at a later sweep.
+      await rm(path, { force: true }).catch(() => {})
     }),
   )
 }
@@ -302,7 +303,7 @@ export async function placed(gridkit: GridKit, place: Place, signal: AbortSignal
   if (runtime.kind === 'container')
     for (const path of [place.solver, ...place.touches]) {
       const inside = relative(place.root, path)
-      if (inside.startsWith('..') || isAbsolute(inside))
+      if (inside === '..' || inside.startsWith('..' + sep) || isAbsolute(inside))
         throw new Error(
           `${basename(path)} is outside ${place.root}, the folder GridKit's container mounts.`,
         )

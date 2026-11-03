@@ -312,7 +312,7 @@ suite('Diagram menus', () => {
       const [x, y] = await until(
         () =>
           diagram.evaluate<[number, number] | null>(
-            `gridkitLocate(${JSON.stringify({ table: 'Ieeest', id, ...(field ? { field } : {}) })}, ${JSON.stringify(field ?? null)})`,
+            `gridkitLocate(${JSON.stringify({ table: 'Ieeest', id })})`,
           ),
         id + ' drawn',
       )

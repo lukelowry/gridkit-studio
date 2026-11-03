@@ -8,18 +8,14 @@ const text =
   '{\r\n "buses":[{"class":"Bus","number":7,"params":{"kv":230.000}}],\r\n "signals":[{"signal_id":3,"name":"net"}],\r\n "devices":[{"class":"ConstantSignalSource","id":"source","ports":{"sr":3},"params":{"value":1.000}},{"class":"ConstantSignalSource","id":"other"},{"class":"GenClassical","id":"load","ports":{"bus":7}},{"class":"GenClassical","id":"unused","ports":{"bus":7}}]\r\n}'
 const parse = (source = text) => Case.parse(source, catalog)
 describe('document transactions', () => {
-  it('creates forward references, redirects an existing port, removes the old bus and edits values atomically', async () => {
-    const kase = await parse()
-    const next = applyChanges(text, [
+  it('redirects ports, removes the bus nothing names any more and edits values atomically', async () => {
+    const two = text.replace(
+      '"params":{"kv":230.000}}]',
+      '"params":{"kv":230.000}},{"class":"Bus","number":8,"params":{"kv":115.0}}]',
+    )
+    const kase = await parse(two)
+    const next = applyChanges(two, [
       transaction(kase, [
-        {
-          kind: 'add',
-          type: 'Branch',
-          key: 'tie',
-          fields: { 'ports.bus1': 8, 'ports.bus2': 9, 'params.X': 0.1 },
-        },
-        { kind: 'add', type: 'Bus', key: 8, fields: { 'params.kv': 230 } },
-        { kind: 'add', type: 'Bus', key: 9, fields: {} },
         {
           kind: 'set',
           entity: { table: 'GenClassical', id: 'load' },
@@ -30,34 +26,36 @@ describe('document transactions', () => {
           kind: 'set',
           entity: { table: 'GenClassical', id: 'unused' },
           field: 'ports.bus',
-          value: 9,
+          value: 8,
         },
         { kind: 'remove', entities: [{ table: 'Bus', id: 7 }] },
-        { kind: 'set', entity: { table: 'Branch', id: 'tie' }, field: 'params.X', value: 0.2 },
+        { kind: 'set', entity: { table: 'Bus', id: 8 }, field: 'params.kv', value: 230 },
         { kind: 'move', entity: { table: 'GenClassical', id: 'load' }, position: [10, 20] },
       ]),
     ])
     const final = await parse(next)
     expect(final.locate({ table: 'Bus', id: 7 })).toBeNull()
-    expect(final.locate({ table: 'Branch', id: 'tie' })).toBeDefined()
-    expect(JSON.parse(next).buses.map((bus: { number: number }) => bus.number)).toEqual([8, 9])
+    expect(JSON.parse(next).buses).toMatchObject([{ number: 8, params: { kv: 230 } }])
     expect(next).toContain('"value":1.000')
+    // A bus a port still names stays.
+    expect(() =>
+      transaction(kase, [{ kind: 'remove', entities: [{ table: 'Bus', id: 7 }] }]),
+    ).toThrow(/references/)
   })
   it('permits a new signal driver after removing the old one in the same batch', async () => {
     const kase = await parse()
     const next = applyChanges(text, [
       transaction(kase, [
-        {
-          kind: 'add',
-          type: 'ConstantSignalSource',
-          key: 'replacement',
-          fields: { 'ports.sr': 3 },
-        },
         { kind: 'remove', entities: [{ table: 'ConstantSignalSource', id: 'source' }] },
         {
           kind: 'connect',
+          from: { table: 'ConstantSignalSource', id: 'other', field: 'ports.sr' },
+          to: { table: 'Signal', id: 3 },
+        },
+        {
+          kind: 'connect',
           from: { table: 'GenClassical', id: 'load', field: 'ports.pmech' },
-          to: { table: 'ConstantSignalSource', id: 'replacement', field: 'ports.sr' },
+          to: { table: 'ConstantSignalSource', id: 'other', field: 'ports.sr' },
         },
       ]),
     ])
@@ -193,6 +191,29 @@ describe('document transactions', () => {
     expect(edits).toHaveLength(3)
     await parse(next)
   })
+  it.each([
+    '{"name":"東京","buses":[{"class":"Bus","number":1}],"devices":[{"class":"ConstantSignalSource","id":"a"},{"class":"GenClassical","id":"g","ports":{"bus":1}}]}\r\n',
+    '{"buses":[{"class":"Bus","number":1}],"signals":[],"devices":[{"class":"ConstantSignalSource","id":"a"},{"class":"GenClassical","id":"g","ports":{"bus":1}}]}',
+  ])(
+    'writes the signal wiring makes into the signals array, or one of its own: %s',
+    async (source) => {
+      const kase = await parse(source)
+      const next = applyChanges(source, [
+        transaction(kase, [
+          {
+            kind: 'connect',
+            from: { table: 'ConstantSignalSource', id: 'a', field: 'ports.sr' },
+            to: { table: 'GenClassical', id: 'g', field: 'ports.pmech' },
+          },
+        ]),
+      ])
+      const doc = JSON.parse(next)
+      expect(doc.signals).toEqual([{ signal_id: 0, name: 'Signal 0' }])
+      expect([doc.devices[0].ports.sr, doc.devices[1].ports.pmech]).toEqual([0, 0])
+      if (source.includes('東京')) expect(next).toContain('"name":"東京"')
+      await parse(next)
+    },
+  )
   it('guards referenced deletion and removes disjoint records without rewriting the array', async () => {
     const kase = await parse()
     expect(() =>

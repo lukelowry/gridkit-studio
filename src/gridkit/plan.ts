@@ -5,12 +5,19 @@ import { type Element, type Entity, entityKey, entityLabel } from '../shared/doc
 import { problem } from '../shared/errors.js'
 import type { Mutation, SourceEdit, Value } from '../shared/messages.js'
 import type { Case } from './case.js'
-import { createRecords } from './create.js'
 import type { ArrayName } from './definition.js'
-import { apply, editCase, editField, minimal, recordOf, textOffset, withValue } from './edits.js'
+import {
+  apply,
+  editCase,
+  editField,
+  membersMade,
+  minimal,
+  recordOf,
+  textOffset,
+  withValue,
+} from './edits.js'
 import { recordEdits } from './recording.js'
 
-type Addition = Extract<Mutation, { kind: 'add' }>
 export function planTransaction(kase: Case, mutations: readonly Mutation[]): SourceEdit[] {
   const records = mutations.filter((mutation) => mutation.kind === 'record')
   if (records.length) {
@@ -27,7 +34,8 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
     entities.set(key, entity)
     return key
   }
-  const added = new Map<string, Addition>()
+  /** The signals wiring makes, by key. */
+  const added = new Map<string, Entity>()
   const removed = new Set<string>()
   const fields = new Map<string, Map<string, Value>>()
   const positions = new Map<string, readonly [number, number] | null>()
@@ -37,18 +45,11 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
     if (!values) fields.set(key, (values = new Map()))
     values.set(field, value)
   }
-  for (const mutation of mutations) {
-    if (mutation.kind === 'add') {
-      const entity = { table: mutation.type, id: mutation.key }
-      const key = keyOf(entity)
-      if (added.has(key) || kase.locate(entity))
-        throw problem('invalid-input', 'Identity already exists: ' + entityLabel(entity))
-      added.set(key, { ...mutation, fields: { ...mutation.fields } })
-    } else if (mutation.kind === 'remove') {
+  for (const mutation of mutations)
+    if (mutation.kind === 'remove') {
       if (!mutation.entities.length) throw problem('invalid-input', 'Choose components to remove.')
       for (const entity of mutation.entities) removed.add(keyOf(entity))
     }
-  }
   const shapeOf = (entity: Entity) => {
     const key = keyOf(entity)
     const shape = added.has(key)
@@ -64,15 +65,13 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
   const resolve = (entity: Entity): Id | undefined => {
     const key = entityKey(entity)
     if (removed.has(key)) return undefined
-    const addition = added.get(key)
-    if (addition) return addition.key
+    if (added.has(key)) return entity.id
     const found = kase.locate(entity)
     return found ? kase.native(found.table, found.row) : undefined
   }
   const valueOf = (entity: Entity, field: string): Value => {
     const key = entityKey(entity)
     if (fields.get(key)?.has(field)) return fields.get(key)!.get(field)!
-    if (added.has(key)) return added.get(key)!.fields[field] ?? null
     const found = kase.locate(entity)!
     return kase.cell(found.table, field, found.row)
   }
@@ -138,11 +137,10 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
         let id = 0
         for (let row = 0; row < signals.records.length; row++)
           id = Math.max(id, Number(kase.native(signals, row)) + 1)
-        for (const addition of added.values())
-          if (addition.type === type) id = Math.max(id, Number(addition.key) + 1)
+        for (const signal of added.values()) id = Math.max(id, Number(signal.id) + 1)
         if (id > 0xffffffff) throw problem('limit', 'No signal identity is available.')
         target = { table: type, id }
-        added.set(keyOf(target), { kind: 'add', type, key: id, fields: { name: 'Signal ' + id } })
+        added.set(keyOf(target), target)
       }
       set(from.entity, from.plan.name, target.id)
       if (other) set(other.entity, other.plan.name, target.id)
@@ -150,18 +148,15 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
   }
   for (const key of removed) {
     const entity = entities.get(key)!
-    if (added.has(key))
-      throw problem('invalid-input', 'Do not add and remove the same identity in one batch.')
     if (!kase.locate(entity)?.table.shape.array)
       throw problem('invalid-input', 'This component cannot be removed: ' + entityLabel(entity))
   }
   const touchedNets = new Set<string>()
-  const changed = new Set([...fields.keys(), ...added.keys()])
-  for (const key of changed) {
+  for (const key of fields.keys()) {
     const entity = entities.get(key)!
     for (const port of shapeOf(entity).ports) {
       if (port.definition.direction !== 'out') continue
-      if (!added.has(key) && !fields.get(key)?.has(port.name)) continue
+      if (!fields.get(key)!.has(port.name)) continue
       const id = valueOf(entity, port.name)
       if (typeof id === 'number' || typeof id === 'string')
         touchedNets.add(entityKey({ table: port.definition.target, id }))
@@ -209,16 +204,10 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
         if (!removed.has(entityKey(entity))) check(entity)
       }
     }
-    for (const key of added.keys()) check(entities.get(key)!)
   }
   const edits: SourceEdit[] = []
   for (const key of new Set([...fields.keys(), ...positions.keys()])) {
     const entity = entities.get(key)!
-    const addition = added.get(key)
-    if (addition) {
-      Object.assign(addition.fields, Object.fromEntries(fields.get(key) ?? []))
-      continue
-    }
     if (kase.locate(entity)?.table.shape.array === null) {
       edits.push(...editCase(kase, fields.get(key) ?? new Map(), resolve))
       continue
@@ -226,7 +215,7 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
     const record = recordOf(kase, entity)
     let after = record.text
     for (const [field, value] of fields.get(key) ?? [])
-      after = apply(after, editField(kase, entity, field, value, after, resolve))
+      after = apply(after, [editField(kase, entity, field, value, after, resolve)])
     if (positions.has(key))
       after = withValue(
         after,
@@ -258,14 +247,13 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
       edits.push({ offset, length: textOffset(kase, end) - offset, text: '' })
     }
   }
-  if (added.size)
-    edits.push(
-      ...createRecords(kase, [...added.values()], {
-        resolve,
-        removed: [...removed].map((key) => entities.get(key)!),
-        positions,
-      }),
+  if (added.size) {
+    const shape = kase.catalog.shapes.get([...added.values()][0]!.table)!
+    const signals = [...added.values()].map((signal) =>
+      JSON.stringify({ [shape.identity.name]: signal.id, name: 'Signal ' + signal.id }),
     )
+    edits.push(appended(kase, shape.array!, signals, byArray.get(shape.array!)))
+  }
   edits.sort((a, b) => a.offset - b.offset || b.length - a.length)
   const combined: SourceEdit[] = []
   for (const edit of edits) {
@@ -276,4 +264,25 @@ export function planTransaction(kase: Case, mutations: readonly Mutation[]): Sou
     else combined.push(edit)
   }
   return combined
+}
+
+/** The edit that writes `records`, each one's JSON, at the end of the case's array `name`, after the
+ *  last of its records that stays once those at `removed` go; or the array, first among the case's
+ *  members, when it has none. */
+function appended(
+  kase: Case,
+  name: ArrayName,
+  records: readonly string[],
+  removed?: ReadonlySet<number>,
+): SourceEdit {
+  const array = kase.arrays[name]
+  if (!array) return membersMade(kase, [`${JSON.stringify(name)}: [${records.join(', ')}]`])
+  const eol = kase.file.includes(13) ? '\r\n' : '\n'
+  let last = array.ends.length - 1
+  while (removed?.has(last)) last--
+  return {
+    offset: textOffset(kase, last < 0 ? array.open + 1 : array.ends[last]!),
+    length: 0,
+    text: (last < 0 ? '' : ',') + eol + '    ' + records.join(',' + eol + '    '),
+  }
 }

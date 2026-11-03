@@ -4,7 +4,7 @@ import { Data, Expr } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
-import { reader } from '../shared/preferences.js'
+import { defaults, reader } from '../shared/preferences.js'
 import { loadNative } from '../workers/native.js'
 import {
   caseFit,
@@ -31,7 +31,7 @@ it('builds native scenes and projects only mark fields with separate sampled sou
     },
   })
   expect(diagram.controls).toMatchObject({ connect: true, delete: true })
-  const projected = sceneFields(catalog.definition, 'network', {
+  const projected = sceneFields(catalog.definition, ['network'], {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
   expect(projected.flatMap((table) => table.fields)).not.toContain('Vm')
@@ -100,7 +100,7 @@ it('frames whole case tables and raises geographic heights by meters', () => {
   })
   // 111,194.93 meters is one degree of arc, the earth's unit of height.
   const scene = networkScene(data, drawing, reader({ 'network.heightMeters': 111194.93 }), {}, [
-    { table: 'Bus', field: 'kv', channel: 'elevation', domain: [0, 10] },
+    { table: 'Bus', field: 'kv', placement: 'vertex', channel: 'elevation', domain: [0, 10] },
   ])
   const elevation = (scene.marks![0] as { elevation: Expr }).elevation
   const values = data.query({ of: 'Bus', select: { elevation } }).fields.elevation as Float64Array
@@ -139,13 +139,18 @@ it('scales dense case marks and their bindings together while preserving missing
   expect(dense.radius).toBeLessThan(0.7)
   expect(dense.width).toBeGreaterThan(0.2)
   expect(dense.width).toBeLessThan(0.5)
-  const larger = sizes(reader({ 'network.vertexRadius': 5, 'network.edgeWidth': 1.5 }))
+  const larger = sizes(
+    reader({
+      'network.vertexRadius': 2 * defaults['network.vertexRadius'],
+      'network.edgeWidth': 2 * defaults['network.edgeWidth'],
+    }),
+  )
   expect(larger.radius).toBe(dense.radius * 2)
   expect(larger.width).toBe(dense.width * 2)
 
   const scene = networkScene(data, drawing, reader(), {}, [
-    { table: 'Bus', field: 'value', channel: 'radius', domain: [0, 10] },
-    { table: 'Line', field: 'value', channel: 'width', domain: [0, 10] },
+    { table: 'Bus', field: 'value', placement: 'vertex', channel: 'radius', domain: [0, 10] },
+    { table: 'Line', field: 'value', placement: 'edge', channel: 'width', domain: [0, 10] },
   ])
   for (const [table, mark, channel, high] of [
     ['Bus', 1, 'radius', 2.5],
@@ -164,6 +169,7 @@ it('scales dense case marks and their bindings together while preserving missing
   }
   using small = new Data('small').replace('Bus', [1, 2]).replace('Line', [1])
   const sparse = networkScene(small, drawing, reader(), {}, [])
-  expect(sparse.marks![1]).toMatchObject({ radius: 2.5 })
-  expect(sparse.marks![0]).toMatchObject({ width: 0.75 })
+  // A sparse case keeps the sizes the settings give.
+  expect(sparse.marks![1]).toMatchObject({ radius: defaults['network.vertexRadius'] })
+  expect(sparse.marks![0]).toMatchObject({ width: defaults['network.edgeWidth'] })
 })

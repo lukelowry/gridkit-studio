@@ -91,11 +91,11 @@ export function fieldDefinition(
   return tableDefinition(document, table)?.fields.find((item) => item.name === field)
 }
 
+/** A field's name past the object it is in: `kv` of `params.kv`. */
+export const leaf = (field: string): string => field.slice(field.indexOf('.') + 1)
+
 export function fieldLabel(field: FieldDefinition): string {
-  const unit =
-    field.unit?.toLowerCase() === field.name.slice(field.name.indexOf('.') + 1).toLowerCase()
-      ? undefined
-      : field.unit
+  const unit = field.unit?.toLowerCase() === leaf(field.name).toLowerCase() ? undefined : field.unit
   return withUnit(field.label, unit)
 }
 

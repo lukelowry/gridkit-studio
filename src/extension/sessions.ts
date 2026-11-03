@@ -21,7 +21,7 @@ import {
 import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
 import { resent } from '../shared/rpc.js'
 import { catalogFile } from './catalog.js'
-import { Client, CRASHES } from './client.js'
+import { Client, unsteady } from './client.js'
 import { current, Documents, isWritable, wholeAt } from './documents.js'
 import { noCase, Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
@@ -97,12 +97,7 @@ export class Sessions implements vscode.Disposable {
       this.client.results.failure.event((error) => {
         const { steady } = this.client.results
         this.reporter.report(
-          steady
-            ? error
-            : new Error(
-                `${error.message} It stopped ${CRASHES} times in a minute, so Studio reads ` +
-                  'results again once you show them.',
-              ),
+          steady ? error : unsteady(error, 'reads results again once you show them.'),
         )
         for (const session of this.#all.values()) session.lost(error, steady)
       }),

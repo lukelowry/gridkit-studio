@@ -52,7 +52,6 @@ suite('Network', () => {
 
   test('draws the case, filling its editor', async () => {
     assert.equal(bench.studio.state(bench.key).summary?.counts.Bus, bench.source.buses.length)
-    assert.equal(await network.locator('.status').count(), 0)
     assert.ok(await fills(network), 'Network must fill its editor')
     bench.report.network = await stats(network)
     await bench.capture('network-vscode')

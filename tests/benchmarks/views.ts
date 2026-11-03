@@ -1,8 +1,7 @@
 /** Studio's benchmarks inside VS Code, case by case: how soon each view draws, and how soon it
  *  answers what the user does. Where GridKit runs, each case also runs a second of simulation,
  *  followed live, then played, scrubbed, stepped, plotted, restyled, picked and exported. Each
- *  scenario's times, and the work it did, are written for compare.mjs to set beside another run's.
- *  compare.mjs fails the migration gate when qualified timings regress. */
+ *  scenario's times, and the work it did, are written for compare.mjs to set beside another run's. */
 
 import assert from 'node:assert/strict'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -319,23 +318,18 @@ export async function run() {
       )
       const opened = performance.now()
       const diagram = await bench.view('diagram')
-      // A case with no directed signal components draws nothing.
-      const drawn = await diagram
-        .waitForFunction(
-          `() => document.querySelector('canvas[data-rendered=true]') ? 'drawn' : document.querySelector('.canvas-host[data-empty]') ? 'none' : ''`,
-          undefined,
-          { polling: 'raf', timeout: 120_000 },
-        )
-        .then((answer) => answer.jsonValue())
-      if (drawn === 'drawn') {
-        timings[`diagram ${size} > first frame`] = [performance.now() - opened]
-        await diagram.locator('canvas').hover()
-        await time(`diagram ${size} > camera move`, RUNS, {
-          ready: async () => (await idle(diagram)).frames,
-          act: (i) => bench.page.mouse.wheel(0, i % 2 ? 240 : -240),
-          done: (_, frames) => painted(diagram, frames),
-        })
-      }
+      await diagram.waitForFunction(
+        `() => document.querySelector('canvas[data-rendered=true]')`,
+        undefined,
+        { polling: 'raf', timeout: 120_000 },
+      )
+      timings[`diagram ${size} > first frame`] = [performance.now() - opened]
+      await diagram.locator('canvas').hover()
+      await time(`diagram ${size} > camera move`, RUNS, {
+        ready: async () => (await idle(diagram)).frames,
+        act: (i) => bench.page.mouse.wheel(0, i % 2 ? 240 : -240),
+        done: (_, frames) => painted(diagram, frames),
+      })
       // The Diagram's tab closes by name, whichever editor has focus, and leaves the Network's.
       await vscode.window.tabGroups.close(
         vscode.window.tabGroups.all

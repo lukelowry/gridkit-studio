@@ -182,17 +182,18 @@ suite('Monitor', () => {
     const results = await bench.waveform('Native windows.csv', 46_000, 46, 3)
     bench.session.setPlots([{ from: VM.table, field: VM.field }])
     monitor = await bench.show('monitor')
+    let first: number | undefined
     for (const start of [0, 20, 40, 10, 0]) {
       bench.session.setWindow([start, Math.min(results.domain[1], start + 3)])
+      let resident = 0
       await until(async () => {
         const state = await monitor.evaluate<{
-          cacheBytes: number
           reads: number
           views: number
+          resident: number
           plots: { camera: { x: number[] }; drawn: number }[]
         }>('gridkitMonitor()')
-        assert.ok(state.cacheBytes <= 96 * 1024 * 1024)
-        assert.ok(state.reads <= 2)
+        resident = state.resident
         return (
           state.reads === 0 &&
           state.views === 1 &&
@@ -200,6 +201,9 @@ suite('Monitor', () => {
           state.plots[0]!.camera.x[0] === start
         )
       }, 'a bounded native window is rendered')
+      // What the GPU holds stays about what one window needs, however many were shown.
+      first ??= resident
+      assert.ok(resident <= 2 * first, `${resident} bytes resident after ${first}`)
     }
   })
 })

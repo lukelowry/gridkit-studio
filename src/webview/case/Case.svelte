@@ -6,14 +6,7 @@
   import { onMount, tick } from 'svelte'
 
   import { channelsOf, shortNames } from '../../shared/bindings.js'
-  import {
-    changedTable,
-    display,
-    leaf,
-    rowsOf,
-    shownColumns,
-    shownType,
-  } from '../../shared/cells.js'
+  import { changedTable, display, rowsOf, shownColumns, shownType } from '../../shared/cells.js'
   import { menuContext } from '../../shared/contexts.js'
   import type { TableRequest } from '../../shared/data.js'
   import {
@@ -21,6 +14,7 @@
     entityKey,
     type FieldDefinition,
     fieldDefinition,
+    leaf,
     tableDefinition,
   } from '../../shared/document.js'
   import {
@@ -96,7 +90,6 @@
   )
   /** The field each row is known by, shown as the row's own header. */
   const identity = $derived(summary?.identities[type])
-  /** The type's static fields besides its identity; sampled ones belong to the Monitor. */
   /** A cell as text: a number to six significant digits, which hover and editing show whole. */
   const text = (value: unknown) =>
     typeof value === 'number'

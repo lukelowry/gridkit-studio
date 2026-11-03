@@ -23,6 +23,7 @@ import {
   CASE,
   type Catalog,
   DEVICE_CODES,
+  IDENTITY,
   type PortKey,
   type Shape,
   SIGNAL_CODE,
@@ -551,12 +552,10 @@ const RECORD: Record<ArrayName, readonly Key[]> = {
   signals: ['identity', 'name'],
   devices: ['class', 'identity', 'params', 'init', 'mon', 'extension', ...PORT_KEYS],
 }
-/** Each array's identity, as its records write it. */
-const IDENTITY: Record<ArrayName, string> = { buses: 'number', signals: 'signal_id', devices: 'id' }
 const RECORD_KEYS = Object.fromEntries(
   Object.entries(RECORD).map(([array, keys]) => [
     array,
-    new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName] : key))),
+    new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName].name : key))),
   ]),
 ) as Record<ArrayName, Keys>
 /** What Studio keeps under `extension` for itself, and never shows as a field. */
@@ -608,6 +607,7 @@ function lazyColumn(
     return { chunk: target.finish(), wrong: Uint32Array.from(wrong) }
   })
   return {
+    // Whether any row writes a value other than `null`, read or not, the same before and after.
     provided: () =>
       unread
         ? unread.spans.some(
@@ -616,7 +616,8 @@ function lazyColumn(
               at >= 0 &&
               unread!.source.bytes[at + unread!.source.shift] !== 0x6e,
           )
-        : decode().chunk.some(
+        : decode().wrong.length > 0 ||
+          decode().chunk.some(
             (value) => value !== null && (typeof value !== 'number' || Number.isFinite(value)),
           ),
     read: () => decode().chunk,

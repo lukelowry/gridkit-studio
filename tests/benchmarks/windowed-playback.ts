@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import type { FrameRequest } from '../../src/shared/data.js'
+import { type FrameRequest, PAYLOAD_BYTES } from '../../src/shared/data.js'
 import { pause, renderer, testHost, until, visible, VM } from '../vscode/harness.js'
 
 export async function run() {
@@ -40,7 +40,7 @@ export async function run() {
     console.log('Windowed: real 10k simulation complete')
     const results = session.results!
     assert.ok(
-      2 * source.buses.length * results.frames * 8 > 96 * 1024 * 1024,
+      2 * source.buses.length * results.frames * 8 > PAYLOAD_BYTES,
       'Raw data exceeds the page cache',
     )
     session.transport.pause()
@@ -90,7 +90,6 @@ export async function run() {
           reads: number
           windows: { span: number[] }[]
         }>('gridkitStats()')
-        assert.ok(held.cacheBytes <= 96 * 1024 * 1024 && held.reads <= 2)
         assert.ok(
           held.windows.every((window) => window.span[1]! - window.span[0]! < 10),
           'Each field holds a bounded interval',

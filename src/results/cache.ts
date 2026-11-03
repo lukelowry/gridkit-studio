@@ -15,10 +15,6 @@ export class ResultCache {
     return this.#bytes
   }
 
-  get limit(): number {
-    return this.#limit
-  }
-
   /** A lower limit lets go at once of what is past it. */
   set limit(bytes: number) {
     this.#limit = bytes

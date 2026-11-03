@@ -43,6 +43,8 @@ function fixture(
     replace,
     error,
     emit: (name: string, event: unknown) => events.get(name)?.(event),
+    /** The editor's handler of `name`, which a test may call after the editor lets go of it. */
+    handler: (name: string) => events.get(name)!,
     close: () => {
       editor.destroy()
       source.destroy()
@@ -82,12 +84,13 @@ it('cancels arrangement and never commits a late drag after source replacement',
   })
   const rig = fixture(() => pending)
   const signal = vi.mocked(rig.view.arrange).mock.calls[0]![1]!.signal!
+  // A drag latkit queued before the editor went still reaches its handler.
+  const late = rig.handler('drag')
   rig.editor.destroy()
   expect(signal.aborted).toBe(true)
   resolve([new Patch('case').set('Device', ['a/b'], { x: [1], y: [2] })])
-  await Promise.resolve()
-  await Promise.resolve()
-  rig.emit('drag', drag('end'))
+  late(drag('end'))
+  await new Promise((done) => setTimeout(done, 0))
   expect(request).not.toHaveBeenCalled()
   rig.source.destroy()
 })

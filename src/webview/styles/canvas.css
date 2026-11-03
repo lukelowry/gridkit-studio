@@ -1,4 +1,5 @@
-/* A renderer's canvas filling its host, with a start fallback, and the Network's toolbar. */
+/* A renderer's canvas filling its host, with a start fallback, a status in its bottom left (whom
+   the Network's map credits, as its tiles' license asks), and the Network's toolbar. */
 .canvas-host {
   position: relative;
   inline-size: 100%;
@@ -25,16 +26,6 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-1);
-  pointer-events: none;
-}
-
-/* Whom the Network's map credits, as its tiles' license asks, in its bottom right. */
-.canvas-host__credit {
-  position: absolute;
-  inset-inline-end: var(--spacing-sm);
-  inset-block-end: var(--spacing-2xs);
-  color: var(--color-text-2);
-  font-size: var(--text-xs);
   pointer-events: none;
 }
 

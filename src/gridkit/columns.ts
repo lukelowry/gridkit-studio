@@ -81,7 +81,6 @@ export function readColumn(column: Column, offset: number, count: number): Value
   return result
 }
 export interface Builder {
-  readonly length: number
   push(value: Value): void
   finish(): Chunk
 }
@@ -99,9 +98,6 @@ export function chunkOf(kind: DecodeKind, values: readonly Value[]): Chunk {
 export class NumericBuilder implements Builder {
   #values = new Float64Array(256)
   #length = 0
-  get length(): number {
-    return this.#length
-  }
   pushNumber(value: number): void {
     if (this.#length === this.#values.length) {
       const next = new Float64Array(this.#values.length * 2)
@@ -109,9 +105,6 @@ export class NumericBuilder implements Builder {
       this.#values = next
     }
     this.#values[this.#length++] = value
-  }
-  pushNull(): void {
-    this.pushNumber(NaN)
   }
   push(value: Value): void {
     this.pushNumber(typeof value === 'number' ? value : NaN)
@@ -122,9 +115,6 @@ export class NumericBuilder implements Builder {
 }
 class BooleanBuilder implements Builder {
   readonly #values: (boolean | null)[] = []
-  get length(): number {
-    return this.#values.length
-  }
   push(value: Value): void {
     this.#values.push(typeof value === 'boolean' ? value : null)
   }
@@ -134,14 +124,8 @@ class BooleanBuilder implements Builder {
 }
 export class TextBuilder implements Builder {
   readonly #values: (string | null)[] = []
-  get length(): number {
-    return this.#values.length
-  }
   pushUtf8(source: Uint8Array, start: number, end: number): void {
     this.#values.push(utf8(source, start, end))
-  }
-  pushNull(): void {
-    this.#values.push(null)
   }
   push(value: Value): void {
     this.#values.push(typeof value === 'string' ? value : null)
@@ -152,9 +136,6 @@ export class TextBuilder implements Builder {
 }
 class PathBuilder implements Builder {
   readonly #values: (Geometry | null)[] = []
-  get length(): number {
-    return this.#values.length
-  }
   push(value: Value): void {
     this.#values.push(Array.isArray(value) ? (value as Geometry) : null)
   }

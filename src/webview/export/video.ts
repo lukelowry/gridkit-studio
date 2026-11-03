@@ -1,4 +1,4 @@
-﻿import { type Placed, Shot, type Video, type View } from 'latkit'
+﻿import { type Placed, Shot, type Video, View } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
 import type { VideoView, ViewState } from '../../shared/messages.js'
@@ -51,15 +51,14 @@ export function videoTimes(state: ViewState): TimeRange | undefined {
   const range: TimeRange = [Math.max(held[0], shown[0]), Math.min(held[1], shown[1])]
   return range[0] < range[1] ? range : undefined
 }
-/** Whether the encoder takes `job`: a size of whole 4×2 blocks, and a positive rate over a span. */
+/** Whether `job` makes a video: a size at least one encoder block, which latkit rounds to whole
+ *  blocks, and a positive rate over a span. */
 function valid(job: VideoJob): boolean {
   return (
-    Number.isSafeInteger(job.width) &&
+    Number.isFinite(job.width) &&
     job.width >= 4 &&
-    job.width % 4 === 0 &&
-    Number.isSafeInteger(job.height) &&
+    Number.isFinite(job.height) &&
     job.height >= 2 &&
-    job.height % 2 === 0 &&
     Number.isFinite(job.frameRate) &&
     job.frameRate > 0 &&
     ['medium', 'high', 'very-high'].includes(job.quality) &&
@@ -81,16 +80,15 @@ export function exportable(job: VideoJob | undefined, state: ViewState): job is 
   )
 }
 
+/** Records `job`, which `exportable` takes, of the views `placed` to `output`. */
 export async function exportVideo(
   job: VideoJob,
   placed: readonly Placed[],
-  views: readonly View[],
   output: WritableStream<Uint8Array>,
   prepare: (at: number, signal: AbortSignal) => Promise<void>,
   signal: AbortSignal,
   progress: (value: VideoProgress) => void,
 ): Promise<void> {
-  if (!valid(job)) throw new Error('Invalid MP4 export settings.')
   const [from, to] = job.timeRange
   const total = Math.max(1, Math.ceil(((to - from) / job.rate) * job.frameRate))
   if (!Number.isSafeInteger(total)) throw new Error('The video contains too many frames.')
@@ -99,7 +97,7 @@ export async function exportVideo(
     job.height *
     job.frameRate *
     { medium: 0.08, high: 0.15, 'very-high': 0.25 }[job.quality]
-  if (!Number.isFinite(bitrate) || bitrate <= 0) throw new Error('Invalid MP4 bitrate.')
+  const views = placed.map((each) => (each instanceof View ? each : each.view))
   const shot = new Shot([job.width, job.height], { views: placed, capture: 'now' })
   let video: Video | undefined
   try {

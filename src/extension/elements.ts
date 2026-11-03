@@ -3,12 +3,13 @@
 
 import * as vscode from 'vscode'
 
-import { display, leaf } from '../shared/cells.js'
+import { display } from '../shared/cells.js'
 import {
   type Entity,
   entityLabel,
   fieldDefinition,
   fieldLabel,
+  leaf,
   referenceFields,
 } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
@@ -61,8 +62,14 @@ export function registerElements({
   // The element a reference of the element in context names: the field in context's, or, of an
   // element, the one of its references the user picks, when it has several.
   command('goToReference', async (context) => {
-    const { session, summary, element, type, field } = context
+    const { session, summary, element, type } = context
     if (!element || !type) return
+    // A field in context counts only as a reference: the cursor may rest on any.
+    const field =
+      context.field &&
+      fieldDefinition(summary.definition, type, context.field)?.kind === 'reference'
+        ? context.field
+        : undefined
     const fields = field
       ? [field]
       : referenceFields(summary.definition, type).map((each) => each.name)

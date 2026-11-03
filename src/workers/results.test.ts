@@ -8,7 +8,7 @@ import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { FORMAT } from '../results/store.js'
-import type { FramePage, RecordedField } from '../shared/data.js'
+import { type FramePage, PAGE_BYTES, type RecordedField } from '../shared/data.js'
 import type { Results, ResultsApi } from '../shared/messages.js'
 import { loadNative } from './native.js'
 import { bundle, start } from './rig.js'
@@ -96,7 +96,7 @@ async function everything(
       bytes: 96 << 20,
       next,
     })
-    expect(page.bytes.byteLength).toBeLessThanOrEqual(4 << 20)
+    expect(page.bytes.byteLength).toBeLessThanOrEqual(PAGE_BYTES)
     sent.push(page)
     next = page.next
   } while (next)
@@ -229,12 +229,11 @@ describe('the results worker', () => {
       // The rows the file holds, as the case numbers them: here the one bus.
       expect(results.outputs).toMatchObject([{ table: 'Bus', field: 'Vm', ids: [1] }])
       expect(results.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
-      // What the views read of the case it was read against, and not its issues, which are the
-      // case worker's to say.
-      expect(await rig.call('describe', { results: results.id })).toMatchObject({
-        fingerprint: results.fingerprint,
-        validation: 'pending',
-      })
+      // What the views read of the case it was read against, and nothing of its text.
+      const described = await rig.call('describe', { results: results.id })
+      expect(described).toMatchObject({ fingerprint: results.fingerprint, counts: { Bus: 1 } })
+      expect(described).not.toHaveProperty('text')
+      expect(results.revision).not.toHaveProperty('text')
       const exported = join(rig.scratch, 'exported.csv')
       await rig.call('export', { results: results.id, path: exported })
       expect(await readFile(exported, 'utf8')).toContain('0.8')
@@ -350,6 +349,33 @@ describe('the results worker', () => {
       using b = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
       expect([0, 20, 39].map((at) => b.get('Bus', 1, 'Vm', { at }))).toEqual(
         [0, 20, 39].map((at) => a.get('Bus', 1, 'Vm', { at })),
+      )
+    } finally {
+      await rig.stop()
+      await rm(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a file again whole once it changed in place under an unfinished read of it', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'gridkit-rewritten-'))
+    const csv = join(folder, 'results.csv')
+    await waveform(csv, 40)
+    let rig = await start<ResultsApi>(script, { folder })
+    try {
+      const first = await read(rig, await open(rig, caseOf('rewritten'), csv))
+      await rig.stop()
+      // What was kept says its read stopped short, as a window closed partway leaves it; then the
+      // file is written over in place, its size as it was, with other values.
+      const manifest = join(await storeOf(folder), 'manifest.json')
+      const kept = JSON.parse(await readFile(manifest, 'utf8')) as object
+      await writeFile(manifest, JSON.stringify({ ...kept, complete: false }))
+      await waveform(csv, 40, (i) => String((i + 1) % 3))
+      rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
+      const again = await read(rig, await open(rig, caseOf('rewritten'), csv))
+      expect(again.frames).toBe(first.frames)
+      using data = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
+      expect([0, 20, 39].map((at) => data.get('Bus', 1, 'Vm', { at }))).toEqual(
+        [0, 20, 39].map((at) => (at + 1) % 3),
       )
     } finally {
       await rig.stop()

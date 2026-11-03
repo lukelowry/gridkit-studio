@@ -10,7 +10,6 @@ const PALETTE = {
   /** The editor's background, which the Network and Diagram sit on wherever they draw, a video's
    *  too, though the page drawing them sits elsewhere. */
   editor: ['--vscode-editor-background', '#1e1e1e'],
-  surface1: ['--color-surface-1', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
   text1: ['--color-text-1', '#cccccc'],
   text2: ['--color-text-2', '#aaaaaa'],

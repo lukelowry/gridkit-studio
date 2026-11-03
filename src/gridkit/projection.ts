@@ -144,20 +144,6 @@ export async function projectionPage(
   }
 }
 
-export async function* project(
-  document: ProjectedDocument,
-  selection: ReadonlyMap<string, readonly string[]>,
-  signal: AbortSignal,
-): AsyncGenerator<Uint8Array> {
-  const fields = [...selection].map(([table, fields]) => ({ table, fields }))
-  let cursor: ProjectionCursor | undefined
-  do {
-    const page = await projectionPage(document, fields, cursor, signal)
-    yield page.bytes
-    cursor = page.next
-  } while (cursor)
-}
-
 /** A revision owns its native query dataset and releases it with its parser/cache entry. */
 export class CaseQueries {
   readonly data = new Data('case-query')
@@ -215,8 +201,7 @@ export class CaseQueries {
       !Number.isSafeInteger(request.offset) ||
       request.offset < 0 ||
       !Number.isSafeInteger(request.limit) ||
-      request.limit < 1 ||
-      request.limit > 1000
+      request.limit < 1
     ) {
       throw new Error('Invalid table page.')
     }

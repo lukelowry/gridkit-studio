@@ -200,7 +200,8 @@ export class Case {
     readonly close: number,
     /** The case's own members, in file order: its header, params, arrays and monitors. */
     readonly members: readonly Member[],
-    /** Every field the catalog does not know, where it is first. */
+    /** Every field GridKit reads that the catalog does not know, where it is first. An extension's
+     *  members, whose keys GridKit's format leaves to each tool, are columns all the same. */
     readonly found: readonly FoundField[],
     /** The ranges its records were read in, which a revision of it keeps where an edit leaves
      *  them alone, and how their tables were coded. */
@@ -911,7 +912,7 @@ function syntax(text: string): void {
 
 /** Each member the catalog does not know as a column of its table, typed by its values: numbers,
  *  booleans or strings as they are, anything else as its JSON text. Tables that have one take a
- *  shape with it; returns where each is first. */
+ *  shape with it; returns where each that GridKit reads is first. */
 function foundColumns(
   file: Uint8Array,
   found: readonly (Found & { readonly first: number })[],
@@ -995,11 +996,14 @@ function foundColumns(
         source: { kind: 'found', path: members[0]!.path, json: !scalar },
         definition: { name, kind: type, label: name },
       })
-      firsts.push({
-        type: shape.type,
-        field: name,
-        row: rows.get(members[0]!.first + members[0]!.record)!,
-      })
+      // GridKit's format leaves an extension's keys to each tool, so one Studio does not know is
+      // another tool's, not a mistake.
+      if (members[0]!.path[0] !== 'extension')
+        firsts.push({
+          type: shape.type,
+          field: name,
+          row: rows.get(members[0]!.first + members[0]!.record)!,
+        })
     }
     tables.set(shape.type, { ...table, shape: withFound(table.shape, plans), fields: columns })
   }

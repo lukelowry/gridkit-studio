@@ -77,6 +77,22 @@ it('materializes automatic positions with the moved block in one source transact
     rig.close()
   }
 })
+it('puts a block back, and writes nothing, when its drag is cancelled', async () => {
+  const rig = fixture()
+  try {
+    await vi.waitFor(() => expect(rig.replace).toHaveBeenCalledOnce())
+    await Promise.resolve()
+    const preview = rig.replace.mock.calls[0]![0] as Data
+    rig.emit('drag', drag('move'))
+    await vi.waitFor(() => expect(preview.get('Device', 'a/b', 'x')).toBe(55))
+    // A cancelled drag's patch writes back the place it started from.
+    rig.emit('drag', drag('cancel', [10, 30]))
+    await vi.waitFor(() => expect(preview.get('Device', 'a/b', 'x')).toBe(10))
+    expect(request).not.toHaveBeenCalled()
+  } finally {
+    rig.close()
+  }
+})
 it('cancels arrangement and never commits a late drag after source replacement', async () => {
   let resolve!: (patches: Patch[]) => void
   const pending = new Promise<Patch[]>((done) => {

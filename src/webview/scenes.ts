@@ -4,6 +4,7 @@ import {
   type Expr,
   field,
   type Fit,
+  type Gestures,
   type Id,
   type Mark,
   type Scene,
@@ -301,10 +302,26 @@ export function sceneOf(
   )
 }
 
-function controls(settings: SettingsReader, kind: 'network' | 'diagram' | 'monitor') {
+/** What the wheel does in a view, as its Wheel behavior setting says. Every other input keeps
+ *  latkit's own: a drag pans, Shift or the right button turns, two fingers pinch to zoom and slide
+ *  to pan. A trackpad scrolls to pan, and its pinch, which reaches a page as the wheel with
+ *  Control held, zooms. */
+const WHEEL: Record<'wheel' | 'trackpad' | 'modifier' | 'off', Gestures> = {
+  wheel: {},
+  trackpad: { wheel: 'pan', 'control+wheel': 'zoom', 'meta+wheel': 'zoom' },
+  modifier: { wheel: 'none', 'control+wheel': 'zoom', 'meta+wheel': 'zoom' },
+  off: { wheel: 'none', pinch: 'none' },
+}
+
+/** How a view of `kind` answers its inputs: the wheel as its setting says, then `gestures`. */
+function controls(
+  settings: SettingsReader,
+  kind: 'network' | 'diagram' | 'monitor',
+  gestures: Gestures = {},
+) {
   return {
     keyboard: true,
-    zoom: settings.get(`${kind}.zoom`),
+    gestures: { ...WHEEL[settings.get(`${kind}.zoom`)], ...gestures },
     motion:
       settings.get(`${kind}.motion`) === 'system' &&
       typeof document !== 'undefined' &&
@@ -393,7 +410,12 @@ export function diagramScene(
     },
     theme,
     ease: settings.get('diagram.ease'),
-    controls: { ...controls(settings, 'diagram'), connect: editable, delete: editable },
+    // Editing, Alt and a drag draws a connection, and so does a drag from a port, whatever its
+    // button.
+    controls: {
+      ...controls(settings, 'diagram', editable ? { 'alt+primary': 'connect' } : {}),
+      delete: editable,
+    },
     marks: [
       ...drawing.nets.map((table): Mark => ({
         edges: [data.name, table],
@@ -430,7 +452,8 @@ export function plotScene(
     space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
     theme,
     ease: 0,
-    controls: controls(settings, 'monitor'),
+    // Shift and a drag frames a span of time, which becomes the window the Monitor shows.
+    controls: controls(settings, 'monitor', { 'shift+primary': 'zoomBox' }),
     marks: [
       {
         lines: [source.name, plot.from],

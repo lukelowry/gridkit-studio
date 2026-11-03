@@ -12,8 +12,8 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
       latkit:
-        specifier: 0.5.1
-        version: 0.5.1
+        specifier: 0.6.0
+        version: 0.6.0
     devDependencies:
       '@types/mocha':
         specifier: 10.0.10
@@ -1301,8 +1301,8 @@ packages:
   keyv@5.6.0:
     resolution: {integrity: sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw==}
 
-  latkit@0.5.1:
-    resolution: {integrity: sha512-w3wJwt6FMGXGRWWb1KO5gSnA2E8/KBLtn50hj2wGlmvZFUqQW6kCuaKIC+xk48DwELbBeMhWTzDZ8kX89BLaeA==}
+  latkit@0.6.0:
+    resolution: {integrity: sha512-e/nrZ4mYoGvjgK+lHpIFrV5Kky1jxE/QsqFoiQG7l5TfUiFCSH5G7ptikpefsxNivYGn5GQIMHCvO5a4YzR7yA==}
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -2968,7 +2968,7 @@ snapshots:
     dependencies:
       '@keyv/serialize': 1.1.1
 
-  latkit@0.5.1: {}
+  latkit@0.6.0: {}
 
   levn@0.4.1:
     dependencies:

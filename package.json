@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "latkit": "0.5.1"
+    "latkit": "0.6.0"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",
@@ -1498,15 +1498,17 @@
           "gridkitStudio.network.zoom": {
             "default": "wheel",
             "scope": "resource",
-            "markdownDescription": "Interaction — Wheel behavior",
+            "markdownDescription": "Interaction — Wheel behavior. Trackpad scrolls to pan and pinches to zoom.",
             "type": "string",
             "enum": [
               "wheel",
+              "trackpad",
               "modifier",
               "off"
             ],
             "enumDescriptions": [
               "Wheel",
+              "Trackpad",
               "Modifier + wheel",
               "Off"
             ]
@@ -1662,15 +1664,17 @@
           "gridkitStudio.diagram.zoom": {
             "default": "wheel",
             "scope": "resource",
-            "markdownDescription": "Interaction — Wheel behavior",
+            "markdownDescription": "Interaction — Wheel behavior. Trackpad scrolls to pan and pinches to zoom.",
             "type": "string",
             "enum": [
               "wheel",
+              "trackpad",
               "modifier",
               "off"
             ],
             "enumDescriptions": [
               "Wheel",
+              "Trackpad",
               "Modifier + wheel",
               "Off"
             ]

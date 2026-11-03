@@ -101,6 +101,9 @@ const ZOOM = [
   ['modifier', 'Modifier + wheel'],
   ['off', 'Off'],
 ] as const
+/** A canvas's wheel can also pan, as a trackpad scrolls. The Monitor's wheel scrolls its plots. */
+const CANVAS_ZOOM = [['wheel', 'Wheel'], ['trackpad', 'Trackpad'], ...ZOOM.slice(1)] as const
+const TRACKPAD = 'Trackpad scrolls to pan and pinches to zoom.'
 const MOTION = [
   ['system', 'System'],
   ['full', 'Full'],
@@ -143,7 +146,7 @@ export const SETTINGS = [
       ),
     ]),
     group('Interaction', [
-      choice('network.zoom', 'Wheel behavior', 'wheel', ZOOM),
+      choice('network.zoom', 'Wheel behavior', 'wheel', CANVAS_ZOOM, TRACKPAD),
       choice('network.motion', 'Motion', 'system', MOTION),
       num('network.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),
@@ -185,7 +188,7 @@ export const SETTINGS = [
       num('diagram.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),
     ]),
     group('Interaction', [
-      choice('diagram.zoom', 'Wheel behavior', 'wheel', ZOOM),
+      choice('diagram.zoom', 'Wheel behavior', 'wheel', CANVAS_ZOOM, TRACKPAD),
       choice('diagram.motion', 'Motion', 'system', MOTION),
       num('diagram.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),

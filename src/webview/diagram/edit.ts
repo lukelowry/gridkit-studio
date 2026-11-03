@@ -66,6 +66,7 @@ export class DiagramEditor {
         void (async () => {
           if (this.#ready) await this.#ready
           if (!this.#preview || !patch || this.#busy || this.#closed) return
+          // A released drag's place is kept; a cancelled one's patch puts the block back.
           this.#preview.apply(patch)
           if (phase === 'end') await this.#commit(this.#moves(), 'Move diagram blocks')
         })().catch(error)

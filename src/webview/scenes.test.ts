@@ -23,7 +23,15 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   const settings = reader()
   const network = networkScene(data, catalog.definition.drawing, settings, {}, [])
   expect(network.layout).toEqual({ stress: { gap: GAP } })
-  expect(network.controls).toMatchObject({ keyboard: true, motion: 'system' })
+  // The wheel's default leaves every input to latkit.
+  expect(network.controls).toEqual(
+    expect.objectContaining({ keyboard: true, motion: 'system', gestures: {} }),
+  )
+  // A trackpad scrolls a canvas to pan and pinches to zoom.
+  const trackpad = reader({ 'network.zoom': 'trackpad' })
+  expect(networkScene(data, catalog.definition.drawing, trackpad, {}, []).controls).toMatchObject({
+    gestures: { wheel: 'pan', 'control+wheel': 'zoom' },
+  })
   const diagram = diagramScene(data, catalog.definition.drawing, settings, {}, true)
   expect(diagram.layout).toEqual({
     layered: {
@@ -32,7 +40,10 @@ it('builds native scenes and projects only mark fields with separate sampled sou
       rankGap: settings.get('diagram.rankGap'),
     },
   })
-  expect(diagram.controls).toMatchObject({ connect: true, delete: true })
+  expect(diagram.controls).toMatchObject({
+    gestures: { 'alt+primary': 'connect' },
+    delete: true,
+  })
   const projected = sceneFields(catalog.definition, ['network'], {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
@@ -43,6 +54,11 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   expect(monitored.marks).toMatchObject([
     { trace: 'Vm', interpolation: 'linear', width: settings.get('monitor.lineWidth') },
   ])
+  // Shift and a drag frames a span of time; a wheel turned off neither zooms nor pinches.
+  expect(monitored.controls).toMatchObject({ gestures: { 'shift+primary': 'zoomBox' } })
+  expect(plotScene(data, plot, reader({ 'monitor.zoom': 'off' }), {}).controls).toMatchObject({
+    gestures: { wheel: 'none', pinch: 'none', 'shift+primary': 'zoomBox' },
+  })
   // The Monitor's lanes name their plots, whose axes carry ticks alone; a picture's plot, which
   // has no lane, names itself on its value axis. Neither titles the time axis: its last tick says
   // it is seconds.

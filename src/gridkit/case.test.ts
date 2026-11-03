@@ -422,11 +422,14 @@ describe('single catalog and source ownership', () => {
   it('keeps what the catalog does not know: a member as a column, a class as a table', async () => {
     const text = source
       .replace('"devices":[', '"devices":[{"class":"Future","id":"next","params":{"gain":2.5}},')
-      .replace('"params":{"kv":115.0}', '"params":{"kv":115.0,"kz":3}')
+      .replace('"params":{"kv":115.0}', '"params":{"kv":115.0,"kz":3},"extension":{"vset":1.03}')
     const kase = await Case.parse(text, catalog)
     const buses = kase.table('Bus')
     expect(fieldDefinition(kase.definition, 'Bus', 'params.kz')).toMatchObject({ kind: 'number' })
     expect([kase.cell(buses, 'params.kz', 0), kase.cell(buses, 'params.kz', 1)]).toEqual([null, 3])
+    // An extension's keys are each tool's own, as GridKit's format has them: one Studio does not
+    // know is a column it reads like any other, and nothing to warn of.
+    expect(kase.cell(buses, 'extension.vset', 1)).toBe(1.03)
     expect(kase.cell(kase.table('Future'), 'params.gain', 0)).toBe(2.5)
     // An object is kept as its JSON text, and not edited in place.
     expect(kase.cell(kase.table('Branch'), 'unknown', 0)).toBe('{"keep":1}')
@@ -442,6 +445,9 @@ describe('single catalog and source ownership', () => {
         ['warning', expect.stringMatching(/^params\.kz is not a Bus field/)],
       ]),
     )
+    expect(
+      (await diagnose(kase, AbortSignal.any([]))).some(({ field }) => field === 'extension.vset'),
+    ).toBe(false)
     const next = apply(text, set(kase, { table: 'Bus', id: 7 }, 'params.kz', 4))
     expect(JSON.parse(next).buses[1].params.kz).toBe(4)
   })

@@ -117,12 +117,7 @@ export async function run() {
     await bench.show('monitor')
     await monitor.evaluate("document.querySelector('.monitor__lanes').scrollTop = 0")
     await visible(monitor, 'canvas[data-rendered=true]')
-    bench.studio.action.fire({
-      uri: bench.key,
-      view: 'monitor',
-      command: 'valueRange',
-      value: { plot: allPlots[0], range: [0.5, 1.5] },
-    })
+    bench.session.plotRange(allPlots[0]!, [0.5, 1.5])
     await until(
       async () => (await firstPlot())?.camera.y?.join() === '0.5,1.5',
       'manual range applied',

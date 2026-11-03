@@ -286,6 +286,8 @@ export interface Plot {
   from: string
   field: string
   id?: Id
+  /** The values it shows, low to high. Without them, it fits the values shown. */
+  range?: readonly [number, number]
 }
 
 /** What the Case panel shows: a type, the columns chosen for each type, the order of its rows, and
@@ -330,13 +332,7 @@ export interface Cameras {
 
 /** What a command asks of a view. */
 export type ViewAction =
-  | 'fit'
-  | 'reloadView'
-  | 'neighborhood'
-  | 'diagramEditing'
-  | 'arrangeDiagram'
-  | 'valueRange'
-  | 'exportImage'
+  'fit' | 'reloadView' | 'neighborhood' | 'diagramEditing' | 'arrangeDiagram' | 'exportImage'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -426,6 +422,8 @@ export type ViewMessage =
   | { kind: 'select'; element: Element | null }
   /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: TimeRange }
+  /** The values the user chose for a plot to show; null, the values it shows. */
+  | { kind: 'range'; plot: Plot; range: readonly [number, number] | null }
   | { kind: 'camera'; camera: unknown }
   | { kind: 'display'; values: Partial<SettingsValues> }
   | ({ kind: 'transport'; seq: number } & TransportAction)

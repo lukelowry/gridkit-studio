@@ -244,19 +244,6 @@ export class FrameWindow {
     }
   }
 
-  /** Prefer a compact min/max overview. Gaps and incomplete buckets can require more bytes;
-   * retain those details within the page's allocation instead of discarding them. */
-  async plot(request: FrameRequest, version: number, signal: AbortSignal): Promise<boolean> {
-    const bytes = Math.min(request.bytes, 2 * 1024 * 1024)
-    try {
-      return await this.receive({ ...request, bytes }, version, signal)
-    } catch (error) {
-      signal.throwIfAborted()
-      if (!failedWith(error, 'limit') || bytes === request.bytes) throw error
-      return this.receive(request, version, signal)
-    }
-  }
-
   clear(): void {
     this.#playhead++
     this.#controller?.abort()

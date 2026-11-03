@@ -92,7 +92,6 @@ async function everything(
       ...field,
       range: results.domain,
       purpose: 'playhead',
-      pixels: 1024,
       bytes: 96 << 20,
       next,
     })
@@ -447,7 +446,6 @@ describe('the results worker', () => {
           field: field.field,
           range: [results.domain[1], results.domain[1]],
           purpose: 'playhead',
-          pixels: 1,
           bytes: 4096,
         })
       const sent = await ask()

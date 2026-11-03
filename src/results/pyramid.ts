@@ -31,6 +31,16 @@ export interface PyramidState {
   })[]
 }
 
+/** The level latkit draws `frames` frames at across `columns` device pixel columns, as its own
+ *  `detail` chooses: frames while there are at most two per column, else the finest level with at
+ *  most two buckets per column. A plot holds that level, so latkit never shows a coarser one. */
+export function detail(frames: number, columns: number): number {
+  const needed = Math.ceil(frames / (2 * Math.max(1, columns)))
+  let level = 0
+  while (8 ** level < needed && level < 21) level++
+  return level
+}
+
 /** Eight-way streaming min/max reduction; at most seven children per level stay resident. */
 export class Pyramid {
   readonly #levels: Array<Bucket | undefined> = []

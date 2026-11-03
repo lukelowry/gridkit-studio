@@ -36,7 +36,7 @@ import {
   type TableState,
   type ViewKind,
 } from '../shared/messages.js'
-import { plotsFor, samePlot } from '../shared/plots.js'
+import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
 import type { SettingsValues } from '../shared/preferences.js'
 import { Transport } from '../shared/transport.js'
 import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
@@ -548,13 +548,20 @@ export class Session {
   /** Plots `plot`'s field of the element `id` alone, or, with none, of every element: the plot
    *  it then is, if there is one already, stays alone. */
   plotElement(plot: Plot, id?: Id): void {
-    const next: Plot = { from: plot.from, field: plot.field, ...(id !== undefined && { id }) }
+    const next = plotWith(plot, id, plot.range)
     if (samePlot(next, plot)) return
     const there = this.#plots.some((each) => samePlot(each, next))
     this.setPlots(
       there
         ? this.#plots.filter((each) => !samePlot(each, plot))
         : this.#plots.map((each) => (samePlot(each, plot) ? next : each)),
+    )
+  }
+
+  /** Shows `plot` over the values `range`; with none, over the values it shows. */
+  plotRange(plot: Plot, range?: readonly [number, number]): void {
+    this.setPlots(
+      this.#plots.map((each) => (samePlot(each, plot) ? plotWith(each, each.id, range) : each)),
     )
   }
 

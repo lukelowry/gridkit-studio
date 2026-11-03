@@ -22,7 +22,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.79104,
         "longitude": -113.740793
@@ -39,7 +39,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.321766,
         "longitude": -112.086864
@@ -56,7 +56,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.652361,
         "longitude": -111.331526
@@ -73,7 +73,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.948556,
         "longitude": -109.788292
@@ -90,7 +90,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.598981,
         "longitude": -112.054306
@@ -107,7 +107,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.09398,
         "longitude": -109.788292
@@ -124,7 +124,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.998612,
         "longitude": -114.346366
@@ -141,7 +141,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.668367,
         "longitude": -113.350101
@@ -158,7 +158,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.247111,
         "longitude": -113.350101
@@ -175,7 +175,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.168218,
         "longitude": -114.613339
@@ -192,7 +192,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.943311,
         "longitude": -114.782639
@@ -209,7 +209,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.675315,
         "longitude": -116.156573
@@ -226,7 +226,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.938065,
         "longitude": -117.908175
@@ -243,7 +243,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.361733,
         "longitude": -116.924934
@@ -260,7 +260,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.523226,
         "longitude": -116.091457
@@ -277,7 +277,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.507614,
         "longitude": -118.077475
@@ -294,7 +294,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.010702,
         "longitude": -116.924934
@@ -311,7 +311,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.976431,
         "longitude": -115.32312
@@ -328,7 +328,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.561594,
         "longitude": -115.961227
@@ -345,7 +345,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.113847,
         "longitude": -115.829421
@@ -362,7 +362,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.729446,
         "longitude": -115.238446
@@ -379,7 +379,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.297952,
         "longitude": -118.241794
@@ -396,7 +396,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.150117,
         "longitude": -118.177975
@@ -413,7 +413,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.212286,
         "longitude": -116.144263
@@ -430,7 +430,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.444485,
         "longitude": -115.867712
@@ -447,7 +447,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.718903,
         "longitude": -118.331141
@@ -464,7 +464,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.496665,
         "longitude": -118.684275
@@ -481,7 +481,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.934562,
         "longitude": -119.041664
@@ -498,7 +498,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.098921,
         "longitude": -118.914025
@@ -515,7 +515,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.850762,
         "longitude": -117.880151
@@ -532,7 +532,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.538755,
         "longitude": -117.812077
@@ -549,7 +549,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.376289,
         "longitude": -117.756767
@@ -566,7 +566,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.218248,
         "longitude": -117.433415
@@ -583,7 +583,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.298976,
         "longitude": -118.960826
@@ -600,7 +600,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.761927,
         "longitude": -120.296779
@@ -617,7 +617,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.176503,
         "longitude": -118.182229
@@ -634,7 +634,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.525085,
         "longitude": -119.411817
@@ -651,7 +651,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.767849,
         "longitude": -119.305451
@@ -668,7 +668,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.631543,
         "longitude": -119.60753
@@ -685,7 +685,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.340375,
         "longitude": -119.960664
@@ -702,7 +702,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.489062,
         "longitude": -120.011719
@@ -719,7 +719,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.295716,
         "longitude": -120.322307
@@ -736,7 +736,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.912788,
         "longitude": -119.428835
@@ -753,7 +753,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.293094,
         "longitude": -119.582002
@@ -770,7 +770,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.87031,
         "longitude": -118.731076
@@ -787,7 +787,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.348723,
         "longitude": -119.73175
@@ -804,7 +804,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.486091,
         "longitude": -120.798825
@@ -821,7 +821,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.018277,
         "longitude": -120.420163
@@ -838,7 +838,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.322514,
         "longitude": -119.37778
@@ -855,7 +855,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.018277,
         "longitude": -119.586256
@@ -872,7 +872,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.757883,
         "longitude": -119.509673
@@ -889,7 +889,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 34.607858,
         "longitude": -119.77346
@@ -906,7 +906,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.522153,
         "longitude": -116.91435
@@ -923,7 +923,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.390086,
         "longitude": -117.654656
@@ -940,7 +940,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.248967,
         "longitude": -116.880313
@@ -957,7 +957,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.727142,
         "longitude": -117.484471
@@ -974,7 +974,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.483424,
         "longitude": -114.886823
@@ -991,7 +991,7 @@
       "params": {
         "kv": 287.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.782651,
         "longitude": -118.288595
@@ -1008,7 +1008,7 @@
       "params": {
         "kv": 287.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.729351,
         "longitude": -118.497072
@@ -1025,7 +1025,7 @@
       "params": {
         "kv": 287.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.530949,
         "longitude": -117.756767
@@ -1042,7 +1042,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.213648,
         "longitude": -118.51409
@@ -1059,7 +1059,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.889143,
         "longitude": -117.250466
@@ -1076,7 +1076,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.408805,
         "longitude": -116.633545
@@ -1093,7 +1093,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.381274,
         "longitude": -118.207757
@@ -1110,7 +1110,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.23131,
         "longitude": -117.54829
@@ -1127,7 +1127,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.414753,
         "longitude": -117.986517
@@ -1144,7 +1144,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.732313,
         "longitude": -118.00779
@@ -1161,7 +1161,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.010251,
         "longitude": -117.314285
@@ -1178,7 +1178,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.536584,
         "longitude": -117.37385
@@ -1195,7 +1195,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.829998,
         "longitude": -117.633383
@@ -1212,7 +1212,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.927563,
         "longitude": -117.867387
@@ -1229,7 +1229,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.880274,
         "longitude": -118.663002
@@ -1246,7 +1246,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.821123,
         "longitude": -116.365504
@@ -1263,7 +1263,7 @@
       "params": {
         "kv": 138.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.521736,
         "longitude": -118.428998
@@ -1280,7 +1280,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 35.471234,
         "longitude": -116.40805
@@ -1297,7 +1297,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.478155,
         "longitude": -118.126919
@@ -1314,7 +1314,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.871886,
         "longitude": -115.20813
@@ -1331,7 +1331,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.328378,
         "longitude": -117.38236
@@ -1348,7 +1348,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.098749,
         "longitude": -118.543873
@@ -1365,7 +1365,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.454784,
         "longitude": -117.007952
@@ -1382,7 +1382,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.106388,
         "longitude": -118.199248
@@ -1399,7 +1399,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.046666,
         "longitude": -123.385639
@@ -1416,7 +1416,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.867662,
         "longitude": -123.453713
@@ -1433,7 +1433,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.542025,
         "longitude": -122.994213
@@ -1450,7 +1450,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.149938,
         "longitude": -123.751537
@@ -1467,7 +1467,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.367134,
         "longitude": -123.730263
@@ -1484,7 +1484,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.347599,
         "longitude": -122.870829
@@ -1501,7 +1501,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.580861,
         "longitude": -123.82812
@@ -1518,7 +1518,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.001959,
         "longitude": -121.968848
@@ -1535,7 +1535,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.623578,
         "longitude": -122.258162
@@ -1552,7 +1552,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.192233,
         "longitude": -122.06245
@@ -1569,7 +1569,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.954425,
         "longitude": -122.930394
@@ -1586,7 +1586,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.278112,
         "longitude": -122.828282
@@ -1603,7 +1603,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.381033,
         "longitude": -123.245236
@@ -1620,7 +1620,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.761069,
         "longitude": -121.360436
@@ -1637,7 +1637,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.262896,
         "longitude": -123.249491
@@ -1654,7 +1654,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.4274,
         "longitude": -122.258162
@@ -1671,7 +1671,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.050692,
         "longitude": -122.785736
@@ -1688,7 +1688,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.325022,
         "longitude": -122.411329
@@ -1705,7 +1705,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.284334,
         "longitude": -122.63257
@@ -1722,7 +1722,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.704141,
         "longitude": -119.501164
@@ -1739,7 +1739,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.880469,
         "longitude": -119.407562
@@ -1756,7 +1756,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.678509,
         "longitude": -120.092557
@@ -1773,7 +1773,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.521669,
         "longitude": -120.403145
@@ -1790,7 +1790,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.237466,
         "longitude": -120.700969
@@ -1807,7 +1807,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.991161,
         "longitude": -119.43309
@@ -1824,7 +1824,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.803734,
         "longitude": -120.203177
@@ -1841,7 +1841,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.658411,
         "longitude": -123.47924
@@ -1858,7 +1858,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.94291,
         "longitude": -123.551569
@@ -1875,7 +1875,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.475448,
         "longitude": -122.828282
@@ -1892,7 +1892,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.701961,
         "longitude": -123.198435
@@ -1909,7 +1909,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.974002,
         "longitude": -120.096812
@@ -1926,7 +1926,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.772376,
         "longitude": -120.024483
@@ -1943,7 +1943,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.034726,
         "longitude": -121.556149
@@ -1960,7 +1960,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.244225,
         "longitude": -119.956409
@@ -1977,7 +1977,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.775612,
         "longitude": -120.535038
@@ -1994,7 +1994,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.321558,
         "longitude": -120.377617
@@ -2011,7 +2011,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.582124,
         "longitude": -119.930881
@@ -2028,7 +2028,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.648602,
         "longitude": -121.224288
@@ -2045,7 +2045,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.985852,
         "longitude": -121.862482
@@ -2062,7 +2062,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.668823,
         "longitude": -119.420326
@@ -2079,7 +2079,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.483744,
         "longitude": -121.147705
@@ -2096,7 +2096,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.118023,
         "longitude": -120.173395
@@ -2113,7 +2113,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.315619,
         "longitude": -119.918117
@@ -2130,7 +2130,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.902413,
         "longitude": -119.522437
@@ -2147,7 +2147,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.312717,
         "longitude": -120.330816
@@ -2164,7 +2164,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.884904,
         "longitude": -119.89259
@@ -2181,7 +2181,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.286594,
         "longitude": -120.726497
@@ -2198,7 +2198,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 36.832353,
         "longitude": -120.309543
@@ -2215,7 +2215,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.911707,
         "longitude": -120.705223
@@ -2232,7 +2232,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.56733,
         "longitude": -121.109413
@@ -2249,7 +2249,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.028019,
         "longitude": -121.126432
@@ -2266,7 +2266,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.486572,
         "longitude": -121.973102
@@ -2283,7 +2283,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.669483,
         "longitude": -121.879501
@@ -2300,7 +2300,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.614724,
         "longitude": -121.339163
@@ -2317,7 +2317,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.387092,
         "longitude": -121.015811
@@ -2334,7 +2334,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.029904,
         "longitude": -121.488075
@@ -2351,7 +2351,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.669483,
         "longitude": -121.007302
@@ -2368,7 +2368,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.683319,
         "longitude": -122.364528
@@ -2385,7 +2385,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.989749,
         "longitude": -122.177324
@@ -2402,7 +2402,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.091578,
         "longitude": -122.91763
@@ -2419,7 +2419,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.990777,
         "longitude": -120.951992
@@ -2436,7 +2436,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.816003,
         "longitude": -123.168653
@@ -2453,7 +2453,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.489347,
         "longitude": -122.764463
@@ -2470,7 +2470,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.206976,
         "longitude": -122.692134
@@ -2487,7 +2487,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.687054,
         "longitude": -120.492492
@@ -2504,7 +2504,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.086439,
         "longitude": -122.296454
@@ -2521,7 +2521,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.937398,
         "longitude": -121.215779
@@ -2538,7 +2538,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.52264,
         "longitude": -120.675441
@@ -2555,7 +2555,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.272826,
         "longitude": -121.113668
@@ -2572,7 +2572,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.411601,
         "longitude": -121.585931
@@ -2589,7 +2589,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.530769,
         "longitude": -121.577422
@@ -2606,7 +2606,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.353232,
         "longitude": -122.339
@@ -2623,7 +2623,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.300244,
         "longitude": -122.551732
@@ -2640,7 +2640,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.161093,
         "longitude": -120.330816
@@ -2657,7 +2657,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.352307,
         "longitude": -120.837117
@@ -2674,7 +2674,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.4274,
         "longitude": -121.122177
@@ -2691,7 +2691,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.999668,
         "longitude": -121.598695
@@ -2708,7 +2708,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.295809,
         "longitude": -122.313473
@@ -2725,7 +2725,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.66171,
         "longitude": -118.057941
@@ -2742,7 +2742,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.641831,
         "longitude": -117.452368
@@ -2759,7 +2759,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.5891,
         "longitude": -118.832813
@@ -2776,7 +2776,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.945107,
         "longitude": -119.282109
@@ -2793,7 +2793,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.217585,
         "longitude": -120.493254
@@ -2810,7 +2810,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.087627,
         "longitude": -120.851389
@@ -2827,7 +2827,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.796341,
         "longitude": -119.438386
@@ -2844,7 +2844,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.97862,
         "longitude": -121.509054
@@ -2861,7 +2861,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.84809,
         "longitude": -121.430915
@@ -2878,7 +2878,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.665296,
         "longitude": -123.176007
@@ -2895,7 +2895,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.770018,
         "longitude": -119.907216
@@ -2912,7 +2912,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.295089,
         "longitude": -122.459738
@@ -2929,7 +2929,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.651772,
         "longitude": -119.190948
@@ -2946,7 +2946,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.053065,
         "longitude": -118.630956
@@ -2963,7 +2963,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.122169,
         "longitude": -118.884905
@@ -2980,7 +2980,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.944321,
         "longitude": -119.295132
@@ -2997,7 +2997,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.726275,
         "longitude": -120.278374
@@ -3014,7 +3014,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.18627,
         "longitude": -119.151878
@@ -3031,7 +3031,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.978941,
         "longitude": -119.718382
@@ -3048,7 +3048,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.820522,
         "longitude": -120.64302
@@ -3065,7 +3065,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.644104,
         "longitude": -119.197459
@@ -3082,7 +3082,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.810297,
         "longitude": -120.297908
@@ -3099,7 +3099,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.417318,
         "longitude": -116.833772
@@ -3116,7 +3116,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.476456,
         "longitude": -117.458879
@@ -3133,7 +3133,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.318885,
         "longitude": -118.377006
@@ -3150,7 +3150,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.222214,
         "longitude": -118.943509
@@ -3167,7 +3167,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.337256,
         "longitude": -121.183477
@@ -3184,7 +3184,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.252146,
         "longitude": -122.51183
@@ -3201,7 +3201,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.231747,
         "longitude": -123.228099
@@ -3218,7 +3218,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.984478,
         "longitude": -123.195541
@@ -3235,7 +3235,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.77632,
         "longitude": -119.900705
@@ -3252,7 +3252,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.037956,
         "longitude": -123.130426
@@ -3269,7 +3269,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 47.207314,
         "longitude": -121.137896
@@ -3286,7 +3286,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 47.184716,
         "longitude": -117.497949
@@ -3303,7 +3303,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.465683,
         "longitude": -117.361206
@@ -3320,7 +3320,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.871489,
         "longitude": -117.471902
@@ -3337,7 +3337,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 47.89414,
         "longitude": -122.205788
@@ -3354,7 +3354,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 47.965446,
         "longitude": -118.676536
@@ -3371,7 +3371,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.656741,
         "longitude": -116.794703
@@ -3388,7 +3388,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.156693,
         "longitude": -115.362165
@@ -3405,7 +3405,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.537365,
         "longitude": -114.417993
@@ -3422,7 +3422,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.628262,
         "longitude": -114.203112
@@ -3439,7 +3439,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.818825,
         "longitude": -115.648673
@@ -3456,7 +3456,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.373758,
         "longitude": -109.65155
@@ -3473,7 +3473,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.411162,
         "longitude": -115.244958
@@ -3490,7 +3490,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.654371,
         "longitude": -109.664573
@@ -3507,7 +3507,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 44.112482,
         "longitude": -114.639385
@@ -3524,7 +3524,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 45.91778,
         "longitude": -113.17429
@@ -3541,7 +3541,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.056422,
         "longitude": -110.022707
@@ -3558,7 +3558,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 46.548084,
         "longitude": -113.219871
@@ -3575,7 +3575,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.862718,
         "longitude": -112.438486
@@ -3592,7 +3592,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.467628,
         "longitude": -108.219012
@@ -3609,7 +3609,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 43.449803,
         "longitude": -110.79758
@@ -3626,7 +3626,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.862718,
         "longitude": -108.316685
@@ -3643,7 +3643,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.875023,
         "longitude": -111.722218
@@ -3660,7 +3660,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 42.686959,
         "longitude": -110.426422
@@ -3677,7 +3677,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.132843,
         "longitude": -110.660838
@@ -3694,7 +3694,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.955241,
         "longitude": -118.194683
@@ -3711,7 +3711,7 @@
       "params": {
         "kv": 115.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.237737,
         "longitude": -119.002113
@@ -3728,7 +3728,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.624923,
         "longitude": -116.319361
@@ -3745,7 +3745,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.325258,
         "longitude": -116.052388
@@ -3762,7 +3762,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.942202,
         "longitude": -116.78168
@@ -3779,7 +3779,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.78627,
         "longitude": -113.55847
@@ -3796,7 +3796,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.119151,
         "longitude": -112.080352
@@ -3813,7 +3813,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.554441,
         "longitude": -113.610563
@@ -3830,7 +3830,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.837876,
         "longitude": -113.623586
@@ -3847,7 +3847,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.220784,
         "longitude": -113.317544
@@ -3864,7 +3864,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 37.770013,
         "longitude": -112.607786
@@ -3881,7 +3881,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.052036,
         "longitude": -115.095192
@@ -3898,7 +3898,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.273788,
         "longitude": -114.092416
@@ -3915,7 +3915,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.584525,
         "longitude": -112.106398
@@ -3932,7 +3932,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.322932,
         "longitude": -112.646856
@@ -3949,7 +3949,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 38.074326,
         "longitude": -111.852448
@@ -3966,7 +3966,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 40.412562,
         "longitude": -107.795762
@@ -3983,7 +3983,7 @@
       "params": {
         "kv": 345.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.211974,
         "longitude": -109.632015
@@ -4000,7 +4000,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.103668,
         "longitude": -107.567859
@@ -4017,7 +4017,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.980729,
         "longitude": -110.231076
@@ -4034,7 +4034,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.715581,
         "longitude": -122.134778
@@ -4051,7 +4051,7 @@
       "params": {
         "kv": 500.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.231813,
         "longitude": -120.228705
@@ -4068,7 +4068,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.401591,
         "longitude": -122.181579
@@ -4085,7 +4085,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.806022,
         "longitude": -121.007302
@@ -4102,7 +4102,7 @@
       "params": {
         "kv": 230.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.519511,
         "longitude": -119.956409
@@ -4119,7 +4119,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 41.58198,
         "longitude": -121.790153
@@ -4136,7 +4136,7 @@
       "params": {
         "kv": 20.0
       },
-      "mon": [],
+      "mon": ["Va"],
       "extension": {
         "latitude": 39.654487,
         "longitude": -120.794571

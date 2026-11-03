@@ -8,6 +8,15 @@ import type { Results } from './simulation.js'
 export const samePlot = (a: Plot, b: Plot): boolean =>
   a.from === b.from && a.field === b.field && a.id === b.id
 
+/** `plot`'s field of the element `id`, or of every element with none, over the values `range`, or
+ *  fitting the values it shows with none. */
+export const plotWith = ({ from, field }: Plot, id: Plot['id'], range: Plot['range']): Plot => ({
+  from,
+  field,
+  ...(id !== undefined && { id }),
+  ...(range && { range: [range[0], range[1]] as const }),
+})
+
 /** Whether `results` hold the field `plot` draws. */
 export const holdsPlot = (
   results: Pick<Results, 'outputs'> | undefined,

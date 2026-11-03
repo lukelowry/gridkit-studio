@@ -36,9 +36,17 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   })
   expect(projected.flatMap((table) => table.fields)).not.toContain('Vm')
   expect(projected.find((table) => table.table === 'Branch')?.fields).toContain('ports.bus1')
-  expect(plotScene(data, 'Bus', 'Vm', 'Voltage', settings, {}).marks).toMatchObject([
+  const plot = { from: 'Bus', field: 'Vm' }
+  const monitored = plotScene(data, plot, settings, {})
+  expect(monitored.marks).toMatchObject([
     { trace: 'Vm', interpolation: 'linear', width: settings.get('monitor.lineWidth') },
   ])
+  // The Monitor's lanes name their plots, whose axes carry ticks alone; a picture's plot, which
+  // has no lane, names itself on its value axis. Neither titles the time axis.
+  expect(monitored.space).toEqual({ plot: { y: { label: null } } })
+  expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
+    plot: { y: { label: 'Bus · Vm' } },
+  })
 })
 it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
   using data = new Data('case').replace('Bus', [42, 99], { x: [0, 1], y: [0, 1] })

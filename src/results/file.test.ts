@@ -64,14 +64,17 @@ function following(file: ResultsFile, progress = () => {}) {
     },
   }
 }
-function request(file: ResultsFile, more: Partial<FrameRequest> = {}): FrameRequest {
+/** What a Network binding reads of `file`'s voltages around the playhead. */
+function request(
+  file: ResultsFile,
+  more: Partial<Pick<FrameRequest, 'ids' | 'range'>> & { bytes?: number } = {},
+): FrameRequest {
   return {
     results: 'test',
     table: 'Bus',
     field: 'Vm',
     range: file.progress.domain,
     purpose: 'playhead',
-    pixels: 1000,
     bytes: 8 << 20,
     ...more,
   }
@@ -175,12 +178,19 @@ describe('indexed scientific results', () => {
     expect(bytes).toBeLessThan(4096)
     expect(read.mock.calls.every(([, , , , frames]) => frames! <= 2)).toBe(true)
     expect(file.cache.bytes).toBe(0)
-    const plot = await capture(
-      file,
-      request(file, { purpose: 'plot', pixels: 600, bytes: 32 << 10 }),
-    )
+    const columns = 600
+    const plot = await capture(file, {
+      results: 'test',
+      table: 'Bus',
+      field: 'Vm',
+      range: file.progress.domain,
+      purpose: 'plot',
+      columns,
+    })
     using overview = plot.data
-    expect(plot.bytes).toBeLessThan(32 << 10)
+    // The level latkit draws across 600 columns: at most two buckets a column, each its first and
+    // last time and its least and greatest value, whatever the 600,000 frames.
+    expect(plot.bytes).toBeLessThan(2 * columns * (16 + 8) + (4 << 10))
     expect(
       overview.envelope({ table: 'Bus', field: 'Vm', range: [...file.progress.domain], spans: 1 })
         .greatest[0],

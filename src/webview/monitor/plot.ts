@@ -13,5 +13,4 @@ export function sameWindow(a: TimeRange | undefined, b: TimeRange | undefined): 
 
 export interface PlotState {
   camera?: Camera
-  range?: TimeRange | null
 }

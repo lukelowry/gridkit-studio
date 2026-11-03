@@ -386,6 +386,14 @@ class View {
         session.setWindow(bounds)
         return
       }
+      case 'range': {
+        const range = message.range
+        if (this.kind !== 'monitor' || !session) return
+        if (range && !(range.length === 2 && range.every(Number.isFinite) && range[0] < range[1]))
+          return
+        session.plotRange(message.plot, range ?? undefined)
+        return
+      }
       case 'camera':
         if (this.kind === 'network' || this.kind === 'diagram')
           session?.setCamera(this.kind, message.camera)

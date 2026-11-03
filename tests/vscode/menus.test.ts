@@ -403,6 +403,8 @@ suite('Monitor menus', () => {
     await menu('Value Range')
     await bench.answer('0.5, 1.5')
     await until(async () => (await plotted()).y?.join() === '0.5,1.5', 'the range set')
+    // The plot keeps it, so a picture of the Monitor draws it too.
+    assert.deepEqual(bench.session.plots[0]?.range, [0.5, 1.5])
     await menu('Value Range')
     await bench.answer('')
     // The plot fits its values again, which the next frame frames.
@@ -410,6 +412,7 @@ suite('Monitor menus', () => {
       const { y } = await plotted()
       return y === null
     }, 'the values fitted')
+    assert.equal(bench.session.plots[0]?.range, undefined)
   })
 
   test('narrows the time it shows and shows the whole run again from the title bar', async () => {

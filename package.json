@@ -1727,6 +1727,30 @@
             "minimum": 0.25,
             "maximum": 8
           },
+          "gridkitStudio.monitor.colormap": {
+            "default": "tab10",
+            "scope": "resource",
+            "markdownDescription": "Lines — Colormap",
+            "type": "string",
+            "enum": [
+              "dark2",
+              "okabeito",
+              "paired",
+              "set2",
+              "tab10",
+              "tab20",
+              "tableau10"
+            ],
+            "enumDescriptions": [
+              "Dark2",
+              "Okabe-Ito",
+              "Paired",
+              "Set2",
+              "Tab10",
+              "Tab20",
+              "Tableau10"
+            ]
+          },
           "gridkitStudio.monitor.zoom": {
             "default": "wheel",
             "scope": "resource",

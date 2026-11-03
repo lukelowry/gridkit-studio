@@ -105,7 +105,6 @@ export async function renderVideo(
                 field,
                 range: [at, Math.min(job.timeRange[1], at + job.rate / 2)],
                 purpose: 'playhead',
-                pixels: job.width,
                 bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, sampled.size)),
               },
               results!.frames,

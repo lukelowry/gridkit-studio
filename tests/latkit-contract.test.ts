@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import type { ProjectedDocument } from '../src/gridkit/document.js'
 import { CaseQueries, project, projectionPage } from '../src/gridkit/projection.js'
 import { framePatch, initializeFrames, rawRun, visualValues } from '../src/results/frames.js'
-import { Pyramid, type ReducedRun } from '../src/results/pyramid.js'
+import { detail, Pyramid, type ReducedRun } from '../src/results/pyramid.js'
 import { DatasetSlot } from '../src/webview/datasets.js'
 import { loadNative } from '../src/workers/native.js'
 import { transferables } from '../src/workers/transfer.js'
@@ -242,6 +242,19 @@ it('reduces exact eight-way boundaries with irregular times, gaps, and restart t
   expect(actual.filter((run) => run.level === 1)).toHaveLength(8)
   expect(actual.find((run) => run.level === 2)?.values).toEqual(Float32Array.of(0, 1000))
   expect(actual.find((run) => run.level === 1 && run.first === 2)?.gaps[0]).toBe(1)
+})
+
+it('plots at the level latkit draws: frames at two a column, else the finest level with two buckets a column', () => {
+  for (const columns of [1, 37, 440, 2400])
+    for (const frames of [1, 2, 2403, 600_000, 9e15]) {
+      const level = detail(frames, columns)
+      // Frames while two fit a column; no level coarser than needed to fit two buckets a column.
+      expect(frames / 8 ** level).toBeLessThanOrEqual(2 * columns)
+      if (level > 0) expect(frames / 8 ** (level - 1)).toBeGreaterThan(2 * columns)
+    }
+  // ACTIVSg2000's ten seconds at 240 frames a second, across a Monitor lane.
+  expect(detail(2403, 550)).toBe(1)
+  expect(detail(2403, 1300)).toBe(0)
 })
 
 it('transfers each owned backing buffer once, even with cycles', () => {

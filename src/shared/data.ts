@@ -51,16 +51,18 @@ export interface FrameBlock {
   readonly rows: number
 }
 
-export interface FrameRequest {
+/** A window of a recorded field: a plot's, across the device pixel columns it draws in, or the
+ *  frames around the playhead a Network binding reads, within `bytes`. */
+export type FrameRequest = {
   readonly results: string
   readonly table: string
   readonly field: string
   readonly ids?: readonly Id[]
   readonly range: TimeRange
-  readonly purpose: 'plot' | 'playhead'
-  readonly pixels: number
-  readonly bytes: number
-}
+} & (
+  | { readonly purpose: 'plot'; readonly columns: number }
+  | { readonly purpose: 'playhead'; readonly bytes: number }
+)
 
 export interface VisualizationRun {
   readonly level: number

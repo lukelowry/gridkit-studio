@@ -93,6 +93,10 @@ const category = <const G extends readonly Group[]>(id: string, label: string, g
 const COLORMAPS: Options<ColormapName> = colormaps()
   .filter((map) => map.kind !== 'categorical')
   .map((map) => [map.name, map.label] as const)
+/** latkit's categorical colormaps, which give each trace of a plot its own color. */
+const TRACE_COLORMAPS: Options<ColormapName> = colormaps()
+  .filter((map) => map.kind === 'categorical')
+  .map((map) => [map.name, map.label] as const)
 const ZOOM = [
   ['wheel', 'Wheel'],
   ['modifier', 'Modifier + wheel'],
@@ -192,6 +196,7 @@ export const SETTINGS = [
         ['step', 'Step'],
       ]),
       num('monitor.lineWidth', 'Line width', 1, [0.25, 8, 0.25]),
+      choice('monitor.colormap', 'Colormap', 'tab10', TRACE_COLORMAPS),
     ]),
     group('Interaction', [
       choice('monitor.zoom', 'Wheel behavior', 'wheel', ZOOM),

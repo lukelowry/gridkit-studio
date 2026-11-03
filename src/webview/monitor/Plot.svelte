@@ -5,7 +5,7 @@
   import type { ExactSample, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
-  import { holdsPlot, plotName, samePlot } from '../../shared/plots.js'
+  import { holdsPlot, plotName } from '../../shared/plots.js'
   import { reader } from '../../shared/preferences.js'
   import { clamp } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
@@ -30,7 +30,6 @@
     t,
     clock,
     themeVersion,
-    budget,
     register,
     onwindow,
     onerror,
@@ -45,7 +44,6 @@
     t: number
     clock: Clock
     themeVersion: number
-    budget: number
     register: (view: View) => () => void
     onwindow: (range: TimeRange) => void
     onerror: (error: unknown) => void
@@ -53,10 +51,10 @@
   const frames = new FrameWindow(untrack(() => reads))
   let source = $state.raw<Data>()
   let native = $state.raw<View>()
-  let width = $state(800)
+  /** The device pixel columns the lane spans, which latkit draws its traces across. */
+  let columns = $state(800)
   let visible = $state(true)
   let camera = $state.raw<Camera | undefined>(untrack(() => kept.camera))
-  let valueRange = $state.raw<TimeRange | null>(untrack(() => kept.range ?? null))
   let inspected = $state<Id>()
   let trace = $state(0)
   let exact = $state.raw<ExactSample>()
@@ -73,23 +71,30 @@
   const enabled = $derived(active && visible)
   const scene = $derived.by(() => {
     void themeVersion
-    return source
-      ? plotScene(source, plot.from, plot.field, title, settings, nativeTheme(settings, 'monitor'))
-      : undefined
+    return source ? plotScene(source, plot, settings, nativeTheme(settings, 'monitor')) : undefined
   })
+  /** The times the Monitor shows, over the values the plot was given or those it shows. */
+  const framed = $derived<Camera>({ x: [...shown], y: plot.range ? [...plot.range] : null })
   const sampleId = $derived(inspected ?? plot.id ?? ids[Math.min(trace, ids.length - 1)])
   const unit = $derived(
     app.summary ? fieldDefinition(app.summary.definition, plot.from, plot.field)?.unit : undefined,
   )
+  /** The trace read at the playhead while the plot holds focus or the pointer. */
+  const reading = $derived.by(() => {
+    if (!exact || (!focused && inspected === undefined)) return ''
+    const value = exact.value === null ? 'No value' : String(exact.value)
+    return `${String(sampleId)}: ${value}${unit ? ` ${unit}` : ''} · ${exact.at} s`
+  })
 
   function observe(element: HTMLElement) {
     const size = new ResizeObserver(([entry]) => {
-      if (entry) width = Math.max(1, Math.round(entry.contentRect.width))
+      const box = entry?.devicePixelContentBoxSize[0]
+      if (box) columns = Math.max(1, box.inlineSize)
     })
     const intersection = new IntersectionObserver(([entry]) => {
       if (entry) visible = entry.isIntersecting
     })
-    size.observe(element)
+    size.observe(element, { box: 'device-pixel-content-box' })
     intersection.observe(element)
     return () => {
       size.disconnect()
@@ -102,7 +107,7 @@
     const controller = new AbortController()
     failed = false
     void frames
-      .plot(
+      .receive(
         {
           results: results.id,
           table: plot.from,
@@ -110,8 +115,7 @@
           ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
           range: shown,
           purpose: 'plot',
-          pixels: width,
-          bytes: budget,
+          columns,
         },
         results.frames,
         controller.signal,
@@ -130,7 +134,7 @@
     return () => controller.abort()
   })
   $effect(() => {
-    if (native) native.camera = { x: [...shown], y: valueRange ? [...valueRange] : null }
+    if (native) native.camera = framed
   })
   $effect(() => {
     if (!native || !source) return
@@ -169,7 +173,7 @@
 
   function ready(view: View, canvas: HTMLCanvasElement) {
     native = view
-    view.camera = { x: [...shown], y: valueRange ? [...valueRange] : null }
+    view.camera = framed
     const unregister = register(view)
     const disconnect = bindInteractions(view, {
       select(element) {
@@ -253,32 +257,21 @@
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
       clock.act({ action: 'step', value: event.key === 'ArrowLeft' ? -1 : 1 })
     else if (event.key === 'Home' && results?.domain) {
-      valueRange = null
+      if (plot.range) bridge.send({ kind: 'range', plot, range: null })
       onwindow(results.domain)
     } else return
     event.preventDefault()
     event.stopPropagation()
   }
-  onMount(() => {
-    const off = bridge.on((message) => {
-      if (message.kind !== 'action' || message.command !== 'valueRange') return
-      const value = message.value as { plot: Plotted; range: TimeRange | null }
-      if (samePlot(value.plot, plot)) {
-        valueRange = value.range
-        kept.range = value.range
-      }
-    })
-    return () => {
-      off()
-      frames.clear()
-    }
-  })
+  onMount(() => () => frames.clear())
 </script>
 
 <section class="lane" aria-label={title} {@attach observe}>
   <header class="lane__head">
     <h2 class="lane__name">{title}</h2>
-    <span class="lane__count">{plot.id !== undefined ? 1 : ids.length} traces</span>
+    <output class="lane__reading" aria-live={clock.state.status === 'playing' ? 'off' : 'polite'}>
+      {reading}
+    </output>
     <button
       class="c-icon-button lane__close"
       title="Remove plot"
@@ -317,13 +310,6 @@
       <div class="c-empty"><p class="c-empty__text">Waiting for samples…</p></div>
     {/if}
   </div>
-  <output class="lane__reading" aria-live={clock.state.status === 'playing' ? 'off' : 'polite'}>
-    {#if exact && (focused || inspected !== undefined)}
-      {String(sampleId)}: {exact.value === null ? 'No value' : String(exact.value)}{unit
-        ? ` ${unit}`
-        : ''} · {exact.at} s
-    {/if}
-  </output>
 </section>
 
 <style>
@@ -352,9 +338,12 @@
     white-space: nowrap;
     text-overflow: ellipsis;
   }
-  .lane__count {
+  .lane__reading {
+    overflow: hidden;
     margin-inline-start: auto;
     white-space: nowrap;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
   }
   .lane__close {
     align-self: center;
@@ -363,15 +352,5 @@
     position: relative;
     flex: 1;
     min-block-size: 0;
-  }
-  .lane__reading {
-    block-size: 1.5em;
-    flex: none;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    padding-inline: var(--spacing-sm);
-    font-size: var(--text-sm);
-    font-variant-numeric: tabular-nums;
   }
 </style>

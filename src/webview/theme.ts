@@ -22,7 +22,7 @@ const PALETTE = {
 
 export type Palette = Readonly<Record<keyof typeof PALETTE, string>>
 
-/** The theme's colors, and the editor's monospace font family. */
+/** The theme's colors, and the workbench's font family. */
 export interface Theme {
   readonly palette: Palette
   readonly font: string
@@ -44,7 +44,7 @@ export function theme(): Theme {
         css.getPropertyValue(token).trim() || fallback,
       ]),
     ) as Palette,
-    font: css.getPropertyValue('--font-mono').trim(),
+    font: css.getPropertyValue('--font-body').trim(),
   })
 }
 
@@ -69,19 +69,22 @@ export function nativeTheme(
   settings: SettingsReader,
   kind: 'network' | 'diagram' | 'monitor',
 ): NativeTheme {
-  const { palette } = theme()
+  const { palette, font } = theme()
   const classes = document.body.classList
   return {
     base:
       classes.contains('vscode-light') || classes.contains('vscode-high-contrast-light')
         ? 'light'
         : 'dark',
-    // A high contrast theme keeps colormap colors at WCAG's enhanced contrast with the background.
-    ...((classes.contains('vscode-high-contrast') ||
-      classes.contains('vscode-high-contrast-light')) && { contrast: 7 }),
+    // A high contrast theme keeps colormap colors at WCAG's enhanced contrast with the background,
+    // and a plot's traces keep its minimum for graphics in any theme.
+    ...(classes.contains('vscode-high-contrast') || classes.contains('vscode-high-contrast-light')
+      ? { contrast: 7 }
+      : kind === 'monitor' && { contrast: 3 }),
     background: kind === 'monitor' ? palette.background : palette.editor,
     grid: palette.border,
-    text: { color: palette.text1 },
+    // Labels, ticks and titles in the workbench's font, as the page around them.
+    text: { color: palette.text1, ...(font && { font }) },
     focus: { selected: palette.focus, hover: palette.primaryText },
     vertex: { color: palette.network },
     // Native endpoint blending follows static and sampled vertex colors. A mark's explicit

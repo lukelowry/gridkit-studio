@@ -17,8 +17,8 @@ export interface PlotViews {
 }
 
 /** The Monitor's plots of `results` as views drawn only into pictures, stacked in `region` as the
- *  Monitor stacks them, each over `range` and `pixels` wide: what a video or an image of the Monitor
- *  draws. Their frames come through `reads`. */
+ *  Monitor stacks them, each over `range` in a picture `columns` device pixels wide: what a video or
+ *  an image of the Monitor draws. Their frames come through `reads`. */
 export async function plotViews(
   app: ViewState,
   results: Results,
@@ -26,7 +26,7 @@ export async function plotViews(
   reads: FrameReads,
   range: TimeRange,
   region: Rect,
-  pixels: number,
+  columns: number,
   signal: AbortSignal,
 ): Promise<PlotViews> {
   const settings = reader(app.settings)
@@ -50,19 +50,23 @@ export async function plotViews(
           ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
           range,
           purpose: 'plot',
-          pixels: Math.ceil(pixels * region[2]),
-          bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, plots.length)),
+          columns: Math.ceil(columns * region[2]),
         },
         results.frames,
         signal,
       )
       const source = frame.data!
-      const title = plotName(app.summary?.definition, plot)
-      const scene = plotScene(source, plot.from, plot.field, title, settings, theme)
+      const scene = plotScene(
+        source,
+        plot,
+        settings,
+        theme,
+        plotName(app.summary?.definition, plot),
+      )
       const view = await View.create(null, scene, {
         gpu,
         sources: [source],
-        camera: { x: [...range] },
+        camera: { x: [...range], y: plot.range ? [...plot.range] : null },
         signal,
       })
       const height = region[3] / plots.length

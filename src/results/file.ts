@@ -34,7 +34,7 @@ import {
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
 import { rawRun } from './frames.js'
-import { Pyramid, type ReducedRun } from './pyramid.js'
+import { detail, Pyramid, type ReducedRun } from './pyramid.js'
 import { same, type Stamp, stampAt } from './stamp.js'
 import { fileKey, type LevelIndex, type RawIndex, type Store } from './store.js'
 
@@ -455,11 +455,11 @@ export class ResultsFile {
       !Number.isFinite(request.range[0]) ||
       !Number.isFinite(request.range[1]) ||
       request.range[1] < request.range[0] ||
-      !Number.isFinite(request.pixels) ||
-      request.pixels < 1 ||
-      !Number.isSafeInteger(request.bytes) ||
-      request.bytes < 1024 ||
-      request.bytes > 96 * 1024 * 1024 ||
+      (request.purpose === 'plot'
+        ? !Number.isSafeInteger(request.columns) || request.columns < 1
+        : !Number.isSafeInteger(request.bytes) ||
+          request.bytes < 1024 ||
+          request.bytes > 96 * 1024 * 1024) ||
       frames > this.#progress.frames ||
       frames < 0
     )
@@ -486,8 +486,7 @@ export class ResultsFile {
           frames,
           request.range,
           request.purpose,
-          request.pixels,
-          request.bytes,
+          request.purpose === 'plot' ? request.columns : request.bytes,
         ]),
       )
       .digest('hex')
@@ -502,18 +501,18 @@ export class ResultsFile {
     const stop = frames
       ? Math.min(frames, (await this.#bound(request.range[1], true, frames)) + 1)
       : 0
-    let intervals: Interval[] = []
-    for (let level = 0; level <= 21; level++) {
-      signal.throwIfAborted()
-      intervals = this.#intervals(field, level, first, stop)
-      const entries = intervals.reduce((sum, item) => sum + item.count * (item.level ? 2 : 1), 0)
+    signal.throwIfAborted()
+    // A plot holds the level latkit draws across its columns; the playhead reads frames.
+    const intervals = this.#intervals(
+      field,
+      request.purpose === 'plot' ? detail(stop - first, request.columns) : 0,
+      first,
+      stop,
+    )
+    if (request.purpose === 'playhead') {
+      const entries = intervals.reduce((sum, item) => sum + item.count, 0)
       const bytes = entries * (8 + places.length * 4) + intervals.length * 128 + ids.length * 16
-      if (
-        bytes <= request.bytes &&
-        (request.purpose === 'playhead' || entries <= request.pixels * 2 || level === 21)
-      )
-        break
-      if (request.purpose === 'playhead' || level === 21)
+      if (bytes > request.bytes)
         throw problem(
           'limit',
           'This window exceeds the visualization budget. Choose fewer rows or a narrower time range.',
@@ -541,10 +540,15 @@ export class ResultsFile {
     const initial = plan.intervals[part]
     if (cursor && (!initial || offset >= initial.count))
       throw new Error('Frame cursor exceeds its window.')
+    // A plot colors each trace by its place among them.
+    const fields =
+      request.purpose === 'plot'
+        ? { series: Float32Array.from(plan.ids, (_, place) => place) }
+        : undefined
     const make = () =>
       cursor
         ? new Patch(plan.source)
-        : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids)
+        : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids, fields)
     const runs: VisualizationRun[] = []
     let bytes = make().toBytes()
     if (bytes.byteLength > ENTRY_BYTES)

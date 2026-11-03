@@ -30,7 +30,6 @@ export function registerPlots({
   studio,
   command,
   onSession,
-  action,
   focus,
   signalItem,
   pickPlot,
@@ -106,17 +105,10 @@ export function registerPlots({
     if (!plot) return
     const range = await askRange(
       'Value range of ' + plotName(context.summary.definition, plot),
-      undefined,
+      plot.range,
       'fits the values shown',
     )
-    if (range === undefined) return
-    const { from, field, id } = plot
-    action(
-      context,
-      'valueRange',
-      { plot: { from, field, ...(id !== undefined && { id }) }, range },
-      'monitor',
-    )
+    if (range !== undefined) context.session.plotRange(plot, range ?? undefined)
   })
   onSession('timeWindow', async (session) => {
     const range = await askRange(

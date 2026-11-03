@@ -46,12 +46,6 @@
   const results = $derived(app.results)
   const plots = $derived(app.plots ?? [])
   const shown = $derived(monitorWindow(results, chosen ?? app.window))
-  const budget = $derived(
-    Math.max(
-      1024,
-      Math.min(16 * 1024 * 1024, Math.floor((64 * 1024 * 1024) / Math.max(1, plots.length))),
-    ),
-  )
   const clock = createClock((at) => {
     t = at
     if (active) for (const view of views) view.at = at
@@ -111,7 +105,6 @@
     const lanes = document.querySelector('[data-testid="monitor-lanes"]')
     if (!gpu || !results || !app.uri || !app.summary || !lanes) return
     const size = [lanes.clientWidth, lanes.scrollHeight] as const
-    const pixels = size[0] * SCALE
     const plots = await plotViews(
       app,
       results,
@@ -119,7 +112,7 @@
       reads,
       shown,
       [0, 0, 1, 1],
-      pixels,
+      size[0] * SCALE,
       lifetime.signal,
     )
     try {
@@ -223,7 +216,6 @@
           {t}
           {clock}
           {themeVersion}
-          {budget}
           {register}
           onwindow={turn}
           onerror={fail}

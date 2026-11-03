@@ -329,7 +329,6 @@ function boot() {
                   ]
                 : [at, at],
               purpose: 'playhead',
-              pixels: canvas.clientWidth || 800,
               bytes: 8 * 1024 * 1024,
             },
             results.frames,

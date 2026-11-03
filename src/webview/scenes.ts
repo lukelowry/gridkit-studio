@@ -15,7 +15,7 @@ import {
 import { type Bindings, type Channel, CHANNELS } from '../shared/bindings.js'
 import type { ProjectionSelection, RecordedField } from '../shared/data.js'
 import { type CaseDefinition, type Drawing, fieldDefinition } from '../shared/document.js'
-import type { Results } from '../shared/messages.js'
+import type { Plot, Results } from '../shared/messages.js'
 import type { SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
@@ -294,24 +294,28 @@ export function diagramScene(
   }
 }
 
+/** A plot of `plot`'s field over the times its camera shows, each trace in its own color by its
+ *  place among them (`series`). Its axes carry ticks alone: every plot shares the time axis, which
+ *  is seconds, and the Monitor names each plot in its lane. A picture has no lanes, so it passes
+ *  `name` for the plot to name itself on its value axis. */
 export function plotScene(
   source: Source,
-  table: string,
-  trace: string,
-  title: string,
+  plot: Plot,
   settings: SettingsReader,
   theme: Theme,
+  name?: string,
 ): Scene {
   return {
-    space: { plot: { x: { label: 'Time [s]' }, y: { label: title } } },
+    space: { plot: { y: { label: name ?? null } } },
     theme,
     ease: 0,
     controls: controls(settings, 'monitor'),
     marks: [
       {
-        lines: [source.name, table],
-        trace,
-        name: trace,
+        lines: [source.name, plot.from],
+        trace: plot.field,
+        name: plot.field,
+        color: field('series').colormap(settings.get('monitor.colormap')),
         width: settings.get('monitor.lineWidth'),
         interpolation: settings.get('monitor.interpolation') === 'step' ? 'stepAfter' : 'linear',
       },

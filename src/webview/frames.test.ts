@@ -26,8 +26,7 @@ const input: FrameRequest = {
   field: 'Vm',
   range: [0, 1],
   purpose: 'plot',
-  pixels: 800,
-  bytes: 16 * 1024 * 1024,
+  columns: 800,
 }
 function page(key = 'one'): FramePage {
   return {
@@ -76,24 +75,6 @@ test('shared reads survive one subscriber cancelling and cache only immutable pa
   expect(reads.bytes).toBe(value.bytes.byteLength)
   reads.clear()
   expect(reads.bytes).toBe(0)
-})
-
-test('plot detail expands only within its allocation when gaps exceed the compact budget', async () => {
-  const reads = new FrameReads()
-  const window = new FrameWindow(reads)
-  request.mockImplementation(async (_method, read: FrameRequest) => {
-    if (read.bytes < input.bytes) throw Object.assign(new Error('Gap detail'), { code: 'limit' })
-    return page()
-  })
-  try {
-    expect(await window.plot(input, 2, new AbortController().signal)).toBe(true)
-    expect(request.mock.calls.map((call) => call[1].bytes)).toEqual([2 * 1024 * 1024, input.bytes])
-    expect(window.range).toEqual([0, 1])
-    expect(window.version).toBe(2)
-  } finally {
-    window.clear()
-    reads.clear()
-  }
 })
 
 test('an aborted late response never replaces the published native dataset', async () => {

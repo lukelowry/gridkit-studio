@@ -16,7 +16,7 @@ import {
 } from '../gridkit/index.js'
 import { anchors } from '../gridkit/inspection.js'
 import { CaseQueries, projectionPage } from '../gridkit/projection.js'
-import { same, type Stamp, stampAt } from '../results/stamp.js'
+import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
 import type { CaseApi, Revision, Summary, WorkerOptions } from '../shared/messages.js'
 import { loadNative } from './native.js'
@@ -24,11 +24,11 @@ import { nameOf, readCase, Recent, summarize } from './parsed.js'
 import { memory, serve } from './serve.js'
 
 /** A file as last read: its case, what the extension was told of it, and the stamp of the file it
- *  was read from. */
+ *  was read from, once the file had rested before it. */
 interface Read {
   readonly kase: Case
   readonly summary: Summary
-  stamp: Stamp
+  stamp?: Stamp
   queries?: CaseQueries
   projection?: ProjectedDocument
 }
@@ -61,21 +61,25 @@ serve<CaseApi>(
         if (files.get(uri) !== file || file.reading !== reading) throw superseded()
       }
       // Stamped before it is read, so a file that changes meanwhile reads again next time.
+      const at = BigInt(Date.now()) * 1_000_000n
       const stamp = await stampAt(fileURLToPath(uri))
       if (!stamp) throw problem('invalid-input', `${nameOf(uri)} is not there.`)
       const before = file.read
       if (before && same(before.stamp, stamp)) return before.summary
+      // A file that changed just before may change again and keep its stamp: it reads again
+      // each time until it rests.
+      const kept = settled(stamp, at) ? stamp : undefined
       const kase = await readCase(uri, catalog, signal)
       current()
       // Written again as it was, as by a save that changed nothing: the case read stands.
       if (before?.kase.version === kase.version) {
-        before.stamp = stamp
+        before.stamp = kept
         return before.summary
       }
       const summary = await summarize(kase, { uri, version }, signal)
       current()
       before?.queries?.destroy()
-      file.read = { kase, summary, stamp }
+      file.read = { kase, summary, stamp: kept }
       return summary
     },
     async validate(revision, signal) {

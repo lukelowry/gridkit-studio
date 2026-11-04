@@ -55,7 +55,7 @@ describe('the case worker', () => {
       const text = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
       await rig.write(text)
       const first = await rig.call('read', { uri: rig.uri, version: 1 })
-      // As it was, it reads nothing: what was read stands, at its version.
+      // As it was, what was read stands, at its version.
       expect((await rig.call('read', { uri: rig.uri, version: 2 })).version).toBe(1)
       // Written again as it was, it keeps its version.
       await rig.write(text)
@@ -63,7 +63,8 @@ describe('the case worker', () => {
         version: 1,
         fingerprint: first.fingerprint,
       })
-      // Changed, it reads at the version asked, and the one before is asked of no more.
+      // Changed at once to as many bytes, within a step of file time, it still reads again: at the
+      // version asked, and the one before is asked of no more.
       await rig.write(text.replace('one', 'two'))
       const changed = await rig.call('read', { uri: rig.uri, version: 4 })
       expect(changed.version).toBe(4)

@@ -369,8 +369,9 @@ export function networkScene(
     theme,
     ease: settings.get('network.ease'),
     controls: { ...controls(settings, 'network'), cycle: true },
-    // Seen flat, buses draw over the branches that meet them, the map under both. Where depth
-    // varies, the nearest of whatever overlaps shows, whatever the order.
+    // The map under everything, then branches, then buses. Where depth varies, the nearest
+    // opaque pixel shows, and a mark whose rows a mapped height raises draws them lowest first:
+    // farthest first wherever they overlap, from any camera.
     marks: [...background, ...edges, ...vertices],
   }
 }

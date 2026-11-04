@@ -17,7 +17,7 @@ import { type Bindings, type Channel, CHANNELS } from '../shared/bindings.js'
 import type { ProjectionSelection, RecordedField } from '../shared/data.js'
 import { type CaseDefinition, type Drawing, fieldDefinition } from '../shared/document.js'
 import type { Plot, Results } from '../shared/messages.js'
-import type { SettingsReader } from '../shared/preferences.js'
+import { EDGE_WIDTH, type SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
 export function caseFit(data: Data, drawing: Drawing): Fit {
@@ -64,12 +64,16 @@ function networkSizes(data: Data, drawing: Drawing, settings: SettingsReader): N
     [...new Set(tables)].reduce((sum, table) => sum + (rows.get(table) ?? 0), 0)
   const vertices = count(drawing.vertices.map((vertex) => vertex.table))
   const edges = count(drawing.edges.map((edge) => edge.table))
-  // A sparse case keeps its configured size. Reduce ink smoothly as the graph grows;
-  // strokes shrink more gently than radii, whose occupied area grows quadratically.
+  // A sparse case keeps its configured size. Ink thins smoothly as the graph grows, strokes more
+  // gently than radii, whose occupied area grows quadratically, and no edge thinner than latkit
+  // can draw whole.
   const density = Math.min(1, (1000 / Math.max(1, vertices, edges / 2)) ** 0.4)
   return {
     radius: settings.get('network.vertexRadius') * Math.max(0.08, density),
-    width: settings.get('network.edgeWidth') * Math.max(0.15, Math.sqrt(density)),
+    width: Math.max(
+      EDGE_WIDTH,
+      settings.get('network.edgeWidth') * Math.max(0.15, Math.sqrt(density)),
+    ),
   }
 }
 
@@ -193,11 +197,12 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
   return Math.max(1, most)
 }
 
-/** What each channel's mapped values span; a height spans a share of the case's span. */
+/** What each channel's mapped values span; a height spans a share of the case's span. A width only
+ *  widens an edge, which draws no thinner than it does unmapped. */
 const RANGES: Record<'radius' | 'elevation' | 'width', [low: number, high: number]> = {
   radius: [0.5, 2.5],
   elevation: [0, 1],
-  width: [0.5, 4],
+  width: [1, 4],
 }
 
 function mapped(binding: Binding, map: ColormapName, sizes: NetworkSizes, height: number): Expr {

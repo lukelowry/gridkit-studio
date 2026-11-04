@@ -4,7 +4,7 @@ import { Data, Expr, type Mark, reference } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
-import { defaults, reader } from '../shared/preferences.js'
+import { defaults, EDGE_WIDTH, reader } from '../shared/preferences.js'
 import { loadNative } from '../workers/native.js'
 import {
   caseFit,
@@ -165,24 +165,27 @@ it('scales dense case marks and their bindings together while preserving missing
   const dense = sizes()
   expect(dense.radius).toBeGreaterThan(0.3)
   expect(dense.radius).toBeLessThan(0.7)
-  expect(dense.width).toBeGreaterThan(0.2)
-  expect(dense.width).toBeLessThan(0.5)
+  // An edge draws no thinner than latkit draws a line whole, however dense the case.
+  expect(dense.width).toBe(EDGE_WIDTH)
   const larger = sizes(
     reader({
       'network.vertexRadius': 2 * defaults['network.vertexRadius'],
-      'network.edgeWidth': 2 * defaults['network.edgeWidth'],
+      'network.edgeWidth': 4 * EDGE_WIDTH,
     }),
   )
   expect(larger.radius).toBe(dense.radius * 2)
-  expect(larger.width).toBe(dense.width * 2)
+  // A wider setting widens a dense case's edges past that, though less than a sparse case's.
+  expect(larger.width).toBeGreaterThan(EDGE_WIDTH)
+  expect(larger.width).toBeLessThan(4 * EDGE_WIDTH)
 
   const scene = networkScene(data, drawing, reader(), {}, [
     { table: 'Bus', field: 'value', placement: 'vertex', channel: 'radius', domain: [0, 10] },
     { table: 'Line', field: 'value', placement: 'edge', channel: 'width', domain: [0, 10] },
   ])
-  for (const [table, mark, channel, high] of [
-    ['Bus', 1, 'radius', 2.5],
-    ['Line', 0, 'width', 4],
+  // A mapped radius spans half to two and a half times the vertex's; a mapped width only widens.
+  for (const [table, mark, channel, low, high] of [
+    ['Bus', 1, 'radius', 0.5, 2.5],
+    ['Line', 0, 'width', 1, 4],
   ] as const) {
     const spec = scene.marks![mark]!
     const expression = 'vertices' in spec ? spec.radius : 'edges' in spec ? spec.width : undefined
@@ -190,7 +193,7 @@ it('scales dense case marks and their bindings together while preserving missing
     const values = data.query({ of: table, ids: [0, 1, 2], select: { size: expression } }).fields
       .size
     expect(Array.from(values as Float64Array)).toEqual([
-      dense[channel] * 0.5,
+      dense[channel] * low,
       dense[channel] * high,
       dense[channel],
     ])

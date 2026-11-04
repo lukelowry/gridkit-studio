@@ -1194,12 +1194,12 @@
             "maximum": 12
           },
           "gridkitStudio.network.edgeWidth": {
-            "default": 0.75,
+            "default": 2,
             "scope": "resource",
-            "markdownDescription": "View — Edge width. Width in CSS pixels for sparse networks. Dense networks scale down automatically; width bindings scale with this value.",
+            "markdownDescription": "View — Edge width. Width in CSS pixels for sparse networks. Dense networks draw thinner, down to 2, as a thinner line can't hide what is behind it. Width mappings start from this width.",
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 6
+            "minimum": 2,
+            "maximum": 8
           },
           "gridkitStudio.network.colormap": {
             "default": "viridis",

@@ -111,6 +111,10 @@ const MOTION = [
 ] as const
 /** The tilt the Network's Tilt button sets, and a height mapped on a flat Network takes. */
 export const TILTED = 45
+/** The narrowest an edge draws, in CSS pixels. latkit writes depth only where a line covers whole
+ *  pixels, so a thinner line is a faint sliver that hides nothing behind it, and where many cross,
+ *  the most numerous color shows whichever is nearest. */
+export const EDGE_WIDTH = 2
 export const SETTINGS = [
   category('network', 'Network', [
     group('View', [
@@ -131,9 +135,9 @@ export const SETTINGS = [
       num(
         'network.edgeWidth',
         'Edge width',
-        0.75,
-        [0.1, 6, 0.05],
-        'Width in CSS pixels for sparse networks. Dense networks scale down automatically; width bindings scale with this value.',
+        EDGE_WIDTH,
+        [EDGE_WIDTH, 8, 0.25],
+        `Width in CSS pixels for sparse networks. Dense networks draw thinner, down to ${EDGE_WIDTH}, as a thinner line can't hide what is behind it. Width mappings start from this width.`,
       ),
       choice('network.colormap', 'Colormap', 'viridis', COLORMAPS),
       num('network.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),

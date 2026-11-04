@@ -284,19 +284,51 @@ export class TestHost {
       .flatMap((page) => page.frames())
   }
 
-  /** The webview showing `kind`. */
-  view(kind: ViewKind, uri?: string): Promise<Frame> {
-    return until(async () => {
-      for (const candidate of this.#frames())
-        if (
-          await candidate
-            .locator('body[data-kind="' + kind + '"]:not([data-shown="false"])')
-            .isVisible()
-            .catch(() => false)
+  /** Each of Studio's webviews Playwright sees: its kind, whether it is hidden, and the case it
+   *  shows, which it hears of in its first state. */
+  async #seen(): Promise<string[]> {
+    const seen: string[] = []
+    for (const frame of this.#frames()) {
+      const body = await frame
+        .evaluate<Record<string, string>>('({ ...document.body.dataset })')
+        .catch(() => undefined)
+      if (body?.kind)
+        seen.push(
+          `${body.kind}${body.shown === 'false' ? ' (hidden)' : ''} of ${body.uri || 'no case yet'}`,
         )
-          if (!uri || (await candidate.evaluate<string>('document.body.dataset.uri')) === uri)
-            return candidate
-    }, kind + ' webview')
+    }
+    return seen
+  }
+
+  /** The webview showing `kind`, of the case at `uri` when given. A wait that fails says what
+   *  webviews there were instead. */
+  view(kind: ViewKind, uri?: string): Promise<Frame> {
+    return until(
+      async () => {
+        for (const candidate of this.#frames())
+          if (
+            await candidate
+              .locator('body[data-kind="' + kind + '"]:not([data-shown="false"])')
+              .isVisible()
+              .catch(() => false)
+          )
+            if (!uri || (await candidate.evaluate<string>('document.body.dataset.uri')) === uri)
+              return candidate
+      },
+      async () => {
+        const tabs = vscode.window.tabGroups.all
+          .flatMap((group) => group.tabs)
+          .map((tab) =>
+            tab.input instanceof vscode.TabInputCustom
+              ? `${tab.label} (${tab.input.viewType})`
+              : tab.label,
+          )
+        return (
+          `${kind} webview${uri ? ' of ' + uri : ''}, among: ${(await this.#seen()).join('; ') || 'none'}` +
+          ` (${this.#frames().length} frames; tabs: ${tabs.join(', ') || 'none'})`
+        )
+      },
+    )
   }
 
   /** Show the case in the Network, and wait for its first frame. */

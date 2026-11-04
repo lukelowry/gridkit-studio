@@ -17,7 +17,7 @@ import { type Bindings, type Channel, CHANNELS } from '../shared/bindings.js'
 import type { ProjectionSelection, RecordedField } from '../shared/data.js'
 import { type CaseDefinition, type Drawing, fieldDefinition } from '../shared/document.js'
 import type { Plot, Results } from '../shared/messages.js'
-import { EDGE_WIDTH, type SettingsReader } from '../shared/preferences.js'
+import type { SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
 export function caseFit(data: Data, drawing: Drawing): Fit {
@@ -57,24 +57,11 @@ interface NetworkSizes {
   readonly width: number
 }
 
-/** Count only case marks, never map geometry. Metadata reads do not materialize row columns. */
-function networkSizes(data: Data, drawing: Drawing, settings: SettingsReader): NetworkSizes {
-  const rows = new Map(data.describe().tables.map((table) => [table.name, table.rows]))
-  const count = (tables: readonly string[]) =>
-    [...new Set(tables)].reduce((sum, table) => sum + (rows.get(table) ?? 0), 0)
-  const vertices = count(drawing.vertices.map((vertex) => vertex.table))
-  const edges = count(drawing.edges.map((edge) => edge.table))
-  // A sparse case keeps its configured size. Ink thins smoothly as the graph grows, strokes more
-  // gently than radii, whose occupied area grows quadratically, and no edge thinner than latkit
-  // can draw whole.
-  const density = Math.min(1, (1000 / Math.max(1, vertices, edges / 2)) ** 0.4)
-  return {
-    radius: settings.get('network.vertexRadius') * Math.max(0.08, density),
-    width: Math.max(
-      EDGE_WIDTH,
-      settings.get('network.edgeWidth') * Math.max(0.15, Math.sqrt(density)),
-    ),
-  }
+/** The Network's sizes in CSS pixels, as the settings give them on every case: a vertex never
+ *  narrower than twice its edges, so it shows past the edges that meet it. */
+function networkSizes(settings: SettingsReader): NetworkSizes {
+  const width = settings.get('network.edgeWidth')
+  return { width, radius: Math.max(width, settings.get('network.vertexRadius')) }
 }
 
 /** The distance the stress layout keeps between linked vertices, in plane units: latkit's own
@@ -197,12 +184,13 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
   return Math.max(1, most)
 }
 
-/** What each channel's mapped values span; a height spans a share of the case's span. A width only
- *  widens an edge, which draws no thinner than it does unmapped. */
+/** What each channel's mapped values span: a size from the mark's own to three times it, so a
+ *  mapping only enlarges a mark, which draws no smaller than it does unmapped; a height, a share of
+ *  the case's span. */
 const RANGES: Record<'radius' | 'elevation' | 'width', [low: number, high: number]> = {
-  radius: [0.5, 2.5],
+  radius: [1, 3],
   elevation: [0, 1],
-  width: [1, 4],
+  width: [1, 3],
 }
 
 function mapped(binding: Binding, map: ColormapName, sizes: NetworkSizes, height: number): Expr {
@@ -329,7 +317,7 @@ export function networkScene(
   bindings: readonly Binding[],
   background: readonly Mark[] = [],
 ): Scene {
-  const sizes = networkSizes(data, drawing, settings)
+  const sizes = networkSizes(settings)
   // The highest mapped value raises a vertex a share of the case's span, whatever the space's
   // units and however large the case: its relief reads alike on every case.
   const height = bindings.some((binding) => binding.channel === 'elevation')

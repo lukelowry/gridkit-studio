@@ -4,7 +4,7 @@
  *  GRIDKIT_TEST_VERBOSE=1 keeps them. */
 
 import { spawn } from 'node:child_process'
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -51,9 +51,11 @@ await build({
   logLevel: 'warning',
 })
 
+const output = process.env.GRIDKIT_TEST_OUTPUT ?? path.join(root, 'output')
 const testRoot = path.join(root, '.vscode-test')
 await mkdir(testRoot, { recursive: true })
 const run = await mkdtemp(path.join(testRoot, 'run-'))
+let passed = false
 try {
   const profile = path.join(run, 'user-data')
   await mkdir(path.join(profile, 'User'), { recursive: true })
@@ -146,7 +148,7 @@ try {
         VSCODE_CLI: '1',
         GRIDKIT_TEST_PROFILE: profile,
         GRIDKIT_TEST_ROOT: root,
-        GRIDKIT_TEST_OUTPUT: process.env.GRIDKIT_TEST_OUTPUT ?? path.join(root, 'output'),
+        GRIDKIT_TEST_OUTPUT: output,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -165,7 +167,16 @@ try {
     child.once('close', resolve)
   })
   if (code !== 0) throw new Error(`VS Code exited ${code}.`)
+  passed = true
 } finally {
+  // A failed run keeps VS Code's logs, which say what its windows and extension hosts did.
+  if (!passed) {
+    const logs = path.join(output, 'logs', path.basename(run))
+    await cp(path.join(run, 'user-data', 'logs'), logs, { recursive: true }).then(
+      () => console.warn("Kept the run's logs in " + logs),
+      () => {},
+    )
+  }
   // Remove only this run's own profile, whether or not the run passed.
   const relative = path.relative(testRoot, run)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative))

@@ -138,13 +138,13 @@ it('draws the map, then branches, then the buses over them, however the network 
     expect(kinds(reader(settings))).toEqual(['lines', 'edges', 'vertices'])
 })
 
-it('scales dense case marks and their bindings together while preserving missing rows', () => {
+it('draws every case at the sizes the settings give, a vertex past its edges', () => {
   const drawing = {
     geographic: true,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [{ table: 'Line' }],
   }
-  using data = new Data('case')
+  using dense = new Data('dense')
     .replace(
       'Bus',
       Array.from({ length: 70_000 }, (_, id) => id),
@@ -155,52 +155,43 @@ it('scales dense case marks and their bindings together while preserving missing
     )
     .set('Bus', [0, 1, 2], { value: Float64Array.of(0, 10, NaN) })
     .set('Line', [0, 1, 2], { value: Float64Array.of(0, 10, NaN) })
-  const sizes = (settings = reader()) => {
+  using sparse = new Data('sparse').replace('Bus', [1, 2]).replace('Line', [1])
+  const sizes = (data: Data, settings = reader()) => {
     const scene = networkScene(data, drawing, settings, {}, [])
     return {
       radius: (scene.marks![1] as { radius: number }).radius,
       width: (scene.marks![0] as { width: number }).width,
     }
   }
-  const dense = sizes()
-  expect(dense.radius).toBeGreaterThan(0.3)
-  expect(dense.radius).toBeLessThan(0.7)
-  // An edge draws no thinner than latkit draws a line whole, however dense the case.
-  expect(dense.width).toBe(EDGE_WIDTH)
-  const larger = sizes(
-    reader({
-      'network.vertexRadius': 2 * defaults['network.vertexRadius'],
-      'network.edgeWidth': 4 * EDGE_WIDTH,
-    }),
-  )
-  expect(larger.radius).toBe(dense.radius * 2)
-  // A wider setting widens a dense case's edges past that, though less than a sparse case's.
-  expect(larger.width).toBeGreaterThan(EDGE_WIDTH)
-  expect(larger.width).toBeLessThan(4 * EDGE_WIDTH)
+  // However many rows a case has.
+  const given = {
+    radius: defaults['network.vertexRadius'],
+    width: defaults['network.edgeWidth'],
+  }
+  expect(sizes(dense)).toEqual(given)
+  expect(sizes(sparse)).toEqual(given)
+  // A vertex is never narrower than twice its edges, whatever the two settings.
+  const wide = reader({ 'network.vertexRadius': EDGE_WIDTH, 'network.edgeWidth': 3 * EDGE_WIDTH })
+  expect(sizes(dense, wide)).toEqual({ radius: 3 * EDGE_WIDTH, width: 3 * EDGE_WIDTH })
 
-  const scene = networkScene(data, drawing, reader(), {}, [
+  // A mapped size spans the mark's own to three times it; a row without a value keeps its own.
+  const scene = networkScene(dense, drawing, reader(), {}, [
     { table: 'Bus', field: 'value', placement: 'vertex', channel: 'radius', domain: [0, 10] },
     { table: 'Line', field: 'value', placement: 'edge', channel: 'width', domain: [0, 10] },
   ])
-  // A mapped radius spans half to two and a half times the vertex's; a mapped width only widens.
-  for (const [table, mark, channel, low, high] of [
-    ['Bus', 1, 'radius', 0.5, 2.5],
-    ['Line', 0, 'width', 1, 4],
+  for (const [table, mark, channel] of [
+    ['Bus', 1, 'radius'],
+    ['Line', 0, 'width'],
   ] as const) {
     const spec = scene.marks![mark]!
     const expression = 'vertices' in spec ? spec.radius : 'edges' in spec ? spec.width : undefined
     if (!(expression instanceof Expr)) throw new Error('Expected a native size expression.')
-    const values = data.query({ of: table, ids: [0, 1, 2], select: { size: expression } }).fields
+    const values = dense.query({ of: table, ids: [0, 1, 2], select: { size: expression } }).fields
       .size
     expect(Array.from(values as Float64Array)).toEqual([
-      dense[channel] * low,
-      dense[channel] * high,
-      dense[channel],
+      given[channel],
+      3 * given[channel],
+      given[channel],
     ])
   }
-  using small = new Data('small').replace('Bus', [1, 2]).replace('Line', [1])
-  const sparse = networkScene(small, drawing, reader(), {}, [])
-  // A sparse case keeps the sizes the settings give.
-  expect(sparse.marks![1]).toMatchObject({ radius: defaults['network.vertexRadius'] })
-  expect(sparse.marks![0]).toMatchObject({ width: defaults['network.edgeWidth'] })
 })

@@ -1188,15 +1188,15 @@
           "gridkitStudio.network.vertexRadius": {
             "default": 2.5,
             "scope": "resource",
-            "markdownDescription": "View — Vertex radius. Radius in CSS pixels for sparse networks. Dense networks scale down automatically; size bindings scale with this value.",
+            "markdownDescription": "View — Vertex radius. Radius in CSS pixels, never under the edge width, so a vertex shows past the edges that meet it. Size mappings start from this radius.",
             "type": "number",
-            "minimum": 0.25,
+            "minimum": 2,
             "maximum": 12
           },
           "gridkitStudio.network.edgeWidth": {
             "default": 2,
             "scope": "resource",
-            "markdownDescription": "View — Edge width. Width in CSS pixels for sparse networks. Dense networks draw thinner, down to 2, as a thinner line can't hide what is behind it. Width mappings start from this width.",
+            "markdownDescription": "View — Edge width. Width in CSS pixels, at least 2, as a thinner line can't hide what is behind it. Width mappings start from this width.",
             "type": "number",
             "minimum": 2,
             "maximum": 8

@@ -53,7 +53,7 @@ export function gridkitOf(uri: vscode.Uri): GridKit {
   }
 }
 
-/** How many bytes of results no view shows the results worker keeps open. It only paces what stays
+/** How many bytes of results no view shows the worker keeps open. It only paces what stays
  *  open, so any value works: one that is not a number keeps the default, and a negative one keeps
  *  nothing. */
 export function cacheBytes(): number {

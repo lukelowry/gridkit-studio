@@ -433,23 +433,13 @@ class View {
    *  and the videos and images it exports. A revision a newer one replaced is refused, quietly. */
   #handlers(): Handlers<ViewApi> {
     const { studio } = this
-    const { client } = studio
+    const { worker } = studio.client
     return {
-      frames: (input, signal) => client.results.call('frames', input, signal),
-      sample: (input, signal) => client.results.call('sample', input, signal),
-      project: (input, signal) =>
-        'results' in input
-          ? client.results.call('project', input, signal)
-          : client.cases.call(
-              'project',
-              { ...input.revision, fields: input.fields, cursor: input.cursor },
-              signal,
-            ),
+      frames: (input, signal) => worker.call('frames', input, signal),
+      sample: (input, signal) => worker.call('sample', input, signal),
+      project: (input, signal) => worker.call('project', input, signal),
       page: (input, signal) => {
-        const read =
-          'results' in input
-            ? client.results.call('page', input, signal)
-            : client.cases.call('page', { ...input.revision, request: input.request }, signal)
+        const read = worker.call('page', input, signal)
         if (this.kind === 'case')
           void vscode.window.withProgress({ location: { viewId: viewId('case') } }, () =>
             read.catch(() => {}),
@@ -468,7 +458,7 @@ class View {
         const id = randomUUID()
         this.#shares.add(id)
         try {
-          const shared = await client.results.call('share', { results, as: id }, signal)
+          const shared = await worker.call('share', { results, as: id }, signal)
           signal.throwIfAborted()
           return shared
         } catch (error) {

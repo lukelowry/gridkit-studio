@@ -1,5 +1,5 @@
 /** One request protocol for each channel Studio has: a webview and the extension, and the extension
- *  and each of its workers. A request is answered once, with its value or the problem it met,
+ *  and its worker. A request is answered once, with its value or the problem it met,
  *  unless whoever asked lets go of it first, which tells the other side to stop. */
 
 import { errorOf, type Problem, problemOf } from './errors.js'

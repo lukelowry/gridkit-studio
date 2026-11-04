@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import type { FramePage, FrameRequest } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
-import { FrameReads, FrameWindow, type Sampled, SampledWindows } from './frames.js'
+import { FrameReads, FrameWindow, PlayheadFeed, type Sampled } from './frames.js'
 
 const request = vi.hoisted(() => vi.fn())
 vi.mock('./bridge.js', () => ({ bridge: { request } }))
@@ -103,25 +103,46 @@ test('an aborted late response never replaces the published native dataset', asy
   reads.clear()
 })
 
-test('a scene holds a window for each mapped field, and lets go of those it maps no more', async () => {
+test('a feed keeps each mapped field about the playhead, and lets go of those mapped no more', async () => {
   const reads = new FrameReads()
-  const windows = new SampledWindows(reads)
+  const feed = new PlayheadFeed(reads)
   const vm: Sampled = ['Bus', 'Vm']
+  const results = { id: 'run', frames: 2, domain: [0, 10] as const }
+  const still = { results, playing: false, rate: 1, shown: 60, bytes: 1 << 20 }
+  const frames = expect.anything()
   request.mockResolvedValue(page())
-  await windows.of(vm).receive(input, 2)
-  const data = windows.of(vm).data
+  // Still, it asks for the frame shown alone.
+  expect(await feed.ahead([vm], 0.5, still)).toBe(true)
+  expect(request).toHaveBeenLastCalledWith(
+    'frames',
+    expect.objectContaining({ range: [0.5, 0.5], step: 0 }),
+    frames,
+  )
+  const data = feed.source('Bus', 'Vm')
   expect(data).toBeDefined()
-  expect(windows.source('Bus', 'Vm')).toBe(data)
-  expect(windows.sources).toEqual([data])
-  // It holds the frames of the times it read, and of no field it has not read.
-  expect(windows.hold([vm], 0.5)).toBe(true)
-  expect(windows.hold([vm], 2)).toBe(false)
-  expect(windows.hold([vm, ['Bus', 'Va']], 0.5)).toBe(false)
-  expect(windows.keep([vm])).toBe(false)
-  expect(windows.keep([])).toBe(true)
-  expect(windows.source('Bus', 'Vm')).toBeUndefined()
-  expect(windows.sources).toEqual([])
-  windows.clear()
+  expect(feed.sources).toEqual([data])
+  // It holds the times it read, of no field it has not read, and asks again for none of them.
+  expect(feed.holds([vm], 0.5)).toBe(true)
+  expect(feed.holds([vm], 2)).toBe(false)
+  expect(feed.holds([vm, ['Bus', 'Va']], 0.5)).toBe(false)
+  request.mockClear()
+  expect(await feed.ahead([vm], 0.5, still)).toBe(false)
+  expect(request).not.toHaveBeenCalled()
+  // Playing at twice the speed, sixty frames a second, the window that shows serves, and it reads
+  // the next from where that one ends: two seconds of playback, a thirtieth of a second apart.
+  expect(await feed.ahead([vm], 0.2, { ...still, playing: true, rate: 2 })).toBe(false)
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenLastCalledWith(
+      'frames',
+      expect.objectContaining({ range: [1, 5], step: 2 / 60 }),
+      frames,
+    ),
+  )
+  expect(feed.keep([vm])).toBe(false)
+  expect(feed.keep([])).toBe(true)
+  expect(feed.source('Bus', 'Vm')).toBeUndefined()
+  expect(feed.sources).toEqual([])
+  feed.clear()
   reads.clear()
 })
 

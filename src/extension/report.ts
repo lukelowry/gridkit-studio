@@ -7,7 +7,7 @@ import { defect, detail, message, quiet } from '../shared/errors.js'
 import { commandId } from '../shared/ids.js'
 
 /** A choice a notification offers: its label, and the command it runs. */
-export interface Offer {
+interface Offer {
   readonly title: string
   readonly command: string
 }

@@ -86,7 +86,7 @@ export async function run() {
     const key = uri.toString()
     const session = bench.studio.get(key)!
     await bench.record('Bus', ['Vm', 'Va'], uri)
-    bench.run(
+    bench.explorer(
       'Run Dynamic Simulation',
       await bench.writeSolver(
         {

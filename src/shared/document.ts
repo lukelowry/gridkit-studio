@@ -10,7 +10,7 @@ export interface Element extends Entity {
   readonly field?: string
 }
 
-export type FieldKind = 'number' | 'boolean' | 'text' | 'reference' | 'path' | 'json' | 'sampled'
+type FieldKind = 'number' | 'boolean' | 'text' | 'reference' | 'path' | 'json' | 'sampled'
 
 export interface FieldDefinition {
   readonly name: string
@@ -31,13 +31,13 @@ export interface TableDefinition {
   readonly fields: readonly FieldDefinition[]
 }
 
-export interface VertexDefinition {
+interface VertexDefinition {
   readonly table: string
   readonly label?: string
   readonly position: [string, string]
 }
 
-export interface EdgeDefinition {
+interface EdgeDefinition {
   readonly table: string
   readonly ends?: [string, string]
   readonly bends?: string
@@ -65,7 +65,7 @@ export function entityLabel(entity: Entity): string {
   return `${entity.table} ${String(entity.id)}`
 }
 
-export function withUnit(name: string, unit: string | undefined): string {
+function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 

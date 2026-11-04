@@ -367,7 +367,7 @@ export async function run() {
       const wrote = () => (ran() ? session.results : undefined)
       const started = performance.now()
       const since = () => performance.now() - started
-      bench.run('Run Dynamic Simulation', solver)
+      bench.explorer('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
         settle(() => (wrote()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
         network
@@ -493,7 +493,7 @@ export async function run() {
       await settings.update('monitor.lineWidth', undefined, global)
       // The traces under the pointer, read where the plot drew them.
       const t = span[0] + 0.5 * (span[1] - span[0])
-      const exact = await bench.studio.client.results.call('sample', {
+      const exact = await bench.studio.client.worker.call('sample', {
         results: session.results!.id,
         table: 'Bus',
         field: 'Vm',

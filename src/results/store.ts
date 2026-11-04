@@ -116,6 +116,9 @@ export class Store {
   readonly raw: RawIndex[] = []
   readonly levels = new Map<string, LevelIndex[]>()
   #rows: readonly number[] = []
+  /** Each selection of rows a reader asks of, checked against the rows a field records, and its
+   *  places in the order they lie on disk: a window reads many blocks of one selection. */
+  readonly #orders = new WeakMap<readonly number[], { rows: number; order: Uint32Array }>()
   #manifest?: Manifest
   #rawBytes = 0
   #levelBytes = 0
@@ -311,6 +314,20 @@ export class Store {
     await readAll(file, new Uint8Array(at.buffer), index.at + offset * 8)
     return at
   }
+  /** The places of `selected` in the order they lie on disk, once each is checked to be one of a
+   *  field's `rows`. */
+  #order(selected: readonly number[], rows: number): Uint32Array {
+    const known = this.#orders.get(selected)
+    if (known?.rows === rows) return known.order
+    for (const place of selected)
+      if (!Number.isSafeInteger(place) || place < 0 || place >= rows)
+        throw new Error('Invalid recorded row.')
+    const order = Uint32Array.from(selected, (_, i) => i).sort(
+      (a, b) => selected[a]! - selected[b]!,
+    )
+    this.#orders.set(selected, { rows, order })
+    return order
+  }
   async readRaw(
     index: RawIndex,
     field: number,
@@ -322,16 +339,10 @@ export class Store {
     const [file] = await this.#handles()
     const selected = places ?? Array.from({ length: this.#rows[field]! }, (_, i) => i)
     const values = new Float64Array(count * selected.length)
-    for (const place of selected) {
-      if (!Number.isSafeInteger(place) || place < 0 || place >= this.#rows[field]!)
-        throw new Error('Invalid recorded row.')
-    }
     // Rows are contiguous on disk. Read adjacent selections together, bounded to 4 MiB,
     // then transpose directly into the requested order. A single-row inspection still
     // reads only its requested times, rather than the whole field or run.
-    const order = Array.from({ length: selected.length }, (_, i) => i).sort(
-      (a, b) => selected[a]! - selected[b]!,
-    )
+    const order = this.#order(selected, this.#rows[field]!)
     for (let first = 0; first < order.length;) {
       const place = selected[order[first]!]!
       let stop = first + 1

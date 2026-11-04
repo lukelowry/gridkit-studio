@@ -88,8 +88,8 @@ try {
   await verify(target)
   assert.deepEqual(
     (await readdir(join(target, 'dist'))).filter((name) => /\.(cjs|mjs)$/.test(name)).sort(),
-    ['cases.mjs', 'extension.cjs', 'results.mjs'],
-    'Ship only the native extension and its two worker bundles',
+    ['extension.cjs', 'worker.mjs'],
+    'Ship only the native extension and its worker bundle',
   )
   for (const asset of [
     'webview/latkit.wasm',

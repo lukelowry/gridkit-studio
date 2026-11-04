@@ -25,15 +25,16 @@ export function send(message: FromWorker, buffers: readonly ArrayBufferLike[] = 
 }
 
 /** Answer each request with `handlers`. The replies of `moved` methods hold buffers of their own,
- *  which go to the extension without a copy. Someone waits on each answer but those of `background`
- *  methods, whose long work steps aside while any other request is under way. */
+ *  which go to the extension without a copy. Someone waits on each answer but those of `unawaited`
+ *  methods, so background work, which steps aside while anything awaited is under way, goes on
+ *  while they are. */
 export function serve<A extends Api<A>>(
   handlers: Handlers<A>,
   moved: readonly (keyof A & string)[] = [],
-  background: readonly (keyof A & string)[] = [],
+  unawaited: readonly (keyof A & string)[] = [],
 ) {
   const moving = new Set<string>(moved)
-  const behind = new Set<string>(background)
+  const behind = new Set<string>(unawaited)
   const answers = Object.fromEntries(
     Object.entries<(input: unknown, signal: AbortSignal) => unknown>(handlers).map(
       ([method, handler]) => [

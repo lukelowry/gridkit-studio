@@ -1,7 +1,8 @@
 import type { Data } from 'latkit'
 
-import { type FramePage, type FrameRequest, PAYLOAD_BYTES } from '../shared/data.js'
+import { type FramePage, type FrameRequest, PAYLOAD_BYTES, type TimeRange } from '../shared/data.js'
 import { failedWith } from '../shared/errors.js'
+import type { Results } from '../shared/messages.js'
 import { bridge } from './bridge.js'
 import { DatasetSlot } from './datasets.js'
 import { loadRenderer } from './runtime.js'
@@ -143,6 +144,10 @@ export class FrameWindow {
   get pending(): boolean {
     return this.#pending !== undefined
   }
+  /** The read under way, which settles once its window is held. */
+  get loading(): Promise<boolean> | undefined {
+    return this.#pending
+  }
   get data(): Data | undefined {
     return this.slot.current?.data
   }
@@ -258,61 +263,160 @@ export type Sampled = readonly [table: string, field: string]
 
 const keyOf = (table: string, field: string) => JSON.stringify([table, field])
 
-/** A window of frames for each sampled field a scene maps, which the Network holds around its
- *  playhead, and a video around the frame it draws. Each asks its windows for frames its own way. */
-export class SampledWindows {
-  readonly #windows = new Map<string, FrameWindow>()
+/** The most frames a second a playing view shows, so the most it asks for. */
+export const SHOWN_PER_SECOND = 60
+/** How much of the run a playing feed reads at a time, in seconds of playback: one window shows
+ *  while the next, which starts where it ends, is read. */
+const WINDOW_SECONDS = 2
+
+/** How a view moves through `results`: playing at `rate`, showing `shown` frames a second, or
+ *  still. Each field's window may take `bytes`. */
+interface Pace {
+  readonly results: Pick<Results, 'id' | 'frames' | 'domain'>
+  readonly playing: boolean
+  readonly rate: number
+  readonly shown: number
+  readonly bytes: number
+}
+
+/** A field's windows: the one that shows, and while playing, the one read after it, which starts
+ *  where the first ends. */
+interface Lane {
+  now: FrameWindow
+  next: FrameWindow
+}
+
+const holding = (window: FrameWindow, at: number) =>
+  !!window.range && at >= window.range[0] && at <= window.range[1]
+
+/** The frames each sampled field a scene maps holds about its playhead: the frame shown while
+ *  still, and while playing, the frames the view shows next, each read once and before it is due.
+ *  The Network keeps one, and so does a video while it draws. */
+export class PlayheadFeed {
+  readonly #lanes = new Map<string, Lane>()
 
   constructor(readonly reads: FrameReads) {}
 
-  /** The window of `table`'s `field`, made when first asked for. */
-  of([table, field]: Sampled): FrameWindow {
-    const key = keyOf(table, field)
-    let window = this.#windows.get(key)
-    if (!window) this.#windows.set(key, (window = new FrameWindow(this.reads)))
-    return window
+  /** Keeps each of `fields` about `at` as `pace` moves: the frame at `at` while still; while
+   *  playing, a window of the frames shown from `at`, and the window after it, read while the
+   *  first shows. Settles once what `at` needs is held, true when a view draws differently for it.
+   *  A read ahead that fails is read again once it is due, which says why. */
+  async ahead(
+    fields: readonly Sampled[],
+    at: number,
+    pace: Pace,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    const { results, playing, rate } = pace
+    const domain = results.domain ?? [at, at]
+    const span = WINDOW_SECONDS * rate
+    const read = (window: FrameWindow, [table, field]: Sampled, range: TimeRange) =>
+      window.playhead(
+        {
+          results: results.id,
+          table,
+          field,
+          range,
+          purpose: 'playhead',
+          bytes: pace.bytes,
+          step: playing ? rate / pace.shown : 0,
+        },
+        results.frames,
+        range[0],
+        signal,
+      )
+    let moved = false
+    const waits: Promise<boolean>[] = []
+    for (const sampled of fields) {
+      const lane = this.#lane(sampled)
+      if (!playing) lane.next.clear()
+      else if (!holding(lane.now, at) && holding(lane.next, at)) {
+        // Played past the window that showed, into the one read after it.
+        ;[lane.now, lane.next] = [lane.next, lane.now]
+        lane.next.clear()
+        moved = true
+      }
+      const asked = lane.now.requested
+      if (lane.now.loading && asked && at >= asked[0] && at <= asked[1])
+        waits.push(lane.now.loading)
+      else if (!holding(lane.now, at) || (!playing && lane.now.version !== results.frames)) {
+        // A still view shows the run as it stands, which a growing run changes at its end.
+        lane.next.clear()
+        const from = Math.min(at, domain[1])
+        waits.push(
+          read(
+            lane.now,
+            sampled,
+            playing ? [from, Math.max(from, Math.min(domain[1], from + span))] : [at, at],
+          ),
+        )
+      } else if (playing && !lane.next.loading && !lane.next.range) {
+        const end = lane.now.range![1]
+        if (end < domain[1])
+          void read(lane.next, sampled, [end, Math.min(domain[1], end + span)]).catch(() => {})
+      }
+    }
+    return (await Promise.all(waits)).some(Boolean) || moved
   }
 
-  /** Lets go of every window but those of `fields`; whether any went. */
+  #lane([table, field]: Sampled): Lane {
+    const key = keyOf(table, field)
+    let lane = this.#lanes.get(key)
+    if (!lane)
+      this.#lanes.set(
+        key,
+        (lane = { now: new FrameWindow(this.reads), next: new FrameWindow(this.reads) }),
+      )
+    return lane
+  }
+
+  /** Lets go of every field's windows but those of `fields`; whether any went. */
   keep(fields: readonly Sampled[]): boolean {
     const kept = new Set(fields.map(([table, field]) => keyOf(table, field)))
     let went = false
-    for (const [key, window] of this.#windows)
+    for (const [key, lane] of this.#lanes)
       if (!kept.has(key)) {
-        window.clear()
-        this.#windows.delete(key)
+        lane.now.clear()
+        lane.next.clear()
+        this.#lanes.delete(key)
         went = true
       }
     return went
   }
 
-  /** Where a scene reads `table`'s `field`, once its window holds frames. */
+  /** Where a scene reads `table`'s `field`: the window that shows, once it holds frames. */
   readonly source = (table: string, field: string): Data | undefined =>
-    this.#windows.get(keyOf(table, field))?.data
+    this.#lanes.get(keyOf(table, field))?.now.data
 
-  /** The frames the windows hold, as a view's sources. */
+  /** The frames every window holds, as a view's sources. */
   get sources(): Data[] {
-    return [...this.#windows.values()].flatMap((window) => (window.data ? [window.data] : []))
+    return [...this.#lanes.values()].flatMap(({ now, next }) =>
+      [now.data, next.data].filter((data): data is Data => !!data),
+    )
   }
 
-  /** Whether the window of each of `fields` holds the frames at `at`. */
-  hold(fields: readonly Sampled[], at: number): boolean {
+  /** Whether each of `fields` holds the frames at `at`, in the window that shows or the next. */
+  holds(fields: readonly Sampled[], at: number): boolean {
     return fields.every(([table, field]) => {
-      const range = this.#windows.get(keyOf(table, field))?.range
-      return !!range && at >= range[0] && at <= range[1]
+      const lane = this.#lanes.get(keyOf(table, field))
+      return !!lane && (holding(lane.now, at) || holding(lane.next, at))
     })
   }
 
   /** What each window holds, and whether it reads more. */
   get spans(): { span?: FrameRequest['range']; pending: boolean }[] {
-    return [...this.#windows.values()].map((window) => ({
-      span: window.range,
-      pending: window.pending,
-    }))
+    return [...this.#lanes.values()].flatMap(({ now, next }) =>
+      [now, next]
+        .filter((window) => window.range || window.pending)
+        .map((window) => ({ span: window.range, pending: window.pending })),
+    )
   }
 
   clear(): void {
-    for (const window of this.#windows.values()) window.clear()
-    this.#windows.clear()
+    for (const { now, next } of this.#lanes.values()) {
+      now.clear()
+      next.clear()
+    }
+    this.#lanes.clear()
   }
 }

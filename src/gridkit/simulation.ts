@@ -10,7 +10,7 @@ import type { RunRequest } from '../shared/simulation.js'
 import type { Case } from './case.js'
 import { type Launch, launch, placed } from './runtime.js'
 
-export interface RunContext extends Launch {
+interface RunContext extends Launch {
   /** Hears of the results file the run reads as soon as it reads it, so views can ask it for
    *  frames as it fills. */
   readonly reading: (file: ResultsFile) => void

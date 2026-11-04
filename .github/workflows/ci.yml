@@ -29,11 +29,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm quality
-      # An odd minor version (0.5.x) is a pre-release, as VS Code recommends: the Marketplace keeps
-      # each version number to one channel.
-      - shell: bash
-        run: |
-          pnpm package $(node -p "require('./package.json').version.split('.')[1] % 2 ? '--pre-release' : ''")
+      # Packaged as any build is: an odd minor version is a pre-release.
+      - run: pnpm package
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
         with:

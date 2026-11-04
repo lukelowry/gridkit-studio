@@ -22,7 +22,7 @@ const NOTCHES_OUT = 4
 async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promise<void> {
   const session = bench.studio.get(uri.toString())!
   const previous = session.run?.id
-  bench.run('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
+  bench.explorer('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
   await until(
     () => session.run?.id !== previous && session.run?.state !== 'running',
     'the run ends',

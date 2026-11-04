@@ -9,23 +9,19 @@ import type { RunRequest } from '../shared/messages.js'
 import { bundle, OPTIONS } from '../workers/rig.js'
 import { Client } from './client.js'
 
-/** The workers as the extension ships them, side by side. */
+/** The worker as the extension ships it. */
 let shipped: string
-/** The case worker beside a results worker that reports a GridKit process when asked to run,
- *  answers anything else with `ok`, and crashes when asked to open. */
+/** A worker that reports a GridKit process when asked to run, answers anything else with `ok`,
+ *  and crashes when asked to open. */
 let crashing: string
 beforeAll(async () => {
-  shipped = dirname(await bundle('cases', 'client'))
-  await bundle('results', 'client')
+  shipped = dirname(await bundle('client'))
+  await mkdir(join(shipped, 'webview'), { recursive: true })
+  await copyFile(OPTIONS.wasmPath, join(shipped, 'webview', 'latkit.wasm'))
   crashing = resolve('output/tests/client-crashing')
   await mkdir(crashing, { recursive: true })
-  await copyFile(join(shipped, 'cases.mjs'), join(crashing, 'cases.mjs'))
-  for (const folder of [shipped, crashing]) {
-    await mkdir(join(folder, 'webview'), { recursive: true })
-    await copyFile(OPTIONS.wasmPath, join(folder, 'webview', 'latkit.wasm'))
-  }
   await writeFile(
-    join(crashing, 'results.mjs'),
+    join(crashing, 'worker.mjs'),
     `import { parentPort } from 'node:worker_threads'
 parentPort.on('message', (message) => {
   if (message.kind !== 'request') return
@@ -43,36 +39,31 @@ parentPort.on('message', (message) => {
 })
 
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
-/** The results worker as the tests start it, keeping what it reads under the tests' output. */
+/** The worker as the tests start it, keeping what it reads under the tests' output. */
 const options = () => ({ ...OPTIONS, store: resolve('output/tests/client-store') })
 /** What a listener's failure is said by. */
 const failed = vi.fn()
 
-describe('the workers the extension asks', () => {
-  it('asks each worker its own methods, and only those running what they hold', async () => {
-    const client = new Client(shipped, {}, options, failed)
+describe('the worker the extension asks', () => {
+  it('starts the worker once asked, and asks what it holds only while it runs', async () => {
+    const client = new Client(shipped, options, failed)
     try {
-      expect(await client.stats()).toEqual({})
+      expect(await client.stats()).toBeUndefined()
       const file = resolve('output/tests/client-one.case.json')
       await writeFile(file, ONE)
-      const summary = await client.cases.call('read', {
+      const summary = await client.worker.call('read', {
         uri: pathToFileURL(file).href,
         version: 1,
       })
       expect(summary.counts.Bus).toBe(1)
-      // Only the case worker has been asked anything, so only it is running.
-      expect(await client.stats()).toEqual({ cases: expect.objectContaining({ cases: 1 }) })
-      await expect(client.results.call('describe', { results: 'none' })).rejects.toMatchObject({
+      expect(await client.stats()).toMatchObject({ cases: 1, results: 0, files: 0, runs: 0 })
+      await expect(client.worker.call('describe', { results: 'none' })).rejects.toMatchObject({
         code: 'results-closed',
-      })
-      expect(await client.stats()).toMatchObject({
-        cases: { cases: 1 },
-        results: { files: 0, cases: 0, runs: 0 },
       })
     } finally {
       await client.dispose()
     }
-    await expect(client.cases.call('stats', {})).rejects.toThrow(/closed/)
+    await expect(client.worker.call('stats', {})).rejects.toThrow(/closed/)
   })
 
   it('ends what a stopped worker started, fails what was asked of it, and starts again', async () => {
@@ -80,38 +71,32 @@ describe('the workers the extension asks', () => {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-    const client = new Client(crashing, {}, options, failed)
+    const client = new Client(crashing, options, failed)
     const stopped = vi.fn()
-    const casesStopped = vi.fn()
-    client.results.failure.event(stopped)
-    client.cases.failure.event(casesStopped)
+    client.worker.failure.event(stopped)
     try {
-      const run = client.results.call('run', {
+      const run = client.worker.call('run', {
         uri: 'file:///one',
         run: 'first',
         pid: gridkit.pid,
       } as unknown as RunRequest)
       // Answered after the worker reported the process, which the client now owns.
-      expect(await client.results.call('stats', {})).toBe('ok')
-      const open = client.results.call('open', {
+      expect(await client.worker.call('stats', {})).toBe('ok')
+      const open = client.worker.call('open', {
         uri: 'file:///one',
         version: 1,
-        fingerprint: '',
         results: 'any',
         path: 'any.csv',
       })
-      await expect(open).rejects.toThrow(/results worker stopped/)
-      await expect(run).rejects.toThrow(/results worker stopped/)
+      await expect(open).rejects.toThrow(/worker stopped/)
+      await expect(run).rejects.toThrow(/worker stopped/)
       expect(stopped).toHaveBeenCalledOnce()
       // The process it started is ended with it.
       await vi.waitFor(() => expect(() => process.kill(gridkit.pid!, 0)).toThrow(), {
         timeout: 5000,
       })
       // Asked again, another worker answers.
-      expect(await client.results.call('stats', {})).toBe('ok')
-      // The case worker never stopped, and its owner heard nothing.
-      expect(await client.cases.call('stats', {})).toMatchObject({ cases: 0 })
-      expect(casesStopped).not.toHaveBeenCalled()
+      expect(await client.worker.call('stats', {})).toBe('ok')
     } finally {
       gridkit.kill()
       await client.dispose()

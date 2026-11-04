@@ -3,7 +3,7 @@
 import { type Results, type ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
-import { FrameReads, SampledWindows } from '../frames.js'
+import { FrameReads, PlayheadFeed } from '../frames.js'
 import { type Background, backgroundOf } from '../maps.js'
 import { CaseProjection } from '../projections.js'
 import { asset, openGpu } from '../runtime.js'
@@ -24,7 +24,7 @@ export async function renderVideo(
   const projection = new CaseProjection()
   const reads = new FrameReads()
   /** The frames each mapped field of the results holds about the frame the video draws. */
-  const sampled = new SampledWindows(reads)
+  const feed = new PlayheadFeed(reads)
   const views: View[] = []
   const placed: Placed[] = []
   /** Lets go of the Monitor's plots, whose views and frames are their own. */
@@ -73,33 +73,19 @@ export async function renderVideo(
     const fields = job.views.includes('network')
       ? sampledFields(definition, app.bindings, results)
       : []
-    const sources = () => [data, ...background.sources, ...sampled.sources]
+    const sources = () => [data, ...background.sources, ...feed.sources]
     let network: View | undefined
-    /** Holds each mapped field's frames from `at` to where half a second of the video reaches. */
+    // The video plays the times it shows at its rate, its frames a second, to its last time.
+    const pace = {
+      results: { ...results, domain: job.timeRange },
+      playing: true,
+      rate: job.rate,
+      shown: job.frameRate,
+      bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, fields.length)),
+    }
+    /** Holds each mapped field's frames at `at`, and those the video shows next. */
     const prepare = async (at: number, abort: AbortSignal) => {
-      let changed = false
-      await Promise.all(
-        fields.map(async ([table, field]) => {
-          const window = sampled.of([table, field])
-          const range = window.range
-          if (range && at >= range[0] && at <= range[1]) return
-          changed =
-            (await window.playhead(
-              {
-                results: results!.id,
-                table,
-                field,
-                range: [at, Math.min(job.timeRange[1], at + job.rate / 2)],
-                purpose: 'playhead',
-                bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, fields.length)),
-              },
-              results!.frames,
-              at,
-              abort,
-            )) || changed
-        }),
-      )
-      if (network && changed) network.sources = sources()
+      if ((await feed.ahead(fields, at, pace, abort)) && network) network.sources = sources()
     }
     await prepare(job.timeRange[0], signal)
 
@@ -126,7 +112,7 @@ export async function renderVideo(
         const scene = sceneOf(data, definition, settings, nativeTheme(settings, 'network'), {
           bindings: app.bindings,
           results,
-          sampled: sampled.source,
+          sampled: feed.source,
           background: background.marks,
         })
         if (background.attribution)
@@ -161,7 +147,7 @@ export async function renderVideo(
     for (const release of released) release()
     for (const view of views) view.destroy()
     gpu?.destroy()
-    sampled.clear()
+    feed.clear()
     projection.clear()
     reads.clear()
     background.destroy?.()

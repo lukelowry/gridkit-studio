@@ -4,17 +4,16 @@ import { pathToFileURL } from 'node:url'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import type { CaseApi } from '../shared/messages.js'
 import { bundle, start } from './rig.js'
 
 let script: string
 beforeAll(async () => {
-  script = await bundle('cases', 'case-worker')
+  script = await bundle('case-files')
 })
 
-/** The case worker, with the case file `name` in its folder to write: its path and URI. */
+/** The worker, with the case file `name` in its folder to write: its path and URI. */
 async function rigged(name = 'test.case.json') {
-  const rig = await start<CaseApi>(script)
+  const rig = await start(script)
   const path = join(rig.scratch, name)
   return {
     ...rig,
@@ -25,7 +24,7 @@ async function rigged(name = 'test.case.json') {
 
 const request = { table: 'Bus', fields: ['name'], offset: 0, limit: 100 } as const
 
-describe('the case worker', () => {
+describe("the worker's case files", () => {
   it('reads a case file, and draws and validates it', async () => {
     const rig = await rigged()
     try {
@@ -35,15 +34,11 @@ describe('the case worker', () => {
         ...revision,
         recording: { listed: { Bus: { Vm: 1 } }, anything: true },
       })
-      const rows = await rig.call('page', { ...revision, request })
+      const rows = await rig.call('page', { revision, request })
       expect(rows.ids).toEqual([1])
       expect(rows.fields.name).toEqual(['one'])
       expect(await rig.call('validate', revision)).toEqual([])
       await expect(rig.call('validate', { ...revision, version: 2 })).rejects.toThrow(/changed/)
-      // Runs and results files are the results worker's: nothing here answers for them.
-      await expect(rig.call('step' as keyof CaseApi, { results: 'none' } as never)).rejects.toThrow(
-        /Nothing answers step/,
-      )
     } finally {
       await rig.stop()
     }
@@ -69,12 +64,9 @@ describe('the case worker', () => {
       const changed = await rig.call('read', { uri: rig.uri, version: 4 })
       expect(changed.version).toBe(4)
       expect(changed.fingerprint).not.toBe(first.fingerprint)
-      expect((await rig.call('page', { uri: rig.uri, version: 4, request })).fields.name).toEqual([
-        'two',
-      ])
-      await expect(rig.call('page', { uri: rig.uri, version: 1, request })).rejects.toThrow(
-        /changed/,
-      )
+      const at = (version: number) => ({ revision: { uri: rig.uri, version }, request })
+      expect((await rig.call('page', at(4))).fields.name).toEqual(['two'])
+      await expect(rig.call('page', at(1))).rejects.toThrow(/changed/)
     } finally {
       await rig.stop()
     }

@@ -524,7 +524,7 @@ const removeContainer = ({ cli, name }: { cli: string; name: string }) =>
   )
 
 /** Stops the process `owned` names and every process it started, and removes its container. The
- *  extension also calls it, should the results worker exit before cleaning up. */
+ *  extension also calls it, should the worker exit before cleaning up. */
 export async function terminateRuntime(owned: RuntimeProcess): Promise<void> {
   // Ending the CLI leaves its container running: the engine removes it by name.
   if (owned.container) await removeContainer(owned.container)

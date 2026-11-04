@@ -2,7 +2,7 @@ import type { Camera, Hit, View } from 'latkit'
 
 import type { Element } from '../shared/document.js'
 
-export interface InteractionActions {
+interface InteractionActions {
   select(element: Element | null): void
   open(element: Element): void
   menu(point: [number, number], elements: Element[]): void
@@ -10,7 +10,7 @@ export interface InteractionActions {
   error(error: unknown): void
 }
 
-export function elementOf(hit: Hit): Element {
+function elementOf(hit: Hit): Element {
   return { table: hit.row.table, id: hit.row.id, ...(hit.port ? { field: hit.port } : {}) }
 }
 

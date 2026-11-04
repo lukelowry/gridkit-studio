@@ -101,7 +101,8 @@ const solverText = (name: string, solver: Solver) =>
 /** The text of the file at `uri` as it is on disk. */
 const textOf = (uri: vscode.Uri) => readFile(uri.fsPath, 'utf8')
 
-/** IEEE39, the case every suite starts from, followed alone with its file as found. */
+/** IEEE39, the case every suite starts from, followed alone with its file as found. The local
+ *  end-to-end suites drive the same bench from outside the window too. */
 export class Bench {
   /** The case's file as found. */
   readonly text: string
@@ -115,7 +116,7 @@ export class Bench {
   /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
 
-  private constructor(text: string, solver: string) {
+  protected constructor(text: string, solver: string) {
     this.text = text
     this.solverText = solver
     this.source = JSON.parse(this.text)
@@ -215,11 +216,12 @@ export class Bench {
     return this.record(type, fields, this.uri, true)
   }
 
-  /** Write the solver file beside the case, its members `solver`. */
-  async writeSolver(solver: Solver): Promise<vscode.Uri> {
-    const text = solverText('IEEE39', solver)
-    await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(text))
-    return this.solver
+  /** Write the solver file beside the case `uri`, its members `solver`. */
+  async writeSolver(solver: Solver, uri = this.uri): Promise<vscode.Uri> {
+    const name = basename(uri.path).replace(/\.case\.json$/i, '')
+    const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(solverText(name, solver)))
+    return file
   }
 
   /** Run the solver file as its Explorer menu does, and wait for the run to end. */
@@ -284,6 +286,16 @@ export class Bench {
    *  run, selected, mapped or plotted. */
   async reset(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    await this.restore()
+    const session = await this.follow()
+    await this.settled()
+    this.clean(session)
+    session.clear()
+    this.said()
+  }
+
+  /** Stops a run under way, and writes the case's file and solver file back as found. */
+  protected async restore(): Promise<void> {
     const running = this.studio.get(this.key)
     if (running?.running) {
       running.stop()
@@ -292,8 +304,11 @@ export class Bench {
     if ((await textOf(this.uri)) !== this.text) await this.write(this.text)
     if ((await textOf(this.solver)) !== this.solverText)
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
-    const session = await this.follow()
-    await this.settled()
+  }
+
+  /** Lets go of what `session` shows: nothing selected, mapped, plotted, framed or filtered, and
+   *  its clock at its own pace. */
+  protected clean(session: Session): void {
     session.select()
     session.setPlots([])
     for (const { table, field } of Object.values(session.bindings))
@@ -306,9 +321,7 @@ export class Bench {
       filter: undefined,
       equal: undefined,
     })
-    session.clear()
     session.transport.setRate(1)
-    this.said()
   }
 }
 

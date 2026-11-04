@@ -75,7 +75,7 @@ export function charsAt(file: Uint8Array, byte: number): number {
 
 /** The UTF-16 offsets of ascending byte offsets of `file`: each counted on from the last, near, or
  *  found from a checkpoint, far; so a walk through the file is linear however many it asks for. */
-export function charsWalk(file: Uint8Array): (byte: number) => number {
+function charsWalk(file: Uint8Array): (byte: number) => number {
   if (!checkpointsOf(file)) return (byte) => byte
   let byte = -1
   let chars = 0

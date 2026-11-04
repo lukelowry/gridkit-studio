@@ -92,7 +92,7 @@ const envelope = (data: Data, range: TimeRange, spans = 60) =>
 /** What a Network binding reads of `file`'s voltages around the playhead. */
 function request(
   file: ResultsFile,
-  more: Partial<Pick<FrameRequest, 'ids' | 'range'>> & { bytes?: number } = {},
+  more: Partial<Pick<FrameRequest, 'ids' | 'range'>> & { bytes?: number; step?: number } = {},
 ): FrameRequest {
   return {
     results: 'test',
@@ -101,6 +101,7 @@ function request(
     range: file.progress.domain,
     purpose: 'playhead',
     bytes: 8 << 20,
+    step: 0,
     ...more,
   }
 }
@@ -218,6 +219,29 @@ describe('indexed scientific results', () => {
       overview.envelope({ table: 'Bus', field: 'Vm', range: [...file.progress.domain], spans: 1 })
         .greatest[0],
     ).toBe(19)
+  })
+  it('sends a playhead the frames it shows, as every frame would show them', async () => {
+    // A frame each hundredth of a second, its value its number.
+    const file = await through(
+      await create(
+        'stepped',
+        HEADER + Array.from({ length: 101 }, (_, i) => `${i / 100},${i}\n`).join(''),
+      ),
+    )
+    const range: TimeRange = [0.1, 0.5]
+    const step = 1 / 30
+    const every = await capture(file, request(file, { range }))
+    const shown = await capture(file, request(file, { range, step }))
+    using all = every.data
+    using some = shown.data
+    expect(some.describe().span![0]).toBe(0.1)
+    expect(some.describe().span![1]).toBeCloseTo(0.5, 9)
+    // Each time a view shows, thirty a second, it shows what every frame would.
+    for (let shown = 0; range[0] + shown * step <= range[1] + 1e-9; shown++) {
+      const at = range[0] + shown * step
+      expect(some.get('Bus', 1, 'Vm', { at })).toBe(all.get('Bus', 1, 'Vm', { at }))
+    }
+    expect(shown.bytes).toBeLessThan(every.bytes)
   })
   it('reads only complete rows after a stopped writer, and accepts an unterminated final row after success', async () => {
     const stopped = await through(await create('stopped', HEADER + '0,1\n1,1.25'), 'stopped')

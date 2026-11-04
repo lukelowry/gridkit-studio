@@ -13,9 +13,6 @@ export type Code =
   | 'superseded'
   /** Studio stopped before it ended. */
   | 'interrupted'
-  /** The case file changed since the extension read it: it reads the file again, then asks
-   *  again. */
-  | 'case-changed'
   /** The results asked of were closed: nothing failed, and nothing more is asked of them. */
   | 'results-closed'
   /** What Studio kept of the results asked of does not read: their owner reads their file again,

@@ -55,7 +55,7 @@ suite('Runs', function () {
     // The playhead rests at the end of the run, which the views read from the samples it wrote.
     assert.equal(session.transport.state.follow, false)
     assert.equal(session.transport.currentT(), results.domain[1])
-    const { value } = await host.studio.client.results.call('sample', {
+    const { value } = await host.studio.client.worker.call('sample', {
       results: results.id,
       table: 'Bus',
       field: 'Vm',

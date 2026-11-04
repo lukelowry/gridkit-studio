@@ -251,7 +251,7 @@ export function sceneBindings(
 }
 
 /** What a scene of a case draws besides the case: its bindings' results and a map. */
-export interface SceneExtras {
+interface SceneExtras {
   readonly bindings?: Bindings
   readonly results?: Results
   /** The source of a binding's sampled field, once its frames are held. */

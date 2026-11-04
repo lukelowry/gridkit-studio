@@ -25,7 +25,7 @@ export async function run() {
   try {
     assert.ok(await bench.gridkit(), 'Installed GridKit is required')
     await bench.record('Bus', ['Vm', 'Va'])
-    bench.run(
+    bench.explorer(
       'Run Dynamic Simulation',
       await bench.writeSolver({
         tmax: 2,
@@ -62,7 +62,7 @@ export async function run() {
       async () => (await state()).views > 0 && (await state()).reads === 0,
       'visible plots are loaded',
     )
-    const thread = bench.studio.client.results
+    const thread = bench.studio.client.worker
     const original = thread.call
     let requests = 0
     thread.call = (async (...args: Parameters<typeof original>) => {

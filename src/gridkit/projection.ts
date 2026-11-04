@@ -20,7 +20,7 @@ const ROWS_PER_STEP = 4096
 /** The patch `write` makes of as many of `rows` rows as fit a page: all of them, halved until they
  *  do, so a case goes to a view in as few pages as its bytes take. One row always goes, whatever it
  *  weighs. */
-export async function paged(
+async function paged(
   rows: number,
   write: (count: number) => Uint8Array,
   turns: Turns,
@@ -34,7 +34,7 @@ export async function paged(
   }
 }
 
-export function projectionKey(
+function projectionKey(
   document: ProjectedDocument,
   selection: readonly ProjectionSelection[],
 ): string {

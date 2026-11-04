@@ -43,7 +43,7 @@ export interface Context {
 /** The case a webview's command is about. */
 type Supplied = { uri?: string }
 
-/** The file `uri` names on this machine; the results worker reads and writes files only there. */
+/** The file `uri` names on this machine; the worker reads and writes files only there. */
 export function localPath(uri: vscode.Uri): string {
   if (uri.scheme !== 'file') throw new Error('Choose a file on this machine.')
   return uri.fsPath
@@ -162,7 +162,11 @@ export function commandsOf(studio: Sessions) {
   }
   const rows = async (context: Context, request: TableRequest, signal?: AbortSignal) =>
     rowsOf(
-      await studio.client.cases.call('page', { ...revisionOf(context.summary), request }, signal),
+      await studio.client.worker.call(
+        'page',
+        { revision: revisionOf(context.summary), request },
+        signal,
+      ),
     )
   const valuesOf = async (context: Context, table: string, fields: string[], id: Id) => {
     const [row] = await rows(context, { table, fields, ids: [id], offset: 0, limit: 1 })

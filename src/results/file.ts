@@ -9,7 +9,6 @@ import { pipeline } from 'node:stream/promises'
 import { type Id, Patch } from 'latkit'
 
 import type { Case } from '../gridkit/case.js'
-import { CaseQueries } from '../gridkit/projection.js'
 import {
   ENTRY_BYTES,
   type ExactSample,
@@ -68,6 +67,8 @@ interface FramePlan {
   first: number
   intervals: readonly Interval[]
   frames: number
+  /** The stored frames a playhead's window sends, in order, where it steps past others. */
+  picks?: Uint32Array
 }
 interface Cursor {
   key: string
@@ -88,6 +89,21 @@ function lowerBound(count: number, predicate: (index: number) => boolean): numbe
   return lo
 }
 
+/** The frames of `run`, read whole from the store, that `picks` names: renumbered by their place
+ *  among the picks, so a window's frames run on without gaps. */
+function picked(run: VisualizationRun, picks: Uint32Array, rows: number): VisualizationRun {
+  const from = lowerBound(picks.length, (i) => picks[i]! >= run.first)
+  const to = lowerBound(picks.length, (i) => picks[i]! >= run.first + run.at.length)
+  const at = new Float64Array(to - from)
+  const values = new Float32Array((to - from) * rows)
+  for (let pick = from; pick < to; pick++) {
+    const frame = picks[pick]! - run.first
+    at[pick - from] = run.at[frame]!
+    values.set(run.values.subarray(frame * rows, (frame + 1) * rows), (pick - from) * rows)
+  }
+  return { level: 0, first: from, at, values }
+}
+
 export class ResultsFile {
   #layout: ResultsLayout
   readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] }
@@ -102,7 +118,6 @@ export class ResultsFile {
   #stamp?: Stamp
   #read = 0
   #retired = false
-  #queries?: CaseQueries
   constructor(
     readonly kase: Case,
     readonly store: Store,
@@ -146,12 +161,7 @@ export class ResultsFile {
   get fields(): readonly Field[] {
     return this.#decode.read?.fields ?? []
   }
-  get queries(): CaseQueries {
-    return (this.#queries ??= new CaseQueries(this.kase.projected()))
-  }
   idle(): void {
-    this.#queries?.destroy()
-    this.#queries = undefined
     this.#plans.clear()
   }
   get bytes(): number {
@@ -365,6 +375,30 @@ export class ResultsFile {
       block.first + lowerBound(times.length, (i) => (strict ? times[i]! > at : times[i]! >= at))
     )
   }
+  /** The stored frames from `first` to before `stop` a view shows, stepping `step` seconds through
+   *  `range`: of each time from `range[0]`, the last frame at or before it, each frame once. */
+  async #picks(first: number, stop: number, range: TimeRange, step: number): Promise<Uint32Array> {
+    const times = new Float64Array(stop - first)
+    for (let frame = first; frame < stop;) {
+      const block = this.#rawAt(frame)
+      const count = Math.min(stop, block.first + block.count) - frame
+      times.set(
+        await this.#stored(this.store.times(block, frame - block.first, count)),
+        frame - first,
+      )
+      frame += count
+    }
+    const picks: number[] = []
+    const last = Math.floor((range[1] - range[0]) / step)
+    for (let at = 0; at < times.length; at++) {
+      // The first time shown at or after this frame, which shows it unless a later frame comes first.
+      const shown = Math.max(0, Math.ceil((times[at]! - range[0]) / step - 1e-9))
+      if (shown > last) break
+      const next = times[at + 1]
+      if (next === undefined || range[0] + shown * step < next) picks.push(first + at)
+    }
+    return Uint32Array.from(picks)
+  }
   #rawAt(frame: number): RawIndex {
     const blocks = this.store.raw
     const index = lowerBound(blocks.length, (i) => blocks[i]!.first + blocks[i]!.count > frame)
@@ -471,7 +505,9 @@ export class ResultsFile {
         ? !Number.isSafeInteger(request.columns) || request.columns < 1
         : !Number.isSafeInteger(request.bytes) ||
           request.bytes < 1024 ||
-          request.bytes > PAYLOAD_BYTES) ||
+          request.bytes > PAYLOAD_BYTES ||
+          !Number.isFinite(request.step) ||
+          request.step < 0) ||
       frames > this.#progress.frames ||
       frames < 0
     )
@@ -498,7 +534,7 @@ export class ResultsFile {
           frames,
           request.range,
           request.purpose,
-          request.purpose === 'plot' ? request.columns : request.bytes,
+          request.purpose === 'plot' ? request.columns : [request.bytes, request.step],
         ]),
       )
       .digest('hex')
@@ -514,11 +550,16 @@ export class ResultsFile {
       ? Math.min(frames, (await this.#bound(request.range[1], true, frames)) + 1)
       : 0
     signal.throwIfAborted()
-    // A plot holds buckets no wider than its columns; the playhead reads frames.
+    // A plot holds buckets no wider than its columns; the playhead reads frames, those it shows.
     const level = request.purpose === 'plot' ? detail(stop - first, request.columns) : 0
     const intervals = this.#intervals(field, level, first, stop)
+    const picks =
+      request.purpose === 'playhead' && request.step > 0
+        ? await this.#picks(first, stop, request.range, request.step)
+        : undefined
+    signal.throwIfAborted()
     if (request.purpose === 'playhead') {
-      const entries = intervals.reduce((sum, item) => sum + item.count, 0)
+      const entries = picks?.length ?? intervals.reduce((sum, item) => sum + item.count, 0)
       const bytes = entries * (8 + places.length * 4) + intervals.length * 128 + ids.length * 16
       if (bytes > request.bytes)
         throw problem(
@@ -526,7 +567,18 @@ export class ResultsFile {
           'This window exceeds the visualization budget. Choose fewer rows or a narrower time range.',
         )
     }
-    const plan: FramePlan = { key, source, field, ids, places, level, first, intervals, frames }
+    const plan: FramePlan = {
+      key,
+      source,
+      field,
+      ids,
+      places,
+      level,
+      first,
+      intervals,
+      frames,
+      ...(picks && { picks }),
+    }
     this.#plans.set(key, plan)
     while (this.#plans.size > 16) this.#plans.delete(this.#plans.keys().next().value!)
     return plan
@@ -604,13 +656,18 @@ export class ResultsFile {
       cursor || lacking
         ? new Patch(plan.source)
         : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids, fields)
-    const runs: VisualizationRun[] = []
-    let bytes = make().toBytes()
-    if (bytes.byteLength > ENTRY_BYTES)
+    // The page is written once: each run it takes is measured alone, then added.
+    const patch = make()
+    if (patch.byteLength > ENTRY_BYTES)
       throw problem('limit', 'Visualization identities exceed 16 MiB.')
+    const empty = new Patch(plan.source).byteLength
+    let runs = 0
+    // The share of the frames read that a playhead's window sends, which sizes each read.
+    const stored = plan.intervals.reduce((sum, item) => sum + item.count, 0)
+    const share = plan.picks ? Math.max(plan.picks.length, 1) / Math.max(stored, 1) : 1
     // Disk blocks follow ingestion boundaries; a wire page combines them up to its byte
     // budget. This avoids one RPC per small live-ingestion block during later playback.
-    page: while (part < intervals.length && runs.length < 64) {
+    page: while (part < intervals.length && runs < 64) {
       const interval = intervals[part]!
       const first = interval.first + offset
       const block =
@@ -618,15 +675,15 @@ export class ResultsFile {
           ? this.#rawAt(first)
           : this.#levelAt(plan.field, interval.level, first)!
       const entryBytes = (interval.level ? 2 : 1) * (8 + plan.ids.length * 4)
-      if (runs.length && bytes.byteLength + entryBytes + 256 > PAGE_BYTES) break
+      if (runs && patch.byteLength + entryBytes + 256 > PAGE_BYTES) break
       let count = Math.min(
         interval.count - offset,
         block.first + block.count - first,
-        Math.max(1, Math.floor((PAGE_BYTES - bytes.byteLength - 1024) / entryBytes)),
+        Math.max(1, Math.floor((PAGE_BYTES - patch.byteLength - 1024) / (entryBytes * share))),
       )
       for (;;) {
         signal.throwIfAborted()
-        const run =
+        const read =
           interval.level === 0
             ? rawRun(
                 await this.#stored(
@@ -642,15 +699,19 @@ export class ResultsFile {
             : await this.#stored(
                 this.store.readLevel(block as LevelIndex, plan.places, first - block.first, count),
               )
+        // A playhead's window sends the frames it shows of those read.
+        const run = plan.picks ? picked(read, plan.picks, plan.ids.length) : read
         signal.throwIfAborted()
-        const patch = make()
-        for (const held of runs) patch.frames(request.table, request.field, held)
-        const encoded = patch.frames(request.table, request.field, run).toBytes()
-        if (encoded.byteLength <= PAGE_BYTES || (!runs.length && count === 1)) {
-          if (encoded.byteLength > ENTRY_BYTES)
+        const adds = run.at.length
+          ? new Patch(plan.source).frames(request.table, request.field, run).byteLength - empty
+          : 0
+        if (patch.byteLength + adds <= PAGE_BYTES || (!runs && count === 1)) {
+          if (patch.byteLength + adds > ENTRY_BYTES)
             throw problem('limit', 'A visualization frame exceeds 16 MiB.')
-          runs.push(run)
-          bytes = encoded
+          if (run.at.length) {
+            patch.frames(request.table, request.field, run)
+            runs++
+          }
           offset += count
           if (offset === interval.count) {
             part++
@@ -662,6 +723,7 @@ export class ResultsFile {
         count = Math.max(1, Math.floor(count / 2))
       }
     }
+    const bytes = patch.toBytes()
     const complete = part === intervals.length
     const next: Cursor = {
       key: plan.key,

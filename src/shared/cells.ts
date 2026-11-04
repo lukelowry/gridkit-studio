@@ -3,7 +3,7 @@
 import { type Entity, entityLabel } from './document.js'
 import type { Summary, TableState } from './messages.js'
 
-export interface CellRow {
+interface CellRow {
   readonly id: Id
   readonly entity: Entity
   readonly values: Record<string, unknown>
@@ -27,7 +27,7 @@ export function rowsOf(page: QueryResult): CellRow[] {
     ),
   }))
 }
-export const COLUMNS = 12
+const COLUMNS = 12
 export function tableFields(
   { definition, identities }: Pick<Summary, 'definition' | 'identities'>,
   table: string,

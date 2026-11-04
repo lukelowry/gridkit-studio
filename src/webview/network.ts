@@ -13,7 +13,7 @@ import { reader, TILTED } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { saveImage, viewShot } from './export/image.js'
-import { FrameReads, SampledWindows } from './frames.js'
+import { FrameReads, PlayheadFeed, SHOWN_PER_SECOND } from './frames.js'
 import { ViewHost } from './host.js'
 import { bindInteractions } from './interactions.js'
 import { type Background, backgroundOf } from './maps.js'
@@ -77,8 +77,8 @@ function boot() {
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const cases = new CaseProjection()
   const reads = new FrameReads()
-  /** The frames each mapped field of the results holds around the playhead. */
-  const windows = new SampledWindows(reads)
+  /** The frames each mapped field of the results holds about the playhead. */
+  const feed = new PlayheadFeed(reads)
   /** Lets go of an image being drawn once the page goes. */
   const page = new AbortController()
   let state: ViewState = {}
@@ -163,7 +163,7 @@ function boot() {
 
   function sources(): Source[] {
     const data = cases.slot.current?.data
-    return [...(data ? [data] : []), ...background.sources, ...windows.sources]
+    return [...(data ? [data] : []), ...background.sources, ...feed.sources]
   }
 
   /** What the view draws now: the bindings whose fields it holds, and the map. */
@@ -179,7 +179,7 @@ function boot() {
     return sceneOf(data, summary.definition, settings, nativeTheme(settings, 'network'), {
       bindings: drawnBindings,
       results: state.results,
-      sampled: windows.source,
+      sampled: feed.source,
       background: background.marks,
     })
   }
@@ -235,60 +235,28 @@ function boot() {
   /** Whether every sampled binding holds the frames at `at`. */
   function covered(at: number): boolean {
     if (!summary || !state.results?.frames) return true
-    return windows.hold(sampledFields(summary.definition, state.bindings, state.results), at)
+    return feed.holds(sampledFields(summary.definition, state.bindings, state.results), at)
   }
 
-  /** Asks each mapped field's window for the frames about `at`: the frame at `at` while paused, and
-   *  while playing, from a quarter second behind to as far as the playhead goes in two seconds, a
-   *  second at least. Lets go of the windows of fields no longer mapped. */
+  /** Keeps the frames each mapped field shows about `at`, as the clock moves, and lets go of those
+   *  of fields no longer mapped. */
   function prefetch(at: number) {
     if (!visible() || !summary) return
     const results = state.results
     const fields = results?.frames ? sampledFields(summary.definition, state.bindings, results) : []
     if (results?.frames)
-      for (const [table, field] of fields) {
-        const window = windows.of([table, field])
-        if (
-          window.pending &&
-          window.requested &&
-          at >= window.requested[0] &&
-          at <= window.requested[1]
-        )
-          continue
-        const range = window.range
-        const domain = results.domain ?? [at, at]
-        const playing = clock.state.status === 'playing'
-        if (
-          range &&
-          at >= range[0] &&
-          ((!playing && at <= range[1] && window.version === results.frames) ||
-            at < range[1] - (range[1] - range[0]) / 4 ||
-            (at <= range[1] && range[1] >= domain[1] && window.version === results.frames))
-        )
-          continue
-        void window
-          .playhead(
-            {
-              results: results.id,
-              table,
-              field,
-              range: playing
-                ? [
-                    Math.max(domain[0], at - 0.25),
-                    Math.min(domain[1], at + Math.max(1, clock.state.rate * 2)),
-                  ]
-                : [at, at],
-              purpose: 'playhead',
-              bytes: 8 * 1024 * 1024,
-            },
-            results.frames,
-            at,
-          )
-          .then((changed) => {
-            if (changed && !closed) paint()
-          }, fail)
-      }
-    if (windows.keep(fields) && host) paint()
+      void feed
+        .ahead(fields, at, {
+          results,
+          playing: clock.state.status === 'playing',
+          rate: clock.state.rate,
+          shown: SHOWN_PER_SECOND,
+          bytes: 8 * 1024 * 1024,
+        })
+        .then((changed) => {
+          if (changed && !closed) paint()
+        }, fail)
+    if (feed.keep(fields) && host) paint()
   }
 
   async function backgrounds() {
@@ -408,7 +376,7 @@ function boot() {
         restore = undefined
       }
       if (previous.uri !== state.uri || previous.results?.id !== state.results?.id) {
-        windows.clear()
+        feed.clear()
         reads.clear()
       }
       const next = state.summary
@@ -505,7 +473,7 @@ function boot() {
       at: view.at,
       requestedAt: clock.now(),
       covered: covered(clock.now()),
-      windows: windows.spans,
+      windows: feed.spans,
       received,
       bindings: drawnBindings,
       cacheBytes: reads.bytes,
@@ -539,7 +507,7 @@ function boot() {
       clearTimeout(saving)
       mapController?.abort()
       background.destroy?.()
-      windows.clear()
+      feed.clear()
       cases.clear()
       reads.clear()
       gpu?.destroy()

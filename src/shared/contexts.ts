@@ -7,7 +7,7 @@ type Scope = 'element' | 'value' | 'column' | 'plot'
 
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
-  origin: 'network' | 'diagram' | 'case' | 'monitor' | 'signals'
+  origin: 'network' | 'case' | 'monitor' | 'signals'
   element?: Element
   type?: string
   field?: string
@@ -46,10 +46,6 @@ export function menuContext(
   const field = target.field ?? target.element?.field
   const definition = type && field ? fieldDefinition(summary.definition, type, field) : undefined
   const network = type ? networkRole(summary.definition, type) : null
-  const diagram = type
-    ? summary.definition.drawing.blocks.some((block) => block.table === type) ||
-      summary.definition.drawing.nets.includes(type)
-    : null
   const scope: Scope = target.plot
     ? 'plot'
     : target.origin === 'case' && field
@@ -63,8 +59,6 @@ export function menuContext(
     gridkitOrigin: target.origin,
     gridkitScope: scope,
     gridkitElement: !!target.element,
-    gridkitNetwork: !!network,
-    gridkitDiagram: !!diagram,
     // A reference field, or, for a whole element, any it has: what Go to Referenced Element follows.
     gridkitReference: field
       ? definition?.kind === 'reference'

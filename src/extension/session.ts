@@ -25,7 +25,6 @@ import {
   type CaseSource,
   type Element,
   type Framing,
-  type Framings,
   type Plot,
   type Results,
   type ResultsLayout,
@@ -35,7 +34,6 @@ import {
   type RunRequest,
   type Summary,
   type TableState,
-  type ViewKind,
 } from '../shared/messages.js'
 import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
 import type { SettingsValues } from '../shared/preferences.js'
@@ -117,8 +115,9 @@ export class Session {
   #rows?: number
   #selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
-  #anchors?: Entity[]
-  #framings: Framings = {}
+  #anchors?: readonly Entity[]
+  /** How the Network was last framed, for an export to keep. */
+  #framing?: Framing
   /** The Monitor's chosen time window; absent, plots show the whole run. */
   #window?: readonly [number, number]
   /** The results file the views draw: a run's, or one opened. */
@@ -183,8 +182,8 @@ export class Session {
   get anchors(): readonly Entity[] | undefined {
     return this.#anchors
   }
-  get framings(): Framings {
-    return this.#framings
+  get framing(): Framing | undefined {
+    return this.#framing
   }
   get window(): readonly [number, number] | undefined {
     return this.#window
@@ -588,9 +587,9 @@ export class Session {
     this.#changed()
   }
 
-  /** How the Network or Diagram was last framed, for an export to keep. */
-  setFraming(kind: Extract<ViewKind, 'network' | 'diagram'>, framing: Framing | undefined): void {
-    this.#framings = { ...this.#framings, [kind]: framing }
+  /** How the Network was last framed, for an export to keep. */
+  setFraming(framing: Framing | undefined): void {
+    this.#framing = framing
   }
 
   /** Reads its display settings again, as they change. */
@@ -680,19 +679,25 @@ export class Session {
     }
   }
 
-  /** Finds what the network draws for the selected element `id`. */
+  /** What the Network draws for `entity` in the case `summary` describes: the element itself where
+   *  the Network draws its type, else the elements nearest it there, which may be none. */
+  async drawnFor(entity: Entity, summary: Summary): Promise<readonly Entity[]> {
+    if (networkRole(summary.definition, entity.table)) return [entity]
+    const { vertices, edges } = summary.definition.drawing
+    return this.#studio.client.cases.call('anchors', {
+      ...revisionOf(summary),
+      entity,
+      drawn: [...vertices, ...edges].map((item) => item.table),
+    })
+  }
+
+  /** Finds what the Network draws for the selected element `entity`, when it does not draw it. */
   async #anchor(entity: Entity): Promise<void> {
     const summary = this.#studio.files.get(this.uri)?.summary
     if (!summary || this.#studio.files.get(this.uri)?.stale) return
-    const network = summary.definition.drawing
-    const drawn = [...network.vertices, ...network.edges].map((item) => item.table)
-    if (drawn.includes(entity.table)) return
+    if (networkRole(summary.definition, entity.table)) return
     try {
-      const anchors = await this.#studio.client.cases.call('anchors', {
-        ...revisionOf(summary),
-        entity,
-        drawn,
-      })
+      const anchors = await this.drawnFor(entity, summary)
       if (this.#selection?.table !== entity.table || this.#selection?.id !== entity.id) return
       this.#anchors = anchors
       this.#changed()

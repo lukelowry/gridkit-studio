@@ -50,7 +50,7 @@ const builds = [
   },
   {
     entryPoints: {
-      canvas: 'src/webview/canvas.ts',
+      network: 'src/webview/network.ts',
       case: 'src/webview/case.ts',
       monitor: 'src/webview/monitor.ts',
       export: 'src/webview/export.ts',

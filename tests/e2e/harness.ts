@@ -197,7 +197,7 @@ export class TestHost {
   /** That case, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
-    devices: { class: string; id: string; extension?: { diagram?: unknown } }[]
+    devices: { class: string; id: string }[]
   }
   /** What the run measured, written beside the screenshots when it ends. */
   readonly report: Record<string, unknown>
@@ -299,15 +299,15 @@ export class TestHost {
     }, kind + ' webview')
   }
 
-  /** Show the case in a canvas editor, and wait for its first frame. */
-  async open(kind: 'network' | 'diagram', column = vscode.ViewColumn.One): Promise<Frame> {
+  /** Show the case in the Network, and wait for its first frame. */
+  async open(column = vscode.ViewColumn.One): Promise<Frame> {
     await vscode.commands.executeCommand(
       'vscode.openWith',
       this.uri,
-      'gridkitStudio.' + kind,
+      'gridkitStudio.network',
       column,
     )
-    const frame = await this.view(kind, this.uri.toString())
+    const frame = await this.view('network', this.uri.toString())
     await visible(frame, 'canvas[data-rendered=true]')
     return frame
   }
@@ -606,7 +606,7 @@ export class TestHost {
       await vscode.workspace.fs.writeFile(this.uri, new TextEncoder().encode(this.text))
     if ((await readFile(this.solver.fsPath, 'utf8')) !== this.solverText)
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
-    await this.open('network')
+    await this.open()
     await this.settled()
     await vscode.commands.executeCommand('workbench.action.closeEditorsInOtherGroups')
     await vscode.commands.executeCommand('workbench.action.closeOtherEditors')
@@ -615,8 +615,7 @@ export class TestHost {
     session.setPlots([])
     for (const { table, field } of Object.values(session.bindings))
       session.bind({ table, field }, [])
-    session.setFraming('network', undefined)
-    session.setFraming('diagram', undefined)
+    session.setFraming(undefined)
     session.setTable({
       type: undefined,
       columns: undefined,

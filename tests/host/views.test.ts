@@ -1,11 +1,14 @@
-/** Which case the views follow, an editor that closes as its case changes, and the keys that place
- *  Studio's commands in VS Code. Drawing is the end-to-end journeys' to check. */
+/** Which case the views follow, an editor that closes as its case changes, how the Network shows an
+ *  element it does not draw, and the keys that place Studio's commands in VS Code. Drawing is the
+ *  end-to-end journeys' to check. */
 
 import assert from 'node:assert/strict'
 
 import { setup, suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
+import type { Action } from '../../src/extension/sessions.js'
+import { menuContext } from '../../src/shared/contexts.js'
 import { named } from '../menus.js'
 import { type Bench, bench, until } from './studio.js'
 
@@ -21,7 +24,7 @@ suite('Views', () => {
     const other = await host.copy('cases/TwoArea.case.json')
     await vscode.commands.executeCommand('vscode.openWith', other, 'gridkitStudio.network')
     await until(() => host.studio.active === other.toString(), 'TwoArea followed')
-    await vscode.commands.executeCommand('vscode.openWith', host.uri, 'gridkitStudio.diagram')
+    await vscode.commands.executeCommand('vscode.openWith', host.uri, 'gridkitStudio.network')
     await until(() => host.studio.active === host.key, 'IEEE39 followed')
     await vscode.commands.executeCommand('gridkitStudio.openCasePanel', other)
     await until(() => host.studio.active === other.toString(), 'the case the command names')
@@ -42,6 +45,37 @@ suite('Views', () => {
       await closing
     }
     assert.deepEqual(host.said(), [])
+  })
+
+  test('reveal an element the Network does not draw by the bus it reaches', async () => {
+    const summary = await host.studio.files.read(host.key)
+    // An exciter, which the Network draws none of, on bus 30.
+    const exciter = { table: 'Esdc1a', id: '30_1_esdc1a' }
+    const menu = menuContext(summary, {
+      uri: host.key,
+      version: summary.version,
+      origin: 'case',
+      element: exciter,
+    })
+    const keys = { ...host.keys(), ...menu }
+    const heard: Action[] = []
+    const listening = host.studio.action.event((action) => heard.push(action))
+    try {
+      const zoom = host.menus.find('webview/context', 'Zoom to Neighborhood', keys)
+      await vscode.commands.executeCommand(zoom.command, menu)
+      assert.deepEqual(
+        heard.map(({ command, value, view }) => ({ command, value, view })),
+        [{ command: 'neighborhood', value: [{ table: 'Bus', id: 30 }], view: 'network' }],
+      )
+      host.session.select()
+      const reveal = host.menus.find('webview/context', 'Reveal in Network', keys)
+      await vscode.commands.executeCommand(reveal.command, menu)
+      assert.deepEqual(host.session.selection, exciter)
+      await until(() => host.session.anchors, 'the bus it reaches')
+      assert.deepEqual(host.session.anchors, [{ table: 'Bus', id: 30 }])
+    } finally {
+      listening.dispose()
+    }
   })
 
   test('place commands only by context keys Studio or VS Code sets', () => {

@@ -2,8 +2,8 @@ import { type Fit, type Scene, View } from 'latkit'
 
 import { drew } from './runtime.js'
 
-/** A latkit view on a canvas, from its creation to its end: what the Network, the Diagram and each
- *  Monitor plot share. It marks its canvas once a frame draws it whole, waits on latkit as long as
+/** A latkit view on a canvas, from its creation to its end: what the Network and each Monitor plot
+ *  share. It marks its canvas once a frame draws it whole, waits on latkit as long as
  *  it lasts, and hands latkit a scene only when it draws differently from the last. */
 export class ViewHost {
   readonly #lifetime = new AbortController()

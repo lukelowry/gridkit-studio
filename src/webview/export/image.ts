@@ -25,7 +25,7 @@ export async function saveImage(
   shot: Shot,
   uri: string,
   name: string,
-  view: 'network' | 'diagram' | 'monitor',
+  view: 'network' | 'monitor',
   signal: AbortSignal,
 ): Promise<void> {
   using image = await shot.image({ signal })

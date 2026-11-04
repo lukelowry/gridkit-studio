@@ -20,11 +20,8 @@ import type { Plot, Results } from '../shared/messages.js'
 import type { SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
-export function caseFit(data: Data, drawing: Drawing, kind: 'network' | 'diagram'): Fit {
-  const tables =
-    kind === 'network'
-      ? [...drawing.vertices, ...drawing.edges].map((item) => item.table)
-      : [...drawing.blocks.map((item) => item.table), ...drawing.nets]
+export function caseFit(data: Data, drawing: Drawing): Fit {
+  const tables = [...drawing.vertices, ...drawing.edges].map((item) => item.table)
   return { tables: [...new Set(tables)].map((table) => data.table(table)) }
 }
 
@@ -270,16 +267,14 @@ export interface SceneExtras {
   readonly background?: readonly Mark[]
 }
 
-/** The Network or Diagram of `data`, as every view and export draws it. */
+/** The Network of `data`, as the view and every export draws it. */
 export function sceneOf(
-  kind: 'network' | 'diagram',
   data: Data,
   definition: CaseDefinition,
   settings: SettingsReader,
   theme: Theme,
   { bindings = {}, results, sampled = () => undefined, background = [] }: SceneExtras,
 ): Scene {
-  if (kind === 'diagram') return diagramScene(data, definition.drawing, settings, theme)
   const outputs =
     results?.outputs.map((output) => ({
       ...output,
@@ -307,11 +302,7 @@ const WHEEL: Record<'wheel' | 'trackpad' | 'modifier' | 'off', Gestures> = {
 }
 
 /** How a view of `kind` answers its inputs: the wheel as its setting says, then `gestures`. */
-function controls(
-  settings: SettingsReader,
-  kind: 'network' | 'diagram' | 'monitor',
-  gestures: Gestures = {},
-) {
+function controls(settings: SettingsReader, kind: 'network' | 'monitor', gestures: Gestures = {}) {
   return {
     keyboard: true,
     gestures: { ...WHEEL[settings.get(`${kind}.zoom`)], ...gestures },
@@ -376,54 +367,6 @@ export function networkScene(
   }
 }
 
-export function diagramScene(
-  data: Data,
-  drawing: Drawing,
-  settings: SettingsReader,
-  theme: Theme,
-): Scene {
-  const grid = settings.get('diagram.grid')
-  return {
-    space: {
-      diagram: {
-        grid:
-          grid === 'none'
-            ? 'off'
-            : grid === 'dots'
-              ? { dots: { pitch: 20 } }
-              : { lines: { pitch: 20 } },
-      },
-    },
-    layout: {
-      layered: {
-        direction: settings.get('diagram.direction'),
-        gap: settings.get('diagram.gap'),
-        rankGap: settings.get('diagram.rankGap'),
-      },
-    },
-    theme,
-    ease: settings.get('diagram.ease'),
-    controls: controls(settings, 'diagram'),
-    marks: [
-      ...drawing.nets.map((table): Mark => ({
-        edges: [data.name, table],
-        name: table,
-        route: 'orthogonal',
-        arrows: true,
-      })),
-      ...drawing.blocks.map((block): Mark => ({
-        vertices: [data.name, block.table],
-        name: block.table,
-        marker: 'block',
-        position: [field(block.position[0]), field(block.position[1])],
-        ports: block.ports,
-        shadow: true,
-        label: settings.get('diagram.labels') && block.label ? field(block.label) : null,
-      })),
-    ],
-  }
-}
-
 /** A plot of `plot`'s field over the times its camera shows, each trace in its own color by its
  *  place among them (`series`). Its axes carry ticks alone: every plot shares the time axis, whose
  *  last tick says it is seconds, and the Monitor names each plot in its lane. A picture has no
@@ -454,10 +397,9 @@ export function plotScene(
   }
 }
 
-/** Only fields needed by the marks of `kinds`; sampled fields live in their own bounded sources. */
+/** Only fields the Network's marks need; sampled fields live in their own bounded sources. */
 export function sceneFields(
   definition: CaseDefinition,
-  kinds: readonly ('network' | 'diagram')[],
   bindings: Bindings = {},
 ): ProjectionSelection[] {
   const selected = new Map<string, Set<string>>()
@@ -467,23 +409,12 @@ export function sceneFields(
     selected.set(table, held)
   }
   const drawing = definition.drawing
-  if (kinds.includes('network')) {
-    for (const vertex of drawing.vertices)
-      add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
-    for (const edge of drawing.edges)
-      add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
-    for (const binding of Object.values(bindings))
-      if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled')
-        add(binding.table, [binding.field])
-  }
-  if (kinds.includes('diagram')) {
-    for (const block of drawing.blocks)
-      add(block.table, [
-        ...block.position,
-        ...(block.label ? [block.label] : []),
-        ...block.ports.map(([name]) => name),
-      ])
-    for (const net of drawing.nets) add(net, [])
-  }
+  for (const vertex of drawing.vertices)
+    add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
+  for (const edge of drawing.edges)
+    add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
+  for (const binding of Object.values(bindings))
+    if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled')
+      add(binding.table, [binding.field])
   return [...selected].map(([table, fields]) => ({ table, fields: [...fields].sort() }))
 }

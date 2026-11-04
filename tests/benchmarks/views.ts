@@ -310,38 +310,6 @@ export async function run() {
       await bench.studio.files.read(key)
       await settle(() => !bench.studio.state(key).stale, path + ' reads as written')
 
-      // ── Diagram ──
-      await vscode.commands.executeCommand(
-        'vscode.openWith',
-        uri,
-        'gridkitStudio.diagram',
-        vscode.ViewColumn.Beside,
-      )
-      const opened = performance.now()
-      const diagram = await bench.view('diagram')
-      await diagram.waitForFunction(
-        `() => document.querySelector('canvas[data-rendered=true]')`,
-        undefined,
-        { polling: 'raf', timeout: 120_000 },
-      )
-      timings[`diagram ${size} > first frame`] = [performance.now() - opened]
-      await diagram.locator('canvas').hover()
-      await time(`diagram ${size} > camera move`, RUNS, {
-        ready: async () => (await idle(diagram)).frames,
-        act: (i) => bench.page.mouse.wheel(0, i % 2 ? 240 : -240),
-        done: (_, frames) => painted(diagram, frames),
-      })
-      // The Diagram's tab closes by name, whichever editor has focus, and leaves the Network's.
-      await vscode.window.tabGroups.close(
-        vscode.window.tabGroups.all
-          .flatMap((group) => group.tabs)
-          .filter(
-            (tab) =>
-              tab.input instanceof vscode.TabInputCustom &&
-              tab.input.viewType === 'gridkitStudio.diagram',
-          ),
-      )
-
       // ── Case panel ──
       const counts = summary().counts
       const rows = (count: number) => `table[aria-rowcount="${count + 1}"]`
@@ -577,7 +545,6 @@ export async function run() {
       const exporter = await shows('export', '[data-testid="video-start"]:enabled')
       for (const [name, on] of [
         ['Network', true],
-        ['Diagram', false],
         ['Monitor', false],
       ] as const) {
         const toggle = exporter.getByRole('switch', { name, exact: true })

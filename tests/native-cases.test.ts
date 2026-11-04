@@ -36,18 +36,23 @@ it('declares reference fields even on empty projected tables', async () => {
     devices: [{ class: 'Branch', id: 'line/[]', ports: { bus1: 0, bus2: 1 } }],
   })
   const document = await Case.parse(new TextEncoder().encode(text), catalog)
-  const empty = document.definition.drawing.blocks.find(
-    (block) => !document.projected().tables.get(block.table)!.ids.length,
+  const projected = document.projected()
+  // A device type the case has none of, whose ports reference other rows.
+  const empty = document.definition.tables.find(
+    (table) =>
+      !projected.tables.get(table.name)!.ids.length &&
+      table.fields.some((field) => field.kind === 'reference'),
   )!
+  const ports = empty.fields.filter((field) => field.kind === 'reference').map(({ name }) => name)
   using data = new Data('case')
-  const selection = [{ table: empty.table, fields: empty.ports.map(([name]) => name) }]
+  const selection = [{ table: empty.name, fields: ports }]
   let cursor: ProjectionCursor | undefined
   do {
-    const page = await projectionPage(document.projected(), selection, cursor, AbortSignal.any([]))
+    const page = await projectionPage(projected, selection, cursor, AbortSignal.any([]))
     data.apply(page.bytes)
     cursor = page.next
   } while (cursor)
-  const fields = data.describe().tables.find((table) => table.name === empty.table)!.fields
+  const fields = data.describe().tables.find((table) => table.name === empty.name)!.fields
   expect(fields.every((field) => field.kind === 'reference')).toBe(true)
-  expect(fields.length).toBe(empty.ports.length)
+  expect(fields.length).toBe(ports.length)
 })

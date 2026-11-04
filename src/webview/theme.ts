@@ -7,7 +7,7 @@ import type { SettingsReader } from '../shared/preferences.js'
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
   background: ['--color-bg', '#1e1e1e'],
-  /** The editor's background, which the Network and Diagram sit on wherever they draw, a video's
+  /** The editor's background, which the Network sits on wherever it draws, a video's
    *  too, though the page drawing them sits elsewhere. */
   editor: ['--vscode-editor-background', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
@@ -64,10 +64,7 @@ function changed() {
 }
 
 /** VS Code colors feed native theme properties directly. */
-export function nativeTheme(
-  settings: SettingsReader,
-  kind: 'network' | 'diagram' | 'monitor',
-): NativeTheme {
+export function nativeTheme(settings: SettingsReader, kind: 'network' | 'monitor'): NativeTheme {
   const { palette, font } = theme()
   const classes = document.body.classList
   return {
@@ -88,7 +85,7 @@ export function nativeTheme(
     vertex: { color: palette.network },
     // Native endpoint blending follows static and sampled vertex colors. A mark's explicit
     // edge-color binding still takes precedence, including in exported network scenes.
-    edge: { color: kind === 'network' ? null : palette.text2 },
+    edge: { color: null },
     line: { color: palette.primaryText },
     earth: {
       ground: settings.get('network.map.ground') ?? palette.editor,

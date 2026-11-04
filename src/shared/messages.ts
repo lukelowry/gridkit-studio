@@ -220,10 +220,10 @@ export type WorkerEvent =
 
 export type FromWorker = Reply | WorkerEvent
 
-export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'export'
+export type ViewKind = 'network' | 'case' | 'monitor' | 'export'
 
 /** A view a video export can draw. */
-export type VideoView = 'network' | 'diagram' | 'monitor'
+export type VideoView = 'network' | 'monitor'
 
 export interface Plot {
   from: string
@@ -266,16 +266,10 @@ export interface ViewState {
   window?: TimeRange
 }
 
-/** What a canvas showed: its camera, over a canvas `size` CSS pixels wide and high. */
+/** What the Network showed: its camera, over a canvas `size` CSS pixels wide and high. */
 export interface Framing {
   readonly camera: Camera
   readonly size: readonly [number, number]
-}
-
-/** How Network and Diagram were last framed, for a video export to keep. */
-export interface Framings {
-  network?: Framing
-  diagram?: Framing
 }
 
 /** `value` as a framing a page sent: a camera with a zoom, over a canvas with an area. */
@@ -350,8 +344,9 @@ export interface ViewApi {
   /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
    *  cancel. */
   exportOpen: { input: { uri: string; name: string }; output: number | null }
-  /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
-  framings: { input: { uri: string }; output: Framings }
+  /** How the Network of the case at `uri` was last framed, for an export to keep; null before it
+   *  was. */
+  framing: { input: { uri: string }; output: Framing | null }
   exportWrite: { input: { file: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished file's path. */
   exportClose: { input: { file: number; abort?: boolean }; output: string | null }
@@ -373,7 +368,7 @@ export type ViewMessage =
   | { kind: 'window'; bounds: TimeRange }
   /** The values the user chose for a plot to show; null, the values it shows. */
   | { kind: 'range'; plot: Plot; range: readonly [number, number] | null }
-  /** What the user framed in a canvas: its camera, and the canvas's size. */
+  /** What the user framed in the Network: its camera, and the canvas's size. */
   | { kind: 'framing'; framing: unknown }
   | { kind: 'display'; values: Partial<SettingsValues> }
   | ({ kind: 'transport'; seq: number } & TransportAction)

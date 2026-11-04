@@ -55,11 +55,10 @@ export async function renderVideo(
         file = null
       },
     )
-    const framings = await bridge.request('framings', { uri: shown.uri }, signal)
+    const framing = await bridge.request('framing', { uri: shown.uri }, signal)
     gpu = await openGpu()
     signal.throwIfAborted()
-    const canvases = job.views.filter((kind) => kind !== 'monitor')
-    const selection = sceneFields(definition, canvases, app.bindings)
+    const selection = job.views.includes('network') ? sceneFields(definition, app.bindings) : []
     await projection.receive({ results: results.id, fields: selection }, selection, signal)
     const data = projection.slot.current!.data
     if (job.views.includes('network') && definition.drawing.geographic)
@@ -130,17 +129,16 @@ export async function renderVideo(
         views.push(...lanes.placed.map(({ view }) => view))
         placed.push(...lanes.placed)
       } else {
-        const scene = sceneOf(kind, data, definition, settings, nativeTheme(settings, kind), {
+        const scene = sceneOf(data, definition, settings, nativeTheme(settings, 'network'), {
           bindings: app.bindings,
           results,
           sampled: (table, field) => sampled.get(JSON.stringify([table, field]))?.data,
           background: background.marks,
         })
-        if (kind === 'network' && background.attribution)
+        if (background.attribution)
           scene.title = { text: background.attribution, place: 'bottom-right' }
-        // What the user framed in the canvas, as they framed it; else the whole case, as the
-        // canvas first frames it.
-        const framing = framings[kind]
+        // What the user framed in the Network, as they framed it; else the whole case, as the
+        // Network first frames it.
         const view = await View.create(null, scene, {
           gpu,
           sources: sources(),
@@ -149,14 +147,12 @@ export async function renderVideo(
           }),
         })
         views.push(view)
-        if (kind === 'network') {
-          network = view
-          view.orbit = settings.get('network.orbit')
-        }
+        network = view
+        view.orbit = settings.get('network.orbit')
         view.at = job.timeRange[0]
         if (!framing) {
-          if (kind === 'network') view.camera = { pitch: settings.get('network.tilt') }
-          void view.fit(caseFit(data, definition.drawing, kind), { signal }).catch(bridge.report)
+          view.camera = { pitch: settings.get('network.tilt') }
+          void view.fit(caseFit(data, definition.drawing), { signal }).catch(bridge.report)
         }
         placed.push({ view, region })
         signal.throwIfAborted()

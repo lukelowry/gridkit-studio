@@ -527,8 +527,6 @@ const RECORD_KEYS = Object.fromEntries(
     new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName].name : key))),
   ]),
 ) as Record<ArrayName, Keys>
-/** What Studio keeps under `extension` for itself, and never shows as a field. */
-const OWN = new Keys(['diagram'])
 
 /** The file a range was parsed from, which what it has yet to decode reads. */
 export interface Source {
@@ -860,10 +858,9 @@ export class Parser {
       let known = -1
       if (key === 'params') known = rows.paramField[rows.params.find(bytes, keyStart, keyEnd)] ?? -1
       else if (key === 'init') known = rows.initField[rows.init.find(bytes, keyStart, keyEnd)] ?? -1
-      else if (key === 'extension') {
-        if (OWN.find(bytes, keyStart, keyEnd) >= 0) continue
+      else if (key === 'extension')
         known = rows.extensionField[rows.extension.find(bytes, keyStart, keyEnd)] ?? -1
-      } else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
+      else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
         const under = rows.ports.get(key)
         const port = under ? (under.port[under.keys.find(bytes, keyStart, keyEnd)] ?? -1) : -1
         if (port >= 0) {

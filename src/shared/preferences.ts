@@ -1,4 +1,4 @@
-/** The display settings of Network, Diagram and Monitor, each defined once; VS Code owns the theme,
+/** The display settings of Network and Monitor, each defined once; VS Code owns the theme,
  *  its contrast and its motion. `pnpm settings` writes them into package.json for VS Code Settings. */
 
 import { type ColormapName, colormaps } from 'latkit'
@@ -101,8 +101,8 @@ const ZOOM = [
   ['modifier', 'Modifier + wheel'],
   ['off', 'Off'],
 ] as const
-/** A canvas's wheel can also pan, as a trackpad scrolls. The Monitor's wheel scrolls its plots. */
-const CANVAS_ZOOM = [['wheel', 'Wheel'], ['trackpad', 'Trackpad'], ...ZOOM.slice(1)] as const
+/** The Network's wheel can also pan, as a trackpad scrolls. The Monitor's wheel scrolls its plots. */
+const NETWORK_ZOOM = [['wheel', 'Wheel'], ['trackpad', 'Trackpad'], ...ZOOM.slice(1)] as const
 const TRACKPAD = 'Trackpad scrolls to pan and pinches to zoom.'
 const MOTION = [
   ['system', 'System'],
@@ -146,7 +146,7 @@ export const SETTINGS = [
       ),
     ]),
     group('Interaction', [
-      choice('network.zoom', 'Wheel behavior', 'wheel', CANVAS_ZOOM, TRACKPAD),
+      choice('network.zoom', 'Wheel behavior', 'wheel', NETWORK_ZOOM, TRACKPAD),
       choice('network.motion', 'Motion', 'system', MOTION),
       num('network.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),
@@ -165,32 +165,6 @@ export const SETTINGS = [
       bool('network.map.daylight', 'Daylight', false),
       color('network.map.ground', 'Ground color', null),
       num('network.map.night', 'Night brightness', 0.3, [0, 1, 0.01]),
-    ]),
-  ]),
-  category('diagram', 'Diagram', [
-    group('Layout', [
-      choice('diagram.direction', 'Direction', 'right', [
-        ['right', 'Right'],
-        ['left', 'Left'],
-        ['down', 'Down'],
-        ['up', 'Up'],
-      ]),
-      num('diagram.gap', 'Block gap', 30, [0, 200, 1]),
-      num('diagram.rankGap', 'Rank gap', 70, [0, 300, 1]),
-      choice('diagram.grid', 'Grid', 'dots', [
-        ['dots', 'Dots'],
-        ['lines', 'Lines'],
-        ['none', 'None'],
-      ]),
-    ]),
-    group('View', [
-      bool('diagram.labels', 'Labels', true),
-      num('diagram.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),
-    ]),
-    group('Interaction', [
-      choice('diagram.zoom', 'Wheel behavior', 'wheel', CANVAS_ZOOM, TRACKPAD),
-      choice('diagram.motion', 'Motion', 'system', MOTION),
-      num('diagram.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),
   ]),
   category('monitor', 'Monitor', [

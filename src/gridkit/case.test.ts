@@ -48,10 +48,6 @@ describe('single catalog and source ownership', () => {
     expect(
       catalog.definition.drawing.vertices.find((vertex) => vertex.table === 'Bus')?.position,
     ).toEqual(['extension.longitude', 'extension.latitude'])
-    expect(catalog.definition.drawing.nets).toContain('Signal')
-    expect(
-      catalog.definition.drawing.blocks.some((block) => block.table === 'ConstantSignalSource'),
-    ).toBe(true)
   })
   it('reads sparse native identities and static values through native queries and patches', async () => {
     const kase = await parse(source)

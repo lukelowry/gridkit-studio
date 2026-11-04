@@ -7,7 +7,6 @@ import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import type { Channel, FieldRef } from '../../src/shared/bindings.js'
-import { menuContext } from '../../src/shared/contexts.js'
 import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 const ROOT = process.env.GRIDKIT_TEST_ROOT!
@@ -157,48 +156,11 @@ export async function run() {
     await shoot(bench, 'activsg25k', wide.network)
     await set('network.tilt', undefined)
 
-    // An IEEE39 generator in the diagram, framed on its exciter and stabilizer.
-    await bench.reset()
-    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
-    const diagram = await bench.open('diagram')
-    await vscode.commands.executeCommand('workbench.action.closePanel')
-    await vscode.commands.executeCommand('workbench.action.closeSidebar')
-    const generator = { table: 'Genrou', id: '30_1_genrou' }
-    const drawn = async () => {
-      await idle(diagram)
-      const [x, y] = await until(
-        () =>
-          diagram.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(generator)})`),
-        'the generator drawn',
-      )
-      return { x, y }
-    }
-    // The generator's own menu frames it: the command alone frames the Network. Then the wheel
-    // closes in on it, its exciter and stabilizer either side.
-    const { summary, bindings } = bench.studio.state(bench.key)
-    await vscode.commands.executeCommand('gridkitStudio.zoomToNeighborhood', {
-      ...menuContext(
-        summary!,
-        { uri: bench.key, version: summary!.version, origin: 'diagram', element: generator },
-        bindings,
-      ),
-      webview: 'gridkitStudio.diagram',
-    })
-    const box = (await diagram.locator('canvas').boundingBox())!
-    const { x: gx, y: gy } = await drawn()
-    await bench.page.mouse.move(box.x + gx, box.y + gy)
-    for (let notch = 0; notch < 4; notch++) await bench.page.mouse.wheel(0, -120)
-    await bench.page.mouse.move(0, WINDOW.height / 2)
-    // Nothing selected, and no focus ring from the right-click.
-    await diagram.locator('canvas').blur()
-    bench.session.select()
-    await shoot(bench, 'diagram', diagram)
-
     // IEEE39 during a fault at bus 16, as its solver file has one: every bus voltage on the network
     // and in the Monitor.
     await bench.reset()
     await set('network.colormap', 'thermal')
-    const ieee = await bench.open('network')
+    const ieee = await bench.open()
     await bench.record('Bus', ['Vm'])
     bench.session.bind(VM, ['vertexColor'])
     await simulate(bench, bench.uri, {

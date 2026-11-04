@@ -12,7 +12,7 @@ import {
   referenceFields,
 } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
-import type { Commands, Context } from './context.js'
+import type { Commands } from './context.js'
 
 export function registerElements({
   studio,
@@ -32,21 +32,18 @@ export function registerElements({
     if (selected?.[0])
       await vscode.commands.executeCommand('vscode.openWith', selected[0], viewId('network'))
   })
-  /** Opens the case in a canvas, selecting the element in context there. */
-  const open = async (context: Context, kind: 'network' | 'diagram') => {
-    await vscode.commands.executeCommand(
-      'vscode.openWith',
-      vscode.Uri.parse(context.session.uri),
-      viewId(kind),
-      vscode.ViewColumn.Active,
-    )
-    if (context.element) context.session.select(context.element)
-  }
-  // A file's menu opens a view of the case; an element's reveals the element there.
+  // A file's menu opens the Network; an element's reveals the element there, or, where the Network
+  // does not draw it, the elements nearest it.
   for (const id of ['openNetwork', 'revealInNetwork'] as const)
-    command(id, (context) => open(context, 'network'))
-  for (const id of ['openDiagram', 'revealInDiagram'] as const)
-    command(id, (context) => open(context, 'diagram'))
+    command(id, async (context) => {
+      await vscode.commands.executeCommand(
+        'vscode.openWith',
+        vscode.Uri.parse(context.session.uri),
+        viewId('network'),
+        vscode.ViewColumn.Active,
+      )
+      if (context.element) context.session.select(context.element)
+    })
   for (const id of ['openCasePanel', 'revealInCase'] as const)
     command(id, (context) => focus(context.session, 'case', context.element))
   command('openMonitor', (context) => focus(context.session, 'monitor', context.element))

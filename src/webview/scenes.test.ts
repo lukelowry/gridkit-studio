@@ -9,7 +9,6 @@ import { loadNative } from '../workers/native.js'
 import {
   caseFit,
   caseSpan,
-  diagramScene,
   GAP,
   networkScene,
   plotScene,
@@ -32,18 +31,7 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   expect(networkScene(data, catalog.definition.drawing, trackpad, {}, []).controls).toMatchObject({
     gestures: { wheel: 'pan', 'control+wheel': 'zoom' },
   })
-  const diagram = diagramScene(data, catalog.definition.drawing, settings, {})
-  expect(diagram.layout).toEqual({
-    layered: {
-      direction: settings.get('diagram.direction'),
-      gap: settings.get('diagram.gap'),
-      rankGap: settings.get('diagram.rankGap'),
-    },
-  })
-  // A diagram is read: no input connects, and nothing deletes.
-  expect(diagram.controls).toEqual(expect.objectContaining({ gestures: {} }))
-  expect(diagram.controls).not.toHaveProperty('delete')
-  const projected = sceneFields(catalog.definition, ['network'], {
+  const projected = sceneFields(catalog.definition, {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
   expect(projected.flatMap((table) => table.fields)).not.toContain('Vm')
@@ -84,8 +72,6 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
     geographic: false,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [],
-    blocks: [],
-    nets: [],
   }
   const scene = networkScene(data, drawing, reader(), {}, bindings)
   const radius = (scene.marks![0] as { radius: Expr }).radius
@@ -103,7 +89,7 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
 it("frames whole case tables, and raises the highest mapped value a share of the case's span", () => {
   const vertices = [{ table: 'Bus', position: ['x', 'y'] as [string, string] }]
   const edges = [{ table: 'Line', ends: ['from', 'to'] as [string, string] }]
-  const drawing = (geographic: boolean) => ({ geographic, vertices, edges, blocks: [], nets: [] })
+  const drawing = (geographic: boolean) => ({ geographic, vertices, edges })
   /** The heights of the lowest and highest of `v`, raised a fifth of the span. */
   const raised = (data: Data, geographic: boolean) => {
     const scene = networkScene(data, drawing(geographic), reader({ 'network.height': 0.2 }), {}, [
@@ -115,7 +101,7 @@ it("frames whole case tables, and raises the highest mapped value a share of the
   }
   // On the earth, 3° east and 4° north of each other near the equator: 5° of arc across.
   using earth = new Data('earth').replace('Bus', [1, 2], { x: [0, 3], y: [0, 4], v: [0, 10] })
-  expect(JSON.parse(JSON.stringify(caseFit(earth, drawing(true), 'network')))).toEqual({
+  expect(JSON.parse(JSON.stringify(caseFit(earth, drawing(true))))).toEqual({
     tables: [
       ['earth', 'Bus'],
       ['earth', 'Line'],
@@ -142,8 +128,6 @@ it('draws the map, then branches, then the buses over them, however the network 
     geographic: true,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [{ table: 'Branch' }],
-    blocks: [],
-    nets: [],
   }
   const coast: Mark = { lines: ['map:coastline', 'lines'], name: 'map:coastline' }
   const kinds = (settings: ReturnType<typeof reader>) =>
@@ -159,8 +143,6 @@ it('scales dense case marks and their bindings together while preserving missing
     geographic: true,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [{ table: 'Line' }],
-    blocks: [],
-    nets: [],
   }
   using data = new Data('case')
     .replace(

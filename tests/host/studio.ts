@@ -298,8 +298,7 @@ export class Bench {
     session.setPlots([])
     for (const { table, field } of Object.values(session.bindings))
       session.bind({ table, field }, [])
-    session.setFraming('network', undefined)
-    session.setFraming('diagram', undefined)
+    session.setFraming(undefined)
     session.setTable({
       type: undefined,
       columns: undefined,

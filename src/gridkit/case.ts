@@ -5,7 +5,7 @@ import { printParseErrorCode, visit } from 'jsonc-parser'
 import { type Id, reference } from 'latkit'
 
 import type { CaseDefinition, Entity } from '../shared/document.js'
-import { DIAGRAM_POSITION, LABEL, NETWORK_POSITION } from '../shared/document.js'
+import { LABEL, NETWORK_POSITION } from '../shared/document.js'
 import type { SourceError, SourceProblem } from '../shared/errors.js'
 import { problem } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
@@ -209,38 +209,11 @@ export class Case {
     const tables = new Map<string, ProjectedTable>()
     for (const [name, table] of this.tables) {
       const ids = identities(table)
-      const positions = deferred(() => ({
-        x: new Float64Array(ids.length).fill(NaN),
-        y: new Float64Array(ids.length).fill(NaN),
-        seen: new Uint8Array(ids.length),
-      }))
-      const positionValues = (axis: number, offset: number, count: number): Float64Array => {
-        const held = positions()
-        const spans = table.shape.array ? this.arrays[table.shape.array] : undefined
-        for (let row = offset; row < offset + count; row++) {
-          if (held.seen[row]) continue
-          held.seen[row] = 1
-          if (!spans) continue
-          const record = table.records[row]!
-          const value = JSON.parse(utf8(this.file, spans.starts[record]!, spans.ends[record]!))
-            .extension?.diagram?.position
-          if (
-            Array.isArray(value) &&
-            value.length === 2 &&
-            value.every((item: unknown) => typeof item === 'number' && Number.isFinite(item))
-          ) {
-            held.x[row] = value[0]
-            held.y[row] = value[1]
-          }
-        }
-        return (axis === 0 ? held.x : held.y).slice(offset, offset + count)
-      }
       tables.set(name, {
         ids,
         read: (field, offset, count) => {
           if (field === LABEL) return ids.slice(offset, offset + count).map(String)
-          const position = DIAGRAM_POSITION.indexOf(field)
-          if (position >= 0) return positionValues(position, offset, count)
+          // Where no field places a vertex, the layout does.
           if (NETWORK_POSITION.includes(field)) return new Float64Array(count).fill(NaN)
           const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
           if (!column) throw problem('invalid-input', 'Unknown source field: ' + name + '.' + field)

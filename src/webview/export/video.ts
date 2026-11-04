@@ -47,9 +47,6 @@ export function viewsOf({ summary }: ViewState): Array<{ value: VideoView; label
     ...(drawing.vertices.some((vertex) => summary.counts[vertex.table])
       ? [{ value: 'network' as const, label: 'Network' }]
       : []),
-    ...(drawing.blocks.some((block) => summary.counts[block.table])
-      ? [{ value: 'diagram' as const, label: 'Diagram' }]
-      : []),
     { value: 'monitor', label: 'Monitor' },
   ]
 }

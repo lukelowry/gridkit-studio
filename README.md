@@ -51,12 +51,6 @@ Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. GridKit run
 
 _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
-- Diagram of control blocks and how they're wired
-
-![An IEEE39 generator with its exciter and stabilizer in the diagram](docs/media/diagram.png)
-
-_An IEEE39 generator with its exciter and stabilizer in the diagram_
-
 - Dynamic simulation from a solver file's menu
 - Monitor for plotting and playing back signals
 

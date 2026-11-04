@@ -81,21 +81,22 @@ async function build(kase: Case): Promise<Adjacency> {
   return { tables, starts, table, row }
 }
 
-/** The nearest elements of the `drawn` types that stand for `id` in a view: none when the view
- *  draws it, else the buses its ports reach, through the devices its control ports drive. */
-export async function anchors(
+/** `entity` selected as the Network shows it: the element itself where the Network draws its type,
+ *  else the nearest elements it draws, which the element's ports reach through the devices they
+ *  drive. A device that reaches nothing the Network draws selects nothing there. */
+export async function networkSelectionOf(
   kase: Case,
-  input: { entity: Entity; drawn: readonly string[] },
+  entity: Entity,
   signal: AbortSignal,
 ): Promise<Entity[]> {
-  const located = kase.locate(input.entity)
-  if (!located) throw new Error('Unknown element: ' + entityLabel(input.entity))
-  if (input.drawn.includes(input.entity.table)) return []
+  const located = kase.locate(entity)
+  if (!located) throw new Error('Unknown element: ' + entityLabel(entity))
+  const { vertices, edges } = kase.definition.drawing
+  const types = new Set([...vertices, ...edges].map((item) => item.table))
+  if (types.has(entity.table)) return [{ table: entity.table, id: entity.id }]
   const adjacency = await new Turns(signal).wait(adjacencyOf(kase))
   const { tables, starts } = adjacency
-  const drawn = new Set(
-    tables.flatMap((table, n) => (input.drawn.includes(table.shape.type) ? [n] : [])),
-  )
+  const drawn = new Set(tables.flatMap((table, n) => (types.has(table.shape.type) ? [n] : [])))
   /** A row, as one number: its table's number, then its row there. */
   const key = (t: number, r: number) => t * 0x1_0000_0000 + r
   const start = key(tables.indexOf(located.table), located.row)

@@ -14,7 +14,7 @@ import {
   rangeIn,
   sourceRange,
 } from '../gridkit/index.js'
-import { anchors } from '../gridkit/inspection.js'
+import { networkSelectionOf } from '../gridkit/inspection.js'
 import { CaseQueries, projectionPage } from '../gridkit/projection.js'
 import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
@@ -91,7 +91,8 @@ serve<CaseApi>(
         ...rangeIn(read.kase.file, { offset, length }),
       }))
     },
-    anchors: async (input, signal) => anchors(latest(input).kase, input, signal),
+    networkSelection: async (input, signal) =>
+      networkSelectionOf(latest(input).kase, input.entity, signal),
     locate: async (input) => {
       const { kase } = latest(input)
       return rangeIn(kase.file, sourceRange(kase, input, input.field))

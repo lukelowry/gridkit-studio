@@ -71,8 +71,8 @@ suite('Views', () => {
       const reveal = host.menus.find('webview/context', 'Reveal in Network', keys)
       await vscode.commands.executeCommand(reveal.command, menu)
       assert.deepEqual(host.session.selection, exciter)
-      await until(() => host.session.anchors, 'the bus it reaches')
-      assert.deepEqual(host.session.anchors, [{ table: 'Bus', id: 30 }])
+      await until(() => host.session.networkSelection, 'the bus it reaches')
+      assert.deepEqual(host.session.networkSelection, [{ table: 'Bus', id: 30 }])
     } finally {
       listening.dispose()
     }

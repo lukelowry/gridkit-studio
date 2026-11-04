@@ -103,7 +103,7 @@ export class Sessions implements vscode.Disposable {
         this.changed.fire(uri)
         const session = this.#all.get(uri)
         if (!session || this.files.get(uri)?.stale) return
-        void session.forget()
+        void session.reselect()
         session.restore('read')
       }),
       this.client.event.event((event) => this.#hear(event)),
@@ -275,7 +275,7 @@ export class Sessions implements vscode.Disposable {
       stale: file?.stale,
       error: file?.error,
       selection: session?.selection,
-      anchors: session?.anchors,
+      networkSelection: session?.networkSelection,
       results: session?.results,
       plots: session?.plots,
       window: session?.window,

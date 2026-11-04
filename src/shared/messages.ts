@@ -107,8 +107,9 @@ export interface CaseApi {
    *  version it was first read at. */
   read: { input: Revision; output: Summary }
   validate: { input: Revision; output: Issue[] }
-  /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
-  anchors: { input: Revision & { entity: Entity; drawn: readonly string[] }; output: Entity[] }
+  /** `entity` selected as the Network shows it: the element itself where the Network draws its
+   *  type, else the nearest elements it draws, which may be none. */
+  networkSelection: { input: Revision & { entity: Entity }; output: Entity[] }
   /** Where an element, or its field, is in the file. */
   locate: { input: Revision & Element; output: SourceRange }
   project: {
@@ -258,8 +259,9 @@ export interface ViewState {
   /** Why the file does not read; `summary` may hold the last revision that did. */
   error?: string
   selection?: Element
-  /** The network elements that stand for a selection the network does not draw. */
-  anchors?: readonly Entity[]
+  /** The selection as the Network shows it: the element itself, or the nearest elements it draws;
+   *  absent until they are found. */
+  networkSelection?: readonly Entity[]
   results?: Results
   plots?: readonly Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */

@@ -6,14 +6,14 @@ import './styles/canvas.css'
 import type { Camera, Data, Gpu, Scene, Source } from 'latkit'
 
 import type { Bindings } from '../shared/bindings.js'
-import { type Entity, isEntity, networkRole } from '../shared/document.js'
+import { type Entity, isEntity } from '../shared/document.js'
 import { quiet } from '../shared/errors.js'
 import { revisionOf, type Summary, type ViewState } from '../shared/messages.js'
 import { reader, TILTED } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
 import { saveImage, viewShot } from './export/image.js'
-import { FrameReads, FrameWindow } from './frames.js'
+import { FrameReads, SampledWindows } from './frames.js'
 import { ViewHost } from './host.js'
 import { bindInteractions } from './interactions.js'
 import { type Background, backgroundOf } from './maps.js'
@@ -28,6 +28,10 @@ import { icon, type IconName } from './ui/glyphs.js'
 const mark = (name: string) => {
   if (!performance.getEntriesByName(name).length) performance.mark(name)
 }
+
+/** Elements as one key, by their type and id alone. */
+const keyOf = (entities: readonly Entity[]) =>
+  JSON.stringify(entities.map(({ table, id }) => [table, id]))
 
 function boot() {
   if (document.body.dataset.kind !== 'network') return
@@ -73,8 +77,8 @@ function boot() {
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const cases = new CaseProjection()
   const reads = new FrameReads()
-  /** The frames each mapped field of the results holds around the playhead, by `[table, field]`. */
-  const windows = new Map<string, FrameWindow>()
+  /** The frames each mapped field of the results holds around the playhead. */
+  const windows = new SampledWindows(reads)
   /** Lets go of an image being drawn once the page goes. */
   const page = new AbortController()
   let state: ViewState = {}
@@ -159,11 +163,7 @@ function boot() {
 
   function sources(): Source[] {
     const data = cases.slot.current?.data
-    return [
-      ...(data ? [data] : []),
-      ...background.sources,
-      ...[...windows.values()].flatMap((window) => (window.data ? [window.data] : [])),
-    ]
+    return [...(data ? [data] : []), ...background.sources, ...windows.sources]
   }
 
   /** What the view draws now: the bindings whose fields it holds, and the map. */
@@ -179,7 +179,7 @@ function boot() {
     return sceneOf(data, summary.definition, settings, nativeTheme(settings, 'network'), {
       bindings: drawnBindings,
       results: state.results,
-      sampled: (table, field) => windows.get(JSON.stringify([table, field]))?.data,
+      sampled: windows.source,
       background: background.marks,
     })
   }
@@ -216,16 +216,12 @@ function boot() {
     selection()
   }
 
-  /** The selection where the Network draws it, else the elements nearest it there. */
+  /** The selection as the Network shows it, framed unless the user picked it here. */
   function selection() {
     const data = cases.slot.current?.data
     if (!host || !data) return
-    const element = state.selection
-    const entities =
-      element && summary && networkRole(summary.definition, element.table)
-        ? [element]
-        : [...(state.anchors ?? [])]
-    const key = JSON.stringify(entities)
+    const entities = state.networkSelection ?? []
+    const key = keyOf(entities)
     if (key === selected) return
     selected = key
     host.view.selection = entities.map((entity) => ({
@@ -239,22 +235,19 @@ function boot() {
   /** Whether every sampled binding holds the frames at `at`. */
   function covered(at: number): boolean {
     if (!summary || !state.results?.frames) return true
-    return sampledFields(summary.definition, state.bindings, state.results).every((field) => {
-      const range = windows.get(JSON.stringify(field))?.range
-      return !!range && at >= range[0] && at <= range[1]
-    })
+    return windows.hold(sampledFields(summary.definition, state.bindings, state.results), at)
   }
 
+  /** Asks each mapped field's window for the frames about `at`: the frame at `at` while paused, and
+   *  while playing, from a quarter second behind to as far as the playhead goes in two seconds, a
+   *  second at least. Lets go of the windows of fields no longer mapped. */
   function prefetch(at: number) {
     if (!visible() || !summary) return
     const results = state.results
-    const wanted = new Set<string>()
+    const fields = results?.frames ? sampledFields(summary.definition, state.bindings, results) : []
     if (results?.frames)
-      for (const [table, field] of sampledFields(summary.definition, state.bindings, results)) {
-        const key = JSON.stringify([table, field])
-        wanted.add(key)
-        const window = windows.get(key) ?? new FrameWindow(reads)
-        windows.set(key, window)
+      for (const [table, field] of fields) {
+        const window = windows.of([table, field])
         if (
           window.pending &&
           window.requested &&
@@ -295,14 +288,7 @@ function boot() {
             if (changed && !closed) paint()
           }, fail)
       }
-    let removed = false
-    for (const [key, window] of windows)
-      if (!wanted.has(key)) {
-        window.clear()
-        windows.delete(key)
-        removed = true
-      }
-    if (removed && host) paint()
+    if (windows.keep(fields) && host) paint()
   }
 
   async function backgrounds() {
@@ -388,7 +374,7 @@ function boot() {
         stops.push(
           bindInteractions(made.view, {
             select(element) {
-              own = JSON.stringify(element ? [element] : [])
+              own = keyOf(element ? [element] : [])
               bridge.send({ kind: 'select', element })
             },
             open(element) {
@@ -422,7 +408,6 @@ function boot() {
         restore = undefined
       }
       if (previous.uri !== state.uri || previous.results?.id !== state.results?.id) {
-        for (const window of windows.values()) window.clear()
         windows.clear()
         reads.clear()
       }
@@ -520,10 +505,7 @@ function boot() {
       at: view.at,
       requestedAt: clock.now(),
       covered: covered(clock.now()),
-      windows: [...windows.values()].map((window) => ({
-        span: window.range,
-        pending: window.pending,
-      })),
+      windows: windows.spans,
       received,
       bindings: drawnBindings,
       cacheBytes: reads.bytes,
@@ -557,7 +539,7 @@ function boot() {
       clearTimeout(saving)
       mapController?.abort()
       background.destroy?.()
-      for (const window of windows.values()) window.clear()
+      windows.clear()
       cases.clear()
       reads.clear()
       gpu?.destroy()

@@ -72,7 +72,7 @@ export const bridge = {
   },
 }
 /** The small parts of a state message, which are compared whole. */
-const SMALL = ['bindings', 'plots', 'selection', 'anchors', 'table', 'window'] as const
+const SMALL = ['bindings', 'plots', 'selection', 'networkSelection', 'table', 'window'] as const
 
 /** Applies a state message. Each carries the whole state except `summary` and `settings`, which
  *  are large and sent only when they change, as they do with the case a view shows, and the

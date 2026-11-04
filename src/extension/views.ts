@@ -98,12 +98,11 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
     table,
   ],
   // The times the results hold mark which ones the network can draw, and their ranges color it.
-  network: ({ uri, stale, error, selection, anchors, bindings, results }) => [
+  network: ({ uri, stale, error, networkSelection, bindings, results }) => [
     uri,
     stale,
     error,
-    selection,
-    anchors,
+    networkSelection,
     bindings,
     drawnOf(results),
   ],

@@ -3,7 +3,7 @@
 import { type Results, type ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/preferences.js'
 import { bridge } from '../bridge.js'
-import { FrameReads, FrameWindow } from '../frames.js'
+import { FrameReads, SampledWindows } from '../frames.js'
 import { type Background, backgroundOf } from '../maps.js'
 import { CaseProjection } from '../projections.js'
 import { asset, openGpu } from '../runtime.js'
@@ -23,7 +23,8 @@ export async function renderVideo(
   if (!shown.summary || !shown.uri || !shown.results) throw new Error('No results to export.')
   const projection = new CaseProjection()
   const reads = new FrameReads()
-  const frames: FrameWindow[] = []
+  /** The frames each mapped field of the results holds about the frame the video draws. */
+  const sampled = new SampledWindows(reads)
   const views: View[] = []
   const placed: Placed[] = []
   /** Lets go of the Monitor's plots, whose views and frames are their own. */
@@ -69,35 +70,28 @@ export async function renderVideo(
         theme().palette,
         signal,
       )
-    const sampled = new Map<string, FrameWindow>()
-    if (job.views.includes('network'))
-      for (const field of sampledFields(definition, app.bindings, results)) {
-        const frame = new FrameWindow(reads)
-        sampled.set(JSON.stringify(field), frame)
-        frames.push(frame)
-      }
-    const sources = () => [
-      data,
-      ...background.sources,
-      ...[...sampled.values()].flatMap((frame) => (frame.data ? [frame.data] : [])),
-    ]
+    const fields = job.views.includes('network')
+      ? sampledFields(definition, app.bindings, results)
+      : []
+    const sources = () => [data, ...background.sources, ...sampled.sources]
     let network: View | undefined
+    /** Holds each mapped field's frames from `at` to where half a second of the video reaches. */
     const prepare = async (at: number, abort: AbortSignal) => {
       let changed = false
       await Promise.all(
-        [...sampled].map(async ([key, frame]) => {
-          const [table, field] = JSON.parse(key) as [string, string]
-          const range = frame.range
+        fields.map(async ([table, field]) => {
+          const window = sampled.of([table, field])
+          const range = window.range
           if (range && at >= range[0] && at <= range[1]) return
           changed =
-            (await frame.playhead(
+            (await window.playhead(
               {
                 results: results!.id,
                 table,
                 field,
                 range: [at, Math.min(job.timeRange[1], at + job.rate / 2)],
                 purpose: 'playhead',
-                bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, sampled.size)),
+                bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, fields.length)),
               },
               results!.frames,
               at,
@@ -132,7 +126,7 @@ export async function renderVideo(
         const scene = sceneOf(data, definition, settings, nativeTheme(settings, 'network'), {
           bindings: app.bindings,
           results,
-          sampled: (table, field) => sampled.get(JSON.stringify([table, field]))?.data,
+          sampled: sampled.source,
           background: background.marks,
         })
         if (background.attribution)
@@ -167,7 +161,7 @@ export async function renderVideo(
     for (const release of released) release()
     for (const view of views) view.destroy()
     gpu?.destroy()
-    for (const frame of frames) frame.clear()
+    sampled.clear()
     projection.clear()
     reads.clear()
     background.destroy?.()

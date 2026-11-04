@@ -42,7 +42,7 @@ export function registerCanvases({ command, action, focus }: Commands) {
     const { session, summary, element } = context
     if (!element) return
     session.select(element)
-    action(context, 'neighborhood', await session.drawnFor(element, summary), 'network')
+    action(context, 'neighborhood', await session.networkSelectionOf(element, summary), 'network')
   })
 
   /** The numeric field in context, which a network channel can show. */

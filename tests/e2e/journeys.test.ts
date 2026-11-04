@@ -67,7 +67,7 @@ suite('Journeys', function () {
     if (!(await bench.gridkit())) this.skip()
     await bench.record(VM.table, [VM.field])
     await bench.writeSolver({ tmax: 2, dt_monitor: 0.001, events: [] })
-    bench.run()
+    bench.explorer('Run Dynamic Simulation')
     const monitor = await bench.view('monitor')
     await until(() => bench.session.run?.state === 'complete', 'the run ends', 120_000)
     await visible(monitor, 'canvas[data-rendered=true]')

@@ -8,41 +8,32 @@ import { pathToFileURL } from 'node:url'
 import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { Case } from '../gridkit/case.js'
-import { catalog } from '../gridkit/definition.js'
 import { FORMAT } from '../results/store.js'
 import { type FramePage, PAGE_BYTES, type RecordedField } from '../shared/data.js'
-import type { Results, ResultsApi } from '../shared/messages.js'
+import { type Results, type Revision, revisionOf } from '../shared/messages.js'
 import { loadNative } from './native.js'
-import { bundle, start } from './rig.js'
+import { bundle, type Rig, start } from './rig.js'
 
 let script: string
 beforeAll(async () => {
-  script = await bundle('results', 'results-worker')
+  script = await bundle('results')
   await loadNative(createRequire(import.meta.url).resolve('latkit/wasm'))
 })
-
-type Rig = Awaited<ReturnType<typeof start<ResultsApi>>>
 
 /** A case of one bus, `one`, and its source. */
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
 
-/** The case `name`, written to `rig`'s folder as `text` holds it, at its first revision: by its
- *  file and its fingerprint, which the worker reads it by. */
-async function caseOf(rig: Rig, name: string, text = ONE) {
+/** The case `name`, written to `rig`'s folder as `text` holds it, and read at `version`, as the
+ *  extension reads it: the revision it reads at. */
+async function caseOf(rig: Rig, name: string, text = ONE, version = 1): Promise<Revision> {
   const path = join(rig.scratch, name + '.case.json')
   await writeFile(path, text)
-  const { version } = await Case.parse(new TextEncoder().encode(text), catalog)
-  return { uri: pathToFileURL(path).href, version: 1, fingerprint: version }
+  return revisionOf(await rig.call('read', { uri: pathToFileURL(path).href, version }))
 }
 
 /** Opens the results file at `path` for `revision` under an id of its own, as the extension does. */
-const open = (
-  rig: Rig,
-  revision: Awaited<ReturnType<typeof caseOf>>,
-  path: string,
-  signal?: AbortSignal,
-): Promise<Results> => rig.call('open', { ...revision, results: randomUUID(), path }, signal)
+const open = (rig: Rig, revision: Revision, path: string, signal?: AbortSignal): Promise<Results> =>
+  rig.call('open', { ...revision, results: randomUUID(), path }, signal)
 
 /** `results` as the worker last told of them: each event's progress, and layout when it changed,
  *  over what the open answered. */
@@ -98,6 +89,7 @@ async function everything(
       range: results.domain,
       purpose: 'playhead',
       bytes: 96 << 20,
+      step: 0,
       next,
     })
     expect(page.bytes.byteLength).toBeLessThanOrEqual(PAGE_BYTES)
@@ -112,9 +104,9 @@ function native(pages: FramePage[]): Data {
   return data
 }
 
-describe('the results worker', () => {
+describe("the worker's results", () => {
   it('sends a view every frame of a file once and in order, a page at a time', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'many.csv')
       const frames = 600_000
@@ -132,7 +124,7 @@ describe('the results worker', () => {
   })
 
   it('answers once the first frames are read, and reads on to the end', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'long.csv')
       const frames = 700_000
@@ -151,7 +143,7 @@ describe('the results worker', () => {
   })
 
   it('says why a file stops reading partway, and keeps what it read', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       // Its last row, a segment past its first, lacks the voltage.
       const path = join(rig.scratch, 'broken-late.csv')
@@ -171,29 +163,37 @@ describe('the results worker', () => {
     }
   })
 
-  it('reads a case by its fingerprint while results of it are held, and from its file once none are', async () => {
-    // Nothing rests: what nothing holds is let go of at once.
-    const rig = await start<ResultsApi>(script, { options: { cacheBytes: 0 } })
+  it('reads results against the case read at their revision, which they keep as its file changes', async () => {
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'small.csv')
       await waveform(path, 3)
       const source = await caseOf(rig, 'known')
       const first = await open(rig, source, path)
-      expect(first.fingerprint).toBe(source.fingerprint)
-      const again = await open(rig, { ...source, version: 2 }, path)
+      const again = await open(rig, source, path)
       // The same file of the same case, read now: held again, and read once.
-      expect(await rig.call('stats', {})).toMatchObject({ results: 2, files: 1, cases: 1 })
-      // Once the last results that read it close, so does the case.
-      for (const { id } of [first, again]) await rig.call('close', { results: id })
-      expect(await rig.call('stats', {})).toMatchObject({ files: 0, cases: 0 })
-      // Its file is read again, which must hold what the fingerprint names: changed since, the
-      // extension reads it again and asks again.
-      const third = await open(rig, source, path)
-      expect(third.fingerprint).toBe(source.fingerprint)
-      await rig.call('close', { results: third.id })
-      await caseOf(rig, 'known', ONE.replace('one', 'two'))
-      await expect(open(rig, { ...source, version: 3 }, path)).rejects.toMatchObject({
-        code: 'case-changed',
+      expect(await rig.call('stats', {})).toMatchObject({ cases: 1, results: 2, files: 1 })
+      // The case file reads otherwise: the revision before is asked of no more, and the extension
+      // asks again of the one that took its place.
+      const two = ONE.replace(']}', ',{"class":"Bus","number":2,"name":"two"}]}')
+      const changed = await caseOf(rig, 'known', two, 2)
+      await expect(open(rig, source, path)).rejects.toMatchObject({ code: 'superseded' })
+      // The results read against it keep it, as their views read it.
+      expect(await rig.call('describe', { results: first.id })).toMatchObject({
+        ...source,
+        fingerprint: first.fingerprint,
+      })
+      const fields = [{ table: 'Bus', fields: ['name'] }]
+      const projected = await rig.call('project', { results: first.id, fields })
+      expect(projected.key.startsWith(first.fingerprint)).toBe(true)
+      // Read against the case as it reads now, the same file is read again for it.
+      const third = await open(rig, changed, path)
+      expect(third.fingerprint).not.toBe(first.fingerprint)
+      expect(await rig.call('describe', { results: third.id })).toMatchObject(changed)
+      expect(await rig.call('stats', {})).toMatchObject({ cases: 1, results: 3, files: 2 })
+      for (const { id } of [first, again, third]) await rig.call('close', { results: id })
+      await expect(rig.call('project', { results: first.id, fields })).rejects.toMatchObject({
+        code: 'results-closed',
       })
     } finally {
       await rig.stop()
@@ -201,7 +201,7 @@ describe('the results worker', () => {
   })
 
   it('keeps nothing of an open let go of before it answers', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const large = join(rig.scratch, 'large.csv')
       await waveform(large, 700_000)
@@ -224,7 +224,7 @@ describe('the results worker', () => {
   })
 
   it('reads a results file where it is, says what it holds, and never changes it', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'original.csv')
       const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
@@ -253,7 +253,7 @@ describe('the results worker', () => {
 
   it('reads what it read of a file written again since, and the file anew when opened again', async () => {
     // Nothing kept but the store: every read of the results is of the store.
-    const rig = await start<ResultsApi>(script, { options: { cacheBytes: 0 } })
+    const rig = await start(script, { options: { cacheBytes: 0 } })
     try {
       const path = join(rig.scratch, 'rewritten.csv')
       await waveform(path, 3, () => '1')
@@ -276,7 +276,7 @@ describe('the results worker', () => {
   })
 
   it('holds one file by several ids, as an export holds what a view shows, and rests it once none do', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'shared.csv')
       await waveform(path, 3)
@@ -290,15 +290,14 @@ describe('the results worker', () => {
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       await rig.call('close', { results: exported.id })
       expect(await rig.call('stats', {})).toMatchObject({ results: 0, files: 0, resting: 1 })
-      // Opened again, it is the file at rest, read nothing again, and its case with it: no source
-      // is asked for.
-      const again = await open(rig, { ...source, version: 2 }, path)
+      // Opened again, it is the file at rest, read nothing again.
+      const again = await open(rig, source, path)
       expect(again).toMatchObject({ growing: false, frames: 3 })
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       // A budget too small for it lets what rests go.
       await rig.call('close', { results: again.id })
       await rig.call('configure', { cacheBytes: 0 })
-      expect(await rig.call('stats', {})).toMatchObject({ resting: 0, cases: 0, cacheBytes: 0 })
+      expect(await rig.call('stats', {})).toMatchObject({ resting: 0, cacheBytes: 0 })
     } finally {
       await rig.stop()
     }
@@ -308,7 +307,7 @@ describe('the results worker', () => {
     const folder = await mkdtemp(join(tmpdir(), 'gridkit-reload-'))
     const csv = join(folder, 'results.csv')
     await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
-    let rig = await start<ResultsApi>(script, { folder })
+    let rig = await start(script, { folder })
     try {
       const first = await read(rig, await open(rig, await caseOf(rig, 'reloaded'), csv))
       const exported = join(folder, 'exported.csv')
@@ -316,7 +315,7 @@ describe('the results worker', () => {
       const measured = await readFile(exported, 'utf8')
       await rig.stop()
       // A saved session names the file, so its store is kept, and read alone, without the CSV.
-      rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
+      rig = await start(script, { folder, options: { saved: [csv] } })
       const again = await open(rig, await caseOf(rig, 'reloaded'), csv)
       expect(again.growing).toBe(false)
       expect(again).toMatchObject({
@@ -338,14 +337,14 @@ describe('the results worker', () => {
     const folder = await mkdtemp(join(tmpdir(), 'gridkit-cut-'))
     const csv = join(folder, 'results.csv')
     await waveform(csv, 40)
-    let rig = await start<ResultsApi>(script, { folder })
+    let rig = await start(script, { folder })
     try {
       const first = await read(rig, await open(rig, await caseOf(rig, 'cut'), csv))
       const values = await everything(rig, first, { table: 'Bus', field: 'Vm' })
       await rig.stop()
       // What was kept of the file ends partway, as a store a crash left would.
       await truncate(join(await storeOf(folder), 'raw.bin'), 8)
-      rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
+      rig = await start(script, { folder, options: { saved: [csv] } })
       const again = await read(rig, await open(rig, await caseOf(rig, 'cut'), csv))
       expect(again.frames).toBe(first.frames)
       using a = native(values)
@@ -363,7 +362,7 @@ describe('the results worker', () => {
     const folder = await mkdtemp(join(tmpdir(), 'gridkit-rewritten-'))
     const csv = join(folder, 'results.csv')
     await waveform(csv, 40)
-    let rig = await start<ResultsApi>(script, { folder })
+    let rig = await start(script, { folder })
     try {
       const first = await read(rig, await open(rig, await caseOf(rig, 'rewritten'), csv))
       await rig.stop()
@@ -373,7 +372,7 @@ describe('the results worker', () => {
       const kept = JSON.parse(await readFile(manifest, 'utf8')) as object
       await writeFile(manifest, JSON.stringify({ ...kept, complete: false }))
       await waveform(csv, 40, (i) => String((i + 1) % 3))
-      rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
+      rig = await start(script, { folder, options: { saved: [csv] } })
       const again = await read(rig, await open(rig, await caseOf(rig, 'rewritten'), csv))
       expect(again.frames).toBe(first.frames)
       using data = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
@@ -391,7 +390,7 @@ describe('the results worker', () => {
     const csv = join(folder, 'results.csv')
     await waveform(csv, 40)
     // Nothing kept in memory, so every read is of the store.
-    const rig = await start<ResultsApi>(script, { folder, options: { cacheBytes: 0 } })
+    const rig = await start(script, { folder, options: { cacheBytes: 0 } })
     try {
       const source = await caseOf(rig, 'lost')
       const results = await read(rig, await open(rig, source, csv))
@@ -415,7 +414,7 @@ describe('the results worker', () => {
   })
 
   it('holds what the extension holds open, of however many cases, and nothing once it closes them', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     try {
       const path = join(rig.scratch, 'shared.csv')
       await waveform(path, 3)
@@ -433,7 +432,6 @@ describe('the results worker', () => {
       expect(await rig.call('stats', {})).toMatchObject({
         results: 0,
         resting: 0,
-        cases: 0,
         runs: 0,
         cacheBytes: 0,
       })
@@ -445,7 +443,7 @@ describe('the results worker', () => {
   })
 
   it('sends a view a bounded bracketing window, and nothing of results closed', async () => {
-    const rig = await start<ResultsApi>(script)
+    const rig = await start(script)
     const { scratch, call, stop } = rig
     try {
       const text = await readFile('cases/TwoArea.case.json', 'utf8')
@@ -476,6 +474,7 @@ describe('the results worker', () => {
           range: [results.domain[1], results.domain[1]],
           purpose: 'playhead',
           bytes: 4096,
+          step: 0,
         })
       const sent = await ask()
       expect(sent.complete).toBe(true)

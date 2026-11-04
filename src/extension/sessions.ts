@@ -1,5 +1,5 @@
 /** Every case Studio works on, each a Session kept while something holds it, and what they share:
- *  the workers, the case files, the log, and the events the views and native UI follow. */
+ *  the worker, the case files, the log, and the events the views and native UI follow. */
 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -19,7 +19,13 @@ import {
   type View,
   viewId,
 } from '../shared/ids.js'
-import type { CaseSource, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
+import {
+  type Revision,
+  revisionOf,
+  type ViewAction,
+  type ViewState,
+  type WorkerEvent,
+} from '../shared/messages.js'
 import { catalogFile } from './catalog.js'
 import { Client, unsteady } from './client.js'
 import { CaseFiles } from './files.js'
@@ -72,13 +78,12 @@ export class Sessions implements vscode.Disposable {
     const store = kept
       ? vscode.Uri.joinPath(kept, 'results').fsPath
       : join(tmpdir(), 'gridkit-studio-results')
-    // Both workers start with the catalog of GridKit's classes the user's file holds, if any.
-    const workers = { catalog: catalogFile((error) => this.reporter.report(error)) }
+    // The worker reads cases with the catalog of GridKit's classes the user's file holds, if any.
+    const catalog = catalogFile((error) => this.reporter.report(error))
     this.client = new Client(
       vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
-      workers,
       () => ({
-        ...workers,
+        catalog,
         cacheBytes: cacheBytes(),
         store,
         saved: savedResults(workspaceState),
@@ -89,15 +94,16 @@ export class Sessions implements vscode.Disposable {
     this.files = new CaseFiles(this.client, (error) => this.reporter.report(error))
     this.#disposables = [
       this.changed.event(() => this.updateContexts()),
-      // Either worker stopping is said. A new results worker holds none of the old one's results,
-      // so each session reads its own again.
-      this.client.cases.failure.event((error) => this.reporter.report(this.files.restart(error))),
-      this.client.results.failure.event((error) => {
-        const { steady } = this.client.results
-        this.reporter.report(
-          steady ? error : unsteady(error, 'reads results again once you show them.'),
-        )
+      // The worker stopping is said. A new worker holds none of the old one's cases or results,
+      // so the files are read again, and each session reads its results again.
+      this.client.worker.failure.event((error) => {
+        const { steady } = this.client.worker
+        const said = steady
+          ? error
+          : unsteady(error, 'reads each case, and its results, again once its file changes.')
+        this.files.restart(error, steady ? undefined : said)
         for (const session of this.#all.values()) session.lost(error, steady)
+        this.reporter.report(said)
       }),
       this.files.changed.event((uri) => {
         this.changed.fire(uri)
@@ -117,8 +123,8 @@ export class Sessions implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((event) => {
         for (const session of this.#all.values())
           if (affects(event, vscode.Uri.parse(session.uri))) session.reconfigure()
-        if (affects(event, undefined, 'resultCacheMiB') && this.client.results.running)
-          void this.client.results
+        if (affects(event, undefined, 'resultCacheMiB') && this.client.worker.running)
+          void this.client.worker
             .call('configure', { cacheBytes: cacheBytes() })
             .catch((error) => this.reporter.report(error))
       }),
@@ -241,25 +247,23 @@ export class Sessions implements vscode.Disposable {
     return session
   }
 
-  /** Asks the results worker `call` of the case at `uri` as its file reads now, by its
-   *  fingerprint: the worker reads the file itself. Changed on disk since, it is read again and
-   *  asked again. */
-  async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
+  /** Asks the worker `call` of the case at `uri` as its file reads now, by its revision. A file
+   *  read again meanwhile supersedes it: it is asked again of the newer one. */
+  async withCase<T>(uri: string, call: (revision: Revision) => Promise<T>): Promise<T> {
     for (;;) {
-      const { version, fingerprint } = await this.files.read(uri)
+      const summary = await this.files.read(uri)
       try {
-        return await call({ uri, version, fingerprint })
+        return await call(revisionOf(summary))
       } catch (error) {
-        if (!failedWith(error, 'case-changed')) throw error
+        if (!failedWith(error, 'superseded')) throw error
       }
     }
   }
 
-  /** Lets go of the results `id` names in the results worker, which a worker that stopped holds no
-   *  more. */
+  /** Lets go of the results `id` names in the worker, which a worker that stopped holds no more. */
   closeResults(id: string): void {
-    if (this.client.results.running)
-      void this.client.results.call('close', { results: id }).catch(() => {})
+    if (this.client.worker.running)
+      void this.client.worker.call('close', { results: id }).catch(() => {})
   }
 
   /** What the views of the case at `uri` show. */

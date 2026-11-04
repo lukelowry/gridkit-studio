@@ -36,7 +36,7 @@ type FieldSource =
   | { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
   | { readonly kind: 'found'; readonly path: readonly string[]; readonly json: boolean }
 /** What a text field may hold, as GridKit checks it: a pattern, and the rule it keeps in words. */
-export interface TextRule {
+interface TextRule {
   readonly pattern: RegExp
   readonly rule: string
 }
@@ -50,7 +50,7 @@ export interface FieldPlan {
   readonly allowed?: TextRule
   readonly geographic?: boolean
 }
-export interface PortPlan extends FieldPlan {
+interface PortPlan extends FieldPlan {
   readonly definition: FieldDefinition & { readonly kind: 'reference'; readonly target: string }
   readonly source: { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
 }

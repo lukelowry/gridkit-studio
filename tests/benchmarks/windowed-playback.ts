@@ -17,7 +17,7 @@ export async function run() {
     const source = JSON.parse(await readFile(uri.fsPath, 'utf8'))
     const id: number = source.buses[0].number
     await bench.record('Bus', ['Vm', 'Va'], uri)
-    bench.run(
+    bench.explorer(
       'Run Dynamic Simulation',
       await bench.writeSolver(
         {
@@ -53,7 +53,7 @@ export async function run() {
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
-    const thread = bench.studio.client.results
+    const thread = bench.studio.client.worker
     const original = thread.call
     let delayed = 0
     let cancelled = 0

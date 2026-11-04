@@ -115,7 +115,6 @@ describe("GridKit's programs on solver files", () => {
     const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
-      fingerprint: kase.version,
       run: randomUUID(),
       results: randomUUID(),
       solver: solverPath,

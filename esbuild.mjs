@@ -38,7 +38,7 @@ const builds = [
     external: ['vscode'],
   },
   {
-    entryPoints: { cases: 'src/workers/cases.ts', results: 'src/workers/results.ts' },
+    entryPoints: { worker: 'src/workers/worker.ts' },
     outdir: 'dist',
     outExtension: { '.js': '.mjs' },
     platform: 'node',

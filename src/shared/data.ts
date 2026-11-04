@@ -56,7 +56,7 @@ export interface FrameBlock {
 
 /** A window of a recorded field: a plot's, across the device pixel columns it draws in, sent only
  *  what the window it holds (`since`, the key it was sent under) lacks where that is the same
- *  window grown; or the frames around the playhead a Network binding reads, within `bytes`. */
+ *  window grown; or the frames ahead of the playhead a Network binding reads, within `bytes`. */
 export type FrameRequest = {
   readonly results: string
   readonly table: string
@@ -65,7 +65,14 @@ export type FrameRequest = {
   readonly range: TimeRange
 } & (
   | { readonly purpose: 'plot'; readonly columns: number; readonly since?: string }
-  | { readonly purpose: 'playhead'; readonly bytes: number }
+  | {
+      readonly purpose: 'playhead'
+      readonly bytes: number
+      /** Seconds of the run between the frames a view shows, the rate over the frames it shows a
+       *  second: of the frames stored, those last at or before each such time from `range[0]` go,
+       *  so no more frames go than show. 0 sends every frame stored. */
+      readonly step: number
+    }
 )
 
 export interface VisualizationRun {

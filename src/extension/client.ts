@@ -5,11 +5,9 @@ import type { CancellationToken } from 'vscode'
 
 import { terminateRuntime } from '../gridkit/index.js'
 import type {
-  CaseApi,
   FromWorker,
-  ResultsApi,
-  ResultsOptions,
   RuntimeProcess,
+  WorkerApi,
   WorkerEvent,
   WorkerOptions,
 } from '../shared/messages.js'
@@ -81,7 +79,6 @@ class Thread<A extends Api<A>> {
   #crashes: number[] = []
 
   constructor(
-    private readonly name: string,
     private readonly script: string,
     private readonly owner: Owner,
     /** Says a failure of what hears of the worker. */
@@ -140,14 +137,12 @@ class Thread<A extends Api<A>> {
     }
     worker.on('error', (error) =>
       stopped(
-        Object.assign(new Error(`The ${this.name} worker stopped: ${error.message}`), {
+        Object.assign(new Error(`Studio's worker stopped: ${error.message}`), {
           detail: error.stack,
         }),
       ),
     )
-    worker.on('exit', (code) =>
-      stopped(new Error(`The ${this.name} worker stopped (exit code ${code}).`)),
-    )
+    worker.on('exit', (code) => stopped(new Error(`Studio's worker stopped (exit code ${code}).`)))
     worker.on('message', (message: FromWorker) => {
       if (message.kind === 'reply') caller.settle(message)
       else this.owner.hear(message)
@@ -168,68 +163,53 @@ class Thread<A extends Api<A>> {
   }
 }
 
-/** The extension's two workers: the case worker, which reads case files as they change, started
- *  with `cases`, and the results worker, which runs GridKit and reads results files, started with
- *  `results`. Their bundles are in `folder`. What fails as it hears of them is said by `failed`. */
+/** The extension's worker, which reads case files as they change, runs GridKit and reads results
+ *  files, started with `options` from its bundle in `folder`. What fails as it hears of it is said
+ *  by `failed`. */
 export class Client {
   readonly event: Emitter<Exclude<WorkerEvent, { kind: 'process' }>>
-  /** The GridKit process of each run the results worker has under way, by the run's id, ended here
-   *  should the worker stop before it ends them. */
+  /** The GridKit process of each run the worker has under way, by the run's id, ended here should
+   *  the worker stop before it ends them. */
   readonly #owned = new Map<string, RuntimeProcess>()
-  readonly cases: Thread<CaseApi>
-  readonly results: Thread<ResultsApi>
+  readonly worker: Thread<WorkerApi>
 
   constructor(
     folder: string,
-    cases: Omit<WorkerOptions, 'wasmPath'>,
-    results: () => Omit<ResultsOptions, 'wasmPath'>,
+    options: () => Omit<WorkerOptions, 'wasmPath'>,
     failed: (error: unknown) => void,
   ) {
     const wasmPath = join(folder, 'webview', 'latkit.wasm')
     this.event = new Emitter(failed)
-    const owner = (release: () => Promise<void>): Owner => ({
-      hear: (event) => {
-        if (event.kind !== 'process') return this.event.fire(event)
-        if (event.process) this.#owned.set(event.run, event.process)
-        else this.#owned.delete(event.run)
+    this.worker = new Thread(
+      join(folder, 'worker.mjs'),
+      {
+        hear: (event) => {
+          if (event.kind !== 'process') return this.event.fire(event)
+          if (event.process) this.#owned.set(event.run, event.process)
+          else this.#owned.delete(event.run)
+        },
+        release: () => this.#terminate(),
       },
-      release,
-    })
-    this.cases = new Thread(
-      'case',
-      join(folder, 'cases.mjs'),
-      owner(async () => {}),
       failed,
-      () => ({ ...cases, wasmPath }),
-    )
-    this.results = new Thread(
-      'results',
-      join(folder, 'results.mjs'),
-      owner(() => this.#terminate()),
-      failed,
-      () => ({ ...results(), wasmPath }),
+      () => ({ ...options(), wasmPath }),
     )
   }
 
-  /** What the workers running hold. */
+  /** What the worker holds, while it runs. */
   async stats() {
-    const [cases, results] = await Promise.all([
-      this.cases.running ? this.cases.call('stats', {}) : undefined,
-      this.results.running ? this.results.call('stats', {}) : undefined,
-    ])
-    return { ...(cases && { cases }), ...(results && { results }) }
+    return this.worker.running ? this.worker.call('stats', {}) : undefined
   }
 
-  /** Ends every GridKit process the results worker started. */
+  /** Ends every GridKit process the worker started. */
   async #terminate() {
     const owned = [...this.#owned.values()]
     this.#owned.clear()
     await Promise.all(owned.map(terminateRuntime))
   }
 
-  /** Stops both workers, and every GridKit process the results worker started. */
+  /** Stops the worker, and every GridKit process it started. */
   async dispose() {
-    await Promise.all([this.cases.dispose(), this.results.dispose()])
+    await this.worker.dispose()
     await this.#terminate()
     this.event.dispose()
   }

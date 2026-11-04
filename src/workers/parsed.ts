@@ -1,4 +1,4 @@
-/** The cases the workers read from disk, and what they tell the extension of one. */
+/** The cases the worker reads from disk, and what they tell the extension of one. */
 
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -42,7 +42,7 @@ function placed(file: Uint8Array, error: unknown): unknown {
   })
 }
 
-/** How many bytes of cases, and how many cases, the case worker keeps of files let go of. */
+/** How many bytes of cases, and how many cases, the worker keeps of files let go of. */
 const KEPT_BYTES = 128 << 20
 const KEPT_CASES = 4
 

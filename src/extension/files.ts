@@ -1,11 +1,11 @@
-/** The case files Studio shows. The case worker reads each one whole from disk, and again whenever
+/** The case files Studio shows. The worker reads each one whole from disk, and again whenever
  *  it changes there, and Problems says what is wrong with it. Studio never writes a case. */
 
 import * as vscode from 'vscode'
 
 import { failedWith, type Problem, quiet, superseded } from '../shared/errors.js'
 import { type Element, revisionOf, type SourceRange, type Summary } from '../shared/messages.js'
-import { type Client, unsteady } from './client.js'
+import type { Client } from './client.js'
 import { diagnosed } from './report.js'
 
 /** How long a file rests after it changes before it is read again, so a save written in parts, or
@@ -13,12 +13,12 @@ import { diagnosed } from './report.js'
 const SETTLE_MS = 100
 
 /** `range` as VS Code takes one. */
-export const rangeOf = ({ start, end }: SourceRange) =>
+const rangeOf = ({ start, end }: SourceRange) =>
   new vscode.Range(start[0], start[1], end[0], end[1])
 
 /** A case file as Studio reads it: its last summary, whether the file has moved past it, and why
  *  the file does not read. */
-export interface CaseFile {
+interface CaseFile {
   readonly summary?: Summary
   readonly stale: boolean
   readonly error?: string
@@ -87,7 +87,7 @@ export class CaseFiles implements vscode.Disposable {
     this.#stop(entry)
     entry.watcher.dispose()
     this.diagnostics.delete(vscode.Uri.parse(uri))
-    if (this.client.cases.running) void this.client.cases.call('release', { uri }).catch(() => {})
+    if (this.client.worker.running) void this.client.worker.call('release', { uri }).catch(() => {})
     this.changed.fire(uri)
   }
 
@@ -112,7 +112,7 @@ export class CaseFiles implements vscode.Disposable {
     const selection =
       element &&
       rangeOf(
-        await this.client.cases.call('locate', {
+        await this.client.worker.call('locate', {
           ...revisionOf(await this.read(uri)),
           ...element,
         }),
@@ -130,23 +130,15 @@ export class CaseFiles implements vscode.Disposable {
     )
   }
 
-  /** A new case worker reads every file again, unless reading one may be what stopped the last:
-   *  then each waits until its file changes. Returns why, to say once. */
-  restart(error: Error): Error {
-    const retry = this.client.cases.steady
-    const why = unsteady(error, 'reads each case again once its file changes.')
+  /** The worker stopped with `error`: a new one reads every file again, unless reading one may be
+   *  what stopped it, when `failed` says so, and each waits until its file changes. */
+  restart(error: Error, failed?: Error): void {
     for (const [uri, entry] of this.#entries) {
       this.#stop(entry)
-      Object.assign(entry, {
-        checked: undefined,
-        stale: true,
-        error: error.message,
-        failed: retry ? undefined : why,
-      })
+      Object.assign(entry, { checked: undefined, stale: true, error: error.message, failed })
       this.changed.fire(uri)
-      if (retry) void this.read(uri).catch(() => {})
+      if (!failed) void this.read(uri).catch(() => {})
     }
-    return retry ? error : why
   }
 
   /** Lets go of what `entry` does now: its read, its check, and its wait to read again. */
@@ -184,7 +176,7 @@ export class CaseFiles implements vscode.Disposable {
     clearTimeout(entry.timer)
     const reading = (entry.reading = new AbortController())
     const current = () => this.#entries.get(uri) === entry && !reading.signal.aborted
-    const pending: Promise<Summary> = this.client.cases
+    const pending: Promise<Summary> = this.client.worker
       .call('read', { uri, version: ++this.#version }, reading.signal)
       .then(
         (read) => {
@@ -234,7 +226,7 @@ export class CaseFiles implements vscode.Disposable {
     entry.checking?.abort()
     const checking = (entry.checking = new AbortController())
     entry.checked = summary.version
-    void this.client.cases.call('validate', revisionOf(summary), checking.signal).then(
+    void this.client.worker.call('validate', revisionOf(summary), checking.signal).then(
       (issues) => {
         if (checking.signal.aborted || this.#entries.get(uri) !== entry) return
         this.diagnostics.set(

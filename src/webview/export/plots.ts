@@ -10,7 +10,7 @@ import { plotScene } from '../scenes.js'
 import { nativeTheme } from '../theme.js'
 
 /** Views of the Monitor's plots, drawn only into pictures. */
-export interface PlotViews {
+interface PlotViews {
   /** Each plot's view, in the region of the picture it draws in. */
   readonly placed: ReadonlyArray<{ readonly view: View; readonly region: Rect }>
   /** Lets go of the views and the frames they draw. */

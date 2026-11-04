@@ -13,9 +13,9 @@ import type { Span } from './offsets.js'
 import { sourceRange, textOffset } from './places.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
-/** An issue where gridkit finds it: a span of the file's text, which the case worker places by line
+/** An issue where gridkit finds it: a span of the file's text, which the worker places by line
  *  and character. */
-export type Finding = Span & Omit<Issue, 'start' | 'end'>
+type Finding = Span & Omit<Issue, 'start' | 'end'>
 
 /** Each case's findings, which every caller shares of the same immutable source. */
 const diagnoses = new WeakMap<Case, Finding[]>()

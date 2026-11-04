@@ -98,8 +98,6 @@ export function viewOf(id: string): View | undefined {
 
 /** A GridKit case, by its file's name. */
 export const CASE_FILE = /\.case\.json$/i
-/** The same, as a glob for document selectors. */
-export const CASE_GLOB = '**/*.case.json'
 /** Whether the views follow the case at `uri`, and Studio saves what they show of it: a case file
  *  on disk, never a copy another extension shows, as Git does of an older version. */
 export const followed = (uri: string) => uri.startsWith('file:') && CASE_FILE.test(uri)

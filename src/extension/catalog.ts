@@ -1,5 +1,5 @@
-/** The catalog of GridKit's classes the Catalog setting names, which the workers read in place of
- *  the bundled one as they start. */
+/** The catalog of GridKit's classes the Catalog setting names, which the worker reads in place of
+ *  the bundled one as it starts. */
 
 import { readFileSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
@@ -10,7 +10,7 @@ import { catalogOf } from '../gridkit/index.js'
 import { message } from '../shared/errors.js'
 import { setting } from './settings.js'
 
-/** The catalog the setting names, checked as the workers read it: none when it names none, or when
+/** The catalog the setting names, checked as the worker reads it: none when it names none, or when
  *  the file does not read, which `report` hears. A relative path resolves against the first
  *  workspace folder. */
 export function catalogFile(report: (error: unknown) => void): unknown {

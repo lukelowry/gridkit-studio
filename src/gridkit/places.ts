@@ -27,10 +27,10 @@ export function nested<T>(read: () => T): T {
 }
 
 /** The tree of a record's `text`. */
-export const treeOf = (text: string) => nested(() => parseTree(text)!)
+const treeOf = (text: string) => nested(() => parseTree(text)!)
 
 /** Where a field's value is in its record's JSON. */
-export function nativePath(field: FieldPlan): string[] {
+function nativePath(field: FieldPlan): string[] {
   const source = field.source
   switch (source.kind) {
     case 'identity':
@@ -54,7 +54,7 @@ export function nativePath(field: FieldPlan): string[] {
 }
 
 /** The record of row `id`: its table and row, its JSON text, and that text's offset in the file. */
-export function recordOf(kase: Case, id: Entity) {
+function recordOf(kase: Case, id: Entity) {
   const located = kase.locate(id)
   if (!located) throw problem('invalid-input', 'This element no longer exists.')
   return recordAt(kase, located.table, located.row)
@@ -63,7 +63,7 @@ export function recordOf(kase: Case, id: Entity) {
 /** The record of `row` of `table`, as `recordOf` gives it, found by its place alone. The case's own
  *  row is no record: its fields are in its `header` and `params`, each read alone, as `placeOf`
  *  finds them, and the row stands in its header. */
-export function recordAt(kase: Case, table: Table, row: number) {
+function recordAt(kase: Case, table: Table, row: number) {
   if (table.shape.array === null) {
     const header = objectOf(kase, 'header')
     return { table, row, text: header?.text ?? '', offset: header?.offset ?? 0 }
@@ -73,7 +73,7 @@ export function recordAt(kase: Case, table: Table, row: number) {
 }
 
 /** The JSON text of the record of `row` of `table`, a table whose rows are records. */
-export function recordText(kase: Case, table: Table, row: number): string {
+function recordText(kase: Case, table: Table, row: number): string {
   const array = kase.arrays[table.shape.array!]!
   const record = table.records[row]!
   return decoder.decode(kase.file.subarray(array.starts[record]!, array.ends[record]!))

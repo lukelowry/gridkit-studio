@@ -1,5 +1,5 @@
 import type { RecordedField, TimeRange } from './data.js'
-import type { CaseSource, Revision } from './messages.js'
+import type { Revision } from './messages.js'
 
 /** Where GridKit runs: installed here, else in a container of an image. */
 export interface GridKit {
@@ -14,7 +14,7 @@ export interface GridKit {
   readonly cli: string
 }
 
-/** A running simulation, which the extension stops if the results worker cannot. */
+/** A running simulation, which the extension stops if the worker cannot. */
 export interface RuntimeProcess {
   pid: number
   executable: string
@@ -88,9 +88,9 @@ export interface Run {
   message?: string
 }
 
-/** A run on a solver file, with what Studio read of it and of its case, which the results are read
- *  against. */
-export interface RunRequest extends CaseSource {
+/** A run on a solver file, with what Studio read of it, of the case at the revision its results are
+ *  read against. */
+export interface RunRequest extends Revision {
   /** The run's id. */
   run: string
   /** The id of the results the run writes, which the extension then holds. */

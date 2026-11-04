@@ -42,15 +42,15 @@ describe('errors for people and for the log', () => {
     expect(cancelled(undefined)).toBe(false)
     for (const code of ['superseded', 'results-closed', 'cancelled', 'results-lost'] as const)
       expect(quiet(problem(code, 'Nothing failed.'))).toBe(true)
-    expect(quiet(problem('case-changed', 'Read the case again.'))).toBe(false)
+    expect(quiet(problem('invalid-input', 'Read the case again.'))).toBe(false)
   })
 
   it('keeps a code, and what comes with it, across a channel', () => {
     const range = { start: [4, 0], end: [4, 2] }
-    const made = problem('case-changed', 'Read the case again.', { range })
-    expect(failedWith(made, 'case-changed')).toBe(true)
+    const made = problem('invalid-input', 'Read the case again.', { range })
+    expect(failedWith(made, 'invalid-input')).toBe(true)
     const crossed = errorOf(problemOf(made))
-    expect(crossed).toMatchObject({ message: 'Read the case again.', code: 'case-changed', range })
+    expect(crossed).toMatchObject({ message: 'Read the case again.', code: 'invalid-input', range })
     expect(problemOf(new Error('No code.')).code).toBe('operation-failed')
     expect(errorOf(problemOf(new DOMException('Gone', 'AbortError')))).toMatchObject({
       name: 'AbortError',

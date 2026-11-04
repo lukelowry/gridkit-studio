@@ -1,5 +1,5 @@
-/** The VS Code under test: the extension and a case, driven from inside through the extension's
- *  exports and from outside by Playwright over the window's DevTools port. */
+/** The VS Code under test: the host tests' bench, driven from outside too, by Playwright over the
+ *  window's DevTools port. */
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -13,10 +13,10 @@ import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
-import { contextKey } from '../../src/shared/ids.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
-import { type Keys, type Manifest, Menus } from '../menus.js'
-import { withMons } from '../mons.js'
+import { Bench, extension, folder } from '../host/studio.js'
+
+export { extension, folder, type Solver } from '../host/studio.js'
 
 const TIMEOUT = 30_000
 /** How long a read of what the page shows now waits for it: a moment, not a timeout. */
@@ -28,18 +28,6 @@ const SYNTHETIC = 'Synthetic waveform.csv'
  *  in front. */
 export type TitleBar = 'case' | 'monitor' | 'signals' | 'export' | 'editor'
 
-/** A solver file's members, besides the case it names. */
-export type Solver = Record<string, unknown>
-
-/** The solver file `name.solver.json` for the case `name.case.json` beside it: its own members,
- *  writing its samples to `output/name.csv`, as the samples' solver files do. */
-export const solverText = (name: string, solver: Solver) =>
-  JSON.stringify(
-    { system_model_file: name + '.case.json', output_file: 'output/' + name + '.csv', ...solver },
-    null,
-    4,
-  ) + '\n'
-
 /** The window size every suite starts from. */
 export const VIEWPORT = { width: 1600, height: 1000 }
 
@@ -47,7 +35,9 @@ export const VIEWPORT = { width: 1600, height: 1000 }
 export const VM = { table: 'Bus', field: 'Vm' } as const
 
 /** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
- *  once the wait fails, what it found instead. */
+ *  once the wait fails, what it found instead. Unlike the bench's own wait, it asks every moment,
+ *  as a page's state comes with no event of Studio's, and it waits on what comes before Studio
+ *  starts. */
 export async function until<T>(
   get: () => Promise<T> | T,
   label: string | (() => Promise<string> | string),
@@ -161,16 +151,6 @@ export const simpleDialog = (on: true | undefined) =>
     .getConfiguration()
     .update('files.simpleDialog.enable', on, vscode.ConfigurationTarget.Global)
 
-/** The test workspace folder, which holds the case. */
-export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
-
-/** GridKit Studio as installed in this VS Code. */
-export function extension(): vscode.Extension<{ studio: Sessions }> {
-  const found = vscode.extensions.getExtension<{ studio: Sessions }>('lukelowery.gridkit-studio')
-  assert.ok(found, 'GridKit Studio must be installed and enabled')
-  return found
-}
-
 /** Playwright on the VS Code window the tests run in. */
 async function attach(): Promise<{ browser: Browser; page: Page }> {
   const [port] = (
@@ -189,27 +169,17 @@ const PANELS = {
   export: 'gridkitStudio.exportVideo',
 } as const
 
-export class TestHost {
-  /** The case's file as the suites found it, and as each suite starts. */
-  readonly text: string
-  /** The solver file beside the case, as the suites found it, and as each suite starts. */
-  readonly solverText: string
-  /** That case, parsed. */
-  readonly source: {
-    buses: { number: number; name: string; params: { kv: number } }[]
-    devices: { class: string; id: string }[]
-  }
+/** The bench, with the window's pages in reach: its views, menus and prompts as the user meets
+ *  them, and what they drew. */
+export class TestHost extends Bench {
   /** What the run measured, written beside the screenshots when it ends. */
   readonly report: Record<string, unknown>
   /** Errors Studio's own pages threw. */
   readonly errors: string[] = []
   /** Errors VS Code's own code threw in its pages, kept in the report: VS Code's to fix. */
   readonly vscodeErrors: string[] = []
-  /** Where the installed manifest places Studio's commands. */
-  readonly menus: Menus
 
   private constructor(
-    readonly extension: vscode.Extension<{ studio: Sessions }>,
     readonly browser: Browser,
     /** The VS Code window. */
     readonly page: Page,
@@ -218,15 +188,13 @@ export class TestHost {
     readonly output: string,
     solver: string,
   ) {
-    this.text = text
-    this.solverText = solver
-    this.source = JSON.parse(this.text)
+    super(text, solver)
+    const { packageJSON } = extension()
     this.report = {
       vscodeVersion: vscode.version,
-      extensionVersion: extension.packageJSON.version,
-      latkit: extension.packageJSON.dependencies,
+      extensionVersion: packageJSON.version,
+      latkit: packageJSON.dependencies,
     }
-    this.menus = new Menus(extension.packageJSON as Manifest)
     page.on('pageerror', (error) => {
       const text = error.stack ?? error.message
       // Studio's pages run its own bundles; anything else threw in VS Code's code.
@@ -234,17 +202,17 @@ export class TestHost {
     })
   }
 
-  static async start(): Promise<TestHost> {
+  static override async start(): Promise<TestHost> {
     const installed = extension()
     const uri = vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
+    // Playwright sees only the frames that attach once it connects, so it connects before any view
+    // opens: a view opened before it, even one closed and opened again, it may never see.
+    const { browser, page } = await attach()
     const started = performance.now()
     // Opening a case is what activates the extension; nothing here calls activate().
     await vscode.commands.executeCommand('vscode.open', uri)
     await until(() => installed.isActive, 'a case opening activates the extension')
     const openCaseMs = performance.now() - started
-    const { browser, page } = await attach()
-    // Playwright sees only the frames that attach once it connects, so the views open after it.
-    await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     const output = process.env.GRIDKIT_TEST_OUTPUT!
     await mkdir(join(output, 'playwright'), { recursive: true })
     await mkdir(join(output, 'tests'), { recursive: true })
@@ -253,27 +221,9 @@ export class TestHost {
       vscode.Uri.joinPath(folder(), 'IEEE39.solver.json').fsPath,
       'utf8',
     )
-    const bench = new TestHost(installed, browser, page, text, output, solver)
+    const bench = new TestHost(browser, page, text, output, solver)
     bench.report.openCaseMs = openCaseMs
     return bench
-  }
-
-  get studio(): Sessions {
-    return this.extension.exports.studio
-  }
-  get uri(): vscode.Uri {
-    return vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
-  }
-  /** The case's key among the sessions. */
-  get key(): string {
-    return this.uri.toString()
-  }
-  get session() {
-    return this.studio.get(this.key)!
-  }
-  /** The solver file beside the case, which runs it. */
-  get solver(): vscode.Uri {
-    return vscode.Uri.joinPath(folder(), 'IEEE39.solver.json')
   }
 
   /** Every frame of every VS Code page, webviews' included. */
@@ -364,43 +314,6 @@ export class TestHost {
     return this.view(kind)
   }
 
-  /** Whether every element of `type` lists `field` in the case `uri` as the worker last read it. */
-  recorded(type: string, field: string, uri = this.uri): boolean {
-    const summary = this.studio.state(uri.toString()).summary
-    const count = summary?.recording.listed[type]?.[field] ?? 0
-    return count > 0 && count === summary?.counts[type]
-  }
-
-  /** Make every element of `type` in the case `uri` list `fields` among its outputs and no other,
-   *  their `mon` lists written into its file as a user writes them, and wait for the case to read
-   *  so. */
-  async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
-    const key = uri.toString()
-    const summary = await this.studio.files.read(key)
-    const sampled = summary.definition.tables
-      .find((table) => table.name === type)!
-      .fields.filter((field) => field.kind === 'sampled')
-      .map((field) => field.name)
-    const listed = withMons(await readFile(uri.fsPath, 'utf8'), ({ type: of, mon }) =>
-      of === type ? [...mon.filter((name) => !sampled.includes(name)), ...fields] : undefined,
-    )
-    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(listed))
-    await until(
-      () =>
-        sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
-        !this.studio.state(key).stale,
-      `${type} records ${fields.join(', ')}`,
-    )
-  }
-
-  /** Write the solver file beside the case `uri`, its members `solver`. */
-  async writeSolver(solver: Solver, uri = this.uri): Promise<vscode.Uri> {
-    const name = basename(uri.path).replace(/\.case\.json$/i, '')
-    const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
-    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(solverText(name, solver)))
-    return file
-  }
-
   /** A playback item of the status bar by the start of its name: Previous sample, Play, Pause,
    *  Replay, Next sample, Time, Speed, Go to end or Go live. */
   playback(name: string): Locator {
@@ -413,17 +326,6 @@ export class TestHost {
   //
   // The manifest decides what each title bar and menu offers, and the command runs with what
   // VS Code passes it there, without waiting on a popup VS Code may drop.
-
-  /** The context keys VS Code holds for title bars and the Command Palette: Studio's own, and the
-   *  workspace's trust. */
-  keys(): Keys {
-    return {
-      ...Object.fromEntries(
-        [...this.studio.contexts].map(([key, value]) => [contextKey(key), value]),
-      ),
-      isWorkspaceTrusted: vscode.workspace.isTrusted,
-    }
-  }
 
   /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
    *  there and enabled. */
@@ -458,29 +360,17 @@ export class TestHost {
       },
     )
     // An editor's title bar gives its command the editor's file; a view's gives nothing.
-    if (where === 'editor') this.#run(command, (editor() as vscode.TabInputCustom).uri)
-    else this.#run(command)
+    if (where === 'editor') this.command(command, (editor() as vscode.TabInputCustom).uri)
+    else this.command(command)
   }
 
-  /** Run the solver file `solver` from its Explorer menu, as `item` names the program: what a user
-   *  does to run GridKit. What keeps a run from starting is said in a notification. */
-  run(item = 'Run Dynamic Simulation', solver = this.solver): void {
-    this.explorer(solver, item)
-  }
-
-  /** Choose `item` from the Explorer's menu on the file `uri`. */
-  explorer(uri: vscode.Uri, item: string): void {
+  /** Choose `item` from the Explorer's menu on the file `uri`, the solver file unless given, as a
+   *  user runs GridKit on a solver file: without waiting on it. What keeps a run from starting is
+   *  said in a notification. */
+  explorer(item: string, uri = this.solver): void {
     const keys = { ...this.keys(), resourceFilename: basename(uri.path) }
     const { command } = this.menus.find('explorer/context', item, keys)
-    this.#run(command, uri, [uri])
-  }
-
-  /** Run `command` as VS Code does from a menu: without waiting on it, as one that asks something
-   *  waits for its answer. A command's failure is reported, which fails the test. */
-  #run(command: string, ...args: unknown[]): void {
-    void vscode.commands
-      .executeCommand(command, ...args)
-      .then(undefined, (error: unknown) => this.studio.reporter.error(error))
+    this.command(command, uri, [uri])
   }
 
   // ── VS Code's own prompts, answered from the keyboard ──
@@ -544,15 +434,6 @@ export class TestHost {
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
   }
 
-  /** Wait until the views' case reads as its file holds it now. */
-  async settled(): Promise<void> {
-    const { fingerprint } = await this.studio.files.read(this.key)
-    await until(() => {
-      const state = this.studio.state(this.key)
-      return !state.stale && state.summary?.fingerprint === fingerprint
-    }, 'the case reads as its file')
-  }
-
   /** Results to play: a second of every bus's voltage, each a little out of step with the last,
    *  shown with the first bus's plotted. Those on show, or, once others took their place, the file
    *  read anew. */
@@ -598,17 +479,6 @@ export class TestHost {
     this.session.setPlots([{ from: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
   }
 
-  /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
-   *  without it. */
-  async gridkit(): Promise<boolean> {
-    const runtime = available(gridkitOf(this.uri))
-    if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtime
-    return runtime.then(
-      () => true,
-      () => false,
-    )
-  }
-
   /** Which GridKit the runs use: the image's ID, which stays the same however its tags move, or the
    *  installed program. Runs on different builds time different simulations. */
   async gridkitBuild(): Promise<string> {
@@ -626,41 +496,22 @@ export class TestHost {
 
   /** Back to the case alone in its Network editor: its file as found, nothing selected or mapped,
    *  its clock at rest. */
-  async reset(): Promise<void> {
+  override async reset(): Promise<void> {
     // A prompt a test left asking holds its command open, and would take the next one's keys.
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
-    // A run under way is stopped.
-    if (this.session?.running) {
-      this.session.stop()
-      await until(() => !this.session.running, 'the run stops')
-    }
-    if ((await readFile(this.uri.fsPath, 'utf8')) !== this.text)
-      await vscode.workspace.fs.writeFile(this.uri, new TextEncoder().encode(this.text))
-    if ((await readFile(this.solver.fsPath, 'utf8')) !== this.solverText)
-      await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
+    await this.restore()
     await this.open()
     await this.settled()
     await vscode.commands.executeCommand('workbench.action.closeEditorsInOtherGroups')
     await vscode.commands.executeCommand('workbench.action.closeOtherEditors')
     const { session } = this
-    session.select()
-    session.setPlots([])
-    for (const { table, field } of Object.values(session.bindings))
-      session.bind({ table, field }, [])
-    session.setFraming(undefined)
-    session.setTable({
-      type: undefined,
-      columns: undefined,
-      order: undefined,
-      filter: undefined,
-      equal: undefined,
-    })
+    this.clean(session)
     session.show(undefined)
-    session.transport.setRate(1)
   }
 
   /** Keep what every view showed when `test` failed, with the files of its results. */
   async failed(test: string): Promise<void> {
+    const session = this.studio.get(this.key)
     for (const frame of this.#frames())
       console.error(
         'View lifecycle:',
@@ -672,10 +523,10 @@ export class TestHost {
     console.error('Studio failures:', this.studio.reporter.errors)
     console.error('Case state:', JSON.stringify(this.studio.state(this.key)).slice(0, 2000))
     // A run the test left going would slow every test after it.
-    this.session?.stop()
+    session?.stop()
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
-    const { run, results } = this.session ?? {}
+    const { run, results } = session ?? {}
     if (run || results) {
       const directory = join(this.output, 'tests', name, results?.id ?? run!.id)
       await mkdir(directory, { recursive: true })

@@ -1,57 +1,47 @@
-/** The case worker: each case file Studio shows, read whole from disk, and what the views and the
- *  extension read of it. A file changed on disk is read again whole; one written again as it was
- *  keeps its case. Results files and runs have a worker of their own. */
+/** The worker's case files: each case file Studio shows, read whole from disk, and what the views
+ *  and the extension read of it. A file changed on disk is read again whole; one written again as
+ *  it was keeps its case. */
 
 import { fileURLToPath } from 'node:url'
-import { workerData } from 'node:worker_threads'
 
-import type { ProjectedDocument } from '../gridkit/document.js'
-import {
-  type Case,
-  catalog as bundled,
-  catalogOf,
-  diagnose,
-  rangeIn,
-  sourceRange,
-} from '../gridkit/index.js'
+import type { Catalog } from '../gridkit/definition.js'
+import { type Case, diagnose, rangeIn, sourceRange } from '../gridkit/index.js'
 import { networkSelectionOf } from '../gridkit/inspection.js'
-import { CaseQueries, projectionPage } from '../gridkit/projection.js'
+import { CaseQueries } from '../gridkit/projection.js'
 import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
-import type { CaseApi, Revision, Summary, WorkerOptions } from '../shared/messages.js'
-import { loadNative } from './native.js'
+import type { Revision, Summary, WorkerApi } from '../shared/messages.js'
+import type { Handlers } from '../shared/rpc.js'
 import { nameOf, readCase, Recent, summarize } from './parsed.js'
-import { memory, serve } from './serve.js'
 
-/** A file as last read: its case, what the extension was told of it, and the stamp of the file it
- *  was read from, once the file had rested before it. */
-interface Read {
+/** A file as last read: its case, what the extension was told of it, the stamp of the file it was
+ *  read from, once the file had rested before it, and the queries of its tables, once asked. */
+export interface Read {
   readonly kase: Case
   readonly summary: Summary
   stamp?: Stamp
   queries?: CaseQueries
-  projection?: ProjectedDocument
 }
 
-await loadNative((workerData as WorkerOptions).wasmPath)
+/** The case files the extension follows, each read with `catalog`. */
+export function caseFiles(catalog: Catalog) {
+  /** Each file followed: as last read, and the read of it under way, which a newer read takes the
+   *  place of. */
+  const files = new Map<string, { read?: Read; reading?: object }>()
+  /** Files let go of, kept a while, so one opened again as it was reads nothing. */
+  const recent = new Recent<Read>()
 
-const chosen = (workerData as WorkerOptions | null)?.catalog
-const catalog = chosen === undefined ? bundled : catalogOf(chosen)
-/** Each file the extension follows: as last read, and the read of it under way, which a newer
- *  read takes the place of. */
-const files = new Map<string, { read?: Read; reading?: object }>()
-/** Files let go of, kept a while, so one opened again as it was reads nothing. */
-const recent = new Recent<Read>()
+  /** The case read at `revision`; superseded once the file reads otherwise. */
+  function latest({ uri, version }: Revision): Read {
+    const read = files.get(uri)?.read
+    if (read?.summary.version !== version) throw superseded()
+    return read
+  }
 
-/** The case read at `revision`; superseded once the file reads otherwise. */
-function latest({ uri, version }: Revision): Read {
-  const read = files.get(uri)?.read
-  if (read?.summary.version !== version) throw superseded()
-  return read
-}
-
-serve<CaseApi>(
-  {
+  const handlers: Pick<
+    Handlers<WorkerApi>,
+    'read' | 'validate' | 'networkSelection' | 'locate' | 'page' | 'release'
+  > = {
     async read({ uri, version }, signal) {
       let file = files.get(uri)
       if (!file) files.set(uri, (file = { read: recent.take(uri) }))
@@ -97,20 +87,11 @@ serve<CaseApi>(
       const { kase } = latest(input)
       return rangeIn(kase.file, sourceRange(kase, input, input.field))
     },
-    async project(input, signal) {
-      const read = latest(input)
-      const document = (read.projection ??= read.kase.projected())
-      const page = await projectionPage(document, input.fields, input.cursor, signal)
-      if (latest(input) !== read) throw superseded()
-      return page
-    },
-    async page(input, signal) {
-      const read = latest(input)
-      const queries = (read.queries ??= new CaseQueries(
-        (read.projection ??= read.kase.projected()),
-      ))
-      const page = await queries.page(input.request, signal)
-      if (latest(input) !== read) throw superseded()
+    async page({ revision, request }, signal) {
+      const read = latest(revision)
+      const queries = (read.queries ??= new CaseQueries(read.kase.projected()))
+      const page = await queries.page(request, signal)
+      if (latest(revision) !== read) throw superseded()
       return page
     },
     async release({ uri }) {
@@ -124,13 +105,20 @@ serve<CaseApi>(
       }
       return null
     },
-    stats: async () => ({ memory: memory(), cases: files.size }),
-  },
-  ['project', 'page'],
-  // Problems fills in once the views have what they wait on.
-  ['validate'],
-)
+  }
 
-process.once('exit', () => {
-  for (const file of files.values()) file.read?.queries?.destroy()
-})
+  return {
+    latest,
+    handlers,
+    /** The file at `uri` as last read, while it is followed. */
+    read: (uri: string): Read | undefined => files.get(uri)?.read,
+    /** How many files it follows. */
+    get count() {
+      return files.size
+    },
+    /** Lets go of every table's queries, as the worker ends. */
+    dispose() {
+      for (const file of files.values()) file.read?.queries?.destroy()
+    },
+  }
+}

@@ -25,7 +25,7 @@ interface Rows {
 
 /** The words a Monitored Signals row's `contextValue` holds, which its menu items match: it is a
  *  field, the case records it, a network channel can show it, and one does. */
-export const SIGNAL_WORDS = ['field', 'recorded', 'mappable', 'mapped'] as const
+const SIGNAL_WORDS = ['field', 'recorded', 'mappable', 'mapped'] as const
 
 /** A Monitored Signals field row's `contextValue`. */
 export function signalContext(

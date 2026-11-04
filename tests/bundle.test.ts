@@ -19,8 +19,7 @@ it('ships the exact native runtime with self-contained bundles', () => {
     )
   for (const file of [
     'extension.cjs',
-    'cases.mjs',
-    'results.mjs',
+    'worker.mjs',
     'licenses/latkit-NOTICES.md',
     'licenses/latkit-THIRD_PARTY.md',
   ])

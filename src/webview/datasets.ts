@@ -1,6 +1,6 @@
 import { Data } from 'latkit'
 
-export interface DatasetVersion {
+interface DatasetVersion {
   readonly key: string
   readonly data: Data
 }

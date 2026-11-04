@@ -2,7 +2,7 @@
 **
 !assets/{gridkit.png,gridkit.svg,monitor.svg,walkthrough.md}
 !dist/extension.cjs
-!dist/{cases,results}.mjs
+!dist/worker.mjs
 !dist/webview/*.{js,css,wasm}
 !dist/webview/maps/*.geojson.gz
 !dist/licenses/*.md

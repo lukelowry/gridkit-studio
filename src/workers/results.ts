@@ -4,8 +4,8 @@
  *  nothing holds rests under the one budget of what the worker keeps, so the same file opened
  *  again reads nothing, and a store read through outlives the worker, so a window opened again
  *  reads its results without their CSV. A case is kept only while a file read now, or a run under
- *  way, reads it. Apart from the case worker, neither a long run nor a large file slows editing,
- *  nor editing a seek. */
+ *  way, reads it, each read from its file. Apart from the case worker, neither a long run nor a
+ *  large file slows the views of a case, nor a case read again a seek. */
 
 import { stat } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -25,7 +25,7 @@ import type {
   Run,
 } from '../shared/messages.js'
 import { loadNative } from './native.js'
-import { nameOf, summarize } from './parsed.js'
+import { nameOf, readCase, summarize } from './parsed.js'
 import { memory, send, serve } from './serve.js'
 
 /** How many lines, and characters, of a run the log hears each LOG_MS, besides the errors that say
@@ -62,14 +62,16 @@ function reading(): { readonly uri: string; readonly kase: Case }[] {
 }
 
 /** The case `source` names, as a file read now or a run under way reads it; else read from its
- *  text, which the extension sends again when asked. Nothing else keeps a case: it goes with the
- *  last that reads it. */
-async function caseOf({ uri, fingerprint, text }: CaseSource, signal: AbortSignal) {
+ *  file, which must hold what the fingerprint names: changed since the extension read it, the
+ *  extension reads it again and asks again. Nothing else keeps a case: it goes with the last that
+ *  reads it. */
+async function caseOf({ uri, fingerprint }: CaseSource, signal: AbortSignal) {
   const known = reading().find((user) => user.uri === uri && user.kase.version === fingerprint)
   if (known) return known.kase
-  if (text === undefined)
-    throw problem('needs-source', 'The results worker has yet to read this case.')
-  return Case.parse(text, catalog, nameOf(uri), signal)
+  const kase = await readCase(uri, catalog, signal)
+  if (kase.version !== fingerprint)
+    throw problem('case-changed', `${nameOf(uri)} changed since GridKit Studio read it.`)
+  return kase
 }
 
 /** The file the results `id` hold, while the extension holds them. */

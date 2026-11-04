@@ -6,7 +6,7 @@
 [![Release](https://img.shields.io/github/v/release/lukelowry/gridkit-studio?include_prereleases)](https://github.com/lukelowry/gridkit-studio/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-View, edit, and simulate [GridKit](https://github.com/ORNL/GridKit) power-system cases in VS Code.
+View and simulate [GridKit](https://github.com/ORNL/GridKit) power-system cases in VS Code.
 
 ![ACTIVSg70k with bus voltage level shown as height and color](docs/media/activsg70k.png)
 
@@ -38,20 +38,20 @@ docker pull ghcr.io/birchfieldresearchgroup/gridkit:develop-perf
 
 Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
 
-- **Monitored Signals** chooses what the case records. Right-click a signal there to plot it, or to map it onto the network.
+- **Monitored Signals** shows what the case records. Right-click a signal there to plot it, or to map it onto the network.
 - **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
 - **Open Results…** in the Monitor shows any other CSV GridKit wrote.
 
 ## Features
 
-- Network editor
-- Case panel for editing, sorting and filtering fields, and mapping them onto the network. What you select in the table shows on the network, and the other way around.
+- Network view
+- Case panel for sorting and filtering fields, and mapping them onto the network. What you select in the table shows on the network, and the other way around.
 
 ![ACTIVSg25k during a fault with voltage magnitude shown as color and height](docs/media/activsg25k.png)
 
 _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
-- Diagram editor for control blocks and how they're wired
+- Diagram of control blocks and how they're wired
 
 ![An IEEE39 generator with its exciter and stabilizer in the diagram](docs/media/diagram.png)
 

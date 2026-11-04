@@ -11,10 +11,10 @@ import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
 import { available } from '../../src/gridkit/index.js'
-import { menuContext, type Target } from '../../src/shared/contexts.js'
 import { contextKey } from '../../src/shared/ids.js'
 import type { Run } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
+import { withMons } from '../mons.js'
 
 /** How long a wait lasts before it fails: Studio answers a change in far less. */
 const WAIT = 10_000
@@ -74,9 +74,7 @@ export function until<T>(
     const subscriptions = [
       studio.changed.event,
       studio.clock.event,
-      studio.documents.changed.event,
-      vscode.workspace.onDidChangeTextDocument,
-      vscode.workspace.onDidSaveTextDocument,
+      studio.files.changed.event,
       vscode.languages.onDidChangeDiagnostics,
       vscode.window.tabGroups.onDidChangeTabs,
     ].map((event) => event(() => void ask()))
@@ -100,56 +98,45 @@ const solverText = (name: string, solver: Solver) =>
     4,
   ) + '\n'
 
-/** IEEE39, the case every suite starts from, followed alone with its source as found. */
+/** The text of the file at `uri` as it is on disk. */
+const textOf = (uri: vscode.Uri) => readFile(uri.fsPath, 'utf8')
+
+/** IEEE39, the case every suite starts from, followed alone with its file as found. */
 export class Bench {
-  /** The case's source as found. */
+  /** The case's file as found. */
   readonly text: string
   /** Its solver file as found. */
   readonly solverText: string
-  /** That source, parsed. */
+  /** That case, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
     devices: { class: string; id: string; ports?: Record<string, number | string | null> }[]
   }
   /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
-  #document: vscode.TextDocument
 
-  private constructor(document: vscode.TextDocument, solver: string) {
-    this.#document = document
-    this.text = document.getText()
+  private constructor(text: string, solver: string) {
+    this.text = text
     this.solverText = solver
     this.source = JSON.parse(this.text)
     this.menus = new Menus(extension().packageJSON as Manifest)
   }
 
   static async start(): Promise<Bench> {
-    const uri = vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
-    const document = await vscode.workspace.openTextDocument(uri)
+    const text = await textOf(vscode.Uri.joinPath(folder(), 'IEEE39.case.json'))
     await extension().activate()
-    const solver = await readFile(
-      vscode.Uri.joinPath(folder(), 'IEEE39.solver.json').fsPath,
-      'utf8',
-    )
-    return new Bench(document, solver)
+    const solver = await textOf(vscode.Uri.joinPath(folder(), 'IEEE39.solver.json'))
+    return new Bench(text, solver)
   }
 
   get studio(): Sessions {
     return extension().exports.studio
   }
   get uri(): vscode.Uri {
-    return this.#document.uri
+    return vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
   }
   get key(): string {
     return this.uri.toString()
-  }
-  /** The case's document as VS Code holds it now. One no editor showed for a while VS Code closes,
-   *  and opens again as another. */
-  get document(): vscode.TextDocument {
-    this.#document =
-      vscode.workspace.textDocuments.find((open) => open.uri.toString() === this.key) ??
-      this.#document
-    return this.#document
   }
   get session(): Session {
     const session = this.studio.get(this.key)
@@ -166,32 +153,23 @@ export class Bench {
   }
 
   /** Follow the case, as opening it does. */
-  async follow(uri = this.uri): Promise<Session> {
-    return this.studio.open(await vscode.workspace.openTextDocument(uri))
+  follow(uri = this.uri): Promise<Session> {
+    return this.studio.open(uri.toString())
   }
 
-  /** Wait until the case Studio holds is the document's own revision. */
-  settled(): Promise<unknown> {
-    return until(() => {
-      const state = this.studio.state(this.key)
-      return state.summary?.version === this.document.version && !state.stale
-    }, 'the case follows its document')
+  /** Wait until Studio reads the case at `uri` as its file holds it now. */
+  async settled(uri = this.uri): Promise<void> {
+    const key = uri.toString()
+    const { fingerprint } = await this.studio.files.read(key)
+    await until(() => {
+      const state = this.studio.state(key)
+      return !state.stale && state.summary?.fingerprint === fingerprint
+    }, 'the case reads as its file')
   }
 
-  /** Replace the case's whole source, unsaved. */
-  async replace(text: string, uri = this.uri): Promise<void> {
-    const document = await vscode.workspace.openTextDocument(uri)
-    const edit = new vscode.WorkspaceEdit()
-    edit.replace(uri, new vscode.Range(0, 0, document.lineCount, 0), text)
-    await vscode.workspace.applyEdit(edit)
-  }
-
-  /** Undo in the case's source with VS Code's own undo, until it reads as found. */
-  async undo(): Promise<void> {
-    await vscode.window.showTextDocument(this.document)
-    await vscode.commands.executeCommand('undo')
-    await until(() => this.document.getText() === this.text, 'the source as found')
-    await this.settled()
+  /** Write `text` into the case file at `uri`, as another program saves it. */
+  async write(text: string, uri = this.uri): Promise<void> {
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text))
   }
 
   /** Whether every element of `type` records `field` in the case `uri` as Studio last read it. */
@@ -201,21 +179,29 @@ export class Bench {
     return count > 0 && count === summary?.counts[type]
   }
 
-  /** Make every element of `type` record `fields` and no other sampled field, as Monitored Signals
-   *  does, and wait for the case to read so. */
-  async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
+  /** Make every element of `type` record `fields` and no other sampled field, and with `only`,
+   *  every other element nothing: their `mon` lists written into the file at `uri` as a user
+   *  writes them. Waits for Studio to read the case so. */
+  async record(
+    type: string,
+    fields: readonly string[],
+    uri = this.uri,
+    only = false,
+  ): Promise<void> {
     const key = uri.toString()
-    const summary = await this.studio.documents.ensure(await vscode.workspace.openTextDocument(uri))
+    const summary = await this.studio.files.read(key)
     const sampled = summary.definition.tables
       .find((table) => table.name === type)!
       .fields.filter((field) => field.kind === 'sampled')
       .map((field) => field.name)
-    await this.studio.documents.transact(
-      key,
-      summary.version,
-      [{ kind: 'record', type, add: fields, remove: sampled.filter((f) => !fields.includes(f)) }],
-      'Record ' + fields.join(', '),
+    const listed = withMons(await textOf(uri), ({ type: of, mon }) =>
+      of === type
+        ? [...mon.filter((name) => !sampled.includes(name)), ...fields]
+        : only
+          ? []
+          : undefined,
     )
+    await this.write(listed, uri)
     await until(
       () =>
         sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
@@ -224,27 +210,15 @@ export class Bench {
     )
   }
 
-  /** Make the case record `fields` of `type` and nothing else, as Record No Signals then a check
-   *  in Monitored Signals do. */
-  async recordOnly(type: string, fields: readonly string[]): Promise<void> {
-    await vscode.commands.executeCommand('gridkitStudio.recordNoSignals')
-    await until(
-      () =>
-        !Object.keys(this.studio.state(this.key).summary?.recording.listed ?? {}).length &&
-        !this.studio.state(this.key).stale,
-      'the case records nothing',
-    )
-    if (fields.length) await this.record(type, fields)
+  /** Make the case record `fields` of `type` and nothing else. */
+  recordOnly(type: string, fields: readonly string[]): Promise<void> {
+    return this.record(type, fields, this.uri, true)
   }
 
   /** Write the solver file beside the case, its members `solver`. */
   async writeSolver(solver: Solver): Promise<vscode.Uri> {
     const text = solverText('IEEE39', solver)
     await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(text))
-    await until(
-      async () => (await vscode.workspace.openTextDocument(this.solver)).getText() === text,
-      'the solver file read again',
-    )
     return this.solver
   }
 
@@ -285,25 +259,6 @@ export class Bench {
     }
   }
 
-  /** Choose `item` from the menu a right-click on `target` opens in its view: the context its page
-   *  gives the click, matched against the manifest as VS Code matches it, and its command run with
-   *  that context as VS Code runs it. Where a view draws the target is its page's and latkit's. */
-  async menu(target: Omit<Target, 'uri' | 'version'>, item: string): Promise<void> {
-    const state = this.studio.state(this.key)
-    assert.ok(state.summary, 'the case reads')
-    const context = menuContext(
-      state.summary,
-      { uri: this.key, version: state.summary.version, ...target },
-      state.bindings,
-    )
-    const { command } = this.menus.find('webview/context', item, context)
-    assert.ok(this.menus.enabled(command, { ...this.keys(), ...context }), item + ' enabled')
-    await vscode.commands.executeCommand(command, {
-      ...context,
-      webview: 'gridkitStudio.' + target.origin,
-    })
-  }
-
   /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
    *  without it. */
   async gridkit(): Promise<boolean> {
@@ -325,8 +280,8 @@ export class Bench {
     return uri
   }
 
-  /** Back to IEEE39 alone and followed: its source and solver file as found and saved, no editor
-   *  open, nothing run, selected, mapped or plotted. */
+  /** Back to IEEE39 alone and followed: its file and solver file as found, no editor open, nothing
+   *  run, selected, mapped or plotted. */
   async reset(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     const running = this.studio.get(this.key)
@@ -334,17 +289,15 @@ export class Bench {
       running.stop()
       await until(() => !running.running, 'the run stops')
     }
-    if (this.document.getText() !== this.text) await this.replace(this.text)
-    if (this.document.isDirty) await this.document.save()
-    const solver = await vscode.workspace.openTextDocument(this.solver)
-    if (solver.getText() !== this.solverText) await this.writeSolver(JSON.parse(this.solverText))
+    if ((await textOf(this.uri)) !== this.text) await this.write(this.text)
+    if ((await textOf(this.solver)) !== this.solverText)
+      await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
     const session = await this.follow()
     await this.settled()
     session.select()
     session.setPlots([])
     for (const { table, field } of Object.values(session.bindings))
       session.bind({ table, field }, [])
-    session.setEditing(false)
     session.setFraming('network', undefined)
     session.setFraming('diagram', undefined)
     session.setTable({

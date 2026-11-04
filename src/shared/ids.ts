@@ -17,12 +17,9 @@ export const COMMANDS = [
   'openSource',
   'revealInSource',
   'goToReference',
-  'editField',
   'copyId',
   'copyValue',
   'copyFieldPath',
-  'recordAllSignals',
-  'recordNoSignals',
   'runSimulation',
   'showLastResults',
   'runSimulationAgain',
@@ -63,11 +60,6 @@ export const COMMANDS = [
   'networkSettings',
   'diagramSettings',
   'monitorSettings',
-  'editDiagram',
-  'finishDiagramEditing',
-  'arrangeDiagram',
-  'disconnectPort',
-  'deleteElement',
   'exportVideo',
   'exportImage',
 ] as const
@@ -85,8 +77,6 @@ export type View = (typeof VIEWS)[number]
 /** The context keys Studio sets, which its manifest's `when` clauses read. */
 export const CONTEXT_KEYS = [
   'hasCase',
-  'diagramEditing',
-  'editable',
   'running',
   'fromSolver',
   'hasResults',

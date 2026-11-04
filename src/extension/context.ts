@@ -34,7 +34,6 @@ const TYPING_MS = 90
  *  on. */
 export interface Context {
   session: Session
-  document: vscode.TextDocument
   summary: Summary
   target?: Target
   element?: Element
@@ -104,18 +103,16 @@ export function commandsOf(studio: Sessions) {
   }
   const resolve = async (value?: unknown, supplied?: Supplied): Promise<Context> => {
     const { uri, target } = targetOf(value, supplied)
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    const session = studio.get(uri) ?? (await studio.open(document))
-    const summary = await studio.documents.ensure(document)
-    // A plot names a type's field, which an edit leaves as it was: the Monitor reads the results
-    // against the revision they were opened at, so its menus are of that one.
+    const session = studio.get(uri) ?? (await studio.open(uri))
+    const summary = await studio.files.read(uri)
+    // A plot names a type's field, which a change of the file leaves as it was: the Monitor reads
+    // the results against the revision they were opened at, so its menus are of that one.
     if (target && target.origin !== 'monitor' && target.version !== summary.version)
-      throw new Error('The document changed. Open the context menu again.')
+      throw new Error('The case file changed. Open the context menu again.')
     // A menu acts on what it was opened on, and only that; any other command on the selection.
     const element = target ? target.element : session.selection
     return {
       session,
-      document,
       summary,
       target,
       element,
@@ -129,7 +126,7 @@ export function commandsOf(studio: Sessions) {
   const command = (id: Command, run: (context: Context, value?: unknown) => unknown) =>
     register(id, async (value, supplied) => run(await resolve(value, supplied), value))
   /** A command on the case's clock or results alone, which neither reads the case nor needs it to
-   *  read: a key held down plays on while the case is edited, or broken. */
+   *  read: a key held down plays on while the case's file changes, or does not read. */
   const onSession = (id: Command, run: (session: Session, value?: unknown) => unknown) =>
     register(id, (value, supplied) => {
       const session = studio.get(targetOf(value, supplied).uri)

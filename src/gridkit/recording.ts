@@ -1,11 +1,10 @@
 /** What a case records, and where: each element's `mon` list, and the case's `monitors`. GridKit
  *  writes a column for every output an element lists, so the lists are all a run records. */
 
-import type { SourceEdit, Summary } from '../shared/messages.js'
+import type { Summary } from '../shared/messages.js'
 import type { Sink } from '../shared/study.js'
 import type { Case, Part, Table } from './case.js'
 import type { Shape } from './definition.js'
-import { textOffsets } from './edits.js'
 import { NONE, type Parsed } from './parse.js'
 import { Turns } from './turns.js'
 
@@ -21,22 +20,11 @@ export function outputName(table: Table, field: string): string {
  *  BusDataJSONParser reads it, a device's as written. */
 const monKey = (shape: Shape, name: string) => (shape.kind === 'bus' ? name.toLowerCase() : name)
 
-/** The outputs row `row` of `table` lists, as its file writes them. */
-function listed(kase: Case, table: Table, row: number): string[] {
-  const mons = kase.arrays[table.shape.array!]!.mons
-  const record = table.records[row]!
-  const from = mons[2 * record]!
-  if (from === 0) return []
-  const list = JSON.parse(decoder.decode(kase.file.subarray(from, mons[2 * record + 1]))) as unknown
-  return Array.isArray(list) ? list.filter((name): name is string => typeof name === 'string') : []
-}
-
 /** How many records of each table, by its code, list each output, by its `monKey`, in each range
- *  read: a list that names an output twice counts once. Counted once for each range, which a
- *  revision keeps where an edit leaves it alone. */
+ *  read: a list that names an output twice counts once. Counted once for each range. */
 const counted = new WeakMap<Parsed, Map<number, Map<string, number>>>()
 
-function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, number>> {
+function countsOf(kase: Case, { parsed }: Part): Map<number, Map<string, number>> {
   let counts = counted.get(parsed)
   if (counts) return counts
   counts = new Map()
@@ -46,7 +34,7 @@ function countsOf(kase: Case, { parsed, shift }: Part): Map<number, Map<string, 
     const code = codes[record]!
     if (from === 0 || code === NONE) continue
     const list = JSON.parse(
-      decoder.decode(kase.file.subarray(from + shift, mons[2 * record + 1]! + shift)),
+      decoder.decode(kase.file.subarray(from, mons[2 * record + 1]!)),
     ) as unknown
     if (!Array.isArray(list)) continue
     let named = counts.get(code)
@@ -112,50 +100,4 @@ function monitorOf(kase: Case): Sink | undefined {
     if (/^csv$/i.test(String(format)) && delim === ',') file = typeof name === 'string' ? name : ''
   }
   return file ? { file } : undefined
-}
-
-/** What one type of a case is to record: the outputs each of its elements is to list, and those
- *  none is to. */
-export interface Recording {
-  readonly type: string
-  readonly add: readonly string[]
-  readonly remove: readonly string[]
-}
-
-/** The edits that make every element of each type `recordings` name list the outputs in its `add`
- *  and none in its `remove`, one for each element whose list changes, of its list alone. A list
- *  keeps its order, and what it gains goes last. A record with no list gains one, before its
- *  closing brace. How they reach the editor is `delivered`'s to say. */
-export function recordEdits(kase: Case, recordings: readonly Recording[]): SourceEdit[] {
-  /** Each record's change, by where it is in the file. */
-  const changes: { start: number; end: number; text: string }[] = []
-  for (const { type, add, remove } of recordings) {
-    const table = kase.table(type)
-    const array = table.shape.array && kase.arrays[table.shape.array]
-    if (!array) continue
-    const key = (name: string) => monKey(table.shape, name)
-    const adding = add.map((field) => outputName(table, field))
-    const removing = new Set(remove.map((field) => key(outputName(table, field))))
-    for (let row = 0; row < table.records.length; row++) {
-      const before = listed(kase, table, row)
-      const kept = before.filter((name) => !removing.has(key(name)))
-      const held = new Set(kept.map(key))
-      const after = [...kept, ...adding.filter((name) => !held.has(key(name)))]
-      if (after.length === before.length && after.every((name, n) => name === before[n])) continue
-      const record = table.records[row]!
-      const from = array.mons[2 * record]!
-      const brace = array.ends[record]! - 1
-      changes.push(
-        from > 0
-          ? { start: from, end: array.mons[2 * record + 1]!, text: JSON.stringify(after) }
-          : { start: brace, end: brace, text: `, "mon": ${JSON.stringify(after)}` },
-      )
-    }
-  }
-  changes.sort((a, b) => a.start - b.start)
-  const offsetOf = textOffsets(kase)
-  return changes.map(({ start, end, text }) => {
-    const offset = offsetOf(start)
-    return { offset, length: offsetOf(end) - offset, text }
-  })
 }

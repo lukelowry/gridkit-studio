@@ -10,10 +10,7 @@ import { extension, folder } from './studio.js'
 export async function run(): Promise<void> {
   assert.equal(vscode.workspace.isTrusted, false, 'The fixture must be an untrusted workspace')
   const { studio } = await extension().activate()
-  const document = await vscode.workspace.openTextDocument(
-    vscode.Uri.joinPath(folder(), 'IEEE39.case.json'),
-  )
-  const session = await studio.open(document)
+  const session = await studio.open(vscode.Uri.joinPath(folder(), 'IEEE39.case.json').toString())
   assert.ok(studio.state(session.uri).summary, 'Inspection remains available without trust')
   // A command whose enablement fails runs anyway when called; the run itself refuses.
   const errors = studio.reporter.errors.length

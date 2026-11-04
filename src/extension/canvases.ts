@@ -1,5 +1,5 @@
-/** Commands on what the views draw: framing and reloading them, editing the Diagram, mapping a
- *  field onto the Network, their settings, and a video or image of them. */
+/** Commands on what the views draw: framing and reloading them, mapping a field onto the Network,
+ *  their settings, and a video or image of them. */
 
 import * as vscode from 'vscode'
 
@@ -47,16 +47,6 @@ export function registerCanvases({ command, action, focus }: Commands) {
       context.target?.origin === 'diagram' ? 'diagram' : 'network',
     )
   })
-  // The title bar offers whichever is not the case now, so its icon shows whether the Diagram edits.
-  for (const [id, editing] of [
-    ['editDiagram', true],
-    ['finishDiagramEditing', false],
-  ] as const)
-    command(id, (context) => {
-      if (context.session.diagramEditing === editing) return
-      context.session.setEditing(editing)
-    })
-  command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
 
   /** The numeric field in context, which a network channel can show. */
   const mappable = ({ summary, type, field }: Context): FieldRef => {
@@ -80,7 +70,7 @@ export function registerCanvases({ command, action, focus }: Commands) {
     const channels = picked.map(({ channel }) => channel)
     context.session.bind(field, channels, domainOf(bindings, field))
     // A height shows only from the side: a flat Network tilts, as its Tilt button tilts it.
-    const { uri } = context.document
+    const uri = vscode.Uri.parse(context.session.uri)
     if (channels.includes('vertexHeight') && displayOf(uri)['network.tilt'] === 0)
       await setDisplay(uri, 'network.tilt', TILTED)
   })

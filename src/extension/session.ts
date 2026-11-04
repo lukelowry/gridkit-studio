@@ -118,7 +118,6 @@ export class Session {
   #selection?: Element
   /** The network elements that stand for a selection the network does not draw. */
   #anchors?: Entity[]
-  #diagramEditing = false
   #framings: Framings = {}
   /** The Monitor's chosen time window; absent, plots show the whole run. */
   #window?: readonly [number, number]
@@ -183,9 +182,6 @@ export class Session {
   }
   get anchors(): readonly Entity[] | undefined {
     return this.#anchors
-  }
-  get diagramEditing(): boolean {
-    return this.#diagramEditing
   }
   get framings(): Framings {
     return this.#framings
@@ -496,7 +492,7 @@ export class Session {
   /** Lets go of the selection once the case, read again, no longer holds its element. */
   async forget(): Promise<void> {
     const entity = this.#selection
-    const { summary, stale } = this.#studio.documents.get(this.uri) ?? {}
+    const { summary, stale } = this.#studio.files.get(this.uri) ?? {}
     if (!entity || !summary || stale) return
     try {
       const page = await this.#studio.client.cases.call('page', {
@@ -506,14 +502,14 @@ export class Session {
       if (
         !page.ids.length &&
         this.#selection === entity &&
-        this.#studio.documents.get(this.uri)?.summary?.version === summary.version
+        this.#studio.files.get(this.uri)?.summary?.version === summary.version
       )
         this.select()
     } catch (error) {
       if (failedWith(error, 'invalid-input') || failedWith(error, 'invalid')) {
         if (
           this.#selection === entity &&
-          this.#studio.documents.get(this.uri)?.summary?.version === summary.version
+          this.#studio.files.get(this.uri)?.summary?.version === summary.version
         )
           this.select()
       } else if (defect(error)) this.#studio.reporter.report(error)
@@ -522,7 +518,7 @@ export class Session {
 
   /** Makes `field` drive exactly `channels`, over `domain` when given. */
   bind(field: FieldRef, channels: readonly Channel[], domain?: readonly [number, number]): void {
-    const definition = this.#studio.documents.get(this.uri)?.summary?.definition
+    const definition = this.#studio.files.get(this.uri)?.summary?.definition
     if (!definition) throw noCase()
     const allowed = channelsFor(networkRole(definition, field.table))
     this.#bindings = bound(this.#bindings, allowed, field, channels, domain)
@@ -576,7 +572,7 @@ export class Session {
    *  draws what it is sent, so a change made while it is hidden shows as it opens. Another type
    *  starts unfiltered, in file order. */
   setTable(change: Partial<TableState>): void {
-    const summary = this.#studio.documents.get(this.uri)?.summary
+    const summary = this.#studio.files.get(this.uri)?.summary
     const table = changedTable(summary, this.#table, change)
     if (JSON.stringify(table) === JSON.stringify(this.#table)) return
     this.#table = table
@@ -589,12 +585,6 @@ export class Session {
   setRows(rows: number): void {
     if (rows === this.#rows) return
     this.#rows = rows
-    this.#changed()
-  }
-
-  setEditing(editing: boolean): void {
-    if (this.#diagramEditing === editing) return
-    this.#diagramEditing = editing
     this.#changed()
   }
 
@@ -630,7 +620,7 @@ export class Session {
     if (!saved) return
     let path = saved.path
     try {
-      const { summary } = await this.#studio.caseOf(this.uri)
+      const summary = await this.#studio.files.read(this.uri)
       path = (saved.solver && (await writtenNow(saved.solver, summary))) || saved.path
       const results = await this.#read(path, saved.solver)
       if (this.#pending === saved) this.show(results)
@@ -692,8 +682,8 @@ export class Session {
 
   /** Finds what the network draws for the selected element `id`. */
   async #anchor(entity: Entity): Promise<void> {
-    const summary = this.#studio.documents.get(this.uri)?.summary
-    if (!summary || this.#studio.documents.get(this.uri)?.stale) return
+    const summary = this.#studio.files.get(this.uri)?.summary
+    if (!summary || this.#studio.files.get(this.uri)?.stale) return
     const network = summary.definition.drawing
     const drawn = [...network.vertices, ...network.edges].map((item) => item.table)
     if (drawn.includes(entity.table)) return

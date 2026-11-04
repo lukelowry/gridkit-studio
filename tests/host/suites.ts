@@ -3,7 +3,6 @@
 
 import './runs.test.js'
 import './playback.test.js'
-import './editing.test.js'
 import './source.test.js'
 import './sessions.test.js'
 import './views.test.js'

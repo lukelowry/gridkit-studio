@@ -18,20 +18,23 @@ import { extension, folder, until } from './studio.js'
 
 suite('Sessions', () => {
   let studio: Sessions
-  let document: vscode.TextDocument
+  let uri: vscode.Uri
 
-  /** A copy of IEEE39 of its own, opened and followed. */
-  async function copy(): Promise<vscode.TextDocument> {
-    const uri = vscode.Uri.joinPath(folder(), `recording-${randomUUID()}.case.json`)
-    await vscode.workspace.fs.copy(vscode.Uri.joinPath(folder(), 'IEEE39.case.json'), uri)
-    const opened = await vscode.workspace.openTextDocument(uri)
-    await studio.open(opened)
-    return opened
+  /** The case file at `at`, parsed. */
+  const caseAt = async (at: vscode.Uri) =>
+    JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(at)))
+
+  /** A copy of IEEE39 of its own, followed. */
+  async function copy(): Promise<vscode.Uri> {
+    const made = vscode.Uri.joinPath(folder(), `recording-${randomUUID()}.case.json`)
+    await vscode.workspace.fs.copy(vscode.Uri.joinPath(folder(), 'IEEE39.case.json'), made)
+    await studio.open(made.toString())
+    return made
   }
 
-  /** A results file of the case `document` holds: its first bus's voltage over a second. */
-  async function samples(document: vscode.TextDocument, name = `results-${randomUUID()}.csv`) {
-    const { buses } = JSON.parse(document.getText()) as { buses: { name: string }[] }
+  /** A results file of the case at `at`: its first bus's voltage over a second. */
+  async function samples(at: vscode.Uri, name = `results-${randomUUID()}.csv`) {
+    const { buses } = (await caseAt(at)) as { buses: { name: string }[] }
     const csv = vscode.Uri.joinPath(folder(), name)
     await vscode.workspace.fs.writeFile(
       csv,
@@ -41,19 +44,17 @@ suite('Sessions', () => {
   }
 
   /** The case's session let go of, as a reload does, and its case opened again: a session of its
-   *  own, read anew from what the last one saved. Its document is still open, which holds it as it
-   *  does after a reload, so a tab change that has the views follow the case in front meanwhile
-   *  leaves it be. */
+   *  own, read anew from what the last one saved. An editor of it holds it, as one does after a
+   *  reload, so a tab change that has the views follow the case in front meanwhile leaves it be. */
   async function reopen(session: Session) {
     session.release('active')
     session.release('document')
     assert.equal(studio.get(session.uri), undefined, 'Nothing holds the session, so it closes')
     studio.hold(session.uri, 'document')
     reopened.push(session.uri)
-    return studio.open(document)
+    return studio.open(uri.toString())
   }
-  /** The cases tests reopened, each let go of as its test ends: a document VS Code closes when it
-   *  will would let go of it in the middle of the next test, which counts what is held. */
+  /** The cases tests reopened, each let go of as its test ends, as its editor closing would. */
   const reopened: string[] = []
   teardown(() => {
     for (const uri of reopened.splice(0)) studio.release(uri, 'document')
@@ -61,11 +62,11 @@ suite('Sessions', () => {
 
   setup(async () => {
     studio = (await extension().activate()).studio
-    document = await copy()
+    uri = await copy()
   })
 
   test('a case records what its own lists name', async () => {
-    const source = JSON.parse(document.getText()) as {
+    const source = (await caseAt(uri)) as {
       buses: { mon?: string[] }[]
       devices: { class: string; mon?: string[] }[]
     }
@@ -75,24 +76,7 @@ suite('Sessions', () => {
       ...source.devices.map(({ class: type, mon }) => ({ type, mon })),
     ])
       for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
-    assert.deepEqual((await studio.documents.ensure(document)).recording.listed, listed)
-  })
-
-  test('records a field by writing it in the case, one edit for every element', async () => {
-    const key = document.uri.toString()
-    const { version, counts } = await studio.documents.ensure(document)
-    await studio.documents.transact(
-      key,
-      version,
-      [{ kind: 'record', type: 'Bus', add: ['Vm'], remove: [] }],
-      'Record Bus Vm',
-    )
-    const buses = JSON.parse(document.getText()).buses as { mon?: string[] }[]
-    assert.ok(buses.every((bus) => bus.mon?.includes('Vm')))
-    await until(
-      async () => (await studio.documents.ensure(document)).recording.listed.Bus?.Vm === counts.Bus,
-      'every bus records Vm',
-    )
+    assert.deepEqual((await studio.files.read(uri.toString())).recording.listed, listed)
   })
 
   test('a new run keeps the plots it recorded, else plots its first signal', () => {
@@ -125,7 +109,7 @@ suite('Sessions', () => {
 
   test('reads the results file it showed again when the case opens, and forgets one gone', async () => {
     const session = studio.current()
-    const csv = await samples(document)
+    const csv = await samples(uri)
     await session.load(csv.fsPath)
     const restored = await reopen(session)
     await until(() => restored.results?.path === csv.fsPath, 'the file read again')
@@ -145,7 +129,7 @@ suite('Sessions', () => {
     const name = randomUUID()
     const solver = vscode.Uri.joinPath(folder(), `${name}.solver.json`)
     const solverText = JSON.stringify({
-      system_model_file: basename(document.uri.path),
+      system_model_file: basename(uri.path),
       output_file: `output/${name}.csv`,
       dt_monitor: 0.5,
       tmax: 1,
@@ -153,13 +137,13 @@ suite('Sessions', () => {
     })
     await vscode.workspace.fs.writeFile(solver, new TextEncoder().encode(solverText))
     // What a run of the solver file wrote, read from where the solver file wrote it then.
-    const before = await samples(document, `${name}.csv`)
+    const before = await samples(uri, `${name}.csv`)
     await session.load(before.fsPath, solver.fsPath)
     // The solver file writes elsewhere now, and that file is the one read again.
     await vscode.workspace.fs.delete(before)
     const now = vscode.Uri.joinPath(folder(), 'output', `${name}.csv`)
     await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(folder(), 'output'))
-    await vscode.workspace.fs.copy(await samples(document), now)
+    await vscode.workspace.fs.copy(await samples(uri), now)
     const restored = await reopen(session)
     await until(() => restored.results?.path === now.fsPath, 'the file the solver file writes')
     assert.equal(restored.results!.solver, solver.fsPath)
@@ -193,7 +177,7 @@ suite('Sessions', () => {
       'The worker reads a case for the results held, and for each that rests',
     )
     // The last lets go once another case is followed.
-    await studio.open(document)
+    await studio.open(uri.toString())
     assert.equal(studio.get(last!.uri), undefined)
     await until(async () => (await stats())!.files === held.files, 'no results file of theirs held')
   })

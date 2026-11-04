@@ -7,18 +7,20 @@ const signal = new AbortController().signal
 describe('case inspection', () => {
   it('stands an element the network does not draw in for the buses it reaches', async () => {
     const kase = await Case.parse(
-      JSON.stringify({
-        buses: [
-          { class: 'Bus', number: 1 },
-          { class: 'Bus', number: 2 },
-        ],
-        signals: [{ signal_id: 1 }],
-        devices: [
-          { class: 'Branch', id: 'line', ports: { bus1: 1, bus2: 2 } },
-          { class: 'GenClassical', id: 'fault', ports: { bus: 2, pmech: 1 } },
-          { class: 'ConstantSignalSource', id: 'source', ports: { sr: 1 } },
-        ],
-      }),
+      new TextEncoder().encode(
+        JSON.stringify({
+          buses: [
+            { class: 'Bus', number: 1 },
+            { class: 'Bus', number: 2 },
+          ],
+          signals: [{ signal_id: 1 }],
+          devices: [
+            { class: 'Branch', id: 'line', ports: { bus1: 1, bus2: 2 } },
+            { class: 'GenClassical', id: 'fault', ports: { bus: 2, pmech: 1 } },
+            { class: 'ConstantSignalSource', id: 'source', ports: { sr: 1 } },
+          ],
+        }),
+      ),
       catalog,
     )
     const drawn = ['Bus', 'Branch']

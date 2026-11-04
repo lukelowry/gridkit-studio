@@ -12,7 +12,6 @@ import type { Element, Plot } from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
 import { RATES } from '../shared/transport.js'
 import { askRange, type Commands, type Context, localPath } from './context.js'
-import { CHOOSE_SIGNALS, notice } from './report.js'
 import type { Session } from './session.js'
 
 /** The signals there are to plot, of `type` alone when it is given. */
@@ -35,8 +34,8 @@ export function registerPlots({
   pickPlot,
   pickElement,
 }: Commands) {
-  /** Shows `plot` in the Monitor of the session's case, with `element` selected. Recording is a
-   *  separate choice, made in Monitored Signals. */
+  /** Shows `plot` in the Monitor of the session's case, with `element` selected. What a run
+   *  records is the case's own to say, in its records' `mon` lists. */
   const showPlot = (session: Session, plot: Plot, element?: Element) => {
     session.addPlot(plot)
     return focus(session, 'monitor', element)
@@ -46,9 +45,8 @@ export function registerPlots({
     const { definition } = context.summary
     const offered = plottable(context, type)
     if (!offered.length)
-      throw notice(
+      throw new Error(
         `There is no ${type ? tableLabel(definition, type) + ' ' : ''}signal to plot.`,
-        CHOOSE_SIGNALS,
       )
     return (
       await vscode.window.showQuickPick(

@@ -32,7 +32,7 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   expect(networkScene(data, catalog.definition.drawing, trackpad, {}, []).controls).toMatchObject({
     gestures: { wheel: 'pan', 'control+wheel': 'zoom' },
   })
-  const diagram = diagramScene(data, catalog.definition.drawing, settings, {}, true)
+  const diagram = diagramScene(data, catalog.definition.drawing, settings, {})
   expect(diagram.layout).toEqual({
     layered: {
       direction: settings.get('diagram.direction'),
@@ -40,10 +40,9 @@ it('builds native scenes and projects only mark fields with separate sampled sou
       rankGap: settings.get('diagram.rankGap'),
     },
   })
-  expect(diagram.controls).toMatchObject({
-    gestures: { 'alt+primary': 'connect' },
-    delete: true,
-  })
+  // A diagram is read: no input connects, and nothing deletes.
+  expect(diagram.controls).toEqual(expect.objectContaining({ gestures: {} }))
+  expect(diagram.controls).not.toHaveProperty('delete')
   const projected = sceneFields(catalog.definition, ['network'], {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })

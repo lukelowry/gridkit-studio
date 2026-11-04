@@ -35,13 +35,10 @@ suite('Runs', function () {
     assert.equal(host.session.run, undefined)
   })
 
-  test('saves the case, runs its solver file, and reads what it records to the end', async () => {
-    assert.ok(host.document.isDirty, 'recording edits the case')
+  test('runs its solver file, and reads what the case records to the end', async () => {
     const run = await host.run()
     assert.equal(run.state, 'complete', run.message)
     assert.equal(run.command, 'DynamicSimulation IEEE39.solver.json')
-    // GridKit reads the files as saved.
-    assert.equal(host.document.isDirty, false)
     const { session } = host
     const results = await until(
       () => (session.results?.growing === false ? session.results : undefined),

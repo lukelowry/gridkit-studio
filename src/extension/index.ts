@@ -1,7 +1,6 @@
 import type { ExtensionContext } from 'vscode'
 
 import { registerCommands } from './commands.js'
-import { registerNavigation } from './navigation.js'
 import { registerPlayback } from './playback.js'
 import { registerRuns } from './runs.js'
 import { Sessions } from './sessions.js'
@@ -16,7 +15,6 @@ export function activate(context: ExtensionContext) {
     ...registerCommands(studio),
     ...registerRuns(studio),
     ...registerSignals(studio),
-    ...registerNavigation(studio),
     ...registerPlayback(studio),
   )
   studio.reporter.output.info(

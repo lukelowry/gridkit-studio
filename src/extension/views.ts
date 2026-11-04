@@ -88,32 +88,28 @@ function tableChange(change: unknown): Partial<TableState> {
  *  their own; a view is sent state only when this changes. While a run writes, the frames read so
  *  far send a view that draws them state again, which is how it hears there are more to ask for. */
 const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
-  case: ({ uri, version, stale, error, writable, selection, bindings, table }) => [
+  case: ({ uri, version, stale, error, selection, bindings, table }) => [
     uri,
     version,
     stale,
     error,
-    writable,
     selection,
     bindings,
     table,
   ],
-  diagram: ({ uri, stale, error, writable, selection, anchors, bindings, diagramEditing }) => [
+  diagram: ({ uri, stale, error, selection, anchors, bindings }) => [
     uri,
     stale,
     error,
-    writable,
     selection,
     anchors,
     bindings,
-    diagramEditing,
   ],
   // The times the results hold mark which ones the network can draw, and their ranges color it.
-  network: ({ uri, stale, error, writable, selection, anchors, bindings, results }) => [
+  network: ({ uri, stale, error, selection, anchors, bindings, results }) => [
     uri,
     stale,
     error,
-    writable,
     selection,
     anchors,
     bindings,
@@ -465,7 +461,7 @@ class View {
           ? client.results.call('project', input, signal)
           : client.cases.call(
               'project',
-              { ...input.revision, fields: input.fields, cursor: input.cursor, base: input.base },
+              { ...input.revision, fields: input.fields, cursor: input.cursor },
               signal,
             ),
       page: (input, signal) => {
@@ -479,14 +475,6 @@ class View {
           )
         return read
       },
-      transact: ({ revision, mutations, label }) =>
-        studio.documents.transact(
-          revision.uri,
-          revision.version,
-          mutations,
-          label,
-          revision.attachmentId,
-        ),
       framings: async ({ uri }) => studio.get(uri)?.framings ?? {},
       exportOpen: ({ uri, name }, signal) =>
         this.#exports.open(vscode.Uri.parse(uri), name, signal),
@@ -593,25 +581,30 @@ class View {
 
 export function registerViews(studio: Sessions) {
   const subscriptions: vscode.Disposable[] = []
-  for (const kind of ['network', 'diagram'] as const)
+  for (const kind of ['network', 'diagram'] as const) {
+    const provider: vscode.CustomReadonlyEditorProvider = {
+      // One document per file, which its editors share: it holds the case's session, which reads
+      // the file as the webview loads, while any editor shows it. The views follow the case once
+      // its editor is in front, not as it loads: of editors loading side by side, the last would
+      // win. Studio shows case files on disk, which it reads itself.
+      openCustomDocument(uri) {
+        const key = uri.toString()
+        if (!followed(key)) throw new Error('GridKit Studio shows .case.json files on disk.')
+        studio.hold(key, 'document')
+        return { uri, dispose: () => studio.release(key, 'document') }
+      },
+      resolveCustomEditor(document, panel) {
+        // A canvas keeps its webview while hidden, so showing it again is free.
+        new View(studio, panel, kind, 'idle', { uri: document.uri.toString() })
+      },
+    }
     subscriptions.push(
-      vscode.window.registerCustomEditorProvider(
-        viewId(kind),
-        {
-          resolveCustomTextEditor(document, panel) {
-            // A canvas keeps its webview while hidden, so showing it again is free.
-            new View(studio, panel, kind, 'idle', { uri: document.uri.toString() })
-            // Read while the webview loads. The views follow the case once its editor is in front,
-            // not as it loads: of editors loading side by side, the last would win.
-            void studio.documents.parsed(document)
-          },
-        },
-        {
-          supportsMultipleEditorsPerDocument: true,
-          webviewOptions: { retainContextWhenHidden: true },
-        },
-      ),
+      vscode.window.registerCustomEditorProvider(viewId(kind), provider, {
+        supportsMultipleEditorsPerDocument: true,
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
     )
+  }
   for (const kind of PANELS) {
     // An export keeps working while its panel is collapsed. The Case panel takes the Monitor's
     // place in the bottom panel, so the Monitor is kept idle rather than destroyed.

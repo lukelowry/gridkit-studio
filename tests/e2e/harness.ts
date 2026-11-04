@@ -16,6 +16,7 @@ import { available } from '../../src/gridkit/index.js'
 import { contextKey } from '../../src/shared/ids.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
+import { withMons } from '../mons.js'
 
 const TIMEOUT = 30_000
 /** How long a read of what the page shows now waits for it: a moment, not a timeout. */
@@ -189,11 +190,11 @@ const PANELS = {
 } as const
 
 export class TestHost {
-  /** The case's source as the suites found it, and as each suite starts. */
+  /** The case's file as the suites found it, and as each suite starts. */
   readonly text: string
   /** The solver file beside the case, as the suites found it, and as each suite starts. */
   readonly solverText: string
-  /** That source, parsed. */
+  /** That case, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
     devices: { class: string; id: string; extension?: { diagram?: unknown } }[]
@@ -212,13 +213,12 @@ export class TestHost {
     readonly browser: Browser,
     /** The VS Code window. */
     readonly page: Page,
-    document: vscode.TextDocument,
+    text: string,
     /** Where screenshots and the report are written. */
     readonly output: string,
     solver: string,
   ) {
-    this.#document = document
-    this.text = document.getText()
+    this.text = text
     this.solverText = solver
     this.source = JSON.parse(this.text)
     this.report = {
@@ -248,12 +248,12 @@ export class TestHost {
     const output = process.env.GRIDKIT_TEST_OUTPUT!
     await mkdir(join(output, 'playwright'), { recursive: true })
     await mkdir(join(output, 'tests'), { recursive: true })
-    const document = await vscode.workspace.openTextDocument(uri)
+    const text = await readFile(uri.fsPath, 'utf8')
     const solver = await readFile(
       vscode.Uri.joinPath(folder(), 'IEEE39.solver.json').fsPath,
       'utf8',
     )
-    const bench = new TestHost(installed, browser, page, document, output, solver)
+    const bench = new TestHost(installed, browser, page, text, output, solver)
     bench.report.openCaseMs = openCaseMs
     return bench
   }
@@ -261,17 +261,8 @@ export class TestHost {
   get studio(): Sessions {
     return this.extension.exports.studio
   }
-  #document: vscode.TextDocument
-  /** The case's document as VS Code holds it now. One no editor showed for a while VS Code closes,
-   *  and opens again as another. */
-  get document(): vscode.TextDocument {
-    const key = this.#document.uri.toString()
-    this.#document =
-      vscode.workspace.textDocuments.find((open) => open.uri.toString() === key) ?? this.#document
-    return this.#document
-  }
   get uri(): vscode.Uri {
-    return this.#document.uri
+    return vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
   }
   /** The case's key among the sessions. */
   get key(): string {
@@ -331,7 +322,7 @@ export class TestHost {
     await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
     const network = await this.view('network')
     await visible(network, 'canvas[data-rendered=true]')
-    await until(() => this.studio.documents.get(uri.toString())?.summary, name + ' parsed')
+    await until(() => this.studio.files.get(uri.toString())?.summary, name + ' read')
     return { uri, network }
   }
 
@@ -349,20 +340,19 @@ export class TestHost {
   }
 
   /** Make every element of `type` in the case `uri` list `fields` among its outputs and no other,
-   *  as Monitored Signals does, and wait for the case to read so. */
+   *  their `mon` lists written into its file as a user writes them, and wait for the case to read
+   *  so. */
   async record(type: string, fields: readonly string[], uri = this.uri): Promise<void> {
     const key = uri.toString()
-    const summary = await this.studio.documents.ensure(this.studio.documents.get(key)!.document)
-    const definitions = summary.definition.tables.find((table) => table.name === type)!.fields
-    const sampled = definitions
-      .filter((field) => field.kind === 'sampled')
+    const summary = await this.studio.files.read(key)
+    const sampled = summary.definition.tables
+      .find((table) => table.name === type)!
+      .fields.filter((field) => field.kind === 'sampled')
       .map((field) => field.name)
-    await this.studio.documents.transact(
-      key,
-      summary.version,
-      [{ kind: 'record', type, add: fields, remove: sampled.filter((f) => !fields.includes(f)) }],
-      'Record ' + fields.join(', '),
+    const listed = withMons(await readFile(uri.fsPath, 'utf8'), ({ type: of, mon }) =>
+      of === type ? [...mon.filter((name) => !sampled.includes(name)), ...fields] : undefined,
     )
+    await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(listed))
     await until(
       () =>
         sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
@@ -376,12 +366,6 @@ export class TestHost {
     const name = basename(uri.path).replace(/\.case\.json$/i, '')
     const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
     await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(solverText(name, solver)))
-    // An editor holding the file reads it again.
-    await until(
-      async () =>
-        (await vscode.workspace.openTextDocument(file)).getText() === solverText(name, solver),
-      name + '.solver.json read again',
-    )
     return file
   }
 
@@ -528,19 +512,13 @@ export class TestHost {
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
   }
 
-  /** Wait for the views' case to be the document's own revision. */
+  /** Wait until the views' case reads as its file holds it now. */
   async settled(): Promise<void> {
+    const { fingerprint } = await this.studio.files.read(this.key)
     await until(() => {
       const state = this.studio.state(this.key)
-      return state.summary?.version === this.document.version && !state.stale
-    }, 'the case follows its document')
-  }
-
-  /** Replace the case's whole source, unsaved. */
-  async replace(text: string): Promise<void> {
-    const edit = new vscode.WorkspaceEdit()
-    edit.replace(this.uri, new vscode.Range(0, 0, this.document.lineCount, 0), text)
-    await vscode.workspace.applyEdit(edit)
+      return !state.stale && state.summary?.fingerprint === fingerprint
+    }, 'the case reads as its file')
   }
 
   /** Results to play: a second of every bus's voltage, each a little out of step with the last,
@@ -614,8 +592,8 @@ export class TestHost {
     )
   }
 
-  /** Back to the case alone in its Network editor: its source as found and saved, nothing
-   *  selected or mapped, its clock at rest. */
+  /** Back to the case alone in its Network editor: its file as found, nothing selected or mapped,
+   *  its clock at rest. */
   async reset(): Promise<void> {
     // A prompt a test left asking holds its command open, and would take the next one's keys.
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
@@ -624,17 +602,10 @@ export class TestHost {
       this.session.stop()
       await until(() => !this.session.running, 'the run stops')
     }
-    if (this.document.getText() !== this.text) await this.replace(this.text)
-    if (this.document.isDirty) await this.document.save()
-    const solver = await vscode.workspace.openTextDocument(this.solver)
-    if (solver.getText() !== this.solverText) {
+    if ((await readFile(this.uri.fsPath, 'utf8')) !== this.text)
+      await vscode.workspace.fs.writeFile(this.uri, new TextEncoder().encode(this.text))
+    if ((await readFile(this.solver.fsPath, 'utf8')) !== this.solverText)
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
-      await until(
-        async () =>
-          (await vscode.workspace.openTextDocument(this.solver)).getText() === this.solverText,
-        'the solver file as found',
-      )
-    }
     await this.open('network')
     await this.settled()
     await vscode.commands.executeCommand('workbench.action.closeEditorsInOtherGroups')
@@ -644,7 +615,6 @@ export class TestHost {
     session.setPlots([])
     for (const { table, field } of Object.values(session.bindings))
       session.bind({ table, field }, [])
-    session.setEditing(false)
     session.setFraming('network', undefined)
     session.setFraming('diagram', undefined)
     session.setTable({

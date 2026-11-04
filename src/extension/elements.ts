@@ -1,5 +1,5 @@
 /** Commands on a case and its elements: opening the case in its views, revealing an element in
- *  another, going where it refers, and editing, copying and deleting it. */
+ *  another or in the file, going where it refers, and copying it. */
 
 import * as vscode from 'vscode'
 
@@ -9,11 +9,9 @@ import {
   entityLabel,
   fieldDefinition,
   fieldLabel,
-  leaf,
   referenceFields,
 } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
-import type { Value } from '../shared/messages.js'
 import type { Commands, Context } from './context.js'
 
 export function registerElements({
@@ -25,7 +23,6 @@ export function registerElements({
   valuesOf,
   valueOf,
   referred,
-  pickElement,
 }: Commands) {
   register('openCase', async () => {
     const selected = await vscode.window.showOpenDialog({
@@ -53,12 +50,8 @@ export function registerElements({
   for (const id of ['openCasePanel', 'revealInCase'] as const)
     command(id, (context) => focus(context.session, 'case', context.element))
   command('openMonitor', (context) => focus(context.session, 'monitor', context.element))
-  register('openSource', (value, supplied) =>
-    studio.documents.reveal(targetOf(value, supplied).uri),
-  )
-  command('revealInSource', (context) =>
-    studio.documents.reveal(context.session.uri, context.element),
-  )
+  register('openSource', (value, supplied) => studio.files.reveal(targetOf(value, supplied).uri))
+  command('revealInSource', (context) => studio.files.reveal(context.session.uri, context.element))
   // The element a reference of the element in context names: the field in context's, or, of an
   // element, the one of its references the user picks, when it has several.
   command('goToReference', async (context) => {
@@ -95,47 +88,6 @@ export function registerElements({
           )
     if (target) session.select(target.id)
   })
-  command('editField', async (context) => {
-    const { session, summary, element } = context
-    if (!element) return
-    const type = element.table
-    const field =
-      context.field ??
-      (await vscode.window.showQuickPick(summary.editable[type] ?? [], {
-        title: 'Edit ' + element.id,
-      }))
-    if (!field) return
-    const spec = fieldDefinition(summary.definition, type, field)
-    if (!spec || !summary.editable[type]?.includes(field))
-      throw new Error(leaf(field) + ' cannot be edited.')
-    const current = await valueOf(context, type, field, element.id)
-    let value: Value
-    if (spec.kind === 'reference' && spec.target) {
-      const choice = await pickElement(context, spec.target)
-      if (choice === undefined || choice === null) return
-      value = choice
-    } else if (spec.kind === 'boolean') {
-      const choice = await vscode.window.showQuickPick(['true', 'false'], { title: field })
-      if (!choice) return
-      value = choice === 'true'
-    } else {
-      const text = await vscode.window.showInputBox({
-        title: fieldLabel({ ...spec, label: field }),
-        value: spec.kind === 'text' ? String(current ?? '') : JSON.stringify(current ?? null),
-        validateInput: (input) => {
-          if (spec.kind === 'text') return
-          try {
-            JSON.parse(input)
-          } catch {
-            return 'Enter a valid JSON value.'
-          }
-        },
-      })
-      if (text === undefined) return
-      value = spec.kind === 'text' ? text : JSON.parse(text)
-    }
-    await studio.documents.edit(session.uri, summary.version, { ...element, field }, value)
-  })
   command('copyId', async ({ element }) => {
     if (element) await vscode.env.clipboard.writeText(String(element.id))
   })
@@ -157,23 +109,5 @@ export function registerElements({
       { title: 'Elements under the pointer' },
     )
     if (selected) context.session.select(selected.element)
-  })
-  command('disconnectPort', async (context) => {
-    if (!context.element || !context.field) return
-    await studio.documents.transact(
-      context.session.uri,
-      context.summary.version,
-      [{ kind: 'connect', from: { ...context.element, field: context.field }, to: null }],
-      'Disconnect signal port',
-    )
-  })
-  command('deleteElement', async (context) => {
-    if (!context.element) return
-    await studio.documents.transact(
-      context.session.uri,
-      context.summary.version,
-      [{ kind: 'remove', entities: [context.element] }],
-      'Delete element',
-    )
   })
 }

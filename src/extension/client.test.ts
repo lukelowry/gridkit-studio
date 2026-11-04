@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -52,10 +53,11 @@ describe('the workers the extension asks', () => {
     const client = new Client(shipped, {}, options, failed)
     try {
       expect(await client.stats()).toEqual({})
-      const summary = await client.cases.call('parse', {
-        uri: 'file:///one',
+      const file = resolve('output/tests/client-one.case.json')
+      await writeFile(file, ONE)
+      const summary = await client.cases.call('read', {
+        uri: pathToFileURL(file).href,
         version: 1,
-        text: ONE,
       })
       expect(summary.counts.Bus).toBe(1)
       // Only the case worker has been asked anything, so only it is running.
@@ -95,7 +97,6 @@ describe('the workers the extension asks', () => {
         uri: 'file:///one',
         version: 1,
         fingerprint: '',
-        text: ONE,
         results: 'any',
         path: 'any.csv',
       })

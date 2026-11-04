@@ -1,5 +1,5 @@
 /** What a user does with a case, end to end in a real window on a real GPU: every view draws it, a
- *  run is plotted, the Diagram is edited by hand, and pictures and videos are written. Everything
+ *  run is plotted, and pictures and videos are written. Everything
  *  under these journeys is the unit, contract and extension-host suites' to check; these check that
  *  the pieces meet where a user sees them. */
 
@@ -7,22 +7,10 @@ import assert from 'node:assert/strict'
 import { readFile, rm } from 'node:fs/promises'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
-import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
 import { idle, simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
-
-/** Where the canvas draws `entity`, in the window, once its camera rests. */
-async function located(frame: Frame, entity: { table: string; id: string | number }) {
-  await idle(frame)
-  const point = await until(
-    () => frame.evaluate<[number, number] | null>(`gridkitLocate(${JSON.stringify(entity)})`),
-    `${entity.table} ${entity.id} drawn`,
-  )
-  const box = (await frame.locator('canvas').boundingBox())!
-  return { x: box.x + point[0], y: box.y + point[1] }
-}
 
 /** A PNG at `path` once written, which draws more than its background. */
 async function png(path: string): Promise<PNG> {
@@ -97,27 +85,6 @@ suite('Journeys', function () {
     await bench.playback('Previous sample').click()
     await until(() => bench.session.transport.currentT() < end, 'the status bar steps back')
     await bench.capture('journey-run')
-  })
-
-  test('a block dragged in the Diagram is one change, which undo takes back', async () => {
-    const diagram = await bench.open('diagram')
-    // Out of editing, a drag moves the camera.
-    await bench.title('editor', 'Edit Diagram')
-    await until(() => bench.session.diagramEditing, 'the Diagram in editing')
-    await bench.title('editor', 'Fit All')
-    const block = bench.source.devices.find((device) => device.class === 'Ieeest')!
-    const from = await located(diagram, { table: 'Ieeest', id: block.id })
-    const before = bench.document.getText()
-    await bench.page.mouse.move(from.x, from.y)
-    await bench.page.mouse.down()
-    await bench.page.mouse.move(from.x + 45, from.y + 25, { steps: 12 })
-    await bench.page.mouse.up()
-    await until(() => bench.document.getText() !== before, 'the drag written into the case')
-    await bench.settled()
-    await vscode.window.showTextDocument(bench.document)
-    await vscode.commands.executeCommand('undo')
-    await until(() => bench.document.getText() === before, 'one undo takes back the whole drag')
-    await bench.settled()
   })
 
   test('the Network is saved as a picture, and the Monitor as a video', async () => {

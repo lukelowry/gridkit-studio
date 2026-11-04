@@ -43,10 +43,7 @@ describe('native VS Code contract', () => {
     // Every menu any view opens carries the same keys, whatever it was opened on.
     const given = new Set(
       Object.keys(
-        menuContext(
-          { definition: catalog.definition, editable: {} },
-          { uri: '', version: 0, origin: 'case' },
-        ),
+        menuContext({ definition: catalog.definition }, { uri: '', version: 0, origin: 'case' }),
       ),
     )
     for (const { place, when } of menus.clauses()) {
@@ -158,7 +155,7 @@ describe('native VS Code contract', () => {
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
     const definition = catalog.definition
-    const summary = { definition, editable: { GenClassical: ['ports.pmech'] } }
+    const summary = { definition }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
@@ -167,7 +164,6 @@ describe('native VS Code contract', () => {
     }
     const context = menuContext(summary, target)
     expect(context.gridkitTarget).toEqual(target)
-    expect(context.gridkitEditable).toBe(true)
     expect(context.gridkitReference).toBe(true)
     expect(context.gridkitNetwork).toBe(false)
     expect(context.gridkitDiagram).toBe(true)

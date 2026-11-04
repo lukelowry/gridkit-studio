@@ -1,4 +1,4 @@
-﻿/** Native canvas host. Source revisions, previews, and GPU resources have separate lifetimes. */
+﻿/** Native canvas host. Source revisions and GPU resources have separate lifetimes. */
 import './styles/index.css'
 import './styles/canvas.css'
 
@@ -11,7 +11,6 @@ import { revisionOf, type Summary, type ViewState } from '../shared/messages.js'
 import { reader, TILTED } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
-import { DiagramEditor } from './diagram/edit.js'
 import { saveImage, viewShot } from './export/image.js'
 import { FrameReads, FrameWindow } from './frames.js'
 import { ViewHost } from './host.js'
@@ -95,9 +94,6 @@ function boot() {
   let shown = true
   let creating = false
   let restore: Camera | undefined
-  let preview: Data | undefined
-  let editor: DiagramEditor | undefined
-  let editorKey = ''
   let stops: Array<() => void> = []
   let playback: (() => void) | undefined
   let saving: ReturnType<typeof setTimeout> | undefined
@@ -129,10 +125,6 @@ function boot() {
   const drop = () => {
     ++epoch
     restore = host?.view.camera ?? restore
-    editor?.destroy()
-    editor = undefined
-    editorKey = ''
-    preview = undefined
     playback?.()
     playback = undefined
     for (const stop of stops) stop()
@@ -173,20 +165,13 @@ function boot() {
   }
 
   function sources(): Source[] {
-    const data = preview ?? cases.slot.current?.data
+    const data = cases.slot.current?.data
     return [
       ...(data ? [data] : []),
       ...background.sources,
       ...[...windows.values()].flatMap((window) => (window.data ? [window.data] : [])),
     ]
   }
-
-  const editing = () =>
-    kind === 'diagram' &&
-    !!state.diagramEditing &&
-    !!state.writable &&
-    !state.stale &&
-    summary === state.summary
 
   /** What the view draws now: the bindings whose fields it holds, and the map. */
   function scene(data: Data, summary: Summary): Scene {
@@ -203,7 +188,6 @@ function boot() {
       results: state.results,
       sampled: (table, field) => windows.get(JSON.stringify([table, field]))?.data,
       background: background.marks,
-      editable: editing(),
     })
   }
 
@@ -213,14 +197,6 @@ function boot() {
     const { view } = host
     const settings = reader(state.settings)
     view.sources = sources()
-    const editable = editing()
-    if (kind === 'diagram')
-      canvas.setAttribute(
-        'aria-label',
-        editable
-          ? 'Diagram editing. Drag blocks or connect signal ports. Right-click for actions.'
-          : 'Diagram view. Right-click an element for actions.',
-      )
     host.scene = scene(data, summary)
     if (kind === 'network') {
       const projection =
@@ -244,25 +220,6 @@ function boot() {
         tilt = settings.get('network.tilt')
         view.camera = { pitch: tilt }
       }
-    }
-    const key = editable ? cases.slot.current!.key : ''
-    if (key !== editorKey) {
-      editor?.destroy()
-      editor = undefined
-      preview = undefined
-      editorKey = key
-      view.sources = sources()
-      if (editable)
-        editor = new DiagramEditor(
-          view,
-          data,
-          summary,
-          (source) => {
-            preview = source === cases.slot.current?.data ? undefined : source
-            if (host) host.view.sources = sources()
-          },
-          fail,
-        )
     }
     if (covered(clock.now())) view.at = clock.now()
     selection()
@@ -492,10 +449,6 @@ function boot() {
           .receive({ revision: revisionOf(next), fields }, fields)
           .then((changed) => {
             if (!changed || closed) return
-            editor?.destroy()
-            editor = undefined
-            editorKey = ''
-            preview = undefined
             summary = next
             heldFields = new Map(fields.map(({ table, fields }) => [table, new Set(fields)]))
             received++
@@ -521,7 +474,6 @@ function boot() {
         void render().catch(fail)
       } else if (message.command === 'fit' && cases.slot.current && summary)
         host?.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
-      else if (message.command === 'arrangeDiagram') void editor?.arrange().catch(fail)
       else if (message.command === 'neighborhood' && host && cases.slot.current) {
         const entity = isEntity(message.value) ? message.value : state.selection
         if (entity) {

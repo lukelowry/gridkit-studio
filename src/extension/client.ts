@@ -168,7 +168,7 @@ class Thread<A extends Api<A>> {
   }
 }
 
-/** The extension's two workers: the case worker, which reads open cases as they are edited, started
+/** The extension's two workers: the case worker, which reads case files as they change, started
  *  with `cases`, and the results worker, which runs GridKit and reads results files, started with
  *  `results`. Their bundles are in `folder`. What fails as it hears of them is said by `failed`. */
 export class Client {

@@ -1,5 +1,5 @@
 /** A loaded case: its tables as column chunks, what views project of them, and the file as read. */
-import { createHash, type Hash } from 'node:crypto'
+import { createHash } from 'node:crypto'
 
 import { printParseErrorCode, visit } from 'jsonc-parser'
 import { type Id, reference } from 'latkit'
@@ -8,7 +8,6 @@ import type { CaseDefinition, Entity } from '../shared/document.js'
 import { DIAGRAM_POSITION, LABEL, NETWORK_POSITION } from '../shared/document.js'
 import type { SourceError, SourceProblem } from '../shared/errors.js'
 import { problem } from '../shared/errors.js'
-import { defect } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import {
   type Chunk,
@@ -38,13 +37,12 @@ import {
   withFound,
 } from './definition.js'
 import type { ProjectedDocument, ProjectedTable } from './document.js'
-import { bytesAt, carryOffsets, charsAt, leads, trails } from './offsets.js'
+import { charsAt } from './offsets.js'
 import {
   ARRAYS,
   type Coding,
   type Found,
   type IndexedChunk,
-  isBounded,
   jsonText,
   type Layout,
   type Member,
@@ -55,7 +53,6 @@ import {
   PROBLEMS,
   type Range,
   type Records,
-  recordsBetween,
   scan,
 } from './parse.js'
 import { Turns } from './turns.js'
@@ -82,19 +79,7 @@ interface RecordArray extends Records {
   readonly mons: Uint32Array
 }
 
-/** How a case is read again from an earlier one: as `name` names it when its header gives none, until
- *  `signal` lets go, `defects` hearing of a defect in reading the edit alone; and, when the changes
- *  that made the text say so, how much of the earlier text they left `unchanged`: its first `prefix`
- *  and last `suffix` UTF-16 units. */
-export interface Revising {
-  readonly name?: string
-  readonly signal?: AbortSignal
-  readonly defects?: (error: unknown) => void
-  readonly unchanged?: { readonly prefix: number; readonly suffix: number }
-}
-
 const RANGE_BYTES = 256 << 10
-const UTF8 = new TextEncoder()
 /** What a case keeps alive per byte of its source, and per field and per record of its tables. */
 const SOURCE_BYTES = 4
 const FIELD_BYTES = 24
@@ -104,16 +89,15 @@ export class Case {
   #signalsChecked = false
   #projection?: ProjectedDocument
 
-  /** The case `text` holds, parsed in ranges of about 256 KiB whose column chunks join their tables
-   *  in file order without a copy. */
+  /** The case `file` holds, its UTF-8 bytes, parsed in ranges of about 256 KiB whose column chunks
+   *  join their tables in file order without a copy. */
   static async parse(
-    text: string,
+    file: Uint8Array,
     catalog: Catalog,
     name = 'Case',
     signal?: AbortSignal,
   ): Promise<Case> {
     signal?.throwIfAborted()
-    const file = UTF8.encode(text)
     let layout: Layout
     try {
       layout = await scan(file, signal)
@@ -123,7 +107,7 @@ export class Case {
       // A file that is not JSON is read again the slower way, which says why as an editor does,
       // unless it nests deeper than that way reads.
       try {
-        syntax(text)
+        syntax(new TextDecoder().decode(file))
       } catch (reason) {
         if (!(reason instanceof RangeError)) throw reason
       }
@@ -149,43 +133,6 @@ export class Case {
     }
   }
 
-  /** The case `text` holds, read from `previous`, a case of an earlier text, as `name` names it when
-   *  its header gives none. When the text differs only among the records of one array, those records
-   *  alone are read again, and the ranges the edit leaves alone are kept, moved as it moved them:
-   *  what they decoded stays decoded, and the tables it leaves alone keep their indexes. Where those
-   *  records are not JSON, it says so as a whole read would, from them alone. Otherwise, and
-   *  wherever else the text does not read, it is read whole, which says why. A defect in reading the
-   *  records alone, `defects` hears of; the text is read whole all the same. What the edit left
-   *  `unchanged` of the earlier text, when said, is never encoded again nor compared. */
-  static async revise(
-    previous: Case,
-    text: string,
-    { name = 'Case', signal, defects = () => {}, unchanged }: Revising = {},
-  ): Promise<Case> {
-    signal?.throwIfAborted()
-    const made = unchanged ? spliced(previous.file, text, unchanged) : { file: UTF8.encode(text) }
-    const { file } = made
-    const edit = 'edit' in made ? made.edit : changed(previous.file, file)
-    if (edit && !stale(previous))
-      try {
-        const revised = await revisionOf(previous, text, file, edit, name, signal)
-        if (revised) {
-          carryOffsets(previous.file, file, {
-            start: edit.start,
-            ended: edit.before,
-            ends: edit.after,
-          })
-          return revised
-        }
-      } catch (error) {
-        signal?.throwIfAborted()
-        if (defect(error)) defects(error)
-        else if (whole(error)) throw error
-      }
-    signal?.throwIfAborted()
-    return Case.parse(text, previous.catalog, name, signal)
-  }
-
   constructor(
     readonly name: string,
     readonly version: string,
@@ -196,30 +143,19 @@ export class Case {
     /** The file as read. */
     readonly file: Uint8Array,
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
-    /** The top-level object's closing brace. */
-    readonly close: number,
     /** The case's own members, in file order: its header, params, arrays and monitors. */
     readonly members: readonly Member[],
     /** Every field GridKit reads that the catalog does not know, where it is first. An extension's
      *  members, whose keys GridKit's format leaves to each tool, are columns all the same. */
     readonly found: readonly FoundField[],
-    /** The ranges its records were read in, which a revision of it keeps where an edit leaves
-     *  them alone, and how their tables were coded. */
+    /** The ranges its records were read in, and how their tables were coded. */
     readonly parts: readonly Part[],
     readonly coding: Coding,
-    /** Its version's hash as it stood every HASH_BYTES of its file, which a revision hashes on from
-     *  where the edit begins. */
-    readonly hashes: readonly Hash[],
   ) {}
 
   /** The case's own member `name`, as `monitors`, where GridKit writes what the case records. */
   member(name: string): Member | undefined {
     return this.members.find((member) => member.name === name)
-  }
-
-  /** The fewest bytes a case read from `text` keeps alive: its source and the spans into it. */
-  static leastBytes(text: string): number {
-    return text.length * SOURCE_BYTES
   }
 
   /** About how many bytes the case keeps alive, conservatively: its source and the spans into it,
@@ -349,60 +285,43 @@ export class Case {
   }
 }
 
-/** A range of records as a revision of a case read it: where it is in that revision's file, just
- *  past its last record, what was read of it, and how far its bytes lie past where they were read.
- *  A later revision keeps the ranges an edit leaves alone, moved as the edit moved them. */
+/** A range of records as a case read it, and what was read of it. */
 export interface Part {
   readonly range: Range
-  readonly end: number
   readonly parsed: Parsed
-  readonly shift: number
 }
-
-/** A range of records, and just past its last. */
-type Cut = Range & { readonly end: number }
 
 /** The records of each array `layout` lays out, cut at record boundaries into ranges of about
  *  RANGE_BYTES. */
-function rangesOf(layout: Layout): Cut[] {
+function rangesOf(layout: Layout): Range[] {
   return ARRAYS.flatMap((array) => {
     const records = layout.arrays[array]
-    return records ? cut(array, 0, records.starts, records.ends) : []
+    if (!records) return []
+    const { starts, ends } = records
+    const ranges: Range[] = []
+    for (let from = 0; from < starts.length;) {
+      let to = from + 1
+      while (to < starts.length && ends[to]! - starts[from]! < RANGE_BYTES) to++
+      ranges.push({ array, first: from, starts: starts.subarray(from, to) })
+      from = to
+    }
+    return ranges
   })
-}
-
-/** Records `first` on of `array`, starting at `starts` and ending at `ends`, cut at record
- *  boundaries into ranges of about RANGE_BYTES. */
-function cut(array: ArrayName, first: number, starts: Uint32Array, ends: Uint32Array): Cut[] {
-  const ranges: Cut[] = []
-  for (let from = 0; from < starts.length;) {
-    let to = from + 1
-    while (to < starts.length && ends[to]! - starts[from]! < RANGE_BYTES) to++
-    ranges.push({
-      array,
-      first: first + from,
-      starts: starts.subarray(from, to),
-      end: ends[to - 1]!,
-    })
-    from = to
-  }
-  return ranges
 }
 
 /** `ranges` of `bytes` read by `parser`, range by range, in turns so `signal` can cancel. What a
  *  range refuses fails them all, saying where the first refusal is, and the first PROBLEMS in all. */
 async function partsOf(
   bytes: Uint8Array,
-  ranges: readonly Cut[],
+  ranges: readonly Range[],
   parser: Parser,
   signal?: AbortSignal,
 ): Promise<Part[]> {
   const work = new Turns(signal)
   const parts: Part[] = []
-  for (const { end, ...range } of ranges) {
+  for (const range of ranges) {
     await work.step()
-    const parsed = parser.parse(bytes, range.array, range.first, range.starts)
-    parts.push({ range, end, parsed, shift: 0 })
+    parts.push({ range, parsed: parser.parse(bytes, range.array, range.first, range.starts) })
   }
   const problems = parts.flatMap(({ parsed }) => parsed.problems)
   const [first] = problems
@@ -414,35 +333,13 @@ async function partsOf(
   return parts
 }
 
-/** How many bytes of a file its hash takes in between the states a revision may hash on from. */
-const HASH_BYTES = 1 << 20
-
-/** The version of `file` read with `catalog`, and the hash as it stood every HASH_BYTES: hashed on
- *  from the last of `kept` at or before byte `same`, past which `file` differs from the file they
- *  were taken of, else whole. A kept state is copied, never hashed on itself. */
-function hashOf(
-  catalog: Catalog,
-  file: Uint8Array,
-  kept: readonly Hash[] = [],
-  same = 0,
-): { readonly version: string; readonly hashes: readonly Hash[] } {
-  const reused = Math.min(kept.length, Math.floor(same / HASH_BYTES) + 1)
-  const hashes = kept.slice(0, reused)
-  const hash = reused ? hashes[reused - 1]!.copy() : createHash('sha256').update(catalog.text)
-  if (!reused) hashes.push(hash.copy())
-  for (let at = Math.max(0, reused - 1) * HASH_BYTES; at < file.length;) {
-    const next = Math.min(file.length, at + HASH_BYTES)
-    hash.update(file.subarray(at, next))
-    at = next
-    if (at < file.length) hashes.push(hash.copy())
-  }
-  return { version: hash.digest('hex').slice(0, 32), hashes }
-}
+/** The fingerprint of a case read from `file` with `catalog`. */
+const hashOf = (catalog: Catalog, file: Uint8Array): string =>
+  createHash('sha256').update(catalog.text).update(file).digest('hex').slice(0, 32)
 
 /** The case of `file`, as `layout` lays it out and `parts`, coded as `coding` says, read its
- *  records, of the version `hashed` says; `name` names it when its header gives none. Its identity
- *  indexes are built, so an id two rows share fails it; those of the tables a revision of
- *  `previous` leaves alone are its own. */
+ *  records, of the fingerprint `version`; `name` names it when its header gives none. Its
+ *  identity indexes are built, so an id two rows share fails it. */
 function assembled(
   file: Uint8Array,
   layout: Layout,
@@ -450,32 +347,13 @@ function assembled(
   coding: Coding,
   catalog: Catalog,
   name: string,
-  hashed: ReturnType<typeof hashOf>,
-  previous?: Case,
+  version: string,
 ): Case {
-  // What each range has yet to decode is read from this file, where its bytes lie now.
-  for (const { parsed, shift } of parts) {
-    parsed.source.bytes = file
-    parsed.source.shift = shift
-  }
-  const { version, hashes } = hashed
-  const kase = joined(parts, coding, file, layout, catalog, version, name, hashes, previous)
+  const kase = joined(parts, coding, file, layout, catalog, version, name)
   for (const table of kase.tables.values())
     if (table.shape.identity.type === 'text') textIds(table)
     else numberIds(table)
   return kase
-}
-
-/** `spans`, pairs of a start and an end, `shift` further on; a pair 0, 0 says none, and stays. */
-function shifted(spans: Uint32Array, shift: number): Uint32Array {
-  if (!shift) return spans
-  const moved = new Uint32Array(spans.length)
-  for (let i = 0; i < spans.length; i += 2)
-    if (spans[i] !== 0) {
-      moved[i] = spans[i]! + shift
-      moved[i + 1] = spans[i + 1]! + shift
-    }
-  return moved
 }
 
 /** The parsed ranges as one case: chunks joined in file order, ports resolved, records placed. A
@@ -488,8 +366,6 @@ function joined(
   catalog: Catalog,
   version: string,
   fallback: string,
-  hashes: readonly Hash[],
-  previous?: Case,
 ): Case {
   const { shapes } = coding
   const chunks = shapes.map((shape) => ({
@@ -500,17 +376,11 @@ function joined(
   const records = shapes.map((): number[] => [])
   const found: (Found & { readonly first: number })[] = []
   const mons = new Map<ArrayName, Uint32Array[]>()
-  for (const { range, parsed, shift } of parts) {
+  for (const { range, parsed } of parts) {
     const { tables, codes } = parsed
     for (let i = 0; i < codes.length; i++)
       if (codes[i] !== NONE) records[codes[i]!]!.push(range.first + i)
-    for (const member of parsed.found)
-      found.push({
-        ...member,
-        first: range.first,
-        value: member.value + shift,
-        end: member.end + shift,
-      })
+    for (const member of parsed.found) found.push({ ...member, first: range.first })
     tables.forEach((table, code) => {
       if (table === null) return
       const into = chunks[code]!
@@ -518,7 +388,7 @@ function joined(
       table.fields.forEach((field, i) => into.fields[i]!.push(...field))
       table.ports.forEach((port, i) => into.ports[i]!.push(...port))
     })
-    mons.set(range.array, [...(mons.get(range.array) ?? []), shifted(parsed.mons, shift)])
+    mons.set(range.array, [...(mons.get(range.array) ?? []), parsed.mons])
   }
   const tables = new Map<string, Table>()
   // One order of tables for any read, however its ranges were coded: the catalog's in its order,
@@ -533,13 +403,7 @@ function joined(
     const shape = shapes[code]!
     const { ids, fields } = chunks[code]!
     const decoded = fields.map((parts) => deferred(() => parts.map((part) => part.read())))
-    // A table whose ranges were all kept has the ids of the case before, and with them its index
-    // and the indexes built of them.
-    const before = previous?.tables.get(shape.type)
-    const kept =
-      before?.ids.chunks.length === ids.length &&
-      before.ids.chunks.every((chunk, i) => chunk === ids[i])
-    const starts = kept ? before!.starts : startsOf(ids)
+    const starts = startsOf(ids)
     const column = (type: DecodeKind, list: readonly Chunk[]): Column => ({
       kind: type,
       chunks: list,
@@ -548,7 +412,7 @@ function joined(
     tables.set(shape.type, {
       shape,
       starts,
-      ids: kept ? before!.ids : column(shape.identity.type, ids),
+      ids: column(shape.identity.type, ids),
       fields: new Map(
         shape.fields.map((field, i) => [
           field.name,
@@ -601,262 +465,11 @@ function joined(
     tables,
     file,
     arrays,
-    layout.close,
     layout.members,
     fields,
     parts,
     coding,
-    hashes,
   )
-}
-
-/** The bytes of `text`, made from `before`, the bytes of a text it shares but for what lies past
- *  its first `prefix` and before its last `suffix` UTF-16 units: only what lies between is
- *  encoded, and that is all the two differ by. Each side ends on a whole character. */
-function spliced(
-  before: Uint8Array,
-  text: string,
-  { prefix, suffix }: { readonly prefix: number; readonly suffix: number },
-): { file: Uint8Array; edit: { start: number; before: number; after: number } } {
-  const length = charsAt(before, before.length)
-  let head = Math.min(prefix, length, text.length)
-  let tail = Math.min(suffix, length - head, text.length - head)
-  // A pair of surrogates is never split: what starts or ends one goes with the rest of it.
-  if (head > 0 && leads(text.charCodeAt(head - 1))) head--
-  if (tail > 0 && trails(text.charCodeAt(text.length - tail))) tail--
-  const start = bytesAt(before, head)
-  const end = bytesAt(before, length - tail)
-  const middle = UTF8.encode(text.slice(head, text.length - tail))
-  const file = new Uint8Array(start + middle.length + before.length - end)
-  file.set(before.subarray(0, start))
-  file.set(middle, start)
-  file.set(before.subarray(end), start + middle.length)
-  return { file, edit: { start, before: end, after: start + middle.length } }
-}
-
-/** How many bytes are compared at once, natively, as two files are told apart. */
-const COMPARED_BYTES = 1 << 16
-
-/** Whether `count` bytes of `a` at `at` are those of `b` at `bt`. */
-const same = (a: Uint8Array, at: number, b: Uint8Array, bt: number, count: number) =>
-  Buffer.from(a.buffer, a.byteOffset + at, count).equals(
-    Buffer.from(b.buffer, b.byteOffset + bt, count),
-  )
-
-/** Where `after` differs from `before`: from `start`, which both share the bytes before, up to
- *  `before` in the one and `after` in the other, past which both share the rest; undefined where
- *  they are the same. */
-function changed(
-  before: Uint8Array,
-  after: Uint8Array,
-): { start: number; before: number; after: number } | undefined {
-  const shorter = Math.min(before.length, after.length)
-  let start = 0
-  while (start + COMPARED_BYTES <= shorter && same(before, start, after, start, COMPARED_BYTES))
-    start += COMPARED_BYTES
-  while (start < shorter && before[start] === after[start]) start++
-  if (start === shorter && before.length === after.length) return undefined
-  // The bytes both end with, as far back as the bytes neither shares at their start.
-  const room = shorter - start
-  let tail = 0
-  while (
-    tail + COMPARED_BYTES <= room &&
-    same(
-      before,
-      before.length - tail - COMPARED_BYTES,
-      after,
-      after.length - tail - COMPARED_BYTES,
-      COMPARED_BYTES,
-    )
-  )
-    tail += COMPARED_BYTES
-  while (tail < room && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++
-  return { start, before: before.length - tail, after: after.length - tail }
-}
-
-/** `previous` read again as `file`, which differs from its file only from `edit.start`, as
- *  `changed` says: undefined unless the edit lies among the records of one array, past its opening
- *  bracket and before its closing one. Then the records from the range the edit begins in to the
- *  range it ends in are read again, and the rest are kept, those after the edit moved by as much as
- *  it grew. */
-async function revisionOf(
-  previous: Case,
-  text: string,
-  file: Uint8Array,
-  edit: { start: number; before: number; after: number },
-  name: string,
-  signal?: AbortSignal,
-): Promise<Case | undefined> {
-  const grown = edit.after - edit.before
-  const array = ARRAYS.find((each) => {
-    const records = previous.arrays[each]
-    return records && records.open < edit.start && edit.before <= records.close
-  })
-  if (!array) return undefined
-  const old = previous.arrays[array]!
-  const parts = previous.parts
-  const own = parts.flatMap((part, p) => (part.range.array === array ? [p] : []))
-  // The ranges the edit begins and ends in, or none, where it begins before the first record or
-  // ends past the last: what they hold is read again, from the first range's first record, or the
-  // array's start, to the last range's last record, or the array's end.
-  const first = own.findLast((p) => parts[p]!.range.starts[0]! < edit.start)
-  const last = own.find((p) => parts[p]!.end - 1 >= edit.before)
-  const from = first === undefined ? old.open + 1 : parts[first]!.range.starts[0]!
-  const closing = last === undefined
-  const to = closing ? old.close + grown : parts[last]!.end + grown
-  let read: { starts: Uint32Array; ends: Uint32Array }
-  try {
-    read = await recordsBetween(file, from, to, closing, signal)
-  } catch (error) {
-    throw isBounded(error) || (error as { byte?: unknown }).byte === undefined
-      ? error
-      : misread(previous, text, file, from, to, error)
-  }
-  // The ranges of the array kept before and after those read again, and how many records the edit
-  // took and gave.
-  const before = own.filter((p) => first !== undefined && p < first).map((p) => parts[p]!)
-  const after = own.filter((p) => last !== undefined && p > last).map((p) => parts[p]!)
-  const recordsBefore = first === undefined ? 0 : parts[first]!.range.first
-  const removed =
-    old.starts.length -
-    [...before, ...after].reduce((sum, part) => sum + part.range.starts.length, 0)
-  const added = read.starts.length - removed
-  const parser = new Parser(previous.catalog, previous.coding)
-  const fresh = await partsOf(
-    file,
-    cut(array, recordsBefore, read.starts, read.ends),
-    parser,
-    signal,
-  )
-  /** `part`, kept where the edit leaves it, or moved past it. */
-  const moved = (part: Part): Part =>
-    part.range.starts[0]! < edit.start
-      ? part
-      : {
-          range: {
-            array: part.range.array,
-            first: part.range.first + (part.range.array === array ? added : 0),
-            starts: part.range.starts.map((start) => start + grown),
-          },
-          end: part.end + grown,
-          parsed: part.parsed,
-          shift: part.shift + grown,
-        }
-  const ordered = ARRAYS.flatMap((each) =>
-    each === array
-      ? [...before, ...fresh, ...after.map(moved)]
-      : parts.filter((part) => part.range.array === each).map(moved),
-  )
-  const at = (offset: number) => (offset >= edit.before ? offset + grown : offset)
-  const layout: Layout = {
-    members: previous.members.map((member) =>
-      member.start >= edit.before
-        ? {
-            name: member.name,
-            start: member.start + grown,
-            value: member.value + grown,
-            end: member.end + grown,
-          }
-        : member.end >= edit.before
-          ? { ...member, end: member.end + grown }
-          : member,
-    ),
-    close: previous.close + grown,
-    arrays: Object.fromEntries(
-      ARRAYS.flatMap((each): [ArrayName, Records][] => {
-        const records = previous.arrays[each]
-        if (!records) return []
-        if (each !== array) {
-          if (records.open < edit.start) return [[each, records]]
-          return [
-            [
-              each,
-              {
-                open: records.open + grown,
-                close: records.close + grown,
-                starts: records.starts.map((start) => start + grown),
-                ends: records.ends.map((end) => end + grown),
-              },
-            ],
-          ]
-        }
-        const keptBefore = recordsBefore
-        const keptAfter = old.starts.length - keptBefore - removed
-        const join = (column: Uint32Array, middle: Uint32Array) => {
-          const joined = new Uint32Array(keptBefore + middle.length + keptAfter)
-          joined.set(column.subarray(0, keptBefore))
-          joined.set(middle, keptBefore)
-          joined.set(
-            column.subarray(keptBefore + removed).map((offset) => offset + grown),
-            keptBefore + middle.length,
-          )
-          return joined
-        }
-        return [
-          [
-            each,
-            {
-              open: records.open,
-              close: at(records.close),
-              starts: join(records.starts, read.starts),
-              ends: join(records.ends, read.ends),
-            },
-          ],
-        ]
-      }),
-    ),
-  }
-  return assembled(
-    file,
-    layout,
-    ordered,
-    parser.coding,
-    previous.catalog,
-    name,
-    hashOf(previous.catalog, file, previous.hashes, edit.start),
-    previous,
-  )
-}
-
-/** Whether `kase` was coded with classes the catalog does not know that none of its records has any
- *  more, as typing a class name leaves each start of it: a whole read codes it anew. */
-function stale(kase: Case): boolean {
-  let present = 0
-  for (const type of kase.tables.keys()) if (!kase.catalog.shapes.has(type)) present++
-  return kase.coding.unknown.size > present
-}
-
-/** Whether `error` says why a file does not read as a whole read of it says so. */
-const whole = (error: unknown): boolean => (error as { whole?: unknown } | null)?.whole === true
-
-/** `error`, which a read of `file`'s records met between byte `from` and `to`, said as a whole read
- *  of `text` says it, and where. The bytes before `from` are those `previous` read, so a whole read
- *  reads them alike, meets the same at the same byte, and `previous` places them. The editor's own
- *  reading says why, of those records alone, as an array of their own; else the read's. */
-function misread(
-  previous: Case,
-  text: string,
-  file: Uint8Array,
-  from: number,
-  to: number,
-  error: unknown,
-): Error {
-  const start = charsAt(previous.file, from)
-  const byte = (error as { byte: number }).byte
-  const records =
-    '[' + text.slice(start, start + utf8(file, from, Math.min(file.length, to + 1)).length)
-  try {
-    syntax(records)
-  } catch (reason) {
-    const at = (reason as { offset?: unknown }).offset
-    // Where the records end the array this reading gives them is unclosed, which says nothing.
-    if (!(reason instanceof RangeError) && typeof at === 'number' && at < records.length)
-      return Object.assign(reason as Error, { offset: start + at - 1, whole: true })
-  }
-  return Object.assign(error as Error, {
-    offset: start + utf8(file, from, byte).length,
-    whole: true,
-  })
 }
 
 /** Where record `record` of `records` lies in `file`. */

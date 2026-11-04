@@ -1,19 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { problem } from './errors.js'
-import {
-  answerer,
-  Caller,
-  type Cancel,
-  type Handlers,
-  type Reply,
-  type Request,
-  resent,
-} from './rpc.js'
+import { answerer, Caller, type Cancel, type Handlers, type Reply, type Request } from './rpc.js'
 
 interface Echo {
   echo: { input: { text: string }; output: string }
-  fail: { input: { code?: string; offset?: number }; output: never }
+  fail: { input: { code?: string; line?: number }; output: never }
   wait: { input: Record<string, never>; output: never }
 }
 
@@ -35,8 +26,9 @@ function channel(handlers: Handlers<Echo>, post?: (reply: Reply) => void) {
 
 const handlers: Handlers<Echo> = {
   echo: async ({ text }) => text,
-  fail: async ({ code, offset }) => {
-    throw Object.assign(new Error('It failed.'), { code, offset, length: 2 })
+  fail: async ({ code, line }) => {
+    const range = line === undefined ? undefined : { start: [line, 0], end: [line, 2] }
+    throw Object.assign(new Error('It failed.'), { code, range })
   },
   wait: (_, signal) =>
     new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason))),
@@ -47,14 +39,14 @@ describe('a request across a channel', () => {
     const { caller } = channel(handlers)
     expect(await caller.call('echo', { text: 'hi' })).toBe('hi')
     const failed = await caller
-      .call('fail', { code: 'superseded', offset: 4 })
+      .call('fail', { code: 'superseded', line: 4 })
       .catch((error) => error)
     expect(failed).toBeInstanceOf(Error)
+    // Where in a case file it failed crosses with it.
     expect(failed).toMatchObject({
       message: 'It failed.',
       code: 'superseded',
-      offset: 4,
-      length: 2,
+      range: { start: [4, 0], end: [4, 2] },
     })
     expect(failed.detail).toMatch(/It failed/)
     // A failure with no code of its own has the general one.
@@ -129,27 +121,6 @@ describe('a request across a channel', () => {
     for (const call of calls) await expect(call).rejects.toThrow('The worker stopped.')
     // A reply that comes after settles nothing.
     caller.settle({ kind: 'reply', id: 1, value: 'late' })
-  })
-
-  it('sends what the other side lacks only when it says it lacks it', async () => {
-    const sent: string[] = []
-    const call = async (input: string) => {
-      sent.push(input)
-      if (input === 'lean') throw problem('needs-source', 'Send the source.')
-      return input
-    }
-    expect(await resent(call, 'needs-source', 'lean', () => 'whole')).toBe('whole')
-    expect(sent).toEqual(['lean', 'whole'])
-    // Any other failure is the call's own.
-    await expect(resent(call, 'stale-source', 'lean', () => 'whole')).rejects.toMatchObject({
-      code: 'needs-source',
-    })
-    // Nor is it sent again once the asker let go.
-    const controller = new AbortController()
-    controller.abort()
-    await expect(
-      resent(call, 'needs-source', 'lean', () => 'whole', controller.signal),
-    ).rejects.toMatchObject({ code: 'needs-source' })
   })
 
   it('lets go of every answer under way at once', async () => {

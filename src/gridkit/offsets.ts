@@ -1,11 +1,9 @@
-/** Where a byte of a case's file is in its text, as VS Code counts: in UTF-16 units. One way for
- *  every reader, keyed by the file's bytes. */
+/** Where a byte of a case's file is in its text, as VS Code counts: in UTF-16 units, and by line and
+ *  character. One way for every reader, keyed by the file's bytes. */
 
 import { isAscii } from 'node:buffer'
 
-/** Whether the UTF-16 unit `unit` is the first, or the second, of a surrogate pair. */
-export const leads = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
-export const trails = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
+import type { SourceRange } from '../shared/messages.js'
 
 const decoder = new TextDecoder()
 /** How far apart checkpoints are, at least, in bytes. */
@@ -13,6 +11,13 @@ const STEP = 4096
 /** How far a walk through the file counts on, character by character, before it jumps instead from
  *  the nearest checkpoint. */
 const WALK_BYTES = 4096
+const LINE_FEED = 0x0a
+
+/** A stretch of a case's text: from a UTF-16 offset, so many units long. */
+export interface Span {
+  readonly offset: number
+  readonly length: number
+}
 
 /** The bytes checkpoints land on, each on a character's first byte, and the characters before
  *  each. */
@@ -23,6 +28,8 @@ interface Checkpoints {
 
 /** Each file's checkpoints, or null for a file all ASCII, whose bytes are its characters. */
 const known = new WeakMap<Uint8Array, Checkpoints | null>()
+/** Each file's line starts, as UTF-16 offsets, found the first time a place in it is asked for. */
+const lines = new WeakMap<Uint8Array, Uint32Array>()
 
 /** How many bytes the UTF-8 character whose first byte is `first` takes; one of four takes two
  *  UTF-16 units, the others one. */
@@ -66,27 +73,6 @@ export function charsAt(file: Uint8Array, byte: number): number {
   return map.chars[low]! + decoder.decode(file.subarray(map.bytes[low]!, byte)).length
 }
 
-/** The byte of `file` its UTF-16 offset `chars` is at: where the character there starts, or the
- *  next character, should the offset land between the two units of one. */
-export function bytesAt(file: Uint8Array, chars: number): number {
-  const map = checkpointsOf(file)
-  if (!map) return chars
-  let low = 0
-  let high = map.chars.length
-  while (low + 1 < high) {
-    const middle = (low + high) >>> 1
-    if (map.chars[middle]! <= chars) low = middle
-    else high = middle
-  }
-  let byte = map.bytes[low]!
-  for (let count = map.chars[low]!; count < chars && byte < file.length;) {
-    const width = widthOf(file[byte]!)
-    byte += width
-    count += width === 4 ? 2 : 1
-  }
-  return byte
-}
-
 /** The UTF-16 offsets of ascending byte offsets of `file`: each counted on from the last, near, or
  *  found from a checkpoint, far; so a walk through the file is linear however many it asks for. */
 export function charsWalk(file: Uint8Array): (byte: number) => number {
@@ -107,34 +93,35 @@ export function charsWalk(file: Uint8Array): (byte: number) => number {
   }
 }
 
-/** Gives `after`, which differs from `before` only from byte `start`, up to `ended` there and `ends`
- *  here, the checkpoints `before` has: those before the edit kept, those past it moved, so the
- *  first offset asked of `after` never walks it whole, nor looks again whether it is all ASCII. */
-export function carryOffsets(
-  before: Uint8Array,
-  after: Uint8Array,
-  { start, ended, ends }: { readonly start: number; readonly ended: number; readonly ends: number },
-): void {
-  const old = known.get(before)
-  if (old === undefined || known.has(after)) return
-  // A file all ASCII stays so where the edit wrote ASCII alone.
-  if (old === null) {
-    if (isAscii(after.subarray(start, ends))) known.set(after, null)
-    return
-  }
-  const kept = old.bytes.findLastIndex((byte) => byte <= start)
-  const bytes = old.bytes.slice(0, kept + 1)
-  const chars = old.chars.slice(0, kept + 1)
-  const next = old.bytes.findIndex((byte) => byte >= ended)
-  if (next >= 0) {
-    const grown = ends - ended
-    const there = old.bytes[next]! + grown
-    const moved =
-      chars[kept]! + decoder.decode(after.subarray(bytes[kept]!, there)).length - old.chars[next]!
-    for (let i = next; i < old.bytes.length; i++) {
-      bytes.push(old.bytes[i]! + grown)
-      chars.push(old.chars[i]! + moved)
-    }
-  }
-  known.set(after, { bytes, chars })
+function lineStarts(file: Uint8Array): Uint32Array {
+  let starts = lines.get(file)
+  if (starts) return starts
+  let count = 1
+  for (let at = file.indexOf(LINE_FEED); at >= 0; at = file.indexOf(LINE_FEED, at + 1)) count++
+  starts = new Uint32Array(count)
+  const chars = charsWalk(file)
+  let line = 0
+  for (let at = file.indexOf(LINE_FEED); at >= 0; at = file.indexOf(LINE_FEED, at + 1))
+    starts[++line] = chars(at + 1)
+  lines.set(file, starts)
+  return starts
 }
+
+/** The line and character of UTF-16 offset `chars` in `file`. */
+function positionOf(file: Uint8Array, chars: number): [line: number, character: number] {
+  const starts = lineStarts(file)
+  let low = 0
+  let high = starts.length
+  while (low + 1 < high) {
+    const middle = (low + high) >>> 1
+    if (starts[middle]! <= chars) low = middle
+    else high = middle
+  }
+  return [low, chars - starts[low]!]
+}
+
+/** Where `span` of `file` is, as VS Code counts: by line, and by character along it. */
+export const rangeIn = (file: Uint8Array, { offset, length }: Span): SourceRange => ({
+  start: positionOf(file, offset),
+  end: positionOf(file, offset + length),
+})

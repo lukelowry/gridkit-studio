@@ -29,12 +29,14 @@ it('keeps sparse exact results, bounded native windows, recovery watermarks, and
     ).join('\n')
   await writeFile(path, csv)
   const kase = await Case.parse(
-    JSON.stringify({
-      buses: [
-        { number: 42, name: 'A', class: 'Bus' },
-        { number: 99, name: 'B', class: 'Bus' },
-      ],
-    }),
+    new TextEncoder().encode(
+      JSON.stringify({
+        buses: [
+          { number: 42, name: 'A', class: 'Bus' },
+          { number: 99, name: 'B', class: 'Bus' },
+        ],
+      }),
+    ),
     catalog,
   )
   const store = await stores.create(path)
@@ -109,7 +111,10 @@ it('preserves NaN gaps, and draws a value float32 cannot hold as a gap', async (
   await stores.sweep([])
   const path = join(folder, 'raw.csv')
   await writeFile(path, 'time,Bus_A_Vm\n0,1\n0.1,NaN\n10,5\n20,1e100\n')
-  const kase = await Case.parse('{"buses":[{"class":"Bus","number":7,"name":"A"}]}', catalog)
+  const kase = await Case.parse(
+    new TextEncoder().encode('{"buses":[{"class":"Bus","number":7,"name":"A"}]}'),
+    catalog,
+  )
   const store = await stores.create(path)
   const file = new ResultsFile(kase, store, {
     path,
@@ -159,7 +164,10 @@ it('refines isolated gaps without expanding whole disk blocks into raw samples',
         (_, i) => `${i},${i === missing ? 'NaN' : i === spike ? 10000 : 1}\n`,
       ).join(''),
   )
-  const kase = await Case.parse('{"buses":[{"class":"Bus","number":7,"name":"A"}]}', catalog)
+  const kase = await Case.parse(
+    new TextEncoder().encode('{"buses":[{"class":"Bus","number":7,"name":"A"}]}'),
+    catalog,
+  )
   const store = await stores.create(path)
   const file = new ResultsFile(kase, store, {
     path,

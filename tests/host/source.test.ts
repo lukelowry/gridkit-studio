@@ -1,5 +1,6 @@
-/** The case's JSON source: an invalid edit, a file that does not read, and the catalog of GridKit's
- *  classes the case is read with. What is wrong with a source Problems says, and nothing else. */
+/** The case's file: one written so it does not read, one that never read, and the catalog of
+ *  GridKit's classes the case is read with. What is wrong with a file Problems says, and nothing
+ *  else. */
 
 import assert from 'node:assert/strict'
 
@@ -17,11 +18,9 @@ suite('Source', () => {
     host = await bench()
   })
 
-  test('keeps the last case that read while the source does not, and Problems says why', async () => {
+  test('keeps the last case that read while its file does not, and Problems says why', async () => {
     const { version } = host.studio.state(host.key).summary!
-    const edit = new vscode.WorkspaceEdit()
-    edit.insert(host.uri, new vscode.Position(0, 0), '{')
-    await vscode.workspace.applyEdit(edit)
+    await host.write('{' + host.text)
     try {
       await until(() => vscode.languages.getDiagnostics(host.uri).length, 'Problems lists why')
       const state = host.studio.state(host.key)
@@ -30,11 +29,15 @@ suite('Source', () => {
       // A command on the case says nothing more of why it cannot read: Problems says it already.
       await vscode.commands.executeCommand('gridkitStudio.copyId', host.uri)
       await vscode.commands.executeCommand('gridkitStudio.openSource', host.uri)
-      await host.undo()
     } finally {
-      if (host.document.getText() !== host.text) await host.replace(host.text)
+      await host.write(host.text)
     }
-    assert.deepEqual(vscode.languages.getDiagnostics(host.uri), [])
+    await until(
+      () => !vscode.languages.getDiagnostics(host.uri).length && !host.studio.state(host.key).stale,
+      'the file reads again',
+    )
+    // Read again as it was, it is the case that read before.
+    assert.equal(host.studio.state(host.key).summary?.version, version)
   })
 
   test('says why a case file does not read in Problems alone, and reads it once repaired', async () => {
@@ -43,13 +46,31 @@ suite('Source', () => {
     await host.follow(uri).catch(() => {})
     await until(() => host.studio.state(uri.toString()).error, 'the parse error noticed')
     assert.ok(vscode.languages.getDiagnostics(uri).length, 'Problems lists why')
-    await host.replace(host.text, uri)
+    await host.write(host.text, uri)
     await until(
       () => !host.studio.state(uri.toString()).error && host.studio.state(uri.toString()).summary,
       'the repaired case reads',
     )
     assert.deepEqual(vscode.languages.getDiagnostics(uri), [])
-    await (await vscode.workspace.openTextDocument(uri)).save()
+  })
+
+  test('reads a case file larger than VS Code gives an extension, as GridKit has it', async function () {
+    // ACTIVSg70k as GridKit writes it, 94 MB: past the 50 MB of text VS Code gives an extension.
+    this.timeout(120_000)
+    const uri = await host.copy('cases/ACTIVSg70k.case.json')
+    try {
+      await vscode.commands.executeCommand('vscode.openWith', uri, 'gridkitStudio.network')
+      const summary = await until(
+        () => host.studio.state(uri.toString()).summary,
+        'ACTIVSg70k read',
+        120_000,
+      )
+      assert.equal(summary.counts.Bus, 70_000)
+      assert.deepEqual(host.said(), [])
+    } finally {
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+      await vscode.workspace.fs.delete(uri)
+    }
   })
 
   test('reads the catalog the Catalog setting names, and says why one does not read', async () => {

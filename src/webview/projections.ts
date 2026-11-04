@@ -26,8 +26,7 @@ export class CaseProjection {
     try {
       await loadRenderer()
       signal.throwIfAborted()
-      const base = this.slot.current?.key
-      const first = await bridge.request('project', { ...source, fields, base }, signal)
+      const first = await bridge.request('project', { ...source, fields }, signal)
       async function* pages() {
         let page: ProjectionPage = first
         for (;;) {
@@ -35,12 +34,12 @@ export class CaseProjection {
           yield page.bytes
           const cursor: ProjectionCursor | undefined = page.next
           if (!cursor) return
-          page = await bridge.request('project', { ...source, fields, cursor, base }, signal)
-          if (page.key !== first.key || page.base !== first.base)
+          page = await bridge.request('project', { ...source, fields, cursor }, signal)
+          if (page.key !== first.key)
             throw new Error('The projection revision changed while loading.')
         }
       }
-      return await this.slot.receive('case', first.key, pages(), signal, first.base)
+      return await this.slot.receive('case', first.key, pages(), signal)
     } catch (error) {
       if (this.#controller === controller) this.#request = ''
       if (signal.aborted && !abort?.aborted) return false

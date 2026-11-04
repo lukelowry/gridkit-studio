@@ -268,7 +268,6 @@ export interface SceneExtras {
   readonly sampled?: (table: string, field: string) => Source | undefined
   /** Marks drawn under the case's own, such as a map's. */
   readonly background?: readonly Mark[]
-  readonly editable?: boolean
 }
 
 /** The Network or Diagram of `data`, as every view and export draws it. */
@@ -278,15 +277,9 @@ export function sceneOf(
   definition: CaseDefinition,
   settings: SettingsReader,
   theme: Theme,
-  {
-    bindings = {},
-    results,
-    sampled = () => undefined,
-    background = [],
-    editable = false,
-  }: SceneExtras,
+  { bindings = {}, results, sampled = () => undefined, background = [] }: SceneExtras,
 ): Scene {
-  if (kind === 'diagram') return diagramScene(data, definition.drawing, settings, theme, editable)
+  if (kind === 'diagram') return diagramScene(data, definition.drawing, settings, theme)
   const outputs =
     results?.outputs.map((output) => ({
       ...output,
@@ -387,7 +380,6 @@ export function diagramScene(
   drawing: Drawing,
   settings: SettingsReader,
   theme: Theme,
-  editable: boolean,
 ): Scene {
   const grid = settings.get('diagram.grid')
   return {
@@ -410,12 +402,7 @@ export function diagramScene(
     },
     theme,
     ease: settings.get('diagram.ease'),
-    // Editing, Alt and a drag draws a connection, and so does a drag from a port, whatever its
-    // button.
-    controls: {
-      ...controls(settings, 'diagram', editable ? { 'alt+primary': 'connect' } : {}),
-      delete: editable,
-    },
+    controls: controls(settings, 'diagram'),
     marks: [
       ...drawing.nets.map((table): Mark => ({
         edges: [data.name, table],
@@ -429,7 +416,6 @@ export function diagramScene(
         marker: 'block',
         position: [field(block.position[0]), field(block.position[1])],
         ports: block.ports,
-        drag: editable,
         shadow: true,
         label: settings.get('diagram.labels') && block.label ? field(block.label) : null,
       })),

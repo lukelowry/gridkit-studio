@@ -1,5 +1,5 @@
 /** GridKit's document semantics. These are independent of a rendered dataset. */
-import type { Id, Port } from 'latkit'
+import type { Id } from 'latkit'
 
 export interface Entity {
   readonly table: string
@@ -43,16 +43,10 @@ export interface EdgeDefinition {
   readonly bends?: string
 }
 
-export interface BlockDefinition extends VertexDefinition {
-  readonly ports: [string, Port][]
-}
-
 export interface Drawing {
   readonly geographic: boolean
   readonly vertices: readonly VertexDefinition[]
   readonly edges: readonly EdgeDefinition[]
-  readonly blocks: readonly BlockDefinition[]
-  readonly nets: readonly string[]
 }
 
 export interface CaseDefinition {
@@ -61,7 +55,6 @@ export interface CaseDefinition {
 }
 
 export const LABEL = '@studio.label'
-export const DIAGRAM_POSITION: [string, string] = ['@studio.diagram.x', '@studio.diagram.y']
 export const NETWORK_POSITION: [string, string] = ['@studio.network.x', '@studio.network.y']
 
 export function entityKey(entity: Entity): string {

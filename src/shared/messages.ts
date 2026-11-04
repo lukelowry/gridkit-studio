@@ -41,30 +41,21 @@ export type {
   RuntimeProcess,
 } from './simulation.js'
 
-/** A JSON value of a case record: what a cell shows and an edit writes. */
+/** A JSON value of a case record, as a cell shows it. */
 export type Value = number | string | boolean | null | readonly Value[]
 
-/** A case document at one version. */
+/** A case file as read at one version. The extension counts a version for each read, and the case
+ *  worker keeps the one the file's content was first read at. */
 export interface Revision {
   uri: string
   version: number
-  attachmentId?: string
 }
 
+/** A place in a case file as VS Code counts it: from a line and character, in UTF-16 units, to
+ *  another. */
 export interface SourceRange {
-  offset: number
-  length: number
-}
-
-/** An entry of a case's outline: an array of its file, holding its records, or one of them. */
-export interface CaseSymbol extends SourceRange {
-  name: string
-  detail: string
-  children?: CaseSymbol[]
-}
-
-export interface SourceEdit extends SourceRange {
-  text: string
+  readonly start: readonly [line: number, character: number]
+  readonly end: readonly [line: number, character: number]
 }
 
 export interface Issue extends SourceRange {
@@ -75,8 +66,6 @@ export interface Issue extends SourceRange {
 }
 
 export interface Summary extends Revision {
-  /** The fields of each type the user can edit. */
-  editable: Record<string, string[]>
   name: string
   /** Identifies the case content; a run carries the one it ran on. */
   fingerprint: string
@@ -94,38 +83,16 @@ export interface Summary extends Revision {
   }
 }
 
-export interface SourceContext {
-  element?: Element
-  range?: SourceRange
-  type?: string
-  reference?: Entity
-}
-
-/** A field that completes where the cursor is: its key, and its type and unit. */
-export interface Completion {
-  name: string
-  detail: string
-}
-
-export type Mutation =
-  | { kind: 'remove'; entities: readonly Entity[] }
-  | { kind: 'set'; entity: Entity; field: string; value: Value }
-  | { kind: 'move'; entity: Entity; position: readonly [number, number] | null }
-  | { kind: 'connect'; from: Element & { field: string }; to: Element | null }
-  /** Every element of `type` lists the outputs in `add` and none in `remove`. */
-  | { kind: 'record'; type: string; add: readonly string[]; remove: readonly string[] }
-
 /** How much memory a worker holds. */
 export interface Memory {
   heapUsed: number
   arrayBuffers: number
 }
 
-/** The case a request of the results worker reads, at its revision, by its content's fingerprint.
- *  Its source comes only when the worker has yet to read that content. */
+/** The case a request of the results worker reads: the file at a revision, by its content's
+ *  fingerprint. The worker reads the file itself, and says `case-changed` when it reads otherwise. */
 export interface CaseSource extends Revision {
   fingerprint: string
-  text?: string
 }
 
 /** Results the extension holds open, by the id it chose for them. */
@@ -133,43 +100,25 @@ export interface OfResults {
   results: string
 }
 
-/** What brings the case worker's copy of a document to a revision: its whole text at that revision,
- *  or the changes since the version the worker holds, with the length of the text they make, which
- *  the worker checks: changes applied to any other text are refused. */
-export type SourceDelta =
-  | { text: string }
-  | { baseVersion: number; changes: readonly (readonly SourceEdit[])[]; length: number }
-
-/** What the case worker answers: each open case's source, parsed as the user edits it, and what
- *  the editor and the views read of it. */
+/** What the case worker answers: each case file Studio shows, read whole from disk, and what the
+ *  views and the extension read of it. */
 export interface CaseApi {
-  parse: {
-    input: Revision & SourceDelta
-    output: Summary
-  }
+  /** Reads the file at `uri` whole, unless it is as last read: then its summary stands, at the
+   *  version it was first read at. */
+  read: { input: Revision; output: Summary }
   validate: { input: Revision; output: Issue[] }
-  /** The nearest elements of the `drawn` types that stand for element `id` in a view. */
-  anchors: { input: Revision & { entity: Entity; drawn: readonly string[] }; output: Entity[] }
-  complete: {
-    input: Revision & SourceDelta & { offset: number }
-    output: Completion[]
-  }
-  context: { input: Revision & { offset: number }; output: SourceContext }
-  /** The outline, listing up to `limit` records. */
-  symbols: { input: Revision & { limit: number }; output: CaseSymbol[] }
+  /** `entity` selected as the Network shows it: the element itself where the Network draws its
+   *  type, else the nearest elements it draws, which may be none. */
+  networkSelection: { input: Revision & { entity: Entity }; output: Entity[] }
+  /** Where an element, or its field, is in the file. */
   locate: { input: Revision & Element; output: SourceRange }
-  transact: { input: Revision & { mutations: readonly Mutation[] }; output: SourceEdit[] }
   project: {
-    input: Revision & {
-      fields: readonly ProjectionSelection[]
-      cursor?: ProjectionCursor
-      base?: string
-    }
+    input: Revision & { fields: readonly ProjectionSelection[]; cursor?: ProjectionCursor }
     output: ProjectionPage
   }
   page: { input: Revision & { request: TableRequest }; output: TablePage }
-  /** Drops the case. */
-  release: { input: { uri: string; attachmentId?: string }; output: null }
+  /** Lets go of the file's case. */
+  release: { input: { uri: string }; output: null }
   stats: { input: Record<string, never>; output: { memory: Memory; cases: number } }
 }
 
@@ -217,11 +166,7 @@ export interface ResultsApi {
   /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
   project: {
-    input: OfResults & {
-      fields: readonly ProjectionSelection[]
-      cursor?: ProjectionCursor
-      base?: string
-    }
+    input: OfResults & { fields: readonly ProjectionSelection[]; cursor?: ProjectionCursor }
     output: ProjectionPage
   }
   page: { input: OfResults & { request: TableRequest }; output: TablePage }
@@ -276,10 +221,10 @@ export type WorkerEvent =
 
 export type FromWorker = Reply | WorkerEvent
 
-export type ViewKind = 'network' | 'diagram' | 'case' | 'monitor' | 'export'
+export type ViewKind = 'network' | 'case' | 'monitor' | 'export'
 
 /** A view a video export can draw. */
-export type VideoView = 'network' | 'diagram' | 'monitor'
+export type VideoView = 'network' | 'monitor'
 
 export interface Plot {
   from: string
@@ -305,34 +250,28 @@ export interface TableState {
 export interface ViewState {
   uri?: string
   version?: number
-  writable?: boolean
   settings?: SettingsValues
   table?: TableState
-  diagramEditing?: boolean
   bindings?: Bindings
   summary?: Summary
+  /** Whether the file has moved past `summary`: it changed, and is read again, or does not read. */
   stale?: boolean
-  /** Why the source fails to parse; `summary` may hold the last valid revision. */
+  /** Why the file does not read; `summary` may hold the last revision that did. */
   error?: string
   selection?: Element
-  /** The network elements that stand for a selection the network does not draw. */
-  anchors?: readonly Entity[]
+  /** The selection as the Network shows it: the element itself, or the nearest elements it draws;
+   *  absent until they are found. */
+  networkSelection?: readonly Entity[]
   results?: Results
   plots?: readonly Plot[]
   /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
   window?: TimeRange
 }
 
-/** What a canvas showed: its camera, over a canvas `size` CSS pixels wide and high. */
+/** What the Network showed: its camera, over a canvas `size` CSS pixels wide and high. */
 export interface Framing {
   readonly camera: Camera
   readonly size: readonly [number, number]
-}
-
-/** How Network and Diagram were last framed, for a video export to keep. */
-export interface Framings {
-  network?: Framing
-  diagram?: Framing
 }
 
 /** `value` as a framing a page sent: a camera with a zoom, over a canvas with an area. */
@@ -351,7 +290,7 @@ export function framingOf(value: unknown): Framing | undefined {
 }
 
 /** What a command asks of a view. */
-export type ViewAction = 'fit' | 'reloadView' | 'neighborhood' | 'arrangeDiagram' | 'exportImage'
+export type ViewAction = 'fit' | 'reloadView' | 'neighborhood' | 'exportImage'
 
 /** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
  *  most and change seldom, are left out once the view holds them. */
@@ -392,36 +331,24 @@ export type TransportAction =
 export type Source = { readonly revision: Revision } | OfResults
 
 /** The revision `summary` describes, as a request names it. */
-export const revisionOf = ({ uri, version, attachmentId }: Revision): Revision => ({
-  uri,
-  version,
-  ...(attachmentId !== undefined && { attachmentId }),
-})
+export const revisionOf = ({ uri, version }: Revision): Revision => ({ uri, version })
 
 /** What a view asks of the extension. Each request names what it is of: a revision of a case, or
  *  results by their id. */
 export interface ViewApi {
   project: {
-    input: Source & {
-      fields: readonly ProjectionSelection[]
-      cursor?: ProjectionCursor
-      base?: string
-    }
+    input: Source & { fields: readonly ProjectionSelection[]; cursor?: ProjectionCursor }
     output: ProjectionPage
   }
   page: { input: Source & { request: TableRequest }; output: TablePage }
   frames: { input: FrameRequest & { next?: string }; output: FramePage }
   sample: { input: ExactSampleRequest; output: ExactSample }
-  /** Edits the revision of the case the view made `mutations` against. */
-  transact: {
-    input: { revision: Revision; mutations: readonly Mutation[]; label?: string }
-    output: void
-  }
   /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
    *  cancel. */
   exportOpen: { input: { uri: string; name: string }; output: number | null }
-  /** How the Network and Diagram of the case at `uri` were last framed, for an export to keep. */
-  framings: { input: { uri: string }; output: Framings }
+  /** How the Network of the case at `uri` was last framed, for an export to keep; null before it
+   *  was. */
+  framing: { input: { uri: string }; output: Framing | null }
   exportWrite: { input: { file: number; bytes: Uint8Array }; output: void }
   /** Finishes the file, or aborts it; resolves to the finished file's path. */
   exportClose: { input: { file: number; abort?: boolean }; output: string | null }
@@ -443,7 +370,7 @@ export type ViewMessage =
   | { kind: 'window'; bounds: TimeRange }
   /** The values the user chose for a plot to show; null, the values it shows. */
   | { kind: 'range'; plot: Plot; range: readonly [number, number] | null }
-  /** What the user framed in a canvas: its camera, and the canvas's size. */
+  /** What the user framed in the Network: its camera, and the canvas's size. */
   | { kind: 'framing'; framing: unknown }
   | { kind: 'display'; values: Partial<SettingsValues> }
   | ({ kind: 'transport'; seq: number } & TransportAction)

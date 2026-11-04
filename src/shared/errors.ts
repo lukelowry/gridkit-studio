@@ -3,6 +3,8 @@
 
 import type { LatkitError } from 'latkit'
 
+import type { SourceRange } from './messages.js'
+
 /** Why a request failed: one of Studio's own reasons, or latkit's. */
 export type Code =
   /** Let go of by whoever asked: nothing failed. */
@@ -11,11 +13,9 @@ export type Code =
   | 'superseded'
   /** Studio stopped before it ended. */
   | 'interrupted'
-  /** The results worker has yet to read this case, whose source the asker sends again. */
-  | 'needs-source'
-  /** The case worker's copy is not at the base of the changes it was sent: the asker sends it
-   *  whole. */
-  | 'stale-source'
+  /** The case file changed since the extension read it: it reads the file again, then asks
+   *  again. */
+  | 'case-changed'
   /** The results asked of were closed: nothing failed, and nothing more is asked of them. */
   | 'results-closed'
   /** What Studio kept of the results asked of does not read: their owner reads their file again,
@@ -50,18 +50,16 @@ export interface Problem {
   readonly defect?: true
   /** Let go of by whoever asked: nothing failed. */
   readonly cancelled?: true
-  /** Where in the source a parse failed. */
-  readonly offset?: number
-  readonly length?: number
-  /** Each place in the source a parse refused, and why, the first first. */
+  /** Where in the case file a read failed. */
+  readonly range?: SourceRange
+  /** Each place in the file a read refused, and why, the first first. */
   readonly problems?: readonly Placed[]
 }
 
-/** Why a parse refused a place in the source. */
+/** Why a read refused a place in the case file. */
 export interface Placed {
   readonly message: string
-  readonly offset: number
-  readonly length: number
+  readonly range: SourceRange
 }
 
 /** An error of `code` saying `message`, with `more` besides: the one way Studio makes one. */
@@ -77,7 +75,7 @@ export function failedWith(error: unknown, code: Code): boolean {
 /** Why a read of a case's revision answers nothing once a newer revision takes its place: the newer
  *  one is asked of. */
 export const superseded = () =>
-  problem('superseded', 'The document changed. Wait for the current revision.')
+  problem('superseded', 'The case changed. Wait for the current revision.')
 
 /** The codes of failures that are none: whoever asked let go, or another took its place, as results
  *  read again take the place of those lost. */
@@ -130,8 +128,7 @@ export function detail(error: unknown): string {
 export function problemOf(error: unknown): Problem {
   const value = error as {
     code?: unknown
-    offset?: unknown
-    length?: unknown
+    range?: unknown
     problems?: unknown
   } | null
   const gone = cancelled(error)
@@ -146,8 +143,7 @@ export function problemOf(error: unknown): Problem {
     detail: detail(error),
     ...(defect(error) && { defect: true }),
     ...(gone && { cancelled: true }),
-    ...(typeof value?.offset === 'number' && { offset: value.offset }),
-    ...(typeof value?.length === 'number' && { length: value.length }),
+    ...(!!value?.range && typeof value.range === 'object' && { range: value.range as SourceRange }),
     ...(Array.isArray(value?.problems) && { problems: value.problems as Placed[] }),
   }
 }

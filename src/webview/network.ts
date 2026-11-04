@@ -1,4 +1,5 @@
-﻿/** Native canvas host. Source revisions, previews, and GPU resources have separate lifetimes. */
+﻿/** The Network's page: the case on a latkit canvas. Source revisions and GPU resources have
+ *  separate lifetimes. */
 import './styles/index.css'
 import './styles/canvas.css'
 
@@ -11,9 +12,8 @@ import { revisionOf, type Summary, type ViewState } from '../shared/messages.js'
 import { reader, TILTED } from '../shared/preferences.js'
 import { bridge, merged } from './bridge.js'
 import { createClock } from './clock.js'
-import { DiagramEditor } from './diagram/edit.js'
 import { saveImage, viewShot } from './export/image.js'
-import { FrameReads, FrameWindow } from './frames.js'
+import { FrameReads, SampledWindows } from './frames.js'
 import { ViewHost } from './host.js'
 import { bindInteractions } from './interactions.js'
 import { type Background, backgroundOf } from './maps.js'
@@ -29,10 +29,12 @@ const mark = (name: string) => {
   if (!performance.getEntriesByName(name).length) performance.mark(name)
 }
 
+/** Elements as one key, by their type and id alone. */
+const keyOf = (entities: readonly Entity[]) =>
+  JSON.stringify(entities.map(({ table, id }) => [table, id]))
+
 function boot() {
-  const name = document.body.dataset.kind
-  if (name !== 'network' && name !== 'diagram') return
-  const kind: 'network' | 'diagram' = name
+  if (document.body.dataset.kind !== 'network') return
   mark('canvas:boot')
   document.getElementById('app')!.innerHTML =
     '<main class="canvas-host" aria-busy="true"><canvas class="canvas-host__canvas" tabindex="0"></canvas><div class="canvas-host__fallback c-empty" role="status"><p class="c-empty__text">Loading case…</p></div><div class="canvas-host__status" role="status" hidden></div></main>'
@@ -46,43 +48,37 @@ function boot() {
   toolbar.setAttribute('role', 'toolbar')
   toolbar.setAttribute('aria-label', 'Network display')
   const buttons = new Map<string, HTMLButtonElement>()
-  if (kind === 'network') {
-    for (const [label, glyph] of [
-      ['Flat', 'projection-flat'],
-      ['Tilt', 'projection-tilt'],
-      ['Globe', 'projection-globe'],
-      ['Auto-rotate', 'orbit'],
-    ] as const) {
-      const button = document.createElement('button')
-      button.className = 'c-icon-btn'
-      button.setAttribute('aria-label', label)
-      button.title = label
-      button.innerHTML = icon(glyph as IconName)
-      button.addEventListener('click', () => {
-        const values =
-          label === 'Auto-rotate'
-            ? { 'network.orbit': reader(state.settings).get('network.orbit') ? 0 : 8 }
-            : {
-                'network.projection':
-                  label === 'Globe' ? ('globe' as const) : ('mercator' as const),
-                'network.tilt': label === 'Tilt' ? TILTED : 0,
-              }
-        bridge.send({ kind: 'display', values })
-      })
-      buttons.set(label, button)
-      toolbar.append(button)
-    }
-    main.append(toolbar)
+  for (const [label, glyph] of [
+    ['Flat', 'projection-flat'],
+    ['Tilt', 'projection-tilt'],
+    ['Globe', 'projection-globe'],
+    ['Auto-rotate', 'orbit'],
+  ] as const) {
+    const button = document.createElement('button')
+    button.className = 'c-icon-btn'
+    button.setAttribute('aria-label', label)
+    button.title = label
+    button.innerHTML = icon(glyph as IconName)
+    button.addEventListener('click', () => {
+      const values =
+        label === 'Auto-rotate'
+          ? { 'network.orbit': reader(state.settings).get('network.orbit') ? 0 : 8 }
+          : {
+              'network.projection': label === 'Globe' ? ('globe' as const) : ('mercator' as const),
+              'network.tilt': label === 'Tilt' ? TILTED : 0,
+            }
+      bridge.send({ kind: 'display', values })
+    })
+    buttons.set(label, button)
+    toolbar.append(button)
   }
-  canvas.setAttribute(
-    'aria-label',
-    `${kind === 'network' ? 'Network' : 'Diagram'} view. Right-click an element for actions.`,
-  )
+  main.append(toolbar)
+  canvas.setAttribute('aria-label', 'Network view. Right-click an element for actions.')
   canvas.addEventListener('contextmenu', (event) => event.stopPropagation())
   const cases = new CaseProjection()
   const reads = new FrameReads()
-  /** The frames each mapped field of the results holds around the playhead, by `[table, field]`. */
-  const windows = new Map<string, FrameWindow>()
+  /** The frames each mapped field of the results holds around the playhead. */
+  const windows = new SampledWindows(reads)
   /** Lets go of an image being drawn once the page goes. */
   const page = new AbortController()
   let state: ViewState = {}
@@ -95,9 +91,6 @@ function boot() {
   let shown = true
   let creating = false
   let restore: Camera | undefined
-  let preview: Data | undefined
-  let editor: DiagramEditor | undefined
-  let editorKey = ''
   let stops: Array<() => void> = []
   let playback: (() => void) | undefined
   let saving: ReturnType<typeof setTimeout> | undefined
@@ -129,10 +122,6 @@ function boot() {
   const drop = () => {
     ++epoch
     restore = host?.view.camera ?? restore
-    editor?.destroy()
-    editor = undefined
-    editorKey = ''
-    preview = undefined
     playback?.()
     playback = undefined
     for (const stop of stops) stop()
@@ -147,7 +136,7 @@ function boot() {
     if (quiet(error) || startOver(error)) return
     main.setAttribute('aria-busy', 'false')
     fallback.hidden = true
-    bridge.report(error, { view: kind, phase: 'draw' })
+    bridge.report(error, { view: 'network', phase: 'draw' })
   }
   const clock = createClock(
     (at) => {
@@ -173,37 +162,25 @@ function boot() {
   }
 
   function sources(): Source[] {
-    const data = preview ?? cases.slot.current?.data
-    return [
-      ...(data ? [data] : []),
-      ...background.sources,
-      ...[...windows.values()].flatMap((window) => (window.data ? [window.data] : [])),
-    ]
+    const data = cases.slot.current?.data
+    return [...(data ? [data] : []), ...background.sources, ...windows.sources]
   }
-
-  const editing = () =>
-    kind === 'diagram' &&
-    !!state.diagramEditing &&
-    !!state.writable &&
-    !state.stale &&
-    summary === state.summary
 
   /** What the view draws now: the bindings whose fields it holds, and the map. */
   function scene(data: Data, summary: Summary): Scene {
     const settings = reader(state.settings)
-    const requested = sceneFields(summary.definition, [kind], state.bindings)
+    const requested = sceneFields(summary.definition, state.bindings)
     if (
       requested.every(({ table, fields }) =>
         fields.every((field) => heldFields.get(table)?.has(field)),
       )
     )
       drawnBindings = state.bindings ?? {}
-    return sceneOf(kind, data, summary.definition, settings, nativeTheme(settings, kind), {
+    return sceneOf(data, summary.definition, settings, nativeTheme(settings, 'network'), {
       bindings: drawnBindings,
       results: state.results,
-      sampled: (table, field) => windows.get(JSON.stringify([table, field]))?.data,
+      sampled: windows.source,
       background: background.marks,
-      editable: editing(),
     })
   }
 
@@ -213,77 +190,38 @@ function boot() {
     const { view } = host
     const settings = reader(state.settings)
     view.sources = sources()
-    const editable = editing()
-    if (kind === 'diagram')
-      canvas.setAttribute(
-        'aria-label',
-        editable
-          ? 'Diagram editing. Drag blocks or connect signal ports. Right-click for actions.'
-          : 'Diagram view. Right-click an element for actions.',
-      )
     host.scene = scene(data, summary)
-    if (kind === 'network') {
-      const projection =
-        summary.definition.drawing.geographic && settings.get('network.projection') === 'globe'
-          ? 'Globe'
-          : settings.get('network.tilt') > 0
-            ? 'Tilt'
-            : 'Flat'
-      for (const [label, button] of buttons) {
-        button.disabled = label === 'Globe' && !summary.definition.drawing.geographic
-        button.setAttribute(
-          'aria-pressed',
-          String(
-            label === 'Auto-rotate' ? settings.get('network.orbit') !== 0 : label === projection,
-          ),
-        )
-      }
-      view.orbit = settings.get('network.orbit')
-      // A pitch alone turns the camera and keeps a fit that is due.
-      if (tilt !== settings.get('network.tilt')) {
-        tilt = settings.get('network.tilt')
-        view.camera = { pitch: tilt }
-      }
+    const projection =
+      summary.definition.drawing.geographic && settings.get('network.projection') === 'globe'
+        ? 'Globe'
+        : settings.get('network.tilt') > 0
+          ? 'Tilt'
+          : 'Flat'
+    for (const [label, button] of buttons) {
+      button.disabled = label === 'Globe' && !summary.definition.drawing.geographic
+      button.setAttribute(
+        'aria-pressed',
+        String(
+          label === 'Auto-rotate' ? settings.get('network.orbit') !== 0 : label === projection,
+        ),
+      )
     }
-    const key = editable ? cases.slot.current!.key : ''
-    if (key !== editorKey) {
-      editor?.destroy()
-      editor = undefined
-      preview = undefined
-      editorKey = key
-      view.sources = sources()
-      if (editable)
-        editor = new DiagramEditor(
-          view,
-          data,
-          summary,
-          (source) => {
-            preview = source === cases.slot.current?.data ? undefined : source
-            if (host) host.view.sources = sources()
-          },
-          fail,
-        )
+    view.orbit = settings.get('network.orbit')
+    // A pitch alone turns the camera and keeps a fit that is due.
+    if (tilt !== settings.get('network.tilt')) {
+      tilt = settings.get('network.tilt')
+      view.camera = { pitch: tilt }
     }
     if (covered(clock.now())) view.at = clock.now()
     selection()
   }
 
+  /** The selection as the Network shows it, framed unless the user picked it here. */
   function selection() {
     const data = cases.slot.current?.data
     if (!host || !data) return
-    const element = state.selection
-    const entities =
-      element &&
-      summary &&
-      (kind === 'network'
-        ? [...summary.definition.drawing.vertices, ...summary.definition.drawing.edges].some(
-            (item) => item.table === element.table,
-          )
-        : summary.definition.drawing.blocks.some((item) => item.table === element.table) ||
-          summary.definition.drawing.nets.includes(element.table))
-        ? [element]
-        : [...(state.anchors ?? [])]
-    const key = JSON.stringify(entities)
+    const entities = state.networkSelection ?? []
+    const key = keyOf(entities)
     if (key === selected) return
     selected = key
     host.view.selection = entities.map((entity) => ({
@@ -296,23 +234,20 @@ function boot() {
 
   /** Whether every sampled binding holds the frames at `at`. */
   function covered(at: number): boolean {
-    if (kind !== 'network' || !summary || !state.results?.frames) return true
-    return sampledFields(summary.definition, state.bindings, state.results).every((field) => {
-      const range = windows.get(JSON.stringify(field))?.range
-      return !!range && at >= range[0] && at <= range[1]
-    })
+    if (!summary || !state.results?.frames) return true
+    return windows.hold(sampledFields(summary.definition, state.bindings, state.results), at)
   }
 
+  /** Asks each mapped field's window for the frames about `at`: the frame at `at` while paused, and
+   *  while playing, from a quarter second behind to as far as the playhead goes in two seconds, a
+   *  second at least. Lets go of the windows of fields no longer mapped. */
   function prefetch(at: number) {
-    if (kind !== 'network' || !visible() || !summary) return
+    if (!visible() || !summary) return
     const results = state.results
-    const wanted = new Set<string>()
+    const fields = results?.frames ? sampledFields(summary.definition, state.bindings, results) : []
     if (results?.frames)
-      for (const [table, field] of sampledFields(summary.definition, state.bindings, results)) {
-        const key = JSON.stringify([table, field])
-        wanted.add(key)
-        const window = windows.get(key) ?? new FrameWindow(reads)
-        windows.set(key, window)
+      for (const [table, field] of fields) {
+        const window = windows.of([table, field])
         if (
           window.pending &&
           window.requested &&
@@ -353,22 +288,14 @@ function boot() {
             if (changed && !closed) paint()
           }, fail)
       }
-    let removed = false
-    for (const [key, window] of windows)
-      if (!wanted.has(key)) {
-        window.clear()
-        windows.delete(key)
-        removed = true
-      }
-    if (removed && host) paint()
+    if (windows.keep(fields) && host) paint()
   }
 
   async function backgrounds() {
     const settings = reader(state.settings)
-    const mode =
-      kind === 'network' && summary?.definition.drawing.geographic
-        ? settings.get('network.map.source')
-        : 'none'
+    const mode = summary?.definition.drawing.geographic
+      ? settings.get('network.map.source')
+      : 'none'
     const key = JSON.stringify([
       mode,
       settings.get('network.map.tilesUrl'),
@@ -447,21 +374,21 @@ function boot() {
         stops.push(
           bindInteractions(made.view, {
             select(element) {
-              own = JSON.stringify(element ? [element] : [])
+              own = keyOf(element ? [element] : [])
               bridge.send({ kind: 'select', element })
             },
             open(element) {
               bridge.send({ kind: 'select', element })
               bridge.command('revealInSource')
             },
-            menu: (point, elements) => nativeMenu(canvas, point, elements, state, kind),
+            menu: (point, elements) => nativeMenu(canvas, point, elements, state, 'network'),
             camera: framing,
             error: fail,
           }),
         )
       }
       paint()
-      if (fit) host.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
+      if (fit) host.fit(caseFit(cases.slot.current.data, summary.definition.drawing))
       follow()
       void backgrounds()
     } finally {
@@ -481,21 +408,16 @@ function boot() {
         restore = undefined
       }
       if (previous.uri !== state.uri || previous.results?.id !== state.results?.id) {
-        for (const window of windows.values()) window.clear()
         windows.clear()
         reads.clear()
       }
       const next = state.summary
       if (next && !state.stale) {
-        const fields = sceneFields(next.definition, [kind], state.bindings)
+        const fields = sceneFields(next.definition, state.bindings)
         void cases
           .receive({ revision: revisionOf(next), fields }, fields)
           .then((changed) => {
             if (!changed || closed) return
-            editor?.destroy()
-            editor = undefined
-            editorKey = ''
-            preview = undefined
             summary = next
             heldFields = new Map(fields.map(({ table, fields }) => [table, new Set(fields)]))
             received++
@@ -520,25 +442,25 @@ function boot() {
         drop()
         void render().catch(fail)
       } else if (message.command === 'fit' && cases.slot.current && summary)
-        host?.fit(caseFit(cases.slot.current.data, summary.definition.drawing, kind))
-      else if (message.command === 'arrangeDiagram') void editor?.arrange().catch(fail)
+        host?.fit(caseFit(cases.slot.current.data, summary.definition.drawing))
       else if (message.command === 'neighborhood' && host && cases.slot.current) {
-        const entity = isEntity(message.value) ? message.value : state.selection
-        if (entity) {
-          const row = { data: cases.slot.current.data.name, ...entity }
+        // What the Network draws for the element in context, and what each of those links to.
+        const { view } = host
+        const data = cases.slot.current.data.name
+        const entities = Array.isArray(message.value) ? message.value.filter(isEntity) : []
+        if (entities.length)
           host.fit({
-            rows: [
-              { data: row.data, table: row.table, ids: [row.id] },
-              ...host.view.neighbors(row),
-            ],
+            rows: entities.flatMap((entity) => [
+              { data, table: entity.table, ids: [entity.id] },
+              ...view.neighbors({ data, ...entity }),
+            ]),
           })
-        }
       } else if (message.command === 'exportImage' && host && summary && state.uri) {
         const [shown, uri, name] = [host, state.uri, summary.name]
         // The picture shows the view as framed, never its background before its first fit.
         void shown
           .framed()
-          .then(() => saveImage(viewShot(shown.view), uri, name, kind, page.signal))
+          .then(() => saveImage(viewShot(shown.view), uri, name, 'network', page.signal))
           .catch(fail)
       }
     }
@@ -583,10 +505,7 @@ function boot() {
       at: view.at,
       requestedAt: clock.now(),
       covered: covered(clock.now()),
-      windows: [...windows.values()].map((window) => ({
-        span: window.range,
-        pending: window.pending,
-      })),
+      windows: windows.spans,
       received,
       bindings: drawnBindings,
       cacheBytes: reads.bytes,
@@ -620,7 +539,7 @@ function boot() {
       clearTimeout(saving)
       mapController?.abort()
       background.destroy?.()
-      for (const window of windows.values()) window.clear()
+      windows.clear()
       cases.clear()
       reads.clear()
       gpu?.destroy()

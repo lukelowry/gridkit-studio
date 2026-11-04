@@ -8,19 +8,46 @@ const TURN_MS = 8
 /** How many records a long walk through a case reads between asking whether to yield, less one. */
 export const STEP_RECORDS = 1023
 
+/** How many requests someone waits on are under way, which background work steps aside for. */
+let awaited = 0
+/** Settles once no request is awaited, for background work waiting between its turns, and what
+ *  settles it. */
+let resumed: Promise<void> | undefined
+let resume: (() => void) | undefined
+
+/** Does `task` as work someone waits on: background work waits between its turns until it ends. */
+export async function awaitedWork<T>(task: () => Promise<T>): Promise<T> {
+  awaited++
+  try {
+    return await task()
+  } finally {
+    if (--awaited === 0) {
+      resume?.()
+      resumed = resume = undefined
+    }
+  }
+}
+
 /** Long work done in turns of TURN_MS, which stops once `signal` lets go. Each turn ends with
  *  `setImmediate`, never a timer: a timer waits for the system clock's next tick, which is about
- *  15 ms on Windows, so a loop of many turns would wait more than it works. */
+ *  15 ms on Windows, so a loop of many turns would wait more than it works. `background` work, which
+ *  nobody waits on, as a check that fills Problems, waits between its turns while any other request
+ *  is under way, and goes on once none is. */
 export class Turns {
   #ends = performance.now() + TURN_MS
 
-  constructor(readonly signal: AbortSignal = AbortSignal.any([])) {}
+  constructor(
+    readonly signal: AbortSignal = AbortSignal.any([]),
+    readonly background = false,
+  ) {}
 
   /** Ends the turn once it has run its time, and stops once the signal lets go. */
   async step(): Promise<void> {
     this.signal.throwIfAborted()
     if (performance.now() < this.#ends) return
     await setImmediate()
+    while (this.background && awaited > 0)
+      await this.wait((resumed ??= new Promise<void>((settle) => (resume = settle))))
     this.signal.throwIfAborted()
     this.#ends = performance.now() + TURN_MS
   }

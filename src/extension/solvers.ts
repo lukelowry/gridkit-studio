@@ -14,11 +14,11 @@ export const nameOf = (uri: vscode.Uri) => uri.path.split('/').at(-1)!
 const near = (solver: vscode.Uri, path: string) =>
   isAbsolute(path) ? vscode.Uri.file(path) : vscode.Uri.joinPath(solver, '..', path)
 
-/** The solver file at `solver`, as its editor holds it, what it says, and the case it names. */
+/** The solver file at `solver` as saved, what it says, and the case it names. */
 export async function solverAt(solver: vscode.Uri) {
-  const document = await vscode.workspace.openTextDocument(solver)
-  const study = readSolver(nameOf(solver), document.getText())
-  return { document, study, model: near(solver, study.model) }
+  const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(solver))
+  const study = readSolver(nameOf(solver), text)
+  return { study, model: near(solver, study.model) }
 }
 
 /** The file a run of `solver`, which `study` says, writes its samples to for the case `summary`

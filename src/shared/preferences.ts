@@ -1,4 +1,4 @@
-/** The display settings of Network, Diagram and Monitor, each defined once; VS Code owns the theme,
+/** The display settings of Network and Monitor, each defined once; VS Code owns the theme,
  *  its contrast and its motion. `pnpm settings` writes them into package.json for VS Code Settings. */
 
 import { type ColormapName, colormaps } from 'latkit'
@@ -101,6 +101,9 @@ const ZOOM = [
   ['modifier', 'Modifier + wheel'],
   ['off', 'Off'],
 ] as const
+/** The Network's wheel can also pan, as a trackpad scrolls. The Monitor's wheel scrolls its plots. */
+const NETWORK_ZOOM = [['wheel', 'Wheel'], ['trackpad', 'Trackpad'], ...ZOOM.slice(1)] as const
+const TRACKPAD = 'Trackpad scrolls to pan and pinches to zoom.'
 const MOTION = [
   ['system', 'System'],
   ['full', 'Full'],
@@ -108,6 +111,10 @@ const MOTION = [
 ] as const
 /** The tilt the Network's Tilt button sets, and a height mapped on a flat Network takes. */
 export const TILTED = 45
+/** The narrowest an edge draws, in CSS pixels. latkit writes depth only where a line covers whole
+ *  pixels, so a thinner line is a faint sliver that hides nothing behind it, and where many cross,
+ *  the most numerous color shows whichever is nearest. */
+export const EDGE_WIDTH = 2
 export const SETTINGS = [
   category('network', 'Network', [
     group('View', [
@@ -122,15 +129,15 @@ export const SETTINGS = [
         'network.vertexRadius',
         'Vertex radius',
         2.5,
-        [0.25, 12, 0.25],
-        'Radius in CSS pixels for sparse networks. Dense networks scale down automatically; size bindings scale with this value.',
+        [EDGE_WIDTH, 12, 0.25],
+        'Radius in CSS pixels, never under the edge width, so a vertex shows past the edges that meet it. Size mappings start from this radius.',
       ),
       num(
         'network.edgeWidth',
         'Edge width',
-        0.75,
-        [0.1, 6, 0.05],
-        'Width in CSS pixels for sparse networks. Dense networks scale down automatically; width bindings scale with this value.',
+        EDGE_WIDTH,
+        [EDGE_WIDTH, 8, 0.25],
+        `Width in CSS pixels, at least ${EDGE_WIDTH}, as a thinner line can't hide what is behind it. Width mappings start from this width.`,
       ),
       choice('network.colormap', 'Colormap', 'viridis', COLORMAPS),
       num('network.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),
@@ -143,7 +150,7 @@ export const SETTINGS = [
       ),
     ]),
     group('Interaction', [
-      choice('network.zoom', 'Wheel behavior', 'wheel', ZOOM),
+      choice('network.zoom', 'Wheel behavior', 'wheel', NETWORK_ZOOM, TRACKPAD),
       choice('network.motion', 'Motion', 'system', MOTION),
       num('network.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),
@@ -162,32 +169,6 @@ export const SETTINGS = [
       bool('network.map.daylight', 'Daylight', false),
       color('network.map.ground', 'Ground color', null),
       num('network.map.night', 'Night brightness', 0.3, [0, 1, 0.01]),
-    ]),
-  ]),
-  category('diagram', 'Diagram', [
-    group('Layout', [
-      choice('diagram.direction', 'Direction', 'right', [
-        ['right', 'Right'],
-        ['left', 'Left'],
-        ['down', 'Down'],
-        ['up', 'Up'],
-      ]),
-      num('diagram.gap', 'Block gap', 30, [0, 200, 1]),
-      num('diagram.rankGap', 'Rank gap', 70, [0, 300, 1]),
-      choice('diagram.grid', 'Grid', 'dots', [
-        ['dots', 'Dots'],
-        ['lines', 'Lines'],
-        ['none', 'None'],
-      ]),
-    ]),
-    group('View', [
-      bool('diagram.labels', 'Labels', true),
-      num('diagram.ease', 'Transition duration', 0.3, [0, 2, 0.05], 'Seconds.'),
-    ]),
-    group('Interaction', [
-      choice('diagram.zoom', 'Wheel behavior', 'wheel', ZOOM),
-      choice('diagram.motion', 'Motion', 'system', MOTION),
-      num('diagram.pickRadius', 'Picking distance', 8, [0, 32, 1]),
     ]),
   ]),
   category('monitor', 'Monitor', [

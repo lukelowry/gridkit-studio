@@ -10,7 +10,7 @@ import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
 import type { Results } from '../shared/messages.js'
 import { cancellable } from './client.js'
-import { CHOOSE_SIGNALS, notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
+import { notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
 import type { Sessions } from './sessions.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
@@ -34,44 +34,37 @@ function progressOf(results?: Results) {
 }
 
 export function registerRuns(studio: Sessions) {
-  /** The solver file `target` names, what it says, and the case it names, read as GridKit reads
-   *  them, with the file a run of it writes. */
-  const solverRun = async (target: unknown, doing: string) => {
-    const solver = solverOf(target, doing)
-    const { document: input, study, model } = await solverAt(solver)
-    const document = await vscode.workspace.openTextDocument(model)
-    return { solver, input, study, model, document }
-  }
-  /** The case `document` holds, as it reads; a notice that it has problems to fix `before`, which
+  /** The case at `model` as its file reads; a notice that it has problems to fix `before`, which
    *  Problems lists; or why else it could not be read. */
-  const readable = async (document: vscode.TextDocument, before: string) => {
+  const readable = async (model: vscode.Uri, before: string) => {
     try {
-      return await studio.documents.read(document)
+      return await studio.files.read(model.toString())
     } catch (error) {
       if (!saidInProblems(error)) throw error
-      throw notice(`${nameOf(document.uri)} has problems to fix before ${before}.`, SHOW_PROBLEMS)
+      throw notice(`${nameOf(model)} has problems to fix before ${before}.`, SHOW_PROBLEMS)
     }
   }
 
   const run = async (target: unknown) => {
     if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
-    const { solver, input, study, model, document } = await solverRun(target, 'run it')
-    // GridKit reads the files as saved, so they are saved first, as VS Code's tasks do.
-    for (const each of [input, document])
-      if (each.isDirty && !(await each.save()))
-        throw new Error(`${nameOf(each.uri)} was not saved.`)
+    const solver = solverOf(target, 'run it')
+    // GridKit reads the files as saved, and so does Studio: an editor of either with unsaved
+    // changes is saved first, as VS Code's tasks do.
+    await vscode.workspace.save(solver)
+    const { study, model } = await solverAt(solver)
+    await vscode.workspace.save(model)
+    const session = studio.activate(model.toString())
     // The Monitor reads the output against the case, so Studio must read the case. Whether
     // GridKit accepts it is GridKit's to say.
-    const summary = await readable(document, 'it can run')
+    const summary = await readable(model, 'it can run')
     if (!summary.recording.anything)
-      throw notice(`${nameOf(model)} records nothing.`, CHOOSE_SIGNALS)
+      throw new Error(`${nameOf(model)} records nothing: no record lists a signal in its mon list.`)
     const output = writtenBy(solver, study, summary)
     // GridKit writes over the file it writes to, so that file must not be one the run reads.
     if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
     // As the settings of the folder it mounts say.
     const gridkit = gridkitOf(solver)
-    const session = await studio.open(document)
     await studio.showView('monitor')
     await vscode.window.withProgress(
       {
@@ -110,11 +103,12 @@ export function registerRuns(studio: Sessions) {
 
   /** Shows what a solver file's last simulation wrote, read against its case, without running it. */
   const show = async (target: unknown) => {
-    const { solver, study, document } = await solverRun(target, 'show its results')
-    const output = writtenBy(solver, study, await readable(document, 'its results can be read'))
+    const solver = solverOf(target, 'show its results')
+    const { study, model } = await solverAt(solver)
+    const session = studio.activate(model.toString())
+    const output = writtenBy(solver, study, await readable(model, 'its results can be read'))
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
-    const session = await studio.open(document)
     await studio.showView('monitor')
     await session.load(output.fsPath, solver.fsPath)
   }

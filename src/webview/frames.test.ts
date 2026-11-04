@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 
 import type { FramePage, FrameRequest } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
-import { FrameReads, FrameWindow } from './frames.js'
+import { FrameReads, FrameWindow, type Sampled, SampledWindows } from './frames.js'
 
 const request = vi.hoisted(() => vi.fn())
 vi.mock('./bridge.js', () => ({ bridge: { request } }))
@@ -100,6 +100,28 @@ test('an aborted late response never replaces the published native dataset', asy
   expect(window.data).toBe(previous)
   expect(window.version).toBe(2)
   window.clear()
+  reads.clear()
+})
+
+test('a scene holds a window for each mapped field, and lets go of those it maps no more', async () => {
+  const reads = new FrameReads()
+  const windows = new SampledWindows(reads)
+  const vm: Sampled = ['Bus', 'Vm']
+  request.mockResolvedValue(page())
+  await windows.of(vm).receive(input, 2)
+  const data = windows.of(vm).data
+  expect(data).toBeDefined()
+  expect(windows.source('Bus', 'Vm')).toBe(data)
+  expect(windows.sources).toEqual([data])
+  // It holds the frames of the times it read, and of no field it has not read.
+  expect(windows.hold([vm], 0.5)).toBe(true)
+  expect(windows.hold([vm], 2)).toBe(false)
+  expect(windows.hold([vm, ['Bus', 'Va']], 0.5)).toBe(false)
+  expect(windows.keep([vm])).toBe(false)
+  expect(windows.keep([])).toBe(true)
+  expect(windows.source('Bus', 'Vm')).toBeUndefined()
+  expect(windows.sources).toEqual([])
+  windows.clear()
   reads.clear()
 })
 

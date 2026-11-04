@@ -88,34 +88,21 @@ function tableChange(change: unknown): Partial<TableState> {
  *  their own; a view is sent state only when this changes. While a run writes, the frames read so
  *  far send a view that draws them state again, which is how it hears there are more to ask for. */
 const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
-  case: ({ uri, version, stale, error, writable, selection, bindings, table }) => [
+  case: ({ uri, version, stale, error, selection, bindings, table }) => [
     uri,
     version,
     stale,
     error,
-    writable,
     selection,
     bindings,
     table,
   ],
-  diagram: ({ uri, stale, error, writable, selection, anchors, bindings, diagramEditing }) => [
-    uri,
-    stale,
-    error,
-    writable,
-    selection,
-    anchors,
-    bindings,
-    diagramEditing,
-  ],
   // The times the results hold mark which ones the network can draw, and their ranges color it.
-  network: ({ uri, stale, error, writable, selection, anchors, bindings, results }) => [
+  network: ({ uri, stale, error, networkSelection, bindings, results }) => [
     uri,
     stale,
     error,
-    writable,
-    selection,
-    anchors,
+    networkSelection,
     bindings,
     drawnOf(results),
   ],
@@ -144,12 +131,8 @@ const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
 /** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
 type Hidden = 'destroyed' | 'idle' | 'working'
 
-function html(
-  webview: vscode.Webview,
-  context: vscode.ExtensionContext,
-  entry: string,
-  kind: string,
-) {
+/** The page of a view of `kind`, whose script and styles are the bundle of the same name. */
+function html(webview: vscode.Webview, context: vscode.ExtensionContext, kind: ViewKind) {
   const nonce = randomBytes(18).toString('base64')
   const escape = (value: string) =>
     value
@@ -165,11 +148,11 @@ function html(
 <meta name="latkit-wasm" content="${asset('dist/webview/latkit.wasm')}">
 <meta name="latkit-worker" content="${asset('dist/webview/latkit-worker.js')}">
 <meta name="latkit-assets" content="${asset('dist/webview/')}">
-<link rel="stylesheet" href="${asset('dist/webview/' + entry + '.css')}"></head>
-<body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + entry + '.js')}"></script></body></html>`
+<link rel="stylesheet" href="${asset('dist/webview/' + kind + '.css')}"></head>
+<body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + kind + '.js')}"></script></body></html>`
 }
 
-/** One webview of Studio's and the case it shows: a canvas editor's own, or the case a panel
+/** One webview of Studio's and the case it shows: a Network editor's own, or the case a panel
  *  follows. Its page loads once, and follows another case by the state it is sent. Each case it
  *  follows, and each page that loads, is a showing of its own: what the page says and asks names
  *  its showing, and what it says of one past is dropped, as the page drops what is said to it of
@@ -214,12 +197,7 @@ class View {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(studio.context.extensionUri, 'dist', 'webview')],
     }
-    panel.webview.html = html(
-      panel.webview,
-      studio.context,
-      kind === 'network' || kind === 'diagram' ? 'canvas' : kind,
-      kind,
-    )
+    panel.webview.html = html(panel.webview, studio.context, kind)
     // Results closed while the view asked of them, or a revision a newer one replaced, are no
     // failure, and say nothing: newer state follows.
     const report = (error: unknown) => studio.reporter.report(error)
@@ -397,8 +375,7 @@ class View {
       }
       case 'framing': {
         const framing = framingOf(message.framing)
-        if (framing && (this.kind === 'network' || this.kind === 'diagram'))
-          session?.setFraming(this.kind, framing)
+        if (framing && this.kind === 'network') session?.setFraming(framing)
         return
       }
       case 'display': {
@@ -465,7 +442,7 @@ class View {
           ? client.results.call('project', input, signal)
           : client.cases.call(
               'project',
-              { ...input.revision, fields: input.fields, cursor: input.cursor, base: input.base },
+              { ...input.revision, fields: input.fields, cursor: input.cursor },
               signal,
             ),
       page: (input, signal) => {
@@ -479,15 +456,7 @@ class View {
           )
         return read
       },
-      transact: ({ revision, mutations, label }) =>
-        studio.documents.transact(
-          revision.uri,
-          revision.version,
-          mutations,
-          label,
-          revision.attachmentId,
-        ),
-      framings: async ({ uri }) => studio.get(uri)?.framings ?? {},
+      framing: async ({ uri }) => studio.get(uri)?.framing ?? null,
       exportOpen: ({ uri, name }, signal) =>
         this.#exports.open(vscode.Uri.parse(uri), name, signal),
       exportWrite: ({ file, bytes }) => this.#exports.write(file, bytes),
@@ -592,26 +561,28 @@ class View {
 }
 
 export function registerViews(studio: Sessions) {
-  const subscriptions: vscode.Disposable[] = []
-  for (const kind of ['network', 'diagram'] as const)
-    subscriptions.push(
-      vscode.window.registerCustomEditorProvider(
-        viewId(kind),
-        {
-          resolveCustomTextEditor(document, panel) {
-            // A canvas keeps its webview while hidden, so showing it again is free.
-            new View(studio, panel, kind, 'idle', { uri: document.uri.toString() })
-            // Read while the webview loads. The views follow the case once its editor is in front,
-            // not as it loads: of editors loading side by side, the last would win.
-            void studio.documents.parsed(document)
-          },
-        },
-        {
-          supportsMultipleEditorsPerDocument: true,
-          webviewOptions: { retainContextWhenHidden: true },
-        },
-      ),
-    )
+  const network: vscode.CustomReadonlyEditorProvider = {
+    // One document per file, which its editors share: it holds the case's session, which reads
+    // the file as the webview loads, while any editor shows it. The views follow the case once
+    // its editor is in front, not as it loads: of editors loading side by side, the last would
+    // win. Studio shows case files on disk, which it reads itself.
+    openCustomDocument(uri) {
+      const key = uri.toString()
+      if (!followed(key)) throw new Error('GridKit Studio shows .case.json files on disk.')
+      studio.hold(key, 'document')
+      return { uri, dispose: () => studio.release(key, 'document') }
+    },
+    resolveCustomEditor(document, panel) {
+      // The Network keeps its webview while hidden, so showing it again is free.
+      new View(studio, panel, 'network', 'idle', { uri: document.uri.toString() })
+    },
+  }
+  const subscriptions: vscode.Disposable[] = [
+    vscode.window.registerCustomEditorProvider(viewId('network'), network, {
+      supportsMultipleEditorsPerDocument: true,
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  ]
   for (const kind of PANELS) {
     // An export keeps working while its panel is collapsed. The Case panel takes the Monitor's
     // place in the bottom panel, so the Monitor is kept idle rather than destroyed.

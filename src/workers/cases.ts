@@ -1,175 +1,106 @@
-/** The case worker: each open case's source, parsed as the user edits it, and what the views and the
- *  editor read of it. Results files and runs have a worker of their own, so neither slows editing. */
+/** The case worker: each case file Studio shows, read whole from disk, and what the views and the
+ *  extension read of it. A file changed on disk is read again whole; one written again as it was
+ *  keeps its case. Results files and runs have a worker of their own. */
 
+import { fileURLToPath } from 'node:url'
 import { workerData } from 'node:worker_threads'
 
-import { deltaProjectionPage } from '../gridkit/deltas.js'
 import type { ProjectedDocument } from '../gridkit/document.js'
 import {
-  applyChanges,
-  Case,
+  type Case,
   catalog as bundled,
   catalogOf,
-  completionsAt,
-  delivered,
   diagnose,
-  outline,
-  sourceContext,
+  rangeIn,
   sourceRange,
-  transaction,
-  unchangedBy,
 } from '../gridkit/index.js'
-import { anchors } from '../gridkit/inspection.js'
+import { networkSelectionOf } from '../gridkit/inspection.js'
 import { CaseQueries, projectionPage } from '../gridkit/projection.js'
-import { detail, problem, superseded } from '../shared/errors.js'
-import type { CaseApi, Revision, SourceDelta, Summary, WorkerOptions } from '../shared/messages.js'
+import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
+import { problem, superseded } from '../shared/errors.js'
+import type { CaseApi, Revision, Summary, WorkerOptions } from '../shared/messages.js'
 import { loadNative } from './native.js'
-import { nameOf, summarize, TextCases } from './parsed.js'
-import { memory, send, serve } from './serve.js'
+import { nameOf, readCase, Recent, summarize } from './parsed.js'
+import { memory, serve } from './serve.js'
 
-/** An open case: its source as last sent, the parse under way, and the case that parse read. */
-interface Document {
-  attachmentId?: string
-  /** The source as last sent, which edits apply to. */
-  source: { version: number; text: string }
-  /** The latest parse begun: one that ends after another began is let go. */
-  parsing: object
-  /** The case read, and the text it was read from. */
-  read?: {
-    kase: Case
-    summary: Summary
-    text: string
-    queries?: CaseQueries
-    projection?: ProjectedDocument
-    previous?: Case
-  }
+/** A file as last read: its case, what the extension was told of it, and the stamp of the file it
+ *  was read from, once the file had rested before it. */
+interface Read {
+  readonly kase: Case
+  readonly summary: Summary
+  stamp?: Stamp
+  queries?: CaseQueries
+  projection?: ProjectedDocument
 }
 
 await loadNative((workerData as WorkerOptions).wasmPath)
 
 const chosen = (workerData as WorkerOptions | null)?.catalog
 const catalog = chosen === undefined ? bundled : catalogOf(chosen)
-const documents = new Map<string, Document>()
-/** Cases read from whole texts, found again when a document opens again. */
-const opened = new TextCases()
+/** Each file the extension follows: as last read, and the read of it under way, which a newer
+ *  read takes the place of. */
+const files = new Map<string, { read?: Read; reading?: object }>()
+/** Files let go of, kept a while, so one opened again as it was reads nothing. */
+const recent = new Recent<Read>()
 
-/** The case read at `revision`; stale once a newer revision is on its way. */
-function latest({ uri, version, attachmentId }: Revision) {
-  const document = documents.get(uri)
-  const read = document?.read
-  if (
-    !read ||
-    read.summary.version !== version ||
-    document.source.version !== version ||
-    (attachmentId !== undefined && document.attachmentId !== attachmentId)
-  )
-    throw superseded()
+/** The case read at `revision`; superseded once the file reads otherwise. */
+function latest({ uri, version }: Revision): Read {
+  const read = files.get(uri)?.read
+  if (read?.summary.version !== version) throw superseded()
   return read
-}
-
-/** Why the worker's copy of a document cannot take the changes it was sent: the extension sends the
- *  whole text instead. */
-const stale = () => problem('stale-source', 'Source mirror is stale.')
-
-/** The text of `input`'s revision: sent whole, or its changes applied to the source the worker holds,
- *  which must be at their base and make a text of the length the extension's has. */
-function sourceOf(input: Revision & SourceDelta): string {
-  if ('text' in input) return input.text
-  const known = documents.get(input.uri)
-  if (known?.source.version !== input.baseVersion || known.attachmentId !== input.attachmentId)
-    throw stale()
-  const text = applyChanges(known.source.text, input.changes)
-  if (text.length !== input.length) throw stale()
-  return text
 }
 
 serve<CaseApi>(
   {
-    async parse(input, signal) {
-      const { uri, version, attachmentId } = input
-      const known = documents.get(uri)
-      const text = sourceOf(input)
-      const parsing = {}
-      // The last case read of this document answers for its own revision until this one reads.
-      const read = known && known.attachmentId === attachmentId ? known.read : undefined
-      documents.set(uri, { attachmentId, source: { version, text }, parsing, read })
-      const name = nameOf(uri)
-      // The same text again, as when the extension sends it whole once more, is the case read. A
-      // document opened, whose whole text may have been read before, is found by its hash, unless
-      // it is too large to keep; an edit, or the whole text sent again, is never hashed.
-      const reread = read?.text === text
-      const key =
-        'text' in input && !known && !reread && opened.fits(text)
-          ? TextCases.key(text, catalog, name)
-          : undefined
-      // An edit of a case read before reads again only the records it changed: when its changes are
-      // of the text that case was read from, what they leave of it is known without a comparison.
-      const unchanged =
-        'changes' in input && read?.text === known?.source.text
-          ? unchangedBy(read!.text.length, input.changes)
-          : undefined
-      const kase = reread
-        ? read!.kase
-        : ((key === undefined ? undefined : opened.find(key)) ??
-          (read
-            ? await Case.revise(read.kase, text, {
-                name,
-                signal,
-                // A defect in reading the edit alone is said in the log; the case reads whole.
-                defects: (error) => send({ kind: 'log', level: 'error', message: detail(error) }),
-                ...(unchanged && { unchanged }),
-              })
-            : await Case.parse(text, catalog, name, signal)))
-      if (key) opened.keep(kase, () => key)
-      signal.throwIfAborted()
-      const document = documents.get(uri)
-      if (document?.parsing !== parsing) throw superseded()
-      const summary = await summarize(kase, { uri, version, attachmentId }, signal)
-      // A parse begun meanwhile replaced the document this one began with.
-      if (documents.get(uri) !== document) throw superseded()
-      document.read?.queries?.destroy()
-      document.read = { kase, summary, text, ...(read && { previous: read.kase }) }
+    async read({ uri, version }, signal) {
+      let file = files.get(uri)
+      if (!file) files.set(uri, (file = { read: recent.take(uri) }))
+      const reading = (file.reading = {})
+      const current = () => {
+        signal.throwIfAborted()
+        if (files.get(uri) !== file || file.reading !== reading) throw superseded()
+      }
+      // Stamped before it is read, so a file that changes meanwhile reads again next time.
+      const at = BigInt(Date.now()) * 1_000_000n
+      const stamp = await stampAt(fileURLToPath(uri))
+      if (!stamp) throw problem('invalid-input', `${nameOf(uri)} is not there.`)
+      const before = file.read
+      if (before && same(before.stamp, stamp)) return before.summary
+      // A file that changed just before may change again and keep its stamp: it reads again
+      // each time until it rests.
+      const kept = settled(stamp, at) ? stamp : undefined
+      const kase = await readCase(uri, catalog, signal)
+      current()
+      // Written again as it was, as by a save that changed nothing: the case read stands.
+      if (before?.kase.version === kase.version) {
+        before.stamp = kept
+        return before.summary
+      }
+      const summary = await summarize(kase, { uri, version }, signal)
+      current()
+      before?.queries?.destroy()
+      file.read = { kase, summary, stamp: kept }
       return summary
     },
     async validate(revision, signal) {
       const read = latest(revision)
-      const issues = await diagnose(read.kase, signal)
+      const found = await diagnose(read.kase, signal)
       if (latest(revision) !== read) throw superseded()
-      return issues
+      return found.map(({ offset, length, ...issue }) => ({
+        ...issue,
+        ...rangeIn(read.kase.file, { offset, length }),
+      }))
     },
-    anchors: async (input, signal) => anchors(latest(input).kase, input, signal),
-    // Completion reads the revision typed up to the cursor alone, and leaves the copy the worker
-    // holds as it was: a parse brings that up to date, and only a release lets go of it.
-    // The case last read of the same document finds the record the cursor is in, which alone is
-    // read.
-    complete: async (input) => {
-      const document = documents.get(input.uri)
-      const read = document?.attachmentId === input.attachmentId ? document?.read : undefined
-      return completionsAt(catalog, sourceOf(input), input.offset, read)
-    },
-    context: async (input) => sourceContext(latest(input).kase, input.offset),
-    symbols: async ({ limit, ...revision }, signal) =>
-      outline(latest(revision).kase, signal, limit),
-    locate: async (input) => sourceRange(latest(input).kase, input, input.field),
-    // As VS Code takes them in least time, from the text they are of.
-    transact: async (input) => {
-      const { kase, text } = latest(input)
-      return delivered(text, transaction(kase, input.mutations))
+    networkSelection: async (input, signal) =>
+      networkSelectionOf(latest(input).kase, input.entity, signal),
+    locate: async (input) => {
+      const { kase } = latest(input)
+      return rangeIn(kase.file, sourceRange(kase, input, input.field))
     },
     async project(input, signal) {
       const read = latest(input)
       const document = (read.projection ??= read.kase.projected())
-      const page =
-        input.base && read.previous
-          ? await deltaProjectionPage(
-              read.previous,
-              read.kase,
-              input.fields,
-              input.base,
-              input.cursor,
-              signal,
-            )
-          : await projectionPage(document, input.fields, input.cursor, signal)
+      const page = await projectionPage(document, input.fields, input.cursor, signal)
       if (latest(input) !== read) throw superseded()
       return page
     },
@@ -182,21 +113,24 @@ serve<CaseApi>(
       if (latest(input) !== read) throw superseded()
       return page
     },
-    async release({ uri, attachmentId }) {
-      const document = documents.get(uri)
-      if (attachmentId && document?.attachmentId !== attachmentId) return null
-      // A document let go of stays read, so opening it again parses nothing.
-      const read = document?.read
-      read?.queries?.destroy()
-      if (read) opened.keep(read.kase, () => TextCases.key(read.text, catalog, nameOf(uri)))
-      documents.delete(uri)
+    async release({ uri }) {
+      const read = files.get(uri)?.read
+      files.delete(uri)
+      // A file let go of stays read a while, so opening it again as it was reads nothing.
+      if (read) {
+        read.queries?.destroy()
+        read.queries = undefined
+        recent.keep(uri, read)
+      }
       return null
     },
-    stats: async () => ({ memory: memory(), cases: documents.size }),
+    stats: async () => ({ memory: memory(), cases: files.size }),
   },
   ['project', 'page'],
+  // Problems fills in once the views have what they wait on.
+  ['validate'],
 )
 
 process.once('exit', () => {
-  for (const document of documents.values()) document.read?.queries?.destroy()
+  for (const file of files.values()) file.read?.queries?.destroy()
 })

@@ -9,20 +9,15 @@ export const COMMANDS = [
   'openCase',
   'openNetwork',
   'revealInNetwork',
-  'openDiagram',
-  'revealInDiagram',
   'openCasePanel',
   'revealInCase',
   'openMonitor',
   'openSource',
   'revealInSource',
   'goToReference',
-  'editField',
   'copyId',
   'copyValue',
   'copyFieldPath',
-  'recordAllSignals',
-  'recordNoSignals',
   'runSimulation',
   'showLastResults',
   'runSimulationAgain',
@@ -61,13 +56,7 @@ export const COMMANDS = [
   'mappingRange',
   'removeMapping',
   'networkSettings',
-  'diagramSettings',
   'monitorSettings',
-  'editDiagram',
-  'finishDiagramEditing',
-  'arrangeDiagram',
-  'disconnectPort',
-  'deleteElement',
   'exportVideo',
   'exportImage',
 ] as const
@@ -77,16 +66,14 @@ export type Command = (typeof COMMANDS)[number]
 export type ViewCommandName = Extract<Command, 'revealInSource' | 'removePlot'>
 export const VIEW_COMMANDS: readonly ViewCommandName[] = ['revealInSource', 'removePlot']
 
-/** The views Studio contributes: its two canvas editors, its three webview panels, and Monitored
+/** The views Studio contributes: the Network editor, its three webview panels, and Monitored
  *  Signals. */
-export const VIEWS = ['network', 'diagram', 'case', 'monitor', 'export', 'signals'] as const
+export const VIEWS = ['network', 'case', 'monitor', 'export', 'signals'] as const
 export type View = (typeof VIEWS)[number]
 
 /** The context keys Studio sets, which its manifest's `when` clauses read. */
 export const CONTEXT_KEYS = [
   'hasCase',
-  'diagramEditing',
-  'editable',
   'running',
   'fromSolver',
   'hasResults',

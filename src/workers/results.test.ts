@@ -3,10 +3,13 @@ import { mkdtemp, readdir, readFile, rm, truncate, utimes, writeFile } from 'nod
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { Case } from '../gridkit/case.js'
+import { catalog } from '../gridkit/definition.js'
 import { FORMAT } from '../results/store.js'
 import { type FramePage, PAGE_BYTES, type RecordedField } from '../shared/data.js'
 import type { Results, ResultsApi } from '../shared/messages.js'
@@ -24,18 +27,19 @@ type Rig = Awaited<ReturnType<typeof start<ResultsApi>>>
 /** A case of one bus, `one`, and its source. */
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
 
-/** The case `name`, of one bus, at its first revision, with its source. */
-const caseOf = (name: string) => ({
-  uri: `file:///${name}.case.json`,
-  version: 1,
-  fingerprint: '',
-  text: ONE,
-})
+/** The case `name`, written to `rig`'s folder as `text` holds it, at its first revision: by its
+ *  file and its fingerprint, which the worker reads it by. */
+async function caseOf(rig: Rig, name: string, text = ONE) {
+  const path = join(rig.scratch, name + '.case.json')
+  await writeFile(path, text)
+  const { version } = await Case.parse(new TextEncoder().encode(text), catalog)
+  return { uri: pathToFileURL(path).href, version: 1, fingerprint: version }
+}
 
 /** Opens the results file at `path` for `revision` under an id of its own, as the extension does. */
 const open = (
   rig: Rig,
-  revision: ReturnType<typeof caseOf>,
+  revision: Awaited<ReturnType<typeof caseOf>>,
   path: string,
   signal?: AbortSignal,
 ): Promise<Results> => rig.call('open', { ...revision, results: randomUUID(), path }, signal)
@@ -115,7 +119,7 @@ describe('the results worker', () => {
       const path = join(rig.scratch, 'many.csv')
       const frames = 600_000
       await waveform(path, frames)
-      const results = await read(rig, await open(rig, caseOf('pages'), path))
+      const results = await read(rig, await open(rig, await caseOf(rig, 'pages'), path))
       expect(results.domains).toEqual({ Bus: { Vm: [0, 2] } })
       const sent = await everything(rig, results, { table: 'Bus', field: 'Vm' })
       using data = native(sent)
@@ -133,7 +137,7 @@ describe('the results worker', () => {
       const path = join(rig.scratch, 'long.csv')
       const frames = 700_000
       await waveform(path, frames, () => '1')
-      const opened = await open(rig, caseOf('long'), path)
+      const opened = await open(rig, await caseOf(rig, 'long'), path)
       // A file of several segments: the first is read before the request answers, the rest after.
       expect(opened.growing).toBe(true)
       expect(opened.frames).toBeGreaterThan(0)
@@ -158,7 +162,7 @@ describe('the results worker', () => {
           Array.from({ length: frames }, (_, i) => `${i},1\n`).join('') +
           `${frames}\n`,
       )
-      const results = await read(rig, await open(rig, caseOf('late'), path))
+      const results = await read(rig, await open(rig, await caseOf(rig, 'late'), path))
       expect(results.growing).toBe(false)
       expect(results.error).toMatch(/does not match its header/)
       expect(results.frames).toBeGreaterThan(0)
@@ -167,29 +171,30 @@ describe('the results worker', () => {
     }
   })
 
-  it('reads a case by its fingerprint while results of it are held, and asks for it once none are', async () => {
+  it('reads a case by its fingerprint while results of it are held, and from its file once none are', async () => {
     // Nothing rests: what nothing holds is let go of at once.
     const rig = await start<ResultsApi>(script, { options: { cacheBytes: 0 } })
     try {
       const path = join(rig.scratch, 'small.csv')
       await waveform(path, 3)
-      const { text: _, ...unread } = caseOf('known')
-      await expect(
-        rig.call('open', { ...unread, results: randomUUID(), path }),
-      ).rejects.toMatchObject({ code: 'needs-source' })
-      const first = await open(rig, caseOf('known'), path)
-      // The results carry the case's own fingerprint, which reads it again without its source.
-      const lean = { ...unread, version: 2, fingerprint: first.fingerprint }
-      const again = await rig.call('open', { ...lean, results: randomUUID(), path })
-      expect(again.fingerprint).toBe(first.fingerprint)
+      const source = await caseOf(rig, 'known')
+      const first = await open(rig, source, path)
+      expect(first.fingerprint).toBe(source.fingerprint)
+      const again = await open(rig, { ...source, version: 2 }, path)
       // The same file of the same case, read now: held again, and read once.
       expect(await rig.call('stats', {})).toMatchObject({ results: 2, files: 1, cases: 1 })
       // Once the last results that read it close, so does the case.
       for (const { id } of [first, again]) await rig.call('close', { results: id })
       expect(await rig.call('stats', {})).toMatchObject({ files: 0, cases: 0 })
-      await expect(
-        rig.call('open', { ...lean, results: randomUUID(), path }),
-      ).rejects.toMatchObject({ code: 'needs-source' })
+      // Its file is read again, which must hold what the fingerprint names: changed since, the
+      // extension reads it again and asks again.
+      const third = await open(rig, source, path)
+      expect(third.fingerprint).toBe(source.fingerprint)
+      await rig.call('close', { results: third.id })
+      await caseOf(rig, 'known', ONE.replace('one', 'two'))
+      await expect(open(rig, { ...source, version: 3 }, path)).rejects.toMatchObject({
+        code: 'case-changed',
+      })
     } finally {
       await rig.stop()
     }
@@ -203,12 +208,12 @@ describe('the results worker', () => {
       const small = join(rig.scratch, 'small.csv')
       await waveform(small, 3)
       const controller = new AbortController()
-      const cancelled = open(rig, caseOf('cancelled'), large, controller.signal)
+      const cancelled = open(rig, await caseOf(rig, 'cancelled'), large, controller.signal)
       controller.abort()
       await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
       // The worker takes requests in order: once a later open answers, the cancelled one has
       // settled, and the later is the only file read.
-      const kept = await read(rig, await open(rig, caseOf('cancelled'), small))
+      const kept = await read(rig, await open(rig, await caseOf(rig, 'cancelled'), small))
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       expect(
         rig.events.every((event) => event.kind !== 'results' || event.results === kept.id),
@@ -224,16 +229,14 @@ describe('the results worker', () => {
       const path = join(rig.scratch, 'original.csv')
       const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
       await writeFile(path, source)
-      const results = await read(rig, await open(rig, caseOf('in-place'), path))
+      const results = await read(rig, await open(rig, await caseOf(rig, 'in-place'), path))
       expect(results).toMatchObject({ growing: false, path, frames: 3 })
       // The rows the file holds, as the case numbers them: here the one bus.
       expect(results.outputs).toMatchObject([{ table: 'Bus', field: 'Vm', ids: [1] }])
       expect(results.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
-      // What the views read of the case it was read against, and nothing of its text.
+      // What the views read of the case it was read against.
       const described = await rig.call('describe', { results: results.id })
       expect(described).toMatchObject({ fingerprint: results.fingerprint, counts: { Bus: 1 } })
-      expect(described).not.toHaveProperty('text')
-      expect(results.revision).not.toHaveProperty('text')
       const exported = join(rig.scratch, 'exported.csv')
       await rig.call('export', { results: results.id, path: exported })
       expect(await readFile(exported, 'utf8')).toContain('0.8')
@@ -254,7 +257,7 @@ describe('the results worker', () => {
     try {
       const path = join(rig.scratch, 'rewritten.csv')
       await waveform(path, 3, () => '1')
-      const results = await read(rig, await open(rig, caseOf('rewritten'), path))
+      const results = await read(rig, await open(rig, await caseOf(rig, 'rewritten'), path))
       // Another run writes the same file, as long, with other values, a moment later.
       await waveform(path, 3, () => '9')
       const later = new Date(Date.now() + 2000)
@@ -264,9 +267,9 @@ describe('the results worker', () => {
         return [0, 1, 2].map((at) => data.get('Bus', 1, 'Vm', { at }))
       }
       expect(await values(results)).toEqual([1, 1, 1])
-      expect(await values(await read(rig, await open(rig, caseOf('rewritten'), path)))).toEqual([
-        9, 9, 9,
-      ])
+      expect(
+        await values(await read(rig, await open(rig, await caseOf(rig, 'rewritten'), path))),
+      ).toEqual([9, 9, 9])
     } finally {
       await rig.stop()
     }
@@ -277,7 +280,8 @@ describe('the results worker', () => {
     try {
       const path = join(rig.scratch, 'shared.csv')
       await waveform(path, 3)
-      const shown = await read(rig, await open(rig, caseOf('shared'), path))
+      const source = await caseOf(rig, 'shared')
+      const shown = await read(rig, await open(rig, source, path))
       const exported = await rig.call('share', { results: shown.id, as: randomUUID() })
       expect(exported).toMatchObject({ frames: 3, path })
       // The view lets go; the export reads on.
@@ -288,8 +292,7 @@ describe('the results worker', () => {
       expect(await rig.call('stats', {})).toMatchObject({ results: 0, files: 0, resting: 1 })
       // Opened again, it is the file at rest, read nothing again, and its case with it: no source
       // is asked for.
-      const { text: _, ...lean } = { ...caseOf('shared'), fingerprint: shown.fingerprint }
-      const again = await rig.call('open', { ...lean, results: randomUUID(), path })
+      const again = await open(rig, { ...source, version: 2 }, path)
       expect(again).toMatchObject({ growing: false, frames: 3 })
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
       // A budget too small for it lets what rests go.
@@ -307,14 +310,14 @@ describe('the results worker', () => {
     await writeFile(csv, 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n')
     let rig = await start<ResultsApi>(script, { folder })
     try {
-      const first = await read(rig, await open(rig, caseOf('reloaded'), csv))
+      const first = await read(rig, await open(rig, await caseOf(rig, 'reloaded'), csv))
       const exported = join(folder, 'exported.csv')
       await rig.call('export', { results: first.id, path: exported })
       const measured = await readFile(exported, 'utf8')
       await rig.stop()
       // A saved session names the file, so its store is kept, and read alone, without the CSV.
       rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
-      const again = await open(rig, caseOf('reloaded'), csv)
+      const again = await open(rig, await caseOf(rig, 'reloaded'), csv)
       expect(again.growing).toBe(false)
       expect(again).toMatchObject({
         frames: first.frames,
@@ -337,13 +340,13 @@ describe('the results worker', () => {
     await waveform(csv, 40)
     let rig = await start<ResultsApi>(script, { folder })
     try {
-      const first = await read(rig, await open(rig, caseOf('cut'), csv))
+      const first = await read(rig, await open(rig, await caseOf(rig, 'cut'), csv))
       const values = await everything(rig, first, { table: 'Bus', field: 'Vm' })
       await rig.stop()
       // What was kept of the file ends partway, as a store a crash left would.
       await truncate(join(await storeOf(folder), 'raw.bin'), 8)
       rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
-      const again = await read(rig, await open(rig, caseOf('cut'), csv))
+      const again = await read(rig, await open(rig, await caseOf(rig, 'cut'), csv))
       expect(again.frames).toBe(first.frames)
       using a = native(values)
       using b = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
@@ -362,7 +365,7 @@ describe('the results worker', () => {
     await waveform(csv, 40)
     let rig = await start<ResultsApi>(script, { folder })
     try {
-      const first = await read(rig, await open(rig, caseOf('rewritten'), csv))
+      const first = await read(rig, await open(rig, await caseOf(rig, 'rewritten'), csv))
       await rig.stop()
       // What was kept says its read stopped short, as a window closed partway leaves it; then the
       // file is written over in place, its size as it was, with other values.
@@ -371,7 +374,7 @@ describe('the results worker', () => {
       await writeFile(manifest, JSON.stringify({ ...kept, complete: false }))
       await waveform(csv, 40, (i) => String((i + 1) % 3))
       rig = await start<ResultsApi>(script, { folder, options: { saved: [csv] } })
-      const again = await read(rig, await open(rig, caseOf('rewritten'), csv))
+      const again = await read(rig, await open(rig, await caseOf(rig, 'rewritten'), csv))
       expect(again.frames).toBe(first.frames)
       using data = native(await everything(rig, again, { table: 'Bus', field: 'Vm' }))
       expect([0, 20, 39].map((at) => data.get('Bus', 1, 'Vm', { at }))).toEqual(
@@ -390,14 +393,15 @@ describe('the results worker', () => {
     // Nothing kept in memory, so every read is of the store.
     const rig = await start<ResultsApi>(script, { folder, options: { cacheBytes: 0 } })
     try {
-      const results = await read(rig, await open(rig, caseOf('lost'), csv))
+      const source = await caseOf(rig, 'lost')
+      const results = await read(rig, await open(rig, source, csv))
       await truncate(join(await storeOf(folder), 'raw.bin'), 0)
       await expect(everything(rig, results, { table: 'Bus', field: 'Vm' })).rejects.toMatchObject({
         code: 'results-lost',
       })
       expect(rig.events).toContainEqual({
         kind: 'lost',
-        uri: caseOf('lost').uri,
+        uri: source.uri,
         results: results.id,
       })
       // The worker holds them no more: the extension reads the file again under results of its own.
@@ -417,7 +421,7 @@ describe('the results worker', () => {
       await waveform(path, 3)
       const opened = await Promise.all(
         Array.from({ length: 20 }, async (_, n) =>
-          read(rig, await open(rig, caseOf(`case-${n}`), path)),
+          read(rig, await open(rig, await caseOf(rig, `case-${n}`), path)),
         ),
       )
       expect(await rig.call('stats', {})).toMatchObject({ results: 20, files: 20, cases: 20 })
@@ -445,7 +449,7 @@ describe('the results worker', () => {
     const { scratch, call, stop } = rig
     try {
       const text = await readFile('cases/TwoArea.case.json', 'utf8')
-      const revision = { uri: 'file:///test.case.json', version: 1, fingerprint: '', text }
+      const revision = await caseOf(rig, 'test', text)
       // 700,000 frames of one bus's voltage: many blocks of results.
       const path = join(scratch, 'waveform.csv')
       const name = JSON.parse(text).buses[0].name

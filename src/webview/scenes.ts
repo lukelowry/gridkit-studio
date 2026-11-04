@@ -4,6 +4,7 @@ import {
   type Expr,
   field,
   type Fit,
+  type Gestures,
   type Id,
   type Mark,
   type Scene,
@@ -19,11 +20,8 @@ import type { Plot, Results } from '../shared/messages.js'
 import type { SettingsReader } from '../shared/preferences.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
-export function caseFit(data: Data, drawing: Drawing, kind: 'network' | 'diagram'): Fit {
-  const tables =
-    kind === 'network'
-      ? [...drawing.vertices, ...drawing.edges].map((item) => item.table)
-      : [...drawing.blocks.map((item) => item.table), ...drawing.nets]
+export function caseFit(data: Data, drawing: Drawing): Fit {
+  const tables = [...drawing.vertices, ...drawing.edges].map((item) => item.table)
   return { tables: [...new Set(tables)].map((table) => data.table(table)) }
 }
 
@@ -59,20 +57,11 @@ interface NetworkSizes {
   readonly width: number
 }
 
-/** Count only case marks, never map geometry. Metadata reads do not materialize row columns. */
-function networkSizes(data: Data, drawing: Drawing, settings: SettingsReader): NetworkSizes {
-  const rows = new Map(data.describe().tables.map((table) => [table.name, table.rows]))
-  const count = (tables: readonly string[]) =>
-    [...new Set(tables)].reduce((sum, table) => sum + (rows.get(table) ?? 0), 0)
-  const vertices = count(drawing.vertices.map((vertex) => vertex.table))
-  const edges = count(drawing.edges.map((edge) => edge.table))
-  // A sparse case keeps its configured size. Reduce ink smoothly as the graph grows;
-  // strokes shrink more gently than radii, whose occupied area grows quadratically.
-  const density = Math.min(1, (1000 / Math.max(1, vertices, edges / 2)) ** 0.4)
-  return {
-    radius: settings.get('network.vertexRadius') * Math.max(0.08, density),
-    width: settings.get('network.edgeWidth') * Math.max(0.15, Math.sqrt(density)),
-  }
+/** The Network's sizes in CSS pixels, as the settings give them on every case: a vertex never
+ *  narrower than twice its edges, so it shows past the edges that meet it. */
+function networkSizes(settings: SettingsReader): NetworkSizes {
+  const width = settings.get('network.edgeWidth')
+  return { width, radius: Math.max(width, settings.get('network.vertexRadius')) }
 }
 
 /** The distance the stress layout keeps between linked vertices, in plane units: latkit's own
@@ -195,11 +184,13 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
   return Math.max(1, most)
 }
 
-/** What each channel's mapped values span; a height spans a share of the case's span. */
+/** What each channel's mapped values span: a size from the mark's own to three times it, so a
+ *  mapping only enlarges a mark, which draws no smaller than it does unmapped; a height, a share of
+ *  the case's span. */
 const RANGES: Record<'radius' | 'elevation' | 'width', [low: number, high: number]> = {
-  radius: [0.5, 2.5],
+  radius: [1, 3],
   elevation: [0, 1],
-  width: [0.5, 4],
+  width: [1, 3],
 }
 
 function mapped(binding: Binding, map: ColormapName, sizes: NetworkSizes, height: number): Expr {
@@ -267,25 +258,16 @@ export interface SceneExtras {
   readonly sampled?: (table: string, field: string) => Source | undefined
   /** Marks drawn under the case's own, such as a map's. */
   readonly background?: readonly Mark[]
-  readonly editable?: boolean
 }
 
-/** The Network or Diagram of `data`, as every view and export draws it. */
+/** The Network of `data`, as the view and every export draws it. */
 export function sceneOf(
-  kind: 'network' | 'diagram',
   data: Data,
   definition: CaseDefinition,
   settings: SettingsReader,
   theme: Theme,
-  {
-    bindings = {},
-    results,
-    sampled = () => undefined,
-    background = [],
-    editable = false,
-  }: SceneExtras,
+  { bindings = {}, results, sampled = () => undefined, background = [] }: SceneExtras,
 ): Scene {
-  if (kind === 'diagram') return diagramScene(data, definition.drawing, settings, theme, editable)
   const outputs =
     results?.outputs.map((output) => ({
       ...output,
@@ -301,10 +283,22 @@ export function sceneOf(
   )
 }
 
-function controls(settings: SettingsReader, kind: 'network' | 'diagram' | 'monitor') {
+/** What the wheel does in a view, as its Wheel behavior setting says. Every other input keeps
+ *  latkit's own: a drag pans, Shift or the right button turns, two fingers pinch to zoom and slide
+ *  to pan. A trackpad scrolls to pan, and its pinch, which reaches a page as the wheel with
+ *  Control held, zooms. */
+const WHEEL: Record<'wheel' | 'trackpad' | 'modifier' | 'off', Gestures> = {
+  wheel: {},
+  trackpad: { wheel: 'pan', 'control+wheel': 'zoom', 'meta+wheel': 'zoom' },
+  modifier: { wheel: 'none', 'control+wheel': 'zoom', 'meta+wheel': 'zoom' },
+  off: { wheel: 'none', pinch: 'none' },
+}
+
+/** How a view of `kind` answers its inputs: the wheel as its setting says, then `gestures`. */
+function controls(settings: SettingsReader, kind: 'network' | 'monitor', gestures: Gestures = {}) {
   return {
     keyboard: true,
-    zoom: settings.get(`${kind}.zoom`),
+    gestures: { ...WHEEL[settings.get(`${kind}.zoom`)], ...gestures },
     motion:
       settings.get(`${kind}.motion`) === 'system' &&
       typeof document !== 'undefined' &&
@@ -323,7 +317,7 @@ export function networkScene(
   bindings: readonly Binding[],
   background: readonly Mark[] = [],
 ): Scene {
-  const sizes = networkSizes(data, drawing, settings)
+  const sizes = networkSizes(settings)
   // The highest mapped value raises a vertex a share of the case's span, whatever the space's
   // units and however large the case: its relief reads alike on every case.
   const height = bindings.some((binding) => binding.channel === 'elevation')
@@ -359,59 +353,10 @@ export function networkScene(
     theme,
     ease: settings.get('network.ease'),
     controls: { ...controls(settings, 'network'), cycle: true },
-    // Seen flat, buses draw over the branches that meet them, the map under both. Where depth
-    // varies, the nearest of whatever overlaps shows, whatever the order.
+    // The map under everything, then branches, then buses. Where depth varies, the nearest
+    // opaque pixel shows, and a mark whose rows a mapped height raises draws them lowest first:
+    // farthest first wherever they overlap, from any camera.
     marks: [...background, ...edges, ...vertices],
-  }
-}
-
-export function diagramScene(
-  data: Data,
-  drawing: Drawing,
-  settings: SettingsReader,
-  theme: Theme,
-  editable: boolean,
-): Scene {
-  const grid = settings.get('diagram.grid')
-  return {
-    space: {
-      diagram: {
-        grid:
-          grid === 'none'
-            ? 'off'
-            : grid === 'dots'
-              ? { dots: { pitch: 20 } }
-              : { lines: { pitch: 20 } },
-      },
-    },
-    layout: {
-      layered: {
-        direction: settings.get('diagram.direction'),
-        gap: settings.get('diagram.gap'),
-        rankGap: settings.get('diagram.rankGap'),
-      },
-    },
-    theme,
-    ease: settings.get('diagram.ease'),
-    controls: { ...controls(settings, 'diagram'), connect: editable, delete: editable },
-    marks: [
-      ...drawing.nets.map((table): Mark => ({
-        edges: [data.name, table],
-        name: table,
-        route: 'orthogonal',
-        arrows: true,
-      })),
-      ...drawing.blocks.map((block): Mark => ({
-        vertices: [data.name, block.table],
-        name: block.table,
-        marker: 'block',
-        position: [field(block.position[0]), field(block.position[1])],
-        ports: block.ports,
-        drag: editable,
-        shadow: true,
-        label: settings.get('diagram.labels') && block.label ? field(block.label) : null,
-      })),
-    ],
   }
 }
 
@@ -430,7 +375,8 @@ export function plotScene(
     space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
     theme,
     ease: 0,
-    controls: controls(settings, 'monitor'),
+    // Shift and a drag frames a span of time, which becomes the window the Monitor shows.
+    controls: controls(settings, 'monitor', { 'shift+primary': 'zoomBox' }),
     marks: [
       {
         lines: [source.name, plot.from],
@@ -444,10 +390,9 @@ export function plotScene(
   }
 }
 
-/** Only fields needed by the marks of `kinds`; sampled fields live in their own bounded sources. */
+/** Only fields the Network's marks need; sampled fields live in their own bounded sources. */
 export function sceneFields(
   definition: CaseDefinition,
-  kinds: readonly ('network' | 'diagram')[],
   bindings: Bindings = {},
 ): ProjectionSelection[] {
   const selected = new Map<string, Set<string>>()
@@ -457,23 +402,12 @@ export function sceneFields(
     selected.set(table, held)
   }
   const drawing = definition.drawing
-  if (kinds.includes('network')) {
-    for (const vertex of drawing.vertices)
-      add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
-    for (const edge of drawing.edges)
-      add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
-    for (const binding of Object.values(bindings))
-      if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled')
-        add(binding.table, [binding.field])
-  }
-  if (kinds.includes('diagram')) {
-    for (const block of drawing.blocks)
-      add(block.table, [
-        ...block.position,
-        ...(block.label ? [block.label] : []),
-        ...block.ports.map(([name]) => name),
-      ])
-    for (const net of drawing.nets) add(net, [])
-  }
+  for (const vertex of drawing.vertices)
+    add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
+  for (const edge of drawing.edges)
+    add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
+  for (const binding of Object.values(bindings))
+    if (fieldDefinition(definition, binding.table, binding.field)?.kind !== 'sampled')
+      add(binding.table, [binding.field])
   return [...selected].map(([table, fields]) => ({ table, fields: [...fields].sort() }))
 }

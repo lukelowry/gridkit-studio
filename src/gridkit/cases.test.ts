@@ -6,13 +6,13 @@ import { describe, expect, it } from 'vitest'
 
 import { Case } from './case.js'
 import { catalog } from './definition.js'
-import { diagnose } from './edits.js'
+import { diagnose } from './issues.js'
 
 describe('the cases in cases/', () => {
   it.each(readdirSync('cases').filter((name) => name.endsWith('.case.json')))(
     '%s parses whole',
     async (name) => {
-      const kase = await Case.parse(await readFile(join('cases', name), 'utf8'), catalog)
+      const kase = await Case.parse(await readFile(join('cases', name)), catalog)
       // Every class and member is one the catalog knows.
       expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
     },

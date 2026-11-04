@@ -1,66 +1,76 @@
-/** The cases the workers parse, and what they tell the extension of one. */
+/** The cases the workers read from disk, and what they tell the extension of one. */
 
-import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
+import { Case } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
-import { Case, editable, recordingOf } from '../gridkit/index.js'
+import { rangeIn, type Span } from '../gridkit/offsets.js'
+import { recordingOf } from '../gridkit/recording.js'
 import { type Revision, revisionOf, type Summary } from '../shared/messages.js'
 
 /** The name of the case at `uri` when its header gives none: its file's, as the Explorer shows it. */
 export const nameOf = (uri: string) => decodeURIComponent(uri.split('/').at(-1) || 'Case')
 
-/** How many bytes of cases, and how many cases, the case worker keeps of documents let go of. */
+/** The UTF-8 byte order mark, which VS Code leaves out of a file's text. */
+const BOM = [0xef, 0xbb, 0xbf]
+
+/** The case file at `uri`, read whole with `catalog` as GridKit reads it. Where it does not read,
+ *  the error says where as VS Code counts: by line and character. */
+export async function readCase(uri: string, catalog: Catalog, signal?: AbortSignal): Promise<Case> {
+  const bytes = await readFile(fileURLToPath(uri), { signal })
+  // Past a byte order mark, as VS Code shows the file, so places and fingerprints are its text's.
+  const file = BOM.every((byte, at) => bytes[at] === byte) ? bytes.subarray(BOM.length) : bytes
+  try {
+    return await Case.parse(file, catalog, nameOf(uri), signal)
+  } catch (error) {
+    throw placed(file, error)
+  }
+}
+
+/** `error`, which a read of `file` threw, with its places as VS Code counts. */
+function placed(file: Uint8Array, error: unknown): unknown {
+  const { offset, length, problems } = (error ?? {}) as Partial<Span> & {
+    problems?: readonly (Span & { message: string })[]
+  }
+  if (typeof offset !== 'number') return error
+  return Object.assign(error as Error, {
+    range: rangeIn(file, { offset, length: length ?? 1 }),
+    ...(problems && {
+      problems: problems.map(({ message, ...span }) => ({ message, range: rangeIn(file, span) })),
+    }),
+  })
+}
+
+/** How many bytes of cases, and how many cases, the case worker keeps of files let go of. */
 const KEPT_BYTES = 128 << 20
 const KEPT_CASES = 4
 
-/** Cases the case worker read, by the hash of their whole text, so a document opened again parses
- *  nothing. Only whole texts are hashed: an open, or a document let go of, never an edit. Past
- *  `count` cases or about `limit` bytes the least recently used go, and one larger than the limit
- *  is read again when it opens again. */
-export class TextCases {
-  readonly #entries = new Map<string, { kase: Case; bytes: number }>()
+/** Cases of files the extension let go of, by URI, so a file opened again as it was reads nothing.
+ *  Past KEPT_CASES or about KEPT_BYTES the least recently let go of go, and one larger than that
+ *  is not kept. */
+export class Recent<T extends { readonly kase: Case }> {
+  readonly #entries = new Map<string, T>()
   #bytes = 0
-  constructor(
-    readonly limit = KEPT_BYTES,
-    readonly count = KEPT_CASES,
-  ) {}
 
-  /** The key of `text` read as `name` with `catalog`. */
-  static key(text: string, catalog: Catalog, name: string): string {
-    return createHash('sha256')
-      .update(JSON.stringify([catalog.text, name]))
-      .update(text)
-      .digest('hex')
-  }
-
-  /** Whether a case read from `text` may be small enough to keep: one that cannot is never hashed. */
-  fits(text: string): boolean {
-    return Case.leastBytes(text) <= this.limit
-  }
-
-  find(key: string): Case | undefined {
-    const entry = this.#entries.get(key)
+  take(uri: string): T | undefined {
+    const entry = this.#entries.get(uri)
     if (!entry) return undefined
-    this.#entries.delete(key)
-    this.#entries.set(key, entry)
-    return entry.kase
+    this.#entries.delete(uri)
+    this.#bytes -= entry.kase.bytes
+    return entry
   }
 
-  /** Keeps `kase` by the key `keyOf` gives, asked only for a case small enough to keep. */
-  keep(kase: Case, keyOf: () => string): void {
-    const { bytes } = kase
-    if (bytes > this.limit) return
-    const key = keyOf()
-    if (this.#entries.has(key)) return
-    while (
-      this.#entries.size &&
-      (this.#bytes + bytes > this.limit || this.#entries.size >= this.count)
-    ) {
-      const oldest = this.#entries.keys().next().value!
-      this.#bytes -= this.#entries.get(oldest)!.bytes
+  keep(uri: string, entry: T): void {
+    this.take(uri)
+    const { bytes } = entry.kase
+    if (bytes > KEPT_BYTES) return
+    for (const [oldest, dropped] of this.#entries) {
+      if (this.#bytes + bytes <= KEPT_BYTES && this.#entries.size < KEPT_CASES) break
       this.#entries.delete(oldest)
+      this.#bytes -= dropped.kase.bytes
     }
-    this.#entries.set(key, { kase, bytes })
+    this.#entries.set(uri, entry)
     this.#bytes += bytes
   }
 }
@@ -77,12 +87,6 @@ export async function summarize(
     name: kase.name,
     fingerprint: kase.version,
     definition: kase.definition,
-    editable: Object.fromEntries(
-      [...kase.tables].map(([type, { shape }]) => [
-        type,
-        [...shape.plan.values()].filter(editable).map((plan) => plan.name),
-      ]),
-    ),
     identities: Object.fromEntries(
       [...kase.tables].map(([type, { shape }]) => [type, shape.identity.name]),
     ),

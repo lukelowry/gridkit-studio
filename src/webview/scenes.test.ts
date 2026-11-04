@@ -4,12 +4,11 @@ import { Data, Expr, type Mark, reference } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { catalog } from '../gridkit/definition.js'
-import { defaults, reader } from '../shared/preferences.js'
+import { defaults, EDGE_WIDTH, reader } from '../shared/preferences.js'
 import { loadNative } from '../workers/native.js'
 import {
   caseFit,
   caseSpan,
-  diagramScene,
   GAP,
   networkScene,
   plotScene,
@@ -23,17 +22,16 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   const settings = reader()
   const network = networkScene(data, catalog.definition.drawing, settings, {}, [])
   expect(network.layout).toEqual({ stress: { gap: GAP } })
-  expect(network.controls).toMatchObject({ keyboard: true, motion: 'system' })
-  const diagram = diagramScene(data, catalog.definition.drawing, settings, {}, true)
-  expect(diagram.layout).toEqual({
-    layered: {
-      direction: settings.get('diagram.direction'),
-      gap: settings.get('diagram.gap'),
-      rankGap: settings.get('diagram.rankGap'),
-    },
+  // The wheel's default leaves every input to latkit.
+  expect(network.controls).toEqual(
+    expect.objectContaining({ keyboard: true, motion: 'system', gestures: {} }),
+  )
+  // A trackpad scrolls a canvas to pan and pinches to zoom.
+  const trackpad = reader({ 'network.zoom': 'trackpad' })
+  expect(networkScene(data, catalog.definition.drawing, trackpad, {}, []).controls).toMatchObject({
+    gestures: { wheel: 'pan', 'control+wheel': 'zoom' },
   })
-  expect(diagram.controls).toMatchObject({ connect: true, delete: true })
-  const projected = sceneFields(catalog.definition, ['network'], {
+  const projected = sceneFields(catalog.definition, {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
   expect(projected.flatMap((table) => table.fields)).not.toContain('Vm')
@@ -43,6 +41,11 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   expect(monitored.marks).toMatchObject([
     { trace: 'Vm', interpolation: 'linear', width: settings.get('monitor.lineWidth') },
   ])
+  // Shift and a drag frames a span of time; a wheel turned off neither zooms nor pinches.
+  expect(monitored.controls).toMatchObject({ gestures: { 'shift+primary': 'zoomBox' } })
+  expect(plotScene(data, plot, reader({ 'monitor.zoom': 'off' }), {}).controls).toMatchObject({
+    gestures: { wheel: 'none', pinch: 'none', 'shift+primary': 'zoomBox' },
+  })
   // The Monitor's lanes name their plots, whose axes carry ticks alone; a picture's plot, which
   // has no lane, names itself on its value axis. Neither titles the time axis: its last tick says
   // it is seconds.
@@ -69,8 +72,6 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
     geographic: false,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [],
-    blocks: [],
-    nets: [],
   }
   const scene = networkScene(data, drawing, reader(), {}, bindings)
   const radius = (scene.marks![0] as { radius: Expr }).radius
@@ -88,7 +89,7 @@ it('joins sparse sampled bindings by ID with a stable whole-run domain', () => {
 it("frames whole case tables, and raises the highest mapped value a share of the case's span", () => {
   const vertices = [{ table: 'Bus', position: ['x', 'y'] as [string, string] }]
   const edges = [{ table: 'Line', ends: ['from', 'to'] as [string, string] }]
-  const drawing = (geographic: boolean) => ({ geographic, vertices, edges, blocks: [], nets: [] })
+  const drawing = (geographic: boolean) => ({ geographic, vertices, edges })
   /** The heights of the lowest and highest of `v`, raised a fifth of the span. */
   const raised = (data: Data, geographic: boolean) => {
     const scene = networkScene(data, drawing(geographic), reader({ 'network.height': 0.2 }), {}, [
@@ -100,7 +101,7 @@ it("frames whole case tables, and raises the highest mapped value a share of the
   }
   // On the earth, 3° east and 4° north of each other near the equator: 5° of arc across.
   using earth = new Data('earth').replace('Bus', [1, 2], { x: [0, 3], y: [0, 4], v: [0, 10] })
-  expect(JSON.parse(JSON.stringify(caseFit(earth, drawing(true), 'network')))).toEqual({
+  expect(JSON.parse(JSON.stringify(caseFit(earth, drawing(true))))).toEqual({
     tables: [
       ['earth', 'Bus'],
       ['earth', 'Line'],
@@ -127,8 +128,6 @@ it('draws the map, then branches, then the buses over them, however the network 
     geographic: true,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [{ table: 'Branch' }],
-    blocks: [],
-    nets: [],
   }
   const coast: Mark = { lines: ['map:coastline', 'lines'], name: 'map:coastline' }
   const kinds = (settings: ReturnType<typeof reader>) =>
@@ -139,15 +138,13 @@ it('draws the map, then branches, then the buses over them, however the network 
     expect(kinds(reader(settings))).toEqual(['lines', 'edges', 'vertices'])
 })
 
-it('scales dense case marks and their bindings together while preserving missing rows', () => {
+it('draws every case at the sizes the settings give, a vertex past its edges', () => {
   const drawing = {
     geographic: true,
     vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
     edges: [{ table: 'Line' }],
-    blocks: [],
-    nets: [],
   }
-  using data = new Data('case')
+  using dense = new Data('dense')
     .replace(
       'Bus',
       Array.from({ length: 70_000 }, (_, id) => id),
@@ -158,49 +155,43 @@ it('scales dense case marks and their bindings together while preserving missing
     )
     .set('Bus', [0, 1, 2], { value: Float64Array.of(0, 10, NaN) })
     .set('Line', [0, 1, 2], { value: Float64Array.of(0, 10, NaN) })
-  const sizes = (settings = reader()) => {
+  using sparse = new Data('sparse').replace('Bus', [1, 2]).replace('Line', [1])
+  const sizes = (data: Data, settings = reader()) => {
     const scene = networkScene(data, drawing, settings, {}, [])
     return {
       radius: (scene.marks![1] as { radius: number }).radius,
       width: (scene.marks![0] as { width: number }).width,
     }
   }
-  const dense = sizes()
-  expect(dense.radius).toBeGreaterThan(0.3)
-  expect(dense.radius).toBeLessThan(0.7)
-  expect(dense.width).toBeGreaterThan(0.2)
-  expect(dense.width).toBeLessThan(0.5)
-  const larger = sizes(
-    reader({
-      'network.vertexRadius': 2 * defaults['network.vertexRadius'],
-      'network.edgeWidth': 2 * defaults['network.edgeWidth'],
-    }),
-  )
-  expect(larger.radius).toBe(dense.radius * 2)
-  expect(larger.width).toBe(dense.width * 2)
+  // However many rows a case has.
+  const given = {
+    radius: defaults['network.vertexRadius'],
+    width: defaults['network.edgeWidth'],
+  }
+  expect(sizes(dense)).toEqual(given)
+  expect(sizes(sparse)).toEqual(given)
+  // A vertex is never narrower than twice its edges, whatever the two settings.
+  const wide = reader({ 'network.vertexRadius': EDGE_WIDTH, 'network.edgeWidth': 3 * EDGE_WIDTH })
+  expect(sizes(dense, wide)).toEqual({ radius: 3 * EDGE_WIDTH, width: 3 * EDGE_WIDTH })
 
-  const scene = networkScene(data, drawing, reader(), {}, [
+  // A mapped size spans the mark's own to three times it; a row without a value keeps its own.
+  const scene = networkScene(dense, drawing, reader(), {}, [
     { table: 'Bus', field: 'value', placement: 'vertex', channel: 'radius', domain: [0, 10] },
     { table: 'Line', field: 'value', placement: 'edge', channel: 'width', domain: [0, 10] },
   ])
-  for (const [table, mark, channel, high] of [
-    ['Bus', 1, 'radius', 2.5],
-    ['Line', 0, 'width', 4],
+  for (const [table, mark, channel] of [
+    ['Bus', 1, 'radius'],
+    ['Line', 0, 'width'],
   ] as const) {
     const spec = scene.marks![mark]!
     const expression = 'vertices' in spec ? spec.radius : 'edges' in spec ? spec.width : undefined
     if (!(expression instanceof Expr)) throw new Error('Expected a native size expression.')
-    const values = data.query({ of: table, ids: [0, 1, 2], select: { size: expression } }).fields
+    const values = dense.query({ of: table, ids: [0, 1, 2], select: { size: expression } }).fields
       .size
     expect(Array.from(values as Float64Array)).toEqual([
-      dense[channel] * 0.5,
-      dense[channel] * high,
-      dense[channel],
+      given[channel],
+      3 * given[channel],
+      given[channel],
     ])
   }
-  using small = new Data('small').replace('Bus', [1, 2]).replace('Line', [1])
-  const sparse = networkScene(small, drawing, reader(), {}, [])
-  // A sparse case keeps the sizes the settings give.
-  expect(sparse.marks![1]).toMatchObject({ radius: defaults['network.vertexRadius'] })
-  expect(sparse.marks![0]).toMatchObject({ width: defaults['network.edgeWidth'] })
 })

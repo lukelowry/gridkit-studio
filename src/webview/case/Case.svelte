@@ -13,17 +13,10 @@
     type Entity,
     entityKey,
     type FieldDefinition,
-    fieldDefinition,
     leaf,
     tableDefinition,
   } from '../../shared/document.js'
-  import {
-    type Revision,
-    revisionOf,
-    type TableState,
-    type Value,
-    type ViewState,
-  } from '../../shared/messages.js'
+  import { revisionOf, type TableState, type ViewState } from '../../shared/messages.js'
   import { bridge, merged } from '../bridge.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
@@ -65,10 +58,6 @@
   /** The rows read, and the row they start at: until the next page comes, the last stays where it
    *  was read. */
   let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
-  let editing = $state<
-    | { id: Id; field: string; text: string; revision: Revision; row: number; column: number }
-    | undefined
-  >()
   let scroll: HTMLDivElement
   let generation = 0
   let controller: AbortController | undefined
@@ -90,7 +79,7 @@
   )
   /** The field each row is known by, shown as the row's own header. */
   const identity = $derived(summary?.identities[type])
-  /** A cell as text: a number to six significant digits, which hover and editing show whole. */
+  /** A cell as text: a number to six significant digits, which hover shows whole. */
   const text = (value: unknown) =>
     typeof value === 'number'
       ? String(Number(value.toPrecision(6)))
@@ -267,66 +256,6 @@
     own = entityKey({ table: type, id })
     bridge.send({ kind: 'select', element: { table: type, id, ...(field ? { field } : {}) } })
   }
-  function edit(id: Id | null, field: string, value: unknown, row: number, column: number) {
-    if (id === null || stale || !view.writable || !summary?.editable[type]?.includes(field)) return
-    const spec = fieldDefinition(summary.definition, type, field)
-    editing = {
-      id,
-      field,
-      row,
-      column,
-      revision: revisionOf(summary),
-      text:
-        spec?.kind === 'text'
-          ? String(value ?? '')
-          : spec?.kind === 'reference'
-            ? value && typeof value === 'object' && 'id' in value
-              ? String(value.id ?? '')
-              : ''
-            : JSON.stringify(value),
-    }
-  }
-  function focus(input: HTMLInputElement) {
-    input.focus()
-    input.select()
-  }
-  async function commit() {
-    const edit = editing
-    if (!edit || !summary) return
-    editing = undefined
-    try {
-      const spec = fieldDefinition(summary.definition, type, edit.field)!
-      const value: Value =
-        spec.kind === 'text'
-          ? edit.text
-          : spec.kind === 'reference'
-            ? edit.text.trim() === 'null' || !edit.text.trim()
-              ? null
-              : Number.isSafeInteger(Number(edit.text))
-                ? Number(edit.text)
-                : edit.text
-            : JSON.parse(edit.text)
-      await bridge.request('transact', {
-        // The edit's state is reactive; a message carries plain values.
-        revision: $state.snapshot(edit.revision),
-        mutations: [
-          { kind: 'set', entity: { table: type, id: edit.id }, field: edit.field, value },
-        ],
-        label: 'Edit ' + leaf(edit.field),
-      })
-    } catch (reason) {
-      bridge.report(reason)
-    }
-  }
-  /** Ends the edit from its keys, keeping or dropping it, and goes back to its cell. */
-  async function close(keep: boolean) {
-    const edit = editing
-    if (!edit) return
-    if (keep) void commit()
-    else editing = undefined
-    await tick()
-    cellAt(edit.row, edit.column)?.focus()
-  }
   /** Scroll the selected row into view once it is drawn; whether it was. */
   function scrolled(): boolean {
     const shown = revealing !== undefined && scroll?.querySelector('tr.selected')
@@ -457,46 +386,21 @@
             </th>
             {#each fields as field, columnIndex (field)}
               <td data-field={field} class:numeric={typeof row.values[field] === 'number'}>
-                {#if editing?.id === row.id && editing.field === field}
-                  <input
-                    use:focus
-                    aria-label={'Edit ' + leaf(field)}
-                    bind:value={editing.text}
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter' || event.key === 'Escape') {
-                        event.preventDefault()
-                        void close(event.key === 'Enter')
-                      }
-                    }}
-                    onblur={() => void commit()}
-                    placeholder={definitions[field]?.kind === 'reference' ? 'ID or null' : ''}
-                  />
-                {:else}
-                  <button
-                    class="cell"
-                    data-row={page.offset + rowIndex}
-                    data-column={columnIndex}
-                    tabindex={page.offset + rowIndex === anchor.row && columnIndex === anchor.column
-                      ? 0
-                      : -1}
-                    onclick={() => select(row.id, field)}
-                    ondblclick={() =>
-                      edit(row.id, field, row.values[field], page.offset + rowIndex, columnIndex)}
-                    onkeydown={(event) => {
-                      if (event.key === 'Enter' || event.key === 'F2') {
-                        event.preventDefault()
-                        edit(row.id, field, row.values[field], page.offset + rowIndex, columnIndex)
-                      } else move(event, page.offset + rowIndex, columnIndex)
-                    }}
-                    title={(typeof row.values[field] === 'number'
-                      ? String(row.values[field]) + '. '
-                      : '') +
-                      'Double-click or press F2 to edit ' +
-                      leaf(field)}
-                  >
-                    {text(row.values[field])}
-                  </button>
-                {/if}
+                <button
+                  class="cell"
+                  data-row={page.offset + rowIndex}
+                  data-column={columnIndex}
+                  tabindex={page.offset + rowIndex === anchor.row && columnIndex === anchor.column
+                    ? 0
+                    : -1}
+                  onclick={() => select(row.id, field)}
+                  onkeydown={(event) => move(event, page.offset + rowIndex, columnIndex)}
+                  title={typeof row.values[field] === 'number'
+                    ? String(row.values[field])
+                    : undefined}
+                >
+                  {text(row.values[field])}
+                </button>
               </td>
             {/each}
             <td class="case__fill" aria-hidden="true"></td>
@@ -591,8 +495,8 @@
   .cell:hover {
     background: var(--color-row-hover);
   }
-  /* The selected row takes VS Code's list selection, and on its header the accent the Network and
-     Diagram glow the selection in. */
+  /* The selected row takes VS Code's list selection, and on its header the accent the Network
+     glows the selection in. */
   tbody tr.selected > * {
     background: var(--color-selected);
   }
@@ -602,16 +506,6 @@
   }
   tbody tr.selected > th {
     box-shadow: inset 2px 0 0 var(--color-focus-ring);
-  }
-  td input {
-    width: 100%;
-    min-width: 7rem;
-    min-height: var(--spacing-row-h);
-    padding-inline: var(--spacing-xs);
-    border: 1px solid var(--vscode-input-border, var(--color-border));
-    border-radius: var(--radius-sm);
-    background: var(--color-input);
-    color: var(--vscode-input-foreground, var(--color-text-1));
   }
   .spacer {
     padding: 0;

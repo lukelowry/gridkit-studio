@@ -105,7 +105,7 @@ const document: ProjectedDocument = {
         fields: [{ name: 'bus', kind: 'reference', label: 'Bus', target: 'Bus' }],
       },
     ],
-    drawing: { geographic: false, vertices: [], edges: [], blocks: [], nets: [] },
+    drawing: { geographic: false, vertices: [], edges: [] },
   },
   tables: new Map([
     [

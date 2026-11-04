@@ -1,5 +1,5 @@
-/** Commands on what the views draw: framing and reloading them, editing the Diagram, mapping a
- *  field onto the Network, their settings, and a video or image of them. */
+/** Commands on what the views draw: framing and reloading them, mapping a field onto the Network,
+ *  their settings, and a video or image of them. */
 
 import * as vscode from 'vscode'
 
@@ -19,13 +19,13 @@ import { askRange, type Commands, type Context } from './context.js'
 import { displayOf, setDisplay } from './settings.js'
 
 export function registerCanvases({ command, action, focus }: Commands) {
-  /** The canvas a command acts on: the kind its menu was opened on, else the editor in front alone,
+  /** The view a command acts on: the one its menu was opened on, else the Network in front alone,
    *  as its title bar or the Command Palette asks. */
   const canvasOf = (context: Context): { view?: Target['origin']; active: boolean } => {
     if (context.target) return { view: context.target.origin, active: false }
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const view = input instanceof vscode.TabInputCustom ? viewOf(input.viewType) : undefined
-    return view === 'network' || view === 'diagram' ? { view, active: true } : { active: false }
+    return view === 'network' ? { view, active: true } : { active: false }
   }
   command('fit', (context) => {
     const { view, active } = canvasOf(context)
@@ -36,27 +36,14 @@ export function registerCanvases({ command, action, focus }: Commands) {
     context.session.retry()
     action(context, 'reloadView')
   })
-  // A neighborhood shows in a canvas, so from the Case panel the Network frames it.
-  command('zoomToNeighborhood', (context) => {
-    if (!context.element) return
-    context.session.select(context.element)
-    action(
-      context,
-      'neighborhood',
-      context.element,
-      context.target?.origin === 'diagram' ? 'diagram' : 'network',
-    )
+  // A neighborhood shows in the Network, whatever menu asks: of the element, or, where the Network
+  // does not draw it, of the elements nearest it.
+  command('zoomToNeighborhood', async (context) => {
+    const { session, summary, element } = context
+    if (!element) return
+    session.select(element)
+    action(context, 'neighborhood', await session.networkSelectionOf(element, summary), 'network')
   })
-  // The title bar offers whichever is not the case now, so its icon shows whether the Diagram edits.
-  for (const [id, editing] of [
-    ['editDiagram', true],
-    ['finishDiagramEditing', false],
-  ] as const)
-    command(id, (context) => {
-      if (context.session.diagramEditing === editing) return
-      context.session.setEditing(editing)
-    })
-  command('arrangeDiagram', (context) => action(context, 'arrangeDiagram', undefined, 'diagram'))
 
   /** The numeric field in context, which a network channel can show. */
   const mappable = ({ summary, type, field }: Context): FieldRef => {
@@ -80,7 +67,7 @@ export function registerCanvases({ command, action, focus }: Commands) {
     const channels = picked.map(({ channel }) => channel)
     context.session.bind(field, channels, domainOf(bindings, field))
     // A height shows only from the side: a flat Network tilts, as its Tilt button tilts it.
-    const { uri } = context.document
+    const uri = vscode.Uri.parse(context.session.uri)
     if (channels.includes('vertexHeight') && displayOf(uri)['network.tilt'] === 0)
       await setDisplay(uri, 'network.tilt', TILTED)
   })
@@ -99,14 +86,13 @@ export function registerCanvases({ command, action, focus }: Commands) {
 
   for (const [id, category] of [
     ['networkSettings', 'network'],
-    ['diagramSettings', 'diagram'],
     ['monitorSettings', 'monitor'],
   ] as const)
     command(id, () =>
       vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
     )
   command('exportVideo', ({ session }) => focus(session, 'export'))
-  // A canvas editor's title bar names its file, and a menu its view; the Monitor's title bar names
+  // The Network's title bar names its file, and a menu its view; the Monitor's title bar names
   // nothing, so the Command Palette leaves this out.
   command('exportImage', (context, value) => {
     const { view, active } =

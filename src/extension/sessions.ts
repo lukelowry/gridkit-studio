@@ -1,5 +1,5 @@
 /** Every case Studio works on, each a Session kept while something holds it, and what they share:
- *  the workers, the open documents, the log, and the events the views and native UI follow. */
+ *  the workers, the case files, the log, and the events the views and native UI follow. */
 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import * as vscode from 'vscode'
 
 import type { Target } from '../shared/contexts.js'
+import { failedWith } from '../shared/errors.js'
 import {
   type Command,
   commandId,
@@ -18,11 +19,10 @@ import {
   type View,
   viewId,
 } from '../shared/ids.js'
-import type { CaseSource, Summary, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
-import { resent } from '../shared/rpc.js'
+import type { CaseSource, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
 import { catalogFile } from './catalog.js'
 import { Client, unsteady } from './client.js'
-import { current, Documents, isWritable, wholeAt } from './documents.js'
+import { CaseFiles } from './files.js'
 import { noCase, Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
@@ -42,7 +42,7 @@ export interface Action {
 export class Sessions implements vscode.Disposable {
   readonly reporter = new Reporter()
   readonly client: Client
-  readonly documents: Documents
+  readonly files: CaseFiles
   /** Fires when what a case's views show changes. */
   readonly changed = new vscode.EventEmitter<string>()
   /** Fires when a case's clock changes or its following playhead moves with the head. */
@@ -86,14 +86,12 @@ export class Sessions implements vscode.Disposable {
       }),
       (error) => this.reporter.report(error),
     )
-    this.documents = new Documents(this.client, (error) => this.reporter.report(error))
+    this.files = new CaseFiles(this.client, (error) => this.reporter.report(error))
     this.#disposables = [
       this.changed.event(() => this.updateContexts()),
       // Either worker stopping is said. A new results worker holds none of the old one's results,
       // so each session reads its own again.
-      this.client.cases.failure.event((error) =>
-        this.reporter.report(this.documents.restart(error)),
-      ),
+      this.client.cases.failure.event((error) => this.reporter.report(this.files.restart(error))),
       this.client.results.failure.event((error) => {
         const { steady } = this.client.results
         this.reporter.report(
@@ -101,14 +99,11 @@ export class Sessions implements vscode.Disposable {
         )
         for (const session of this.#all.values()) session.lost(error, steady)
       }),
-      // An open case document holds its session.
-      this.documents.opened.event((uri) => this.hold(uri, 'document')),
-      this.documents.closed.event((uri) => this.release(uri, 'document')),
-      this.documents.changed.event((uri) => {
+      this.files.changed.event((uri) => {
         this.changed.fire(uri)
         const session = this.#all.get(uri)
-        if (!session || this.documents.get(uri)?.stale) return
-        void session.forget()
+        if (!session || this.files.get(uri)?.stale) return
+        void session.reselect()
         session.restore('read')
       }),
       this.client.event.event((event) => this.#hear(event)),
@@ -127,31 +122,29 @@ export class Sessions implements vscode.Disposable {
             .call('configure', { cacheBytes: cacheBytes() })
             .catch((error) => this.reporter.report(error))
       }),
-      vscode.window.onDidChangeActiveTextEditor((editor) => this.#followText(editor)),
-      // A tab that comes to the front, opened or chosen, says which canvas is there. One that opens
-      // or changes behind it does not, as the tab VS Code opens for a file an edit left unsaved.
+      // A tab that comes to the front, opened or chosen, or a group that does, says which case is
+      // there: a canvas of it, or its file as text. One that opens or changes behind it does not.
       vscode.window.tabGroups.onDidChangeTabs(({ opened, changed }) => {
         if ([...opened, ...changed].some((tab) => tab.isActive && tab.group.isActive))
-          this.#followCanvas()
+          this.#follow()
+      }),
+      vscode.window.tabGroups.onDidChangeTabGroups(({ changed }) => {
+        if (changed.some((group) => group.isActive)) this.#follow()
       }),
     ]
     void this.prune()
     // A case in front as Studio starts, as VS Code restores its editors, is the one the views follow.
-    this.#followText(vscode.window.activeTextEditor)
-    this.#followCanvas()
+    this.#follow()
   }
 
-  /** Follows the case `editor` holds, when it holds one on disk. */
-  #followText(editor: vscode.TextEditor | undefined): void {
-    if (editor && followed(editor.document.uri.toString()))
-      void this.open(editor.document).catch((error) => this.reporter.report(error))
-  }
-
-  /** Follows the case whose canvas is in front, when one is. */
-  #followCanvas(): void {
+  /** Follows the case in front, when a canvas of it or its file as text is. */
+  #follow(): void {
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-    if (input instanceof vscode.TabInputCustom && followed(input.uri.toString()))
-      this.activate(input.uri.toString())
+    const uri =
+      input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText
+        ? input.uri.toString()
+        : undefined
+    if (uri && followed(uri)) this.activate(uri)
   }
 
   /** Registers the command `id`, reporting why it fails. */
@@ -196,10 +189,15 @@ export class Sessions implements vscode.Disposable {
     return this.#active
   }
 
-  /** The session of `uri`, held for `why`: made, and what it saved read again, as it is first held. */
+  /** The session of `uri`, held for `why`: made, its file followed, and what it saved read again,
+   *  as it is first held. */
   hold(uri: string, why: Hold): Session {
     let session = this.#all.get(uri)
-    if (!session) this.#all.set(uri, (session = new Session(uri, this)))
+    if (!session) {
+      // The file is followed before the session reads anything of it.
+      this.files.open(uri)
+      this.#all.set(uri, (session = new Session(uri, this)))
+    }
     session.hold(why)
     return session
   }
@@ -213,6 +211,7 @@ export class Sessions implements vscode.Disposable {
   closed(session: Session): void {
     if (this.#all.get(session.uri) !== session) return
     this.#all.delete(session.uri)
+    this.files.close(session.uri)
     if (this.#active === session) this.#active = undefined
     this.changed.fire(session.uri)
   }
@@ -235,32 +234,25 @@ export class Sessions implements vscode.Disposable {
     return this.#active
   }
 
-  /** Follows the case `document` holds, and reads it. */
-  async open(document: vscode.TextDocument): Promise<Session> {
-    const session = this.activate(document.uri.toString())
-    await this.documents.ensure(document)
+  /** Follows the case at `uri`, and reads it. */
+  async open(uri: string): Promise<Session> {
+    const session = this.activate(uri)
+    await this.files.read(uri)
     return session
   }
 
-  /** The case at `uri` as it reads now, opening its document if VS Code has let go of it. */
-  async caseOf(uri: string): Promise<{ document: vscode.TextDocument; summary: Summary }> {
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    return { document, summary: await this.documents.read(document) }
-  }
-
-  /** Asks the results worker `call` of the case at `uri` as it reads now: by its fingerprint, and
-   *  with its source too only when the worker has yet to read it. A large case crosses once. Its
-   *  source crosses only as the fingerprint says it reads; edited since, the case is read again. */
+  /** Asks the results worker `call` of the case at `uri` as its file reads now, by its
+   *  fingerprint: the worker reads the file itself. Changed on disk since, it is read again and
+   *  asked again. */
   async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
-    const document = await vscode.workspace.openTextDocument(vscode.Uri.parse(uri))
-    return current(document, async () => {
-      const summary = await this.documents.read(document)
-      const source = { uri, version: summary.version, fingerprint: summary.fingerprint }
-      return resent(call, 'needs-source', source, () => ({
-        ...source,
-        ...wholeAt(document, summary.version),
-      }))
-    })
+    for (;;) {
+      const { version, fingerprint } = await this.files.read(uri)
+      try {
+        return await call({ uri, version, fingerprint })
+      } catch (error) {
+        if (!failedWith(error, 'case-changed')) throw error
+      }
+    }
   }
 
   /** Lets go of the results `id` names in the results worker, which a worker that stopped holds no
@@ -272,20 +264,18 @@ export class Sessions implements vscode.Disposable {
 
   /** What the views of the case at `uri` show. */
   state(uri: string): ViewState {
-    const entry = this.documents.get(uri)
+    const file = this.files.get(uri)
     const session = this.#all.get(uri)
     return {
       uri,
-      version: entry?.document.version,
-      writable: !!entry && isWritable(entry.document),
-      diagramEditing: session?.diagramEditing,
+      version: file?.summary?.version,
       settings: session?.settings,
       bindings: session?.bindings,
-      summary: entry?.summary,
-      stale: entry?.stale,
-      error: entry?.error,
+      summary: file?.summary,
+      stale: file?.stale,
+      error: file?.error,
       selection: session?.selection,
-      anchors: session?.anchors,
+      networkSelection: session?.networkSelection,
       results: session?.results,
       plots: session?.plots,
       window: session?.window,
@@ -296,17 +286,15 @@ export class Sessions implements vscode.Disposable {
   /** Sets the context keys the manifest's `when` clauses read, each only when it changes. */
   updateContexts(): void {
     const session = this.#active
-    const entry = session && this.documents.get(session.uri)
+    const file = session && this.files.get(session.uri)
     const values: Record<ContextKey, boolean> = {
       hasCase: !!session,
-      diagramEditing: !!session?.diagramEditing,
-      editable: !!entry && !entry.stale && isWritable(entry.document),
       running: !!session?.running,
       fromSolver: !!session?.results?.solver,
       hasResults: !!session?.results,
       hasSamples: (session?.results?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,
-      caseReady: !!entry?.summary,
+      caseReady: !!file?.summary,
       caseFiltered: !!(session?.table.filter || session?.table.equal),
     }
     for (const [key, value] of Object.entries(values) as [ContextKey, boolean][])
@@ -370,7 +358,7 @@ export class Sessions implements vscode.Disposable {
 
   async dispose(): Promise<void> {
     for (const session of this.#all.values()) session.dispose()
-    this.documents.dispose()
+    this.files.dispose()
     for (const disposable of this.#disposables) disposable.dispose()
     this.changed.dispose()
     this.clock.dispose()

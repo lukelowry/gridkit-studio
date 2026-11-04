@@ -252,3 +252,67 @@ export class FrameWindow {
     this.slot.clear()
   }
 }
+
+/** A sampled field a scene maps: its type, and the field. */
+export type Sampled = readonly [table: string, field: string]
+
+const keyOf = (table: string, field: string) => JSON.stringify([table, field])
+
+/** A window of frames for each sampled field a scene maps, which the Network holds around its
+ *  playhead, and a video around the frame it draws. Each asks its windows for frames its own way. */
+export class SampledWindows {
+  readonly #windows = new Map<string, FrameWindow>()
+
+  constructor(readonly reads: FrameReads) {}
+
+  /** The window of `table`'s `field`, made when first asked for. */
+  of([table, field]: Sampled): FrameWindow {
+    const key = keyOf(table, field)
+    let window = this.#windows.get(key)
+    if (!window) this.#windows.set(key, (window = new FrameWindow(this.reads)))
+    return window
+  }
+
+  /** Lets go of every window but those of `fields`; whether any went. */
+  keep(fields: readonly Sampled[]): boolean {
+    const kept = new Set(fields.map(([table, field]) => keyOf(table, field)))
+    let went = false
+    for (const [key, window] of this.#windows)
+      if (!kept.has(key)) {
+        window.clear()
+        this.#windows.delete(key)
+        went = true
+      }
+    return went
+  }
+
+  /** Where a scene reads `table`'s `field`, once its window holds frames. */
+  readonly source = (table: string, field: string): Data | undefined =>
+    this.#windows.get(keyOf(table, field))?.data
+
+  /** The frames the windows hold, as a view's sources. */
+  get sources(): Data[] {
+    return [...this.#windows.values()].flatMap((window) => (window.data ? [window.data] : []))
+  }
+
+  /** Whether the window of each of `fields` holds the frames at `at`. */
+  hold(fields: readonly Sampled[], at: number): boolean {
+    return fields.every(([table, field]) => {
+      const range = this.#windows.get(keyOf(table, field))?.range
+      return !!range && at >= range[0] && at <= range[1]
+    })
+  }
+
+  /** What each window holds, and whether it reads more. */
+  get spans(): { span?: FrameRequest['range']; pending: boolean }[] {
+    return [...this.#windows.values()].map((window) => ({
+      span: window.range,
+      pending: window.pending,
+    }))
+  }
+
+  clear(): void {
+    for (const window of this.#windows.values()) window.clear()
+    this.#windows.clear()
+  }
+}

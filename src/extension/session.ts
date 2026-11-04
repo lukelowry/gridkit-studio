@@ -25,7 +25,6 @@ import {
   type CaseSource,
   type Element,
   type Framing,
-  type Framings,
   type Plot,
   type Results,
   type ResultsLayout,
@@ -35,7 +34,6 @@ import {
   type RunRequest,
   type Summary,
   type TableState,
-  type ViewKind,
 } from '../shared/messages.js'
 import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
 import type { SettingsValues } from '../shared/preferences.js'
@@ -116,10 +114,11 @@ export class Session {
   /** How many rows the Case panel's filters leave. */
   #rows?: number
   #selection?: Element
-  /** The network elements that stand for a selection the network does not draw. */
-  #anchors?: Entity[]
-  #diagramEditing = false
-  #framings: Framings = {}
+  /** The selection as the Network shows it: the element itself, or the nearest elements it draws;
+   *  absent until they are found. */
+  #networkSelection?: readonly Entity[]
+  /** How the Network was last framed, for an export to keep. */
+  #framing?: Framing
   /** The Monitor's chosen time window; absent, plots show the whole run. */
   #window?: readonly [number, number]
   /** The results file the views draw: a run's, or one opened. */
@@ -181,14 +180,11 @@ export class Session {
   get selection(): Element | undefined {
     return this.#selection
   }
-  get anchors(): readonly Entity[] | undefined {
-    return this.#anchors
+  get networkSelection(): readonly Entity[] | undefined {
+    return this.#networkSelection
   }
-  get diagramEditing(): boolean {
-    return this.#diagramEditing
-  }
-  get framings(): Framings {
-    return this.#framings
+  get framing(): Framing | undefined {
+    return this.#framing
   }
   get window(): readonly [number, number] | undefined {
     return this.#window
@@ -475,8 +471,7 @@ export class Session {
     this.transport.seek(t)
   }
 
-  /** Selects `element`, or nothing. A selection of an element the Network does not draw finds what
-   *  stands for it there. */
+  /** Selects `element`, or nothing, and finds the selection as the Network shows it. */
   select(element?: Element): void {
     if (
       this.#selection?.table === element?.table &&
@@ -487,42 +482,48 @@ export class Session {
     const moved = this.#selection?.table !== element?.table || this.#selection?.id !== element?.id
     this.#selection = element
     if (moved) {
-      this.#anchors = undefined
-      if (element) void this.#anchor(element)
+      this.#networkSelection = undefined
+      if (element) this.#selectInNetwork(element)
     }
     this.#changed()
   }
 
-  /** Lets go of the selection once the case, read again, no longer holds its element. */
-  async forget(): Promise<void> {
+  /** Takes up the case read again: lets go of the selection when the case no longer holds its
+   *  element, else finds again how the Network shows it, as its ports may have changed. */
+  async reselect(): Promise<void> {
     const entity = this.#selection
-    const { summary, stale } = this.#studio.documents.get(this.uri) ?? {}
+    const { summary, stale } = this.#studio.files.get(this.uri) ?? {}
     if (!entity || !summary || stale) return
+    let held: boolean
     try {
       const page = await this.#studio.client.cases.call('page', {
         ...revisionOf(summary),
         request: { table: entity.table, fields: [], ids: [entity.id], offset: 0, limit: 1 },
       })
-      if (
-        !page.ids.length &&
-        this.#selection === entity &&
-        this.#studio.documents.get(this.uri)?.summary?.version === summary.version
-      )
-        this.select()
+      held = page.ids.length > 0
     } catch (error) {
-      if (failedWith(error, 'invalid-input') || failedWith(error, 'invalid')) {
-        if (
-          this.#selection === entity &&
-          this.#studio.documents.get(this.uri)?.summary?.version === summary.version
-        )
-          this.select()
-      } else if (defect(error)) this.#studio.reporter.report(error)
+      // A type the case no longer has holds nothing.
+      if (!failedWith(error, 'invalid-input') && !failedWith(error, 'invalid')) {
+        if (defect(error)) this.#studio.reporter.report(error)
+        return
+      }
+      held = false
+    }
+    if (
+      this.#selection !== entity ||
+      this.#studio.files.get(this.uri)?.summary?.version !== summary.version
+    )
+      return
+    if (!held) this.select()
+    else {
+      this.#selectInNetwork(entity)
+      this.#changed()
     }
   }
 
   /** Makes `field` drive exactly `channels`, over `domain` when given. */
   bind(field: FieldRef, channels: readonly Channel[], domain?: readonly [number, number]): void {
-    const definition = this.#studio.documents.get(this.uri)?.summary?.definition
+    const definition = this.#studio.files.get(this.uri)?.summary?.definition
     if (!definition) throw noCase()
     const allowed = channelsFor(networkRole(definition, field.table))
     this.#bindings = bound(this.#bindings, allowed, field, channels, domain)
@@ -576,7 +577,7 @@ export class Session {
    *  draws what it is sent, so a change made while it is hidden shows as it opens. Another type
    *  starts unfiltered, in file order. */
   setTable(change: Partial<TableState>): void {
-    const summary = this.#studio.documents.get(this.uri)?.summary
+    const summary = this.#studio.files.get(this.uri)?.summary
     const table = changedTable(summary, this.#table, change)
     if (JSON.stringify(table) === JSON.stringify(this.#table)) return
     this.#table = table
@@ -592,15 +593,9 @@ export class Session {
     this.#changed()
   }
 
-  setEditing(editing: boolean): void {
-    if (this.#diagramEditing === editing) return
-    this.#diagramEditing = editing
-    this.#changed()
-  }
-
-  /** How the Network or Diagram was last framed, for an export to keep. */
-  setFraming(kind: Extract<ViewKind, 'network' | 'diagram'>, framing: Framing | undefined): void {
-    this.#framings = { ...this.#framings, [kind]: framing }
+  /** How the Network was last framed, for an export to keep. */
+  setFraming(framing: Framing | undefined): void {
+    this.#framing = framing
   }
 
   /** Reads its display settings again, as they change. */
@@ -630,7 +625,7 @@ export class Session {
     if (!saved) return
     let path = saved.path
     try {
-      const { summary } = await this.#studio.caseOf(this.uri)
+      const summary = await this.#studio.files.read(this.uri)
       path = (saved.solver && (await writtenNow(saved.solver, summary))) || saved.path
       const results = await this.#read(path, saved.solver)
       if (this.#pending === saved) this.show(results)
@@ -690,25 +685,32 @@ export class Session {
     }
   }
 
-  /** Finds what the network draws for the selected element `id`. */
-  async #anchor(entity: Entity): Promise<void> {
-    const summary = this.#studio.documents.get(this.uri)?.summary
-    if (!summary || this.#studio.documents.get(this.uri)?.stale) return
-    const network = summary.definition.drawing
-    const drawn = [...network.vertices, ...network.edges].map((item) => item.table)
-    if (drawn.includes(entity.table)) return
-    try {
-      const anchors = await this.#studio.client.cases.call('anchors', {
-        ...revisionOf(summary),
-        entity,
-        drawn,
-      })
-      if (this.#selection?.table !== entity.table || this.#selection?.id !== entity.id) return
-      this.#anchors = anchors
-      this.#changed()
-    } catch (error) {
-      this.#studio.reporter.report(error)
+  /** `entity` selected as the Network shows it, in the case `summary` describes: the element itself
+   *  where the Network draws its type, else the nearest elements it draws, which may be none. */
+  networkSelectionOf(entity: Entity, summary: Summary): Promise<Entity[]> {
+    return this.#studio.client.cases.call('networkSelection', { ...revisionOf(summary), entity })
+  }
+
+  /** Finds the selected `entity` as the Network shows it: an element it draws at once, with the
+   *  selection, and the nearest elements it draws once the case worker finds them. */
+  #selectInNetwork(entity: Entity): void {
+    const { summary, stale } = this.#studio.files.get(this.uri) ?? {}
+    if (!summary || stale) return
+    if (networkRole(summary.definition, entity.table)) {
+      this.#networkSelection = [{ table: entity.table, id: entity.id }]
+      return
     }
+    void this.networkSelectionOf(entity, summary).then(
+      (selection) => {
+        if (this.#selection?.table !== entity.table || this.#selection?.id !== entity.id) return
+        this.#networkSelection = selection
+        this.#changed()
+      },
+      // A case read again meanwhile is no failure: its selection is found again.
+      (error: unknown) => {
+        if (!quiet(error)) this.#studio.reporter.report(error)
+      },
+    )
   }
 
   #close(): void {

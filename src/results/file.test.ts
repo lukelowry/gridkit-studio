@@ -27,7 +27,10 @@ beforeAll(async () => {
   await loadNative(createRequire(import.meta.url).resolve('latkit/wasm'))
   directory = await mkdtemp(join(tmpdir(), 'native-results-file-'))
   stores = new Stores(join(directory, 'cache'))
-  kase = await Case.parse('{"buses":[{"class":"Bus","number":1,"name":"A"}]}', catalog)
+  kase = await Case.parse(
+    new TextEncoder().encode('{"buses":[{"class":"Bus","number":1,"name":"A"}]}'),
+    catalog,
+  )
 })
 afterAll(async () => {
   for (const file of made) {
@@ -148,9 +151,11 @@ describe('indexed scientific results', () => {
   })
   it('matches unordered sparse columns to stable numeric IDs', async () => {
     const three = await Case.parse(
-      JSON.stringify({
-        buses: ['A', 'B', 'C'].map((name, i) => ({ class: 'Bus', number: i + 1, name })),
-      }),
+      new TextEncoder().encode(
+        JSON.stringify({
+          buses: ['A', 'B', 'C'].map((name, i) => ({ class: 'Bus', number: i + 1, name })),
+        }),
+      ),
       catalog,
     )
     const file = await through(

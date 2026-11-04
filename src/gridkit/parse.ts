@@ -106,16 +106,12 @@ export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Pro
   return { members, close: i, arrays }
 }
 
-/** The records of an array of `bytes` from `from`, a record's start or just past the array's
- *  opening bracket, each checked as JSON whole, and where they end: just past the record that ends
- *  at `to`, when given, else at the array's closing bracket. Read up to `to`, records that end
- *  elsewhere, or an array that closes first, say only that a whole read would read them otherwise:
- *  `bounded` so. */
+/** The records of an array of `bytes` from `from`, just past the array's opening bracket, each
+ *  checked as JSON whole, and where the array closes. */
 async function recordsFrom(
   bytes: Uint8Array,
   from: number,
   work: Turns,
-  to?: number,
 ): Promise<{ close: number; starts: Uint32Array; ends: Uint32Array }> {
   let starts: Uint32Array = new Uint32Array(1024)
   let ends: Uint32Array = new Uint32Array(1024)
@@ -126,7 +122,7 @@ async function recordsFrom(
     ends: ends.slice(0, count),
   })
   let i = skipSpace(bytes, from)
-  if (to === undefined && bytes[i] === CLOSE_ARRAY) return done(i)
+  if (bytes[i] === CLOSE_ARRAY) return done(i)
   for (;;) {
     if ((count & STEP_RECORDS) === 0) await work.step()
     expect(bytes, i, OPEN_OBJECT, 'a record')
@@ -137,38 +133,11 @@ async function recordsFrom(
     }
     starts[count] = i
     ends[count++] = end
-    if (end === to) return done(-1)
-    if (to !== undefined && end > to) bounded(i, 'a record that ends where one ended')
     i = skipSpace(bytes, end)
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
-    else if (to === undefined && bytes[i] === CLOSE_ARRAY) return done(i)
-    else if (bytes[i] === CLOSE_ARRAY) bounded(i, 'a record where the array ends')
+    else if (bytes[i] === CLOSE_ARRAY) return done(i)
     else malformed(i, 'a comma or the end of the array')
   }
-}
-
-/** Why a read up to a record's end stopped short of it, where a whole read may read on. */
-const bounded = (at: number, what: string): never => malformed(at, what, { bounded: true })
-
-/** Whether `error` is a read up to a record's end stopping short of it, which says nothing of the
- *  file as a whole read reads it. */
-export const isBounded = (error: unknown): boolean =>
-  (error as { bounded?: unknown } | null)?.bounded === true
-
-/** The records of an array of `bytes` from `from` up to `to`, checked as `scan` checks them, each a
- *  start and an end: `from` is a record's start or just past the array's opening bracket, and `to`
- *  is just past a record, or, when `closing`, the array's closing bracket. */
-export async function recordsBetween(
-  bytes: Uint8Array,
-  from: number,
-  to: number,
-  closing: boolean,
-  signal = AbortSignal.any([]),
-): Promise<{ starts: Uint32Array; ends: Uint32Array }> {
-  const work = new Turns(signal)
-  const read = await recordsFrom(bytes, from, work, closing ? undefined : to)
-  if (closing && read.close !== to) bounded(read.close, 'the end of the array where it was')
-  return read
 }
 
 /** Where each open object's keys are, and their hashes, as `checkValue` reads: a key is compared
@@ -558,16 +527,10 @@ const RECORD_KEYS = Object.fromEntries(
     new Keys(keys.map((key) => (key === 'identity' ? IDENTITY[array as ArrayName].name : key))),
   ]),
 ) as Record<ArrayName, Keys>
-/** What Studio keeps under `extension` for itself, and never shows as a field. */
-const OWN = new Keys(['diagram'])
 
-/** Where the bytes of a range were parsed from are now: the file that holds them, and how far past
- *  where they were parsed they lie. A range a later revision keeps is pointed at that revision's
- *  file, so what it has yet to decode reads the same bytes there, and no older file stays alive
- *  for it. */
+/** The file a range was parsed from, which what it has yet to decode reads. */
 export interface Source {
-  bytes: Uint8Array
-  shift: number
+  readonly bytes: Uint8Array
 }
 
 /** A column of the rows whose values `spans` place in `source`, each a start and an end, -1 where
@@ -585,14 +548,13 @@ function lazyColumn(
   const decode = deferred(() => {
     const { source, spans: own } = unread!
     unread = undefined
-    const { bytes, shift } = source
+    const { bytes } = source
     const rows = own.length / 2
     const target = builder(type)
     const wrong: number[] = []
     for (let row = 0; row < rows; row++) {
-      const at = own[2 * row]!
-      const value = at < 0 ? at : at + shift
-      const end = own[2 * row + 1]! + shift
+      const value = own[2 * row]!
+      const end = own[2 * row + 1]!
       let read: boolean
       if (port) {
         const number = value < 0 ? NaN : parseNumber(bytes, value, end)
@@ -611,10 +573,7 @@ function lazyColumn(
     provided: () =>
       unread
         ? unread.spans.some(
-            (at, index) =>
-              index % 2 === 0 &&
-              at >= 0 &&
-              unread!.source.bytes[at + unread!.source.shift] !== 0x6e,
+            (at, index) => index % 2 === 0 && at >= 0 && unread!.source.bytes[at] !== 0x6e,
           )
         : decode().wrong.length > 0 ||
           decode().chunk.some(
@@ -763,7 +722,7 @@ export class Parser {
   /** Every table's shape by code: the catalog's, then each class it does not know, as found. */
   readonly #shapes: Shape[]
   readonly #unknown: Map<string, number>
-  #source: Source = { bytes: new Uint8Array(0), shift: 0 }
+  #source: Source = { bytes: new Uint8Array(0) }
   readonly #members = new Members()
   readonly #nested = new Members()
   /** The record being read: each field's and port's value as a start and end, -1 where absent. */
@@ -780,12 +739,11 @@ export class Parser {
   #found: Found[] = []
   #problems: SourceProblem[] = []
 
-  /** A parser of `catalog`'s cases, coding tables as `coding` did when given, so ranges it reads join
-   *  those another parser read with it. */
-  constructor(catalog: Catalog, coding?: Coding) {
+  /** A parser of `catalog`'s cases. */
+  constructor(catalog: Catalog) {
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
-    this.#shapes = [...(coding?.shapes ?? catalog.codes)]
-    this.#unknown = new Map(coding?.unknown)
+    this.#shapes = [...catalog.codes]
+    this.#unknown = new Map()
   }
 
   /** How it codes tables, the classes found so far included. */
@@ -795,7 +753,7 @@ export class Parser {
 
   parse(bytes: Uint8Array, array: ArrayName, first: number, starts: Uint32Array): Parsed {
     this.#bytes = bytes
-    this.#source = { bytes, shift: 0 }
+    this.#source = { bytes }
     this.#array = array
     this.#first = first
     this.#tables = []
@@ -900,10 +858,9 @@ export class Parser {
       let known = -1
       if (key === 'params') known = rows.paramField[rows.params.find(bytes, keyStart, keyEnd)] ?? -1
       else if (key === 'init') known = rows.initField[rows.init.find(bytes, keyStart, keyEnd)] ?? -1
-      else if (key === 'extension') {
-        if (OWN.find(bytes, keyStart, keyEnd) >= 0) continue
+      else if (key === 'extension')
         known = rows.extensionField[rows.extension.find(bytes, keyStart, keyEnd)] ?? -1
-      } else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
+      else if (key === 'ports' || key === 'ports_in' || key === 'ports_out') {
         const under = rows.ports.get(key)
         const port = under ? (under.port[under.keys.find(bytes, keyStart, keyEnd)] ?? -1) : -1
         if (port >= 0) {

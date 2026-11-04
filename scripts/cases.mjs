@@ -1,9 +1,9 @@
 /** GridKit's cases, copied into cases/ byte for byte as GridKit has them at the ref Studio's default
  *  image is built from, so the samples match the GridKit that runs them. That ref is the image's
- *  `org.opencontainers.image.revision` label. The short solver file beside each, and ACTIVSg25k and
- *  ACTIVSg70k, are kept in cases/ as they are, apart from this.
+ *  `org.opencontainers.image.revision` label. The short solver file beside each is kept in cases/ as
+ *  it is, apart from this.
  *
- *    node scripts/cases.mjs ../GridKit 01d7543e4d2028a6b4ee0b530b16277ee1278336
+ *    node scripts/cases.mjs ../GridKit 0ff72a120d6b0a895ccefd3db5e2b259e2d25d0f
  *
  *  The cases in cases/ list more in their `mon` lists than GridKit's do, which a copy would undo:
  *  to follow a newer GridKit, apply its own diff of each case instead, as `git diff` of the two refs
@@ -19,6 +19,8 @@ const CASES = {
   WECC240: 'WECC240/WECC240',
   ACTIVSg2000: 'ACTIVSg2000/ACTIVSg2000',
   ACTIVSg10k: 'ACTIVSg10k/ACTIVSg10k',
+  ACTIVSg25k: 'ACTIVSg25k/ACTIVSg25k',
+  ACTIVSg70k: 'ACTIVSg70k/ACTIVSg70k',
 }
 
 const [gridkit, ref] = process.argv.slice(2)

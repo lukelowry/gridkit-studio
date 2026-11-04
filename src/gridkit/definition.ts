@@ -1,9 +1,6 @@
 /** GridKit catalog semantics and source decoding rules, independent of native dataset storage. */
-import type { Port } from 'latkit'
-
 import {
   type CaseDefinition,
-  DIAGRAM_POSITION,
   type FieldDefinition,
   LABEL,
   NETWORK_POSITION,
@@ -344,7 +341,7 @@ function compile(
   }
   const generated: FieldDefinition[] = [
     { name: LABEL, kind: 'text', label: 'Identity' },
-    ...[...DIAGRAM_POSITION, ...NETWORK_POSITION].map((name): FieldDefinition => ({
+    ...NETWORK_POSITION.map((name): FieldDefinition => ({
       name,
       kind: 'number',
       label: name,
@@ -397,17 +394,6 @@ export function definitionsOf(
     vertices.every((shape) => position(shape)) &&
     (!supplied ||
       vertices.some((shape) => position(shape)!.every((field) => supplied(shape.type, field))))
-  const directed = shapes.flatMap((shape) =>
-    shape.ports.filter((port) => port.definition.direction).map((port) => ({ shape, port })),
-  )
-  const nets = [...new Set(directed.map(({ port }) => port.definition.target))]
-  // Devices are the diagram's blocks. A bus, which may drive signals too, is the Network's.
-  const blocks = shapes.filter(
-    (shape) =>
-      shape.kind === 'device' &&
-      directed.some((item) => item.shape === shape) &&
-      !nets.includes(shape.type),
-  )
   return {
     tables: shapes.map((shape) => shape.definition),
     drawing: {
@@ -432,21 +418,6 @@ export function definitionsOf(
               (!supplied || supplied(shape.type, field.name)),
           )?.name,
         })),
-      blocks: blocks.map((shape) => ({
-        table: shape.type,
-        label: shape.definition.labelField,
-        position: [...DIAGRAM_POSITION],
-        ports: shape.ports
-          .filter((port) => port.definition.direction)
-          .map((port): [string, Port] => [
-            port.name,
-            {
-              side: port.definition.direction === 'out' ? 'right' : 'left',
-              output: port.definition.direction === 'out',
-            },
-          ]),
-      })),
-      nets,
     },
   }
 }

@@ -20,7 +20,6 @@ export interface ProjectionCursor {
 }
 
 export interface ProjectionPage {
-  readonly base?: string
   readonly key: string
   readonly bytes: Uint8Array
   readonly next?: ProjectionCursor

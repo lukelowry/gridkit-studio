@@ -33,6 +33,15 @@ export async function stampAt(path: string): Promise<Stamp | undefined> {
   }
 }
 
+/** File times move in steps, as long as two seconds (FAT): a file written again within a step of
+ *  its last change may keep its stamp. */
+const STEP_NS = 2_000_000_000n
+
+/** Whether `stamp`, taken at `at` (nanoseconds since 1970), tells every later write of its file:
+ *  the file last changed a step or more before. */
+export const settled = (stamp: Stamp, at: bigint): boolean =>
+  at - BigInt(stamp.modified) >= STEP_NS && at - BigInt(stamp.changed) >= STEP_NS
+
 /** Whether `a` and `b` are both stamps of one file as it stood once. */
 export const same = (a?: Stamp, b?: Stamp): boolean =>
   !!a &&

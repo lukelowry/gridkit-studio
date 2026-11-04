@@ -43,10 +43,7 @@ describe('native VS Code contract', () => {
     // Every menu any view opens carries the same keys, whatever it was opened on.
     const given = new Set(
       Object.keys(
-        menuContext(
-          { definition: catalog.definition, editable: {} },
-          { uri: '', version: 0, origin: 'case' },
-        ),
+        menuContext({ definition: catalog.definition }, { uri: '', version: 0, origin: 'case' }),
       ),
     )
     for (const { place, when } of menus.clauses()) {
@@ -95,7 +92,7 @@ describe('native VS Code contract', () => {
     ).toEqual(['gridkitStudio-case', 'gridkitStudio-monitor'])
     expect(
       manifest.contributes.customEditors.map((editor: { viewType: string }) => editor.viewType),
-    ).toEqual(['gridkitStudio.network', 'gridkitStudio.diagram'])
+    ).toEqual(['gridkitStudio.network'])
     // The side bar holds what the case records and its video; Monitored Signals is a native tree,
     // not a webview.
     expect(manifest.contributes.views.gridkitStudio.map((view: { id: string }) => view.id)).toEqual(
@@ -110,7 +107,7 @@ describe('native VS Code contract', () => {
       manifest.contributes.customEditors.map(
         (editor: { displayName: string }) => editor.displayName,
       ),
-    ).toEqual(['Network', 'Diagram'])
+    ).toEqual(['Network'])
     // GridKit runs only on the solver file a menu was opened on, as a shell runs it.
     const command = commandId('runSimulation')
     for (const menu of ['explorer/context', 'editor/context', 'editor/title/context'])
@@ -118,8 +115,7 @@ describe('native VS Code contract', () => {
         expect.objectContaining({ command, when: 'resourceFilename =~ /\\.solver\\.json$/i' }),
       )
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
-    // Playback lives in the status bar, not the title bars; Fit is the canvas editors' own title
-    // action.
+    // Playback lives in the status bar, not the title bars; Fit is the Network's own title action.
     const titled = ['view/title', 'editor/title'].flatMap((menu) =>
       manifest.contributes.menus[menu].map((item: { command: string }) => item.command),
     )
@@ -158,19 +154,16 @@ describe('native VS Code contract', () => {
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
     const definition = catalog.definition
-    const summary = { definition, editable: { GenClassical: ['ports.pmech'] } }
+    const summary = { definition }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
-      origin: 'diagram' as const,
+      origin: 'case' as const,
       element: { table: 'GenClassical', id: 'one', field: 'ports.pmech' },
     }
     const context = menuContext(summary, target)
     expect(context.gridkitTarget).toEqual(target)
-    expect(context.gridkitEditable).toBe(true)
     expect(context.gridkitReference).toBe(true)
-    expect(context.gridkitNetwork).toBe(false)
-    expect(context.gridkitDiagram).toBe(true)
     // A whole element goes where it refers when its type refers to anything: a branch to its buses,
     // a bus to the signals a signal-voltage bus connects, and a signal nowhere.
     const element = (table: string) =>

@@ -4,7 +4,7 @@
 import * as vscode from 'vscode'
 
 import { defect, detail, message, quiet } from '../shared/errors.js'
-import { commandId, viewId } from '../shared/ids.js'
+import { commandId } from '../shared/ids.js'
 
 /** A choice a notification offers: its label, and the command it runs. */
 export interface Offer {
@@ -17,11 +17,6 @@ export const SHOW_OUTPUT: Offer = { title: 'Show Output', command: commandId('sh
 export const SHOW_PROBLEMS: Offer = {
   title: 'Show Problems',
   command: 'workbench.actions.view.problems',
-}
-/** Monitored Signals, where a case chooses what its runs record. */
-export const CHOOSE_SIGNALS: Offer = {
-  title: 'Choose Signals',
-  command: viewId('signals') + '.focus',
 }
 
 /** An error to report as `text`, offering `offers`. */

@@ -9,12 +9,10 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import { applyEdits, modify } from 'jsonc-parser'
 import type { Id } from 'latkit'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import manifest from '../../package.json'
-import { apply } from '../../src/gridkit/edits.js'
 import {
   available,
   Case,
@@ -24,12 +22,12 @@ import {
   recordingOf,
   simulate,
 } from '../../src/gridkit/index.js'
-import { recordEdits } from '../../src/gridkit/recording.js'
 import type { Runtime } from '../../src/gridkit/runtime.js'
 import { type ResultsFile, Stores } from '../../src/results/index.js'
 import type { TimeRange } from '../../src/shared/data.js'
 import type { GridKit, RunRequest, RuntimeProcess } from '../../src/shared/messages.js'
 import { outputOf, readSolver } from '../../src/shared/study.js'
+import { withMons } from '../mons.js'
 
 const gridkit: GridKit = {
   program: PROGRAM,
@@ -67,6 +65,13 @@ describe("GridKit's programs on solver files", () => {
     console.log('GridKit runs', runtime)
   })
 
+  /** `text`, a case, with every bus listing `add` among its outputs, as a user writes its `mon`
+   *  lists. */
+  const listing = (text: string, add: readonly string[]) =>
+    withMons(text, ({ type, mon }) =>
+      type === 'Bus' ? [...mon.filter((name) => !add.includes(name)), ...add] : undefined,
+    )
+
   /** A case's buses in file order, which are the rows Studio reads them back as. */
   async function busesOf(name: string) {
     const text = await readFile(`cases/${name}.case.json`, 'utf8')
@@ -84,13 +89,12 @@ describe("GridKit's programs on solver files", () => {
     solver: Record<string, unknown>,
     signal: AbortSignal,
     {
-      record = (kase: Case, text: string) =>
-        apply(text, recordEdits(kase, [{ type: 'Bus', add: ['Vm'], remove: [] }])),
+      record = (text: string) => listing(text, ['Vm']),
       progress = () => {},
       using = gridkit,
       mount = root,
     }: {
-      record?: (kase: Case, text: string) => string
+      record?: (text: string) => string
       progress?: (stop: (reason: Error) => void) => void
       using?: GridKit
       mount?: string
@@ -99,20 +103,19 @@ describe("GridKit's programs on solver files", () => {
     const folder = join(root, name)
     await mkdir(folder)
     const release = await readFile(`cases/${model}.case.json`, 'utf8')
-    const text = record(await Case.parse(release, catalog), release)
+    const text = record(release)
     const casePath = join(folder, `${model}.case.json`)
     await writeFile(casePath, text)
     const solverPath = join(folder, `${model}.solver.json`)
     const solverText = JSON.stringify({ system_model_file: `${model}.case.json`, ...solver })
     await writeFile(solverPath, solverText)
-    const kase = await Case.parse(text, catalog, `${model}.case.json`)
+    const kase = await Case.parse(new TextEncoder().encode(text), catalog, `${model}.case.json`)
     const study = readSolver(`${model}.solver.json`, solverText)
     const sink = outputOf(`${model}.solver.json`, study, (await recordingOf(kase)).monitor)
     const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
       fingerprint: kase.version,
-      text,
       run: randomUUID(),
       results: randomUUID(),
       solver: solverPath,
@@ -185,7 +188,7 @@ describe("GridKit's programs on solver files", () => {
     }) => {
       expect(
         await diagnose(
-          await Case.parse(await readFile(`cases/${name}.case.json`, 'utf8'), catalog),
+          await Case.parse(await readFile(`cases/${name}.case.json`), catalog),
           AbortSignal.any([]),
         ),
       ).toEqual([])
@@ -196,8 +199,7 @@ describe("GridKit's programs on solver files", () => {
         { output_file: 'output/out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
         signal,
         {
-          record: (kase, text) =>
-            apply(text, recordEdits(kase, [{ type: 'Bus', add: ['Vm', 'Va'], remove: [] }])),
+          record: (text) => listing(text, ['Vm', 'Va']),
         },
       )
       const results = await done
@@ -238,13 +240,15 @@ describe("GridKit's programs on solver files", () => {
       { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
       signal,
       {
-        record: (kase, text) => {
-          const cleared = apply(
-            text,
-            recordEdits(kase, [{ type: 'Bus', add: [], remove: ['Va', 'Vm'] }]),
-          )
-          return applyEdits(cleared, modify(cleared, ['buses', row, 'mon'], ['Va', 'Vm'], {}))
-        },
+        // Bus 2 alone lists its voltage.
+        record: (text) =>
+          withMons(text, ({ type, index, mon }) =>
+            type !== 'Bus'
+              ? undefined
+              : index === row
+                ? ['Va', 'Vm']
+                : mon.filter((name) => name !== 'Va' && name !== 'Vm'),
+          ),
       },
     )
     const results = await done

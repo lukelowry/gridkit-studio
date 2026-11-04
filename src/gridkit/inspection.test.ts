@@ -1,39 +1,39 @@
 import { describe, expect, it } from 'vitest'
 
 import { Case, catalog } from './index.js'
-import { anchors } from './inspection.js'
+import { networkSelectionOf } from './inspection.js'
 
 const signal = new AbortController().signal
 describe('case inspection', () => {
-  it('stands an element the network does not draw in for the buses it reaches', async () => {
+  it('selects an element the Network does not draw by the buses it reaches', async () => {
     const kase = await Case.parse(
-      JSON.stringify({
-        buses: [
-          { class: 'Bus', number: 1 },
-          { class: 'Bus', number: 2 },
-        ],
-        signals: [{ signal_id: 1 }],
-        devices: [
-          { class: 'Branch', id: 'line', ports: { bus1: 1, bus2: 2 } },
-          { class: 'GenClassical', id: 'fault', ports: { bus: 2, pmech: 1 } },
-          { class: 'ConstantSignalSource', id: 'source', ports: { sr: 1 } },
-        ],
-      }),
+      new TextEncoder().encode(
+        JSON.stringify({
+          buses: [
+            { class: 'Bus', number: 1 },
+            { class: 'Bus', number: 2 },
+          ],
+          signals: [{ signal_id: 1 }, { signal_id: 2 }],
+          devices: [
+            { class: 'Branch', id: 'line', ports: { bus1: 1, bus2: 2 } },
+            { class: 'GenClassical', id: 'fault', ports: { bus: 2, pmech: 1 } },
+            { class: 'ConstantSignalSource', id: 'source', ports: { sr: 1 } },
+            { class: 'ConstantSignalSource', id: 'alone', ports: { sr: 2 } },
+          ],
+        }),
+      ),
       catalog,
     )
-    const drawn = ['Bus', 'Branch']
-    // A drawn element stands for itself.
-    expect(await anchors(kase, { entity: { table: 'Bus', id: 1 }, drawn }, signal)).toEqual([])
-    expect(
-      await anchors(kase, { entity: { table: 'GenClassical', id: 'fault' }, drawn }, signal),
-    ).toEqual([{ table: 'Bus', id: 2 }])
-    // A source reaches its bus through the fault its signal drives.
-    expect(
-      await anchors(
-        kase,
-        { entity: { table: 'ConstantSignalSource', id: 'source' }, drawn },
-        signal,
-      ),
-    ).toEqual([{ table: 'Bus', id: 2 }])
+    const selected = (table: string, id: string | number) =>
+      networkSelectionOf(kase, { table, id }, signal)
+    // An element the Network draws is selected itself.
+    expect(await selected('Bus', 1)).toEqual([{ table: 'Bus', id: 1 }])
+    expect(await selected('Branch', 'line')).toEqual([{ table: 'Branch', id: 'line' }])
+    // A machine by its bus, and a source by the bus of the machine its signal drives.
+    expect(await selected('GenClassical', 'fault')).toEqual([{ table: 'Bus', id: 2 }])
+    expect(await selected('ConstantSignalSource', 'source')).toEqual([{ table: 'Bus', id: 2 }])
+    // A source whose signal drives nothing selects nothing there.
+    expect(await selected('ConstantSignalSource', 'alone')).toEqual([])
+    await expect(selected('Bus', 3)).rejects.toThrow(/Unknown element/)
   })
 })

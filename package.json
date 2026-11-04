@@ -1,8 +1,8 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.5.1",
-  "description": "Explore, edit, and simulate power-system cases with native VS Code tools and Latkit.",
+  "version": "0.7.0",
+  "description": "Explore and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
   "license": "MIT",
@@ -36,7 +36,6 @@
     "workspace"
   ],
   "activationEvents": [
-    "onLanguage:json",
     "onStartupFinished"
   ],
   "scripts": {
@@ -67,7 +66,7 @@
   },
   "dependencies": {
     "jsonc-parser": "3.3.1",
-    "latkit": "0.5.1"
+    "latkit": "0.6.1"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",
@@ -102,7 +101,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Inspect and edit cases. Simulation requires Workspace Trust.",
+      "description": "Inspect cases. Simulation requires Workspace Trust.",
       "restrictedConfigurations": [
         "gridkitStudio.gridkitPath",
         "gridkitStudio.gridkitImage",
@@ -113,8 +112,8 @@
       ]
     },
     "virtualWorkspaces": {
-      "supported": "limited",
-      "description": "Inspect and edit cases. Simulation requires a local filesystem on the workspace host."
+      "supported": false,
+      "description": "GridKit Studio reads case files on the workspace host."
     }
   },
   "contributes": {
@@ -137,20 +136,6 @@
         "title": "Reveal in Network",
         "category": "GridKit Studio",
         "icon": "$(globe)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.openDiagram",
-        "title": "Open Diagram",
-        "category": "GridKit Studio",
-        "icon": "$(type-hierarchy)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.revealInDiagram",
-        "title": "Reveal in Diagram",
-        "category": "GridKit Studio",
-        "icon": "$(type-hierarchy)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -196,13 +181,6 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.editField",
-        "title": "Edit Field…",
-        "category": "GridKit Studio",
-        "icon": "$(edit)",
-        "enablement": "gridkitStudio.editable"
-      },
-      {
         "command": "gridkitStudio.copyId",
         "title": "Copy ID",
         "category": "GridKit Studio",
@@ -221,20 +199,6 @@
         "title": "Copy Field Path",
         "category": "GridKit Studio",
         "icon": "$(copy)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.recordAllSignals",
-        "title": "Record All Signals",
-        "category": "GridKit Studio",
-        "icon": "$(check-all)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.recordNoSignals",
-        "title": "Record No Signals",
-        "category": "GridKit Studio",
-        "icon": "$(clear-all)",
         "enablement": "gridkitStudio.hasCase"
       },
       {
@@ -502,51 +466,11 @@
         "enablement": "gridkitStudio.hasCase"
       },
       {
-        "command": "gridkitStudio.diagramSettings",
-        "title": "Diagram Settings",
-        "category": "GridKit Studio",
-        "icon": "$(settings-gear)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
         "command": "gridkitStudio.monitorSettings",
         "title": "Monitor Settings",
         "category": "GridKit Studio",
         "icon": "$(settings-gear)",
         "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.editDiagram",
-        "title": "Edit Diagram",
-        "category": "GridKit Studio",
-        "icon": "$(edit)",
-        "enablement": "gridkitStudio.editable"
-      },
-      {
-        "command": "gridkitStudio.finishDiagramEditing",
-        "title": "Finish Diagram Editing",
-        "category": "GridKit Studio",
-        "icon": "$(check)",
-        "enablement": "gridkitStudio.hasCase"
-      },
-      {
-        "command": "gridkitStudio.arrangeDiagram",
-        "title": "Arrange Diagram",
-        "category": "GridKit Studio",
-        "icon": "$(type-hierarchy)",
-        "enablement": "gridkitStudio.editable"
-      },
-      {
-        "command": "gridkitStudio.disconnectPort",
-        "title": "Disconnect Port",
-        "category": "GridKit Studio",
-        "enablement": "gridkitStudio.editable"
-      },
-      {
-        "command": "gridkitStudio.deleteElement",
-        "title": "Delete Element",
-        "category": "GridKit Studio",
-        "enablement": "gridkitStudio.editable"
       },
       {
         "command": "gridkitStudio.exportVideo",
@@ -567,62 +491,42 @@
       "editor/title": [
         {
           "command": "gridkitStudio.fit",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "navigation@1"
         },
         {
           "command": "gridkitStudio.openSource",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "navigation@2"
         },
         {
-          "command": "gridkitStudio.editDiagram",
-          "when": "activeCustomEditorId == gridkitStudio.diagram && !gridkitStudio.diagramEditing",
-          "group": "navigation@3"
-        },
-        {
-          "command": "gridkitStudio.finishDiagramEditing",
-          "when": "activeCustomEditorId == gridkitStudio.diagram && gridkitStudio.diagramEditing",
-          "group": "navigation@3"
-        },
-        {
           "command": "gridkitStudio.openCasePanel",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "1_view@1"
         },
         {
           "command": "gridkitStudio.openMonitor",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "1_view@2"
         },
         {
           "command": "gridkitStudio.exportVideo",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "1_view@3"
         },
         {
           "command": "gridkitStudio.exportImage",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "1_view@4"
         },
         {
-          "command": "gridkitStudio.arrangeDiagram",
-          "when": "activeCustomEditorId == gridkitStudio.diagram",
-          "group": "2_layout@1"
-        },
-        {
           "command": "gridkitStudio.reloadView",
-          "when": "activeCustomEditorId == gridkitStudio.network || activeCustomEditorId == gridkitStudio.diagram",
+          "when": "activeCustomEditorId == gridkitStudio.network",
           "group": "2_layout@2"
         },
         {
           "command": "gridkitStudio.networkSettings",
           "when": "activeCustomEditorId == gridkitStudio.network",
-          "group": "4_settings@1"
-        },
-        {
-          "command": "gridkitStudio.diagramSettings",
-          "when": "activeCustomEditorId == gridkitStudio.diagram",
           "group": "4_settings@1"
         }
       ],
@@ -643,14 +547,9 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.openDiagram",
-          "when": "resourceFilename =~ /\\.case\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.openCasePanel",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
-          "group": "gridkit@2"
+          "group": "gridkit@1"
         }
       ],
       "editor/context": [
@@ -670,14 +569,9 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.openDiagram",
-          "when": "resourceFilename =~ /\\.case\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.openCasePanel",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
-          "group": "gridkit@2"
+          "group": "gridkit@1"
         }
       ],
       "editor/title/context": [
@@ -722,16 +616,6 @@
           "command": "gridkitStudio.openSource",
           "when": "view == gridkitStudio.case && gridkitStudio.hasCase",
           "group": "2_source@1"
-        },
-        {
-          "command": "gridkitStudio.recordAllSignals",
-          "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
-          "group": "navigation@1"
-        },
-        {
-          "command": "gridkitStudio.recordNoSignals",
-          "when": "view == gridkitStudio.signals && gridkitStudio.hasCase",
-          "group": "navigation@2"
         },
         {
           "command": "gridkitStudio.stopSimulation",
@@ -807,28 +691,18 @@
         },
         {
           "command": "gridkitStudio.revealInNetwork",
-          "when": "gridkitElement && gridkitNetwork && gridkitOrigin != network",
+          "when": "gridkitElement && gridkitOrigin != network",
           "group": "navigation@3"
-        },
-        {
-          "command": "gridkitStudio.revealInDiagram",
-          "when": "gridkitElement && gridkitDiagram && gridkitOrigin != diagram",
-          "group": "navigation@4"
         },
         {
           "command": "gridkitStudio.revealInCase",
           "when": "gridkitElement && gridkitOrigin != case",
-          "group": "navigation@5"
+          "group": "navigation@4"
         },
         {
           "command": "gridkitStudio.zoomToNeighborhood",
-          "when": "gridkitScope == element && gridkitElement && (gridkitNetwork || gridkitDiagram)",
-          "group": "navigation@6"
-        },
-        {
-          "command": "gridkitStudio.editField",
-          "when": "gridkitEditable && gridkitScope != plot",
-          "group": "1_modification@1"
+          "when": "gridkitScope == element && gridkitElement",
+          "group": "navigation@5"
         },
         {
           "command": "gridkitStudio.sortAscending",
@@ -911,16 +785,6 @@
           "group": "5_cutcopypaste@3"
         },
         {
-          "command": "gridkitStudio.disconnectPort",
-          "when": "gridkitOrigin == diagram && gridkitPort",
-          "group": "7_modification@1"
-        },
-        {
-          "command": "gridkitStudio.deleteElement",
-          "when": "gridkitOrigin == diagram && gridkitElement && !gridkitPort",
-          "group": "7_modification@2"
-        },
-        {
           "command": "gridkitStudio.removePlot",
           "when": "gridkitScope == plot",
           "group": "7_modification@3"
@@ -968,14 +832,6 @@
           "when": "false"
         },
         {
-          "command": "gridkitStudio.openDiagram",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.revealInDiagram",
-          "when": "false"
-        },
-        {
           "command": "gridkitStudio.openCasePanel",
           "when": "gridkitStudio.hasCase"
         },
@@ -1000,10 +856,6 @@
           "when": "gridkitStudio.hasSelection"
         },
         {
-          "command": "gridkitStudio.editField",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
           "command": "gridkitStudio.copyId",
           "when": "gridkitStudio.hasCase"
         },
@@ -1014,14 +866,6 @@
         {
           "command": "gridkitStudio.copyFieldPath",
           "when": "false"
-        },
-        {
-          "command": "gridkitStudio.recordAllSignals",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.recordNoSignals",
-          "when": "gridkitStudio.hasCase"
         },
         {
           "command": "gridkitStudio.runSimulation",
@@ -1172,32 +1016,8 @@
           "when": "gridkitStudio.hasCase"
         },
         {
-          "command": "gridkitStudio.diagramSettings",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
           "command": "gridkitStudio.monitorSettings",
           "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.editDiagram",
-          "when": "gridkitStudio.hasCase && !gridkitStudio.diagramEditing"
-        },
-        {
-          "command": "gridkitStudio.finishDiagramEditing",
-          "when": "gridkitStudio.diagramEditing"
-        },
-        {
-          "command": "gridkitStudio.arrangeDiagram",
-          "when": "gridkitStudio.hasCase"
-        },
-        {
-          "command": "gridkitStudio.disconnectPort",
-          "when": "false"
-        },
-        {
-          "command": "gridkitStudio.deleteElement",
-          "when": "false"
         },
         {
           "command": "gridkitStudio.exportVideo",
@@ -1219,16 +1039,6 @@
           }
         ],
         "priority": "default"
-      },
-      {
-        "viewType": "gridkitStudio.diagram",
-        "displayName": "Diagram",
-        "selector": [
-          {
-            "filenamePattern": "*.[cC][aA][sS][eE].[jJ][sS][oO][nN]"
-          }
-        ],
-        "priority": "option"
       }
     ],
     "viewsContainers": {
@@ -1283,7 +1093,7 @@
     "viewsWelcome": [
       {
         "view": "gridkitStudio.signals",
-        "contents": "Open a GridKit case to choose its monitored signals.\n[Open Case](command:gridkitStudio.openCase)",
+        "contents": "Open a GridKit case to see what it records.\n[Open Case](command:gridkitStudio.openCase)",
         "when": "!gridkitStudio.hasCase"
       }
     ],
@@ -1378,18 +1188,18 @@
           "gridkitStudio.network.vertexRadius": {
             "default": 2.5,
             "scope": "resource",
-            "markdownDescription": "View — Vertex radius. Radius in CSS pixels for sparse networks. Dense networks scale down automatically; size bindings scale with this value.",
+            "markdownDescription": "View — Vertex radius. Radius in CSS pixels, never under the edge width, so a vertex shows past the edges that meet it. Size mappings start from this radius.",
             "type": "number",
-            "minimum": 0.25,
+            "minimum": 2,
             "maximum": 12
           },
           "gridkitStudio.network.edgeWidth": {
-            "default": 0.75,
+            "default": 2,
             "scope": "resource",
-            "markdownDescription": "View — Edge width. Width in CSS pixels for sparse networks. Dense networks scale down automatically; width bindings scale with this value.",
+            "markdownDescription": "View — Edge width. Width in CSS pixels, at least 2, as a thinner line can't hide what is behind it. Width mappings start from this width.",
             "type": "number",
-            "minimum": 0.1,
-            "maximum": 6
+            "minimum": 2,
+            "maximum": 8
           },
           "gridkitStudio.network.colormap": {
             "default": "viridis",
@@ -1498,15 +1308,17 @@
           "gridkitStudio.network.zoom": {
             "default": "wheel",
             "scope": "resource",
-            "markdownDescription": "Interaction — Wheel behavior",
+            "markdownDescription": "Interaction — Wheel behavior. Trackpad scrolls to pan and pinches to zoom.",
             "type": "string",
             "enum": [
               "wheel",
+              "trackpad",
               "modifier",
               "off"
             ],
             "enumDescriptions": [
               "Wheel",
+              "Trackpad",
               "Modifier + wheel",
               "Off"
             ]
@@ -1591,120 +1403,9 @@
         }
       },
       {
-        "id": "gridkitStudio.diagram",
-        "title": "GridKit Studio: Diagram",
-        "order": 2,
-        "properties": {
-          "gridkitStudio.diagram.direction": {
-            "default": "right",
-            "scope": "resource",
-            "markdownDescription": "Layout — Direction",
-            "type": "string",
-            "enum": [
-              "right",
-              "left",
-              "down",
-              "up"
-            ],
-            "enumDescriptions": [
-              "Right",
-              "Left",
-              "Down",
-              "Up"
-            ]
-          },
-          "gridkitStudio.diagram.gap": {
-            "default": 30,
-            "scope": "resource",
-            "markdownDescription": "Layout — Block gap",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 200
-          },
-          "gridkitStudio.diagram.rankGap": {
-            "default": 70,
-            "scope": "resource",
-            "markdownDescription": "Layout — Rank gap",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 300
-          },
-          "gridkitStudio.diagram.grid": {
-            "default": "dots",
-            "scope": "resource",
-            "markdownDescription": "Layout — Grid",
-            "type": "string",
-            "enum": [
-              "dots",
-              "lines",
-              "none"
-            ],
-            "enumDescriptions": [
-              "Dots",
-              "Lines",
-              "None"
-            ]
-          },
-          "gridkitStudio.diagram.labels": {
-            "default": true,
-            "scope": "resource",
-            "markdownDescription": "View — Labels",
-            "type": "boolean"
-          },
-          "gridkitStudio.diagram.ease": {
-            "default": 0.3,
-            "scope": "resource",
-            "markdownDescription": "View — Transition duration. Seconds.",
-            "type": "number",
-            "minimum": 0,
-            "maximum": 2
-          },
-          "gridkitStudio.diagram.zoom": {
-            "default": "wheel",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Wheel behavior",
-            "type": "string",
-            "enum": [
-              "wheel",
-              "modifier",
-              "off"
-            ],
-            "enumDescriptions": [
-              "Wheel",
-              "Modifier + wheel",
-              "Off"
-            ]
-          },
-          "gridkitStudio.diagram.motion": {
-            "default": "system",
-            "scope": "resource",
-            "markdownDescription": "Interaction — Motion",
-            "type": "string",
-            "enum": [
-              "system",
-              "full",
-              "reduced"
-            ],
-            "enumDescriptions": [
-              "System",
-              "Full",
-              "Reduced"
-            ]
-          },
-          "gridkitStudio.diagram.pickRadius": {
-            "default": 8,
-            "scope": "resource",
-            "markdownDescription": "Interaction — Picking distance",
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 32
-          }
-        }
-      },
-      {
         "id": "gridkitStudio.monitor",
         "title": "GridKit Studio: Monitor",
-        "order": 3,
+        "order": 2,
         "properties": {
           "gridkitStudio.monitor.interpolation": {
             "default": "linear",
@@ -1799,12 +1500,12 @@
       {
         "id": "gridkitStudio.gettingStarted",
         "title": "Explore a GridKit case",
-        "description": "Inspect, edit, simulate, and plot.",
+        "description": "Inspect, simulate, and plot.",
         "steps": [
           {
             "id": "open",
             "title": "Open a case",
-            "description": "[Open Case](command:gridkitStudio.openCase). Network and Diagram open as editors. Case and Monitor are in the bottom panel.",
+            "description": "[Open Case](command:gridkitStudio.openCase). The Network opens as an editor. Case and Monitor are in the bottom panel.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -1814,8 +1515,8 @@
           },
           {
             "id": "inspect",
-            "title": "Inspect and edit",
-            "description": "Select an element in the Network or the Case panel. Undo and redo work on edits as they do on text.",
+            "title": "Inspect",
+            "description": "Select an element in the Network or the Case panel, and it is selected in the other views too.",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -1826,7 +1527,7 @@
           {
             "id": "simulate",
             "title": "Simulate and plot",
-            "description": "Monitored Signals chooses what the case records. Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, and the Monitor plots what it writes.\n[Choose Monitored Signals](command:gridkitStudio.signals.focus)",
+            "description": "Monitored Signals shows what the case records, which its records list in their mon lists. Right-click a .solver.json and choose Run Dynamic Simulation. GridKit runs it where it is, and the Monitor plots what it writes.\n[Show Monitored Signals](command:gridkitStudio.signals.focus)",
             "media": {
               "markdown": "assets/walkthrough.md"
             },
@@ -1835,13 +1536,6 @@
             ]
           }
         ]
-      }
-    ],
-    "keybindings": [
-      {
-        "command": "gridkitStudio.editField",
-        "key": "f2",
-        "when": "gridkitStudio.hasSelection && gridkitStudio.editable && (activeCustomEditorId == gridkitStudio.diagram || activeCustomEditorId == gridkitStudio.network) && !inputFocus"
       }
     ]
   }

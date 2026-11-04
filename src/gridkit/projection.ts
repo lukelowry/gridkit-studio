@@ -14,16 +14,18 @@ import { LABEL } from '../shared/document.js'
 import type { ProjectedDocument } from './document.js'
 import { Turns } from './turns.js'
 
-const ROWS_PER_PATCH = 4096
+/** How many rows the Case panel's columns load in at a time, between turns. */
+const ROWS_PER_STEP = 4096
 
-/** The patch `write` makes of the most of `rows` rows, up to ROWS_PER_PATCH, that fit a page:
- *  halving the rows until they do. One row always goes, whatever it weighs. */
+/** The patch `write` makes of as many of `rows` rows as fit a page: all of them, halved until they
+ *  do, so a case goes to a view in as few pages as its bytes take. One row always goes, whatever it
+ *  weighs. */
 export async function paged(
   rows: number,
   write: (count: number) => Uint8Array,
   turns: Turns,
 ): Promise<{ bytes: Uint8Array; count: number }> {
-  for (let count = Math.min(ROWS_PER_PATCH, rows); ;) {
+  for (let count = rows; ;) {
     const bytes = write(count)
     turns.signal.throwIfAborted()
     if (bytes.byteLength <= PAGE_BYTES || count <= 1) return { bytes, count }
@@ -184,10 +186,10 @@ export class CaseQueries {
         Object.fromEntries(missing.map((name) => [name, table.read(name, 0, 0)])),
       )
     }
-    for (let offset = 0; offset < table.ids.length; offset += ROWS_PER_PATCH) {
+    for (let offset = 0; offset < table.ids.length; offset += ROWS_PER_STEP) {
       await turns.step()
       if (this.#destroyed) throw new Error('The query revision was released.')
-      const count = Math.min(ROWS_PER_PATCH, table.ids.length - offset)
+      const count = Math.min(ROWS_PER_STEP, table.ids.length - offset)
       const values: Record<string, Fields[string]> = {}
       for (const name of missing) values[name] = table.read(name, offset, count)
       this.data.set(tableName, table.ids.slice(offset, offset + count), values)

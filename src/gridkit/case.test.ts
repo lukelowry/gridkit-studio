@@ -81,6 +81,25 @@ describe('single catalog and source ownership', () => {
       data.destroy()
     }
   })
+  it('sends a view each table its rows fit a page in whole, however many rows', async () => {
+    const buses = Array.from({ length: 10_000 }, (_, at) => ({
+      class: 'Bus',
+      number: at + 1,
+      name: 'Bus ' + (at + 1),
+    }))
+    const projected = (await parse(JSON.stringify({ buses }))).projected()
+    const selection = [{ table: 'Bus', fields: ['name'] }]
+    const signal = AbortSignal.any([])
+    // Every identity in one page, then every name in the next, which is the last.
+    const identities = await projectionPage(projected, selection, undefined, signal)
+    expect(identities.next).toEqual({ phase: 'fields', table: 0, offset: 0 })
+    const names = await projectionPage(projected, selection, identities.next, signal)
+    expect(names.next).toBeUndefined()
+    using data = new Data('case')
+    data.apply(identities.bytes)
+    data.apply(names.bytes)
+    expect(data.query({ of: 'Bus' }).ids).toHaveLength(buses.length)
+  })
   it('places fields in UTF-16 units, and fingerprints what the file holds', async () => {
     const kase = await parse(source)
     const range = sourceRange(kase, { table: 'Signal', id: 1 }, 'name')

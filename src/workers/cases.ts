@@ -127,6 +127,8 @@ serve<CaseApi>(
     stats: async () => ({ memory: memory(), cases: files.size }),
   },
   ['project', 'page'],
+  // Problems fills in once the views have what they wait on.
+  ['validate'],
 )
 
 process.once('exit', () => {

@@ -20,21 +20,22 @@ export type Finding = Span & Omit<Issue, 'start' | 'end'>
 /** Each case's findings, which every caller shares of the same immutable source. */
 const diagnoses = new WeakMap<Case, Finding[]>()
 
-/** The case's findings. Found a slice at a time, yielding to topology queries between, and
- *  cancelled between slices. */
+/** The case's findings. Found a slice at a time in the background, so what a view waits on goes
+ *  first, and cancelled between slices. */
 export async function diagnose(kase: Case, signal: AbortSignal): Promise<Finding[]> {
   signal.throwIfAborted()
   const cached = diagnoses.get(kase)
   if (cached) return cached
-  const work = new Turns(signal)
+  const work = new Turns(signal, true)
   const steps = diagnostics(kase)
-  for (let step = 0; ; step++) {
+  // Each slice is a field, or STEP_RECORDS of its rows, so the turn is asked of after each.
+  for (;;) {
     const next = steps.next()
     if (next.done) {
       diagnoses.set(kase, next.value)
       return next.value
     }
-    if ((step & STEP_RECORDS) === 0) await work.step()
+    await work.step()
   }
 }
 

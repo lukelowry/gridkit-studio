@@ -1,18 +1,16 @@
 import type { Camera, Hit, View } from 'latkit'
 
-import type { Element } from '../shared/document.js'
+import type { Entity } from '../../shared/document.js'
 
 interface InteractionActions {
-  select(element: Element | null): void
-  open(element: Element): void
-  menu(point: [number, number], elements: Element[]): void
+  select(element: Entity | null): void
+  open(element: Entity): void
+  menu(point: [number, number], elements: Entity[]): void
   camera(camera: Camera): void
   error(error: unknown): void
 }
 
-function elementOf(hit: Hit): Element {
-  return { table: hit.row.table, id: hit.row.id, ...(hit.port ? { field: hit.port } : {}) }
-}
+const elementOf = ({ row }: Hit): Entity => ({ table: row.table, id: row.id })
 
 export function bindInteractions(view: View, actions: InteractionActions): () => void {
   const stop = [
@@ -22,9 +20,6 @@ export function bindInteractions(view: View, actions: InteractionActions): () =>
       if (!trigger) return
       const first = rows.find((group) => group.ids.length > 0)
       actions.select(first ? { table: first.table, id: first.ids[0]! } : null)
-    }),
-    view.on('click', ({ hit }) => {
-      if (hit.port) actions.select(elementOf(hit))
     }),
     view.on('open', ({ hit }) => actions.open(elementOf(hit))),
     view.on('menu', ({ hits, trigger }) => actions.menu(trigger.point, hits.map(elementOf))),

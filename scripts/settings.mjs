@@ -1,11 +1,11 @@
-/** Writes the display settings of src/shared/preferences.ts into package.json, after the runtime
- *  settings it keeps; `--check` fails where package.json differs instead. */
+/** Writes the settings of src/shared/settings.ts into package.json, as VS Code's Settings lists
+ *  them; `--check` fails where package.json differs instead. */
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { build } from 'esbuild'
 
 const bundle = await build({
-  entryPoints: ['src/shared/preferences.ts'],
+  entryPoints: ['src/shared/settings.ts'],
   bundle: true,
   write: false,
   platform: 'node',
@@ -14,20 +14,19 @@ const bundle = await build({
 const { SETTINGS } = await import(
   'data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].contents).toString('base64')
 )
+const PREFIX = 'gridkitStudio'
 const path = new URL('../package.json', import.meta.url)
 const source = await readFile(path, 'utf8')
 const manifest = JSON.parse(source)
-const runtime = manifest.contributes.configuration.find((group) => group.title === 'GridKit Studio')
-if (!runtime) throw new Error('package.json has no "GridKit Studio" settings to keep.')
 
-/** A setting as package.json declares it. `--check` compares key order too. */
-function property(group, setting) {
+/** A setting as package.json declares it, `order`th of its category. `--check` compares key order
+ *  too. */
+function property(setting, order) {
   const base = {
     default: setting.default,
-    scope: 'resource',
-    markdownDescription:
-      [group.label, setting.label].filter(Boolean).join(' — ') +
-      (setting.description ? '. ' + setting.description : ''),
+    scope: setting.scope,
+    order,
+    ...(setting.description && { markdownDescription: setting.description }),
   }
   switch (setting.kind) {
     case 'choice':
@@ -40,16 +39,13 @@ function property(group, setting) {
     case 'number':
       return {
         ...base,
-        type: setting.step === 1 ? 'integer' : 'number',
+        type: setting.integer ? 'integer' : 'number',
         minimum: setting.min,
-        maximum: setting.max,
+        ...(setting.max !== undefined && { maximum: setting.max }),
       }
     case 'color':
       return {
         ...base,
-        markdownDescription:
-          base.markdownDescription.replace(/\.?$/, '.') +
-          ' Null follows the current VS Code theme.',
         type: ['string', 'null'],
         pattern: '^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
         format: 'color-hex',
@@ -59,22 +55,27 @@ function property(group, setting) {
   }
 }
 
-const groups = SETTINGS.map((category) => ({
-  id: 'gridkitStudio.' + category.id,
-  title: 'GridKit Studio: ' + category.label,
-  order: ['network', 'monitor'].indexOf(category.id) + 1,
-  properties: Object.fromEntries(
-    category.groups.flatMap((group) =>
-      group.settings.map((setting) => ['gridkitStudio.' + setting.id, property(group, setting)]),
-    ),
-  ),
-}))
-manifest.contributes.configuration = [runtime, ...groups]
+/** The settings of each category, in the order they are defined: a view's, which its id starts
+ *  with, or GridKit's own. */
+const categories = new Map()
+for (const [id, setting] of Object.entries(SETTINGS)) {
+  const category = id.includes('.') ? id.slice(0, id.indexOf('.')) : ''
+  const properties = categories.get(category) ?? {}
+  properties[`${PREFIX}.${id}`] = property(setting, Object.keys(properties).length)
+  categories.set(category, properties)
+}
+manifest.contributes.configuration = [...categories].map(([category, properties], order) =>
+  category
+    ? {
+        id: `${PREFIX}.${category}`,
+        title: `GridKit Studio: ${category[0].toUpperCase()}${category.slice(1)}`,
+        order,
+        properties,
+      }
+    : { title: 'GridKit Studio', properties },
+)
 if (process.argv.includes('--check')) {
   if (JSON.stringify(JSON.parse(source)) !== JSON.stringify(manifest))
-    throw new Error('Native settings are stale. Run pnpm settings.')
+    throw new Error('package.json differs from src/shared/settings.ts. Run pnpm settings.')
 } else await writeFile(path, JSON.stringify(manifest, null, 2) + '\n')
-console.log(
-  groups.reduce((n, group) => n + Object.keys(group.properties).length, 0) +
-    ' display settings contribute to native VS Code Settings.',
-)
+console.log(Object.keys(SETTINGS).length + ' settings contribute to VS Code Settings.')

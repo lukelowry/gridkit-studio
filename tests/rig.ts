@@ -8,8 +8,8 @@ import { Worker } from 'node:worker_threads'
 
 import { build } from 'esbuild'
 
-import type { FromWorker, WorkerApi, WorkerEvent, WorkerOptions } from '../shared/messages.js'
-import { Caller } from '../shared/rpc.js'
+import type { FromWorker, WorkerApi, WorkerEvent, WorkerOptions } from '../src/shared/messages.js'
+import { Caller } from '../src/shared/rpc.js'
 
 const require = createRequire(import.meta.url)
 /** What the tests start the worker with, but for where it keeps the results it reads: room for the

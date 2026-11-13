@@ -1,17 +1,17 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { Gpu, View } from 'latkit'
   import { onMount, tick } from 'svelte'
 
   import type { TimeRange } from '../../shared/data.js'
   import type { ViewState } from '../../shared/messages.js'
-  import { bridge, merged } from '../bridge.js'
+  import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { picture, saveImage, SCALE } from '../export/image.js'
   import { plotViews } from '../export/plots.js'
-  import { FrameReads } from '../frames.js'
-  import { followPlayback } from '../playback.js'
-  import { openGpu, startOver } from '../runtime.js'
-  import { watchTheme } from '../theme.js'
+  import { followPlayback } from '../latkit/canvas.js'
+  import { FrameReads } from '../latkit/frames.js'
+  import { openGpu, startOver } from '../latkit/load.js'
+  import { watchTheme } from '../latkit/theme.js'
   import { monitorWindow, sameWindow, SETTLE_MS } from './plot.js'
   import Plot from './Plot.svelte'
 
@@ -143,7 +143,7 @@
     const off = bridge.on((message) => {
       if (message.kind === 'state') {
         const old = app
-        app = merged(app, message.state)
+        app = message.state
         if (old.results?.id !== app.results?.id) reads.clear()
         if (old.results?.id !== app.results?.id || old.window !== app.window) chosen = undefined
       } else if (message.kind === 'shown') visible = message.shown
@@ -208,7 +208,7 @@
     </div>
   {:else if gpu}
     <div class="monitor__lanes" data-testid="monitor-lanes">
-      {#each plots as plot (JSON.stringify([results.id, plot.from, plot.field, plot.id]))}
+      {#each plots as plot (JSON.stringify([results.id, plot.table, plot.field, plot.id]))}
         <Plot
           {plot}
           {app}

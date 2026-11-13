@@ -9,9 +9,7 @@ import * as vscode from 'vscode'
 import { fileKey } from '../results/index.js'
 import { formatNumber } from '../shared/format.js'
 import type { Results } from '../shared/messages.js'
-import { cancellable } from './client.js'
-import { notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
-import type { Sessions } from './sessions.js'
+import type { Commands } from './commands.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
 
@@ -20,6 +18,21 @@ function solverOf(target: unknown, doing: string): vscode.Uri {
   if (!(target instanceof vscode.Uri) || target.scheme !== 'file')
     throw new Error(`Right-click a .solver.json on this machine to ${doing}.`)
   return target
+}
+
+/** Run `run` with a signal that aborts when `token` is cancelled. */
+async function cancellable<T>(
+  token: vscode.CancellationToken,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController()
+  const subscription = token.onCancellationRequested(() => controller.abort())
+  if (token.isCancellationRequested) controller.abort()
+  try {
+    return await run(controller.signal)
+  } finally {
+    subscription.dispose()
+  }
 }
 
 /** How far a run has come, by the `results` it has written so far, in percent and in words. */
@@ -33,35 +46,26 @@ function progressOf(results?: Results) {
   }
 }
 
-export function registerRuns(studio: Sessions) {
-  /** The case at `model` as its file reads; a notice that it has problems to fix `before`, which
-   *  Problems lists; or why else it could not be read. */
-  const readable = async (model: vscode.Uri, before: string) => {
-    try {
-      return await studio.files.read(model.toString())
-    } catch (error) {
-      if (!saidInProblems(error)) throw error
-      throw notice(`${nameOf(model)} has problems to fix before ${before}.`, SHOW_PROBLEMS)
-    }
-  }
-
+export function registerRuns({ studio, registrations, command }: Commands) {
   const run = async (target: unknown) => {
     if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to execute GridKit.')
     const solver = solverOf(target, 'run it')
-    // GridKit reads the files as saved, and so does Studio: an editor of either with unsaved
-    // changes is saved first, as VS Code's tasks do.
+    // GridKit reads the files as saved, and so does Studio: an editor of any with unsaved changes
+    // is saved first, as VS Code's tasks do.
     await vscode.workspace.save(solver)
-    const { study, model } = await solverAt(solver)
+    const { study, model, state } = await solverAt(solver)
     await vscode.workspace.save(model)
+    if (state) await vscode.workspace.save(state)
     const session = studio.activate(model.toString())
     // The Monitor reads the output against the case, so Studio must read the case. Whether
     // GridKit accepts it is GridKit's to say.
-    const summary = await readable(model, 'it can run')
+    const summary = await studio.files.readable(model.toString(), 'it can run')
     if (!summary.recording.anything)
       throw new Error(`${nameOf(model)} records nothing: no record lists a signal in its mon list.`)
     const output = writtenBy(solver, study, summary)
     // GridKit writes over the file it writes to, so that file must not be one the run reads.
-    if ([solver, model].some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
+    const read = [solver, model, ...(state ? [state] : [])]
+    if (read.some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
     // As the settings of the folder it mounts say.
     const gridkit = gridkitOf(solver)
@@ -81,6 +85,7 @@ export function registerRuns(studio: Sessions) {
             {
               solver: solver.fsPath,
               output: output.fsPath,
+              ...(state && { state: state.fsPath }),
               tmax: study.tmax,
               // What a container mounts: the solver file's workspace folder.
               root: (
@@ -106,22 +111,21 @@ export function registerRuns(studio: Sessions) {
     const solver = solverOf(target, 'show its results')
     const { study, model } = await solverAt(solver)
     const session = studio.activate(model.toString())
-    const output = writtenBy(solver, study, await readable(model, 'its results can be read'))
+    const summary = await studio.files.readable(model.toString(), 'its results can be read')
+    const output = writtenBy(solver, study, summary)
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
     await studio.showView('monitor')
     await session.load(output.fsPath, solver.fsPath)
   }
 
-  return [
-    studio.command('runSimulation', run),
-    studio.command('stopSimulation', () => studio.current().stop()),
-    studio.command('showLastResults', show),
-    // The solver file of the results on show, run again.
-    studio.command('runSimulationAgain', () => {
-      const { solver } = studio.current().results ?? {}
-      if (!solver) throw new Error('These results were not written by a run of a solver file.')
-      return run(vscode.Uri.file(solver))
-    }),
-  ]
+  // A run is of a solver file, which its menu names; the rest are of the case the views follow.
+  registrations.push(studio.command('runSimulation', run), studio.command('showLastResults', show))
+  command('stopSimulation', ({ session }) => session.stop())
+  // The solver file of the results on show, run again.
+  command('runSimulationAgain', ({ session }) => {
+    const { solver } = session.results ?? {}
+    if (!solver) throw new Error('These results were not written by a run of a solver file.')
+    return run(vscode.Uri.file(solver))
+  })
 }

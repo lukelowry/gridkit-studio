@@ -51,13 +51,8 @@ export class ExportFile {
 
   async #write(bytes: Uint8Array) {
     if (this.#aborted) throw new Error('The export was cancelled.')
+    // Every write goes after the last: the file is written from its start to its end.
     const position = this.#length
-    if (
-      !Number.isSafeInteger(position) ||
-      position < 0 ||
-      !Number.isSafeInteger(position + bytes.length)
-    )
-      throw new Error('Invalid export write.')
     if (this.#handle) {
       for (let written = 0; written < bytes.length;) {
         const { bytesWritten } = await this.#handle.write(
@@ -79,7 +74,7 @@ export class ExportFile {
       this.#bytes = grown
     }
     this.#bytes.set(bytes, position)
-    this.#length = Math.max(this.#length, end)
+    this.#length = end
   }
 
   async close() {

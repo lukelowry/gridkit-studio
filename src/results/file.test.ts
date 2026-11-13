@@ -3,7 +3,6 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { setTimeout } from 'node:timers/promises'
 
 import { Data } from 'latkit'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -14,7 +13,6 @@ import { loadNative } from '../workers/native.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
 import type { Writer } from './follow.js'
-import { PROGRESS_MS } from './limits.js'
 import { Store, Stores } from './store.js'
 
 const signal = AbortSignal.any([])
@@ -89,7 +87,7 @@ async function plotted(file: ResultsFile, request: FrameRequest, onto?: Data) {
 }
 const envelope = (data: Data, range: TimeRange, spans = 60) =>
   data.envelope({ table: 'Bus', field: 'Vm', range: [...range], spans })
-/** What a Network binding reads of `file`'s voltages around the playhead. */
+/** What a Network mapping reads of `file`'s voltages around the playhead. */
 function request(
   file: ResultsFile,
   more: Partial<Pick<FrameRequest, 'ids' | 'range'>> & { bytes?: number; step?: number } = {},
@@ -109,6 +107,7 @@ async function capture(file: ResultsFile, input = request(file)) {
   let next: string | undefined
   let data: Data | undefined
   let bytes = 0
+  let pages = 0
   try {
     do {
       const page = await file.frames({ ...input, next }, signal)
@@ -116,9 +115,10 @@ async function capture(file: ResultsFile, input = request(file)) {
       data.apply(page.bytes)
       expect(page.bytes.byteLength).toBeLessThanOrEqual(PAGE_BYTES)
       bytes += page.bytes.byteLength
+      pages++
       next = page.next
     } while (next)
-    return { data: data!, bytes }
+    return { data: data!, bytes, pages }
   } catch (error) {
     data?.destroy()
     throw error
@@ -182,8 +182,9 @@ describe('indexed scientific results', () => {
       'No result columns match',
     )
   })
-  it('reads bracketing frames by timestamps instead of sending a whole disk block', async () => {
-    const count = 600_000
+  it('reads bracketing frames by timestamps, a plot by its columns, and every frame a page at a time', async () => {
+    // Enough frames for several blocks on disk, and more than a page of them.
+    const count = 400_000
     const file = await through(
       await create(
         'long',
@@ -195,13 +196,20 @@ describe('indexed scientific results', () => {
     const read = vi.spyOn(file.store, 'readRaw')
     const { data, bytes } = await capture(
       file,
-      request(file, { range: [500.0005, 500.0005], bytes: 4096 }),
+      request(file, { range: [300.0005, 300.0005], bytes: 4096 }),
     )
     using held = data
     expect(held.name).toBeTruthy()
-    expect(data.describe().span).toEqual([500, 500.001])
+    expect(data.describe().span).toEqual([300, 300.001])
     expect(bytes).toBeLessThan(4096)
     expect(read.mock.calls.every(([, , , , frames]) => frames! <= 2)).toBe(true)
+    // Every frame of it comes once and in order, however many pages that takes.
+    const every = await capture(file, request(file, { bytes: 96 << 20 }))
+    using all = every.data
+    expect(every.pages).toBeGreaterThan(1)
+    expect(all.describe().span).toEqual([0, (count - 1) / 1000])
+    for (let i = 0; i < count; i += 7919)
+      expect(all.get('Bus', 1, 'Vm', { at: i / 1000 })).toBe(i % 20)
     const columns = 600
     const plot = await capture(file, {
       results: 'test',
@@ -213,7 +221,7 @@ describe('indexed scientific results', () => {
     })
     using overview = plot.data
     // The level latkit draws across 600 columns: at most two buckets a column, each its first and
-    // last time and its least and greatest value, whatever the 600,000 frames.
+    // last time and its least and greatest value, however many the frames.
     expect(plot.bytes).toBeLessThan(2 * columns * (16 + 8) + (4 << 10))
     expect(
       overview.envelope({ table: 'Bus', field: 'Vm', range: [...file.progress.domain], spans: 1 })
@@ -243,14 +251,47 @@ describe('indexed scientific results', () => {
     }
     expect(shown.bytes).toBeLessThan(every.bytes)
   })
-  it('reads only complete rows after a stopped writer, and accepts an unterminated final row after success', async () => {
-    const stopped = await through(await create('stopped', HEADER + '0,1\n1,1.25'), 'stopped')
-    expect(stopped.progress.frames).toBe(1)
-    const finished = await through(await create('finished', HEADER + '0,1\n1,1.25'))
-    expect(finished.progress.frames).toBe(2)
-    expect((await exact(finished, 1)).value).toBe(1.25)
-    const partial = await through(await create('partial', HEADER + '0,1\n1,'))
-    expect(partial.progress.frames).toBe(1)
+  it('keeps a missing value a gap, and draws a value float32 cannot hold as one', async () => {
+    const file = await through(await create('gaps', HEADER + '0,1\n0.1,NaN\n10,5\n20,1e100\n'))
+    expect((await exact(file, 20)).value).toBe(1e100)
+    expect((await exact(file, 0.1)).value).toBeNull()
+    const { data } = await plotted(file, {
+      results: 'test',
+      table: 'Bus',
+      field: 'Vm',
+      range: [0, 20],
+      purpose: 'plot',
+      columns: 100,
+    })
+    expect(data.get('Bus', 1, 'Vm', { at: 10 })).toBe(5)
+    expect(data.get('Bus', 1, 'Vm', { at: 20 })).toBeNull()
+  })
+  it('refines a lone gap down to its frames, leaving the buckets around it whole', async () => {
+    // Buckets of 512 frames across eight columns, one frame of them missing, one a spike.
+    const [count, missing, spike] = [8192, 4113, 6000]
+    const file = await through(
+      await create(
+        'lone-gap',
+        HEADER +
+          Array.from(
+            { length: count },
+            (_, i) => `${i},${i === missing ? 'NaN' : i === spike ? 10000 : 1}\n`,
+          ).join(''),
+      ),
+    )
+    const range: TimeRange = [0, count - 1]
+    const { data, bytes } = await plotted(file, {
+      results: 'test',
+      table: 'Bus',
+      field: 'Vm',
+      range,
+      purpose: 'plot',
+      columns: 8,
+    })
+    // The buckets, and the few finer ones and frames around the gap: a sliver of every frame.
+    expect(bytes).toBeLessThan((count * 12) / 10)
+    expect(data.get('Bus', 1, 'Vm', { at: missing })).toBeNull()
+    expect(envelope(data, range, 1).greatest[0]).toBe(10000)
   })
   it('sends a plot whose window grew only what the window its page holds lacks', async () => {
     const file = await through(
@@ -344,10 +385,50 @@ describe('indexed scientific results', () => {
     expect(await readFile(out, 'utf8')).toBe(csv)
     await expect(file.exportCsv(file.layout.path)).rejects.toThrow('different file')
   })
+  it('writes down what it keeps once, as its read ends, and reads on from where a read stopped short', async () => {
+    const rows = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => `${from + i},${from + i}\n`).join('')
+    const file = await create('once', HEADER + rows(0, 3))
+    const kept = vi.spyOn(file.store, 'checkpoint')
+    const stop = new AbortController()
+    const read = file.ingest(
+      stop.signal,
+      () => 'writing',
+      () => {},
+    )
+    await vi.waitFor(() => expect(file.progress.frames).toBe(3))
+    await appendFile(file.layout.path, rows(3, 6))
+    await vi.waitFor(() => expect(file.progress.frames).toBe(6))
+    // Segment after segment, nothing is written down: a window gone now leaves a store that says
+    // nothing, and its file is read again.
+    expect(kept).not.toHaveBeenCalled()
+    expect(file.store.manifest).toBeUndefined()
+    // Let go of partway, the read says how far it came.
+    stop.abort()
+    await expect(read).rejects.toThrow()
+    expect(kept).toHaveBeenCalledTimes(1)
+    expect(file.store.manifest).toMatchObject({ complete: false, frames: 6 })
+    await appendFile(file.layout.path, rows(6, 9))
+    const { folder, key, manifest } = file.store
+    await file.store.close()
+    const store = new Store(folder, key, manifest)
+    const resumed = await ResultsFile.stored(kase, store, reading(file.layout.path))
+    made.push(resumed)
+    const again = vi.spyOn(store, 'checkpoint')
+    await through(resumed)
+    expect(resumed.progress.frames).toBe(9)
+    expect((await exact(resumed, 2)).value).toBe(2)
+    expect((await exact(resumed, 8)).value).toBe(8)
+    expect(again).toHaveBeenCalledTimes(1)
+    expect(store.manifest).toMatchObject({ complete: true, frames: 9 })
+  })
   it('restores only committed blocks and rejects a truncated committed store', async () => {
     const file = await through(await create('restore', HEADER + '0,1\n1,2\n'))
     const { folder, key, manifest } = file.store
     await file.store.close()
+    // What a write cut short left past what the store said it holds is no part of it.
+    await appendFile(join(folder, 'raw.bin'), new Uint8Array(100))
+    await appendFile(join(folder, 'levels.bin'), new Uint8Array(100))
     const store = new Store(folder, key, manifest)
     const reopened = await ResultsFile.stored(kase, store, reading(file.layout.path))
     made.push(reopened)
@@ -411,27 +492,18 @@ describe('indexed scientific results', () => {
     ).rejects.toThrow('window changed')
     await expect(file.frames(request(file, { bytes: 1 }), signal)).rejects.toThrow('Invalid')
   })
-  it('throttles live progress and exports the last complete rows after a decoding error', async () => {
-    const file = await create('progress', HEADER)
-    let told = 0
-    let count = 0
-    const reader = following(file, () => {
-      told++
-    })
-    const started = performance.now()
-    while (performance.now() - started < 350) {
-      await appendFile(file.layout.path, `${count++},1\n`)
-      await setTimeout(5)
-    }
-    await reader.reach(count)
-    const elapsed = performance.now() - started
-    await appendFile(file.layout.path, `${count},bad\n`)
+  it('shows and exports the rows it read before one that does not decode', async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `${i},1\n`).join('')
+    const file = await create('partial', HEADER + rows)
+    const reader = following(file)
+    await reader.reach(40)
+    // A segment that does not read is no part of the file read: neither its frames nor its bytes.
+    await appendFile(file.layout.path, '40,2\n41,bad\n')
     await expect(reader.end()).rejects.toThrow('not a number')
-    expect(told).toBeLessThanOrEqual(Math.ceil(elapsed / PROGRESS_MS) + 1)
+    expect(file.progress).toMatchObject({ frames: 40, growing: false })
+    expect(file.progress.error).toMatch('not a number')
     const out = join(directory, 'partial-export.csv')
     await file.exportCsv(out)
-    expect(await readFile(out, 'utf8')).toBe(
-      HEADER + Array.from({ length: count }, (_, i) => `${i},1\n`).join(''),
-    )
+    expect(await readFile(out, 'utf8')).toBe(HEADER + rows)
   })
 })

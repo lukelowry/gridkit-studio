@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url'
 
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { bundle, start } from './rig.js'
+import { bundle, start } from '../../tests/rig.js'
 
 let script: string
 beforeAll(async () => {
@@ -28,7 +28,14 @@ describe("the worker's case files", () => {
   it('reads a case file, and draws and validates it', async () => {
     const rig = await rigged()
     try {
-      await rig.write('{"buses":[{"class":"Bus","number":1,"name":"one","mon":["Vm"]}]}')
+      await rig.write(
+        JSON.stringify({
+          header: { case_name: 'one', case_description: '', case_comments: '' },
+          params: { freq_base: 60, va_base: 100e6 },
+          buses: [{ class: 'Bus', number: 1, name: 'one', params: {}, mon: ['Vm'] }],
+          devices: [],
+        }),
+      )
       const revision = { uri: rig.uri, version: 1 }
       expect(await rig.call('read', revision)).toMatchObject({
         ...revision,

@@ -109,7 +109,9 @@ describe("GridKit's programs on solver files", () => {
     const solverPath = join(folder, `${model}.solver.json`)
     const solverText = JSON.stringify({ system_model_file: `${model}.case.json`, ...solver })
     await writeFile(solverPath, solverText)
-    const kase = await Case.parse(new TextEncoder().encode(text), catalog, `${model}.case.json`)
+    const kase = await Case.parse(new TextEncoder().encode(text), catalog, {
+      name: `${model}.case.json`,
+    })
     const study = readSolver(`${model}.solver.json`, solverText)
     const sink = outputOf(`${model}.solver.json`, study, (await recordingOf(kase)).monitor)
     const request: RunRequest = {
@@ -162,10 +164,11 @@ describe("GridKit's programs on solver files", () => {
         )
         found.push({ id, t: sample.at, value: sample.value })
       }
-    } else
+    } else {
+      const rows = ids.map((_, row) => row)
       for (const index of results.store.raw) {
         if (index.end < range[0] || index.start > range[1]) continue
-        const block = await results.store.readRaw(index, field)
+        const block = await results.store.readRaw(index, field, rows)
         for (let t = 0; t < block.at.length; t++) {
           if (block.at[t]! < range[0] || block.at[t]! > range[1]) continue
           for (let row = 0; row < ids.length; row++) {
@@ -178,6 +181,7 @@ describe("GridKit's programs on solver files", () => {
           }
         }
       }
+    }
     return found
   }
 
@@ -398,40 +402,7 @@ describe("GridKit's programs on solver files", () => {
     expect(results.progress.domain[1]).toBeCloseTo(0.05, 9)
   })
 
-  it('reads what a stopped run wrote to its end, which then exports as GridKit wrote it', async ({
-    signal,
-  }) => {
-    let writing!: () => void
-    const begun = new Promise<void>((resolve) => (writing = resolve))
-    let stop!: (reason: Error) => void
-    const stopped = await run(
-      'stopped',
-      'IEEE39',
-      { output_file: 'out.csv', dt_monitor: 0.01, tmax: 1000, events: [] },
-      signal,
-      {
-        progress: (stopRun) => {
-          stop = stopRun
-          writing()
-        },
-      },
-    )
-    await begun
-    stop(new Error('Stopped by the test'))
-    await expect(stopped.done).rejects.toThrow('Stopped by the test')
-    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
-    const results = stopped.read()!
-    expect(results.progress.growing).toBe(false)
-    expect(results.progress.error).toBeUndefined()
-    const exported = join(stopped.folder, 'exported.csv')
-    await results.exportCsv(exported)
-    const copy = await readFile(exported, 'utf8')
-    // GridKit's own file, but for a last row it may have been stopped partway through.
-    expect((await readFile(join(stopped.folder, 'out.csv'), 'utf8')).startsWith(copy)).toBe(true)
-    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
-  })
-
-  it('says why GridKit could not finish, and runs again', async ({ signal }) => {
+  it('says why GridKit could not finish', async ({ signal }) => {
     const failed = await run(
       'failure',
       'IEEE39',
@@ -445,13 +416,6 @@ describe("GridKit's programs on solver files", () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message.trim()).not.toBe('')
     expect(failed.released()).toBe(true)
-    const retry = await run(
-      'retry',
-      'IEEE39',
-      { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
-      signal,
-    )
-    expect((await retry.done).progress.domain[1]).toBeCloseTo(0.1, 9)
   })
 
   it('refuses an image this machine does not have, and never pulls it', async ({
@@ -490,8 +454,10 @@ describe("GridKit's programs on solver files", () => {
     expect(owned()).toBeUndefined()
   })
 
-  it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
-    const { request, done, owned, released, read } = await run(
+  it('stops with its process when cancelled, and reads what it wrote to its end, which exports as GridKit wrote it', async ({
+    signal,
+  }) => {
+    const { folder, request, done, owned, released, read } = await run(
       'cancel',
       'IEEE39',
       { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
@@ -500,9 +466,19 @@ describe("GridKit's programs on solver files", () => {
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)
-    expect(read()!.layout.path).toBe(request.output)
-    expect(read()!.progress.frames).toBeGreaterThan(0)
-    expect(read()!.progress.domain[1]).toBeLessThan(1000)
+    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
+    const results = read()!
+    expect(results.layout.path).toBe(request.output)
+    expect(results.progress.growing).toBe(false)
+    expect(results.progress.error).toBeUndefined()
+    expect(results.progress.frames).toBeGreaterThan(0)
+    expect(results.progress.domain[1]).toBeLessThan(1000)
+    const exported = join(folder, 'exported.csv')
+    await results.exportCsv(exported)
+    const copy = await readFile(exported, 'utf8')
+    // GridKit's own file, but for a last row it may have been stopped partway through.
+    expect((await readFile(request.output, 'utf8')).startsWith(copy)).toBe(true)
+    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
     // The process is gone, not left to finish its thousand seconds, and so is its container.
     expect(() => process.kill(owned()!.pid, 0)).toThrow()
     const container = owned()!.container

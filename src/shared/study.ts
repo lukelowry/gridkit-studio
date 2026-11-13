@@ -5,13 +5,15 @@ import { parse, type ParseError, printParseErrorCode } from 'jsonc-parser'
 
 import { CASE_FILE } from './ids.js'
 
-/** What a .solver.json says that Studio uses: the case it runs, when it ends, and the file it names
- *  for its samples, if any, in its layout. Paths are as written, relative to the solver file's
- *  folder. */
+/** What a .solver.json says that Studio uses: the case it runs, when it ends, the file it names for
+ *  its samples, if any, in its layout, and the state file it starts the case from, if any. Paths
+ *  are as written, relative to the solver file's folder. */
 export interface Solver {
   readonly model: string
   readonly tmax: number
   readonly output?: string
+  /** The .state.json GridKit starts the case's buses from, in place of what the case says. */
+  readonly state?: string
   /** As GridKit reads it, in lower case: `wide`, a column per variable, or `long`, a row per
    *  variable and sample. GridKit says what it makes of any other. */
   readonly layout: string
@@ -36,13 +38,20 @@ export function readSolver(name: string, text: string): Solver {
     tmax,
     output_file: output,
     output_layout: written = 'wide',
+    state_file: state,
   } = (json && typeof json === 'object' ? json : {}) as Record<string, unknown>
   if (typeof model !== 'string' || !CASE_FILE.test(model))
     throw new Error(`${name} names no .case.json in its system_model_file.`)
   if (typeof tmax !== 'number' || !(tmax > 0))
     throw new Error(`${name}: tmax must be a time after 0.`)
   const layout = String(written).toLowerCase()
-  return { model, tmax, layout, ...(typeof output === 'string' && output && { output }) }
+  return {
+    model,
+    tmax,
+    layout,
+    ...(typeof output === 'string' && output && { output }),
+    ...(typeof state === 'string' && state && { state }),
+  }
 }
 
 /** Where a run writes its samples, by GridKit's rule in parseStudyData: the case's CSV monitor,

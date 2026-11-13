@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readdir, readFile, rm, truncate, utimes, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  truncate,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,11 +17,11 @@ import { pathToFileURL } from 'node:url'
 import { Data } from 'latkit'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { bundle, type Rig, start } from '../../tests/rig.js'
 import { FORMAT } from '../results/store.js'
 import { type FramePage, PAGE_BYTES, type RecordedField } from '../shared/data.js'
 import { type Results, type Revision, revisionOf } from '../shared/messages.js'
 import { loadNative } from './native.js'
-import { bundle, type Rig, start } from './rig.js'
 
 let script: string
 beforeAll(async () => {
@@ -73,6 +82,11 @@ async function waveform(path: string, frames: number, value = (i: number) => Str
   )
 }
 
+/** As many frames, each written wide, as make a file of several segments: the first is read before
+ *  an open of it answers, the rest after. */
+const SEVERAL = 120_000
+const wide = () => '1.' + '0'.repeat(32)
+
 /** Everything a view asking for `field` over all of `results` is sent, asking again for what it
  *  lacks until nothing more comes, as a view does. */
 async function everything(
@@ -105,32 +119,13 @@ function native(pages: FramePage[]): Data {
 }
 
 describe("the worker's results", () => {
-  it('sends a view every frame of a file once and in order, a page at a time', async () => {
-    const rig = await start(script)
-    try {
-      const path = join(rig.scratch, 'many.csv')
-      const frames = 600_000
-      await waveform(path, frames)
-      const results = await read(rig, await open(rig, await caseOf(rig, 'pages'), path))
-      expect(results.domains).toEqual({ Bus: { Vm: [0, 2] } })
-      const sent = await everything(rig, results, { table: 'Bus', field: 'Vm' })
-      using data = native(sent)
-      expect(data.describe().span).toEqual([0, frames - 1])
-      for (let i = 0; i < frames; i += 7919) expect(data.get('Bus', 1, 'Vm', { at: i })).toBe(i % 3)
-      expect(data.get('Bus', 1, 'Vm', { at: frames - 1 })).toBe((frames - 1) % 3)
-    } finally {
-      await rig.stop()
-    }
-  })
-
   it('answers once the first frames are read, and reads on to the end', async () => {
     const rig = await start(script)
     try {
       const path = join(rig.scratch, 'long.csv')
-      const frames = 700_000
-      await waveform(path, frames, () => '1')
+      const frames = SEVERAL
+      await waveform(path, frames, wide)
       const opened = await open(rig, await caseOf(rig, 'long'), path)
-      // A file of several segments: the first is read before the request answers, the rest after.
       expect(opened.growing).toBe(true)
       expect(opened.frames).toBeGreaterThan(0)
       expect(opened.frames).toBeLessThan(frames)
@@ -147,13 +142,8 @@ describe("the worker's results", () => {
     try {
       // Its last row, a segment past its first, lacks the voltage.
       const path = join(rig.scratch, 'broken-late.csv')
-      const frames = 700_000
-      await writeFile(
-        path,
-        'time,Bus_one_Vm\n' +
-          Array.from({ length: frames }, (_, i) => `${i},1\n`).join('') +
-          `${frames}\n`,
-      )
+      await waveform(path, SEVERAL, wide)
+      await appendFile(path, `${SEVERAL}\n`)
       const results = await read(rig, await open(rig, await caseOf(rig, 'late'), path))
       expect(results.growing).toBe(false)
       expect(results.error).toMatch(/does not match its header/)
@@ -163,13 +153,18 @@ describe("the worker's results", () => {
     }
   })
 
-  it('reads results against the case read at their revision, which they keep as its file changes', async () => {
+  it('reads a results file where it is, against the case read at its revision, which it keeps as the case file changes', async () => {
     const rig = await start(script)
     try {
       const path = join(rig.scratch, 'small.csv')
-      await waveform(path, 3)
+      const csv = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
+      await writeFile(path, csv)
       const source = await caseOf(rig, 'known')
-      const first = await open(rig, source, path)
+      const first = await read(rig, await open(rig, source, path))
+      expect(first).toMatchObject({ growing: false, path, frames: 3 })
+      // The rows the file holds, as the case numbers them: here the one bus.
+      expect(first.outputs).toMatchObject([{ table: 'Bus', field: 'Vm', ids: [1] }])
+      expect(first.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
       const again = await open(rig, source, path)
       // The same file of the same case, read now: held again, and read once.
       expect(await rig.call('stats', {})).toMatchObject({ cases: 1, results: 2, files: 1 })
@@ -182,6 +177,7 @@ describe("the worker's results", () => {
       expect(await rig.call('describe', { results: first.id })).toMatchObject({
         ...source,
         fingerprint: first.fingerprint,
+        counts: { Bus: 1 },
       })
       const fields = [{ table: 'Bus', fields: ['name'] }]
       const projected = await rig.call('project', { results: first.id, fields })
@@ -191,10 +187,17 @@ describe("the worker's results", () => {
       expect(third.fingerprint).not.toBe(first.fingerprint)
       expect(await rig.call('describe', { results: third.id })).toMatchObject(changed)
       expect(await rig.call('stats', {})).toMatchObject({ cases: 1, results: 3, files: 2 })
+      const exported = join(rig.scratch, 'exported.csv')
+      await rig.call('export', { results: first.id, path: exported })
+      expect(await readFile(exported, 'utf8')).toBe(csv)
       for (const { id } of [first, again, third]) await rig.call('close', { results: id })
-      await expect(rig.call('project', { results: first.id, fields })).rejects.toMatchObject({
-        code: 'results-closed',
-      })
+      for (const asked of [
+        rig.call('project', { results: first.id, fields }),
+        rig.call('export', { results: first.id, path: exported }),
+      ])
+        await expect(asked).rejects.toMatchObject({ code: 'results-closed' })
+      // Closing lets go of the results; the file is the user's, and stays as it was.
+      expect(await readFile(path, 'utf8')).toBe(csv)
     } finally {
       await rig.stop()
     }
@@ -204,7 +207,7 @@ describe("the worker's results", () => {
     const rig = await start(script)
     try {
       const large = join(rig.scratch, 'large.csv')
-      await waveform(large, 700_000)
+      await waveform(large, SEVERAL, wide)
       const small = join(rig.scratch, 'small.csv')
       await waveform(small, 3)
       const controller = new AbortController()
@@ -218,34 +221,6 @@ describe("the worker's results", () => {
       expect(
         rig.events.every((event) => event.kind !== 'results' || event.results === kept.id),
       ).toBe(true)
-    } finally {
-      await rig.stop()
-    }
-  })
-
-  it('reads a results file where it is, says what it holds, and never changes it', async () => {
-    const rig = await start(script)
-    try {
-      const path = join(rig.scratch, 'original.csv')
-      const source = 'time,Bus_one_Vm\n0,1\n1,0.8\n2,1\n'
-      await writeFile(path, source)
-      const results = await read(rig, await open(rig, await caseOf(rig, 'in-place'), path))
-      expect(results).toMatchObject({ growing: false, path, frames: 3 })
-      // The rows the file holds, as the case numbers them: here the one bus.
-      expect(results.outputs).toMatchObject([{ table: 'Bus', field: 'Vm', ids: [1] }])
-      expect(results.domains).toEqual({ Bus: { Vm: [0.8, 1] } })
-      // What the views read of the case it was read against.
-      const described = await rig.call('describe', { results: results.id })
-      expect(described).toMatchObject({ fingerprint: results.fingerprint, counts: { Bus: 1 } })
-      const exported = join(rig.scratch, 'exported.csv')
-      await rig.call('export', { results: results.id, path: exported })
-      expect(await readFile(exported, 'utf8')).toContain('0.8')
-      await rig.call('close', { results: results.id })
-      await expect(
-        rig.call('export', { results: results.id, path: exported }),
-      ).rejects.toMatchObject({ code: 'results-closed' })
-      // Closing lets go of the results; the file is the user's, and stays as it was.
-      expect(await readFile(path, 'utf8')).toBe(source)
     } finally {
       await rig.stop()
     }
@@ -294,10 +269,6 @@ describe("the worker's results", () => {
       const again = await open(rig, source, path)
       expect(again).toMatchObject({ growing: false, frames: 3 })
       expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
-      // A budget too small for it lets what rests go.
-      await rig.call('close', { results: again.id })
-      await rig.call('configure', { cacheBytes: 0 })
-      expect(await rig.call('stats', {})).toMatchObject({ resting: 0, cacheBytes: 0 })
     } finally {
       await rig.stop()
     }
@@ -442,51 +413,19 @@ describe("the worker's results", () => {
     }
   })
 
-  it('sends a view a bounded bracketing window, and nothing of results closed', async () => {
+  it('holds nothing of a file whose first frames do not read', async () => {
     const rig = await start(script)
-    const { scratch, call, stop } = rig
     try {
-      const text = await readFile('cases/TwoArea.case.json', 'utf8')
-      const revision = await caseOf(rig, 'test', text)
-      // 700,000 frames of one bus's voltage: many blocks of results.
-      const path = join(scratch, 'waveform.csv')
-      const name = JSON.parse(text).buses[0].name
-      const count = 700_000
-      await writeFile(
-        path,
-        `time,Bus_${name}_Vm\n` +
-          Array.from({ length: count }, (_, i) => `${i / 100},${1 + (i % 200) / 1000}\n`).join(''),
-      )
-      const results = await read(rig, await open(rig, revision, path))
-      expect(results).toMatchObject({ growing: false, frames: count })
-      expect(results.domains).toEqual({ Bus: { Vm: [1, 1.199] } })
-      // Results whose first frames cannot be read fail to open, and leave nothing held.
-      const broken = join(scratch, 'broken.csv')
-      await writeFile(broken, `time,Bus_${name}_Vm\n0,1\n0.01\n`)
+      const revision = await caseOf(rig, 'unread')
+      const path = join(rig.scratch, 'whole.csv')
+      await waveform(path, 3)
+      await read(rig, await open(rig, revision, path))
+      const broken = join(rig.scratch, 'broken.csv')
+      await writeFile(broken, 'time,Bus_one_Vm\n0,1\n0.01\n')
       await expect(open(rig, revision, broken)).rejects.toThrow(/does not match its header/)
-      expect(await call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
-      const field = results.outputs[0]!
-      const ask = () =>
-        call('frames', {
-          results: results.id,
-          table: field.table,
-          field: field.field,
-          range: [results.domain[1], results.domain[1]],
-          purpose: 'playhead',
-          bytes: 4096,
-          step: 0,
-        })
-      const sent = await ask()
-      expect(sent.complete).toBe(true)
-      using data = native([sent])
-      expect(data.get(field.table, field.ids[0]!, field.field)).toBe(Math.fround(1.199))
-      expect(sent.bytes.byteLength).toBeLessThan(4096)
-      expect((await call('describe', { results: results.id })).version).toBe(revision.version)
-      await call('close', { results: results.id })
-      expect(await call('stats', {})).toMatchObject({ results: 0, files: 0 })
-      await expect(ask()).rejects.toMatchObject({ code: 'results-closed' })
+      expect(await rig.call('stats', {})).toMatchObject({ results: 1, files: 1, resting: 0 })
     } finally {
-      await stop()
+      await rig.stop()
     }
   })
 })

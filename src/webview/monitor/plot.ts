@@ -22,7 +22,7 @@ export const plotRequest = (
   columns: number,
 ): FrameRequest => ({
   results: results.id,
-  table: plot.from,
+  table: plot.table,
   field: plot.field,
   ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
   range,

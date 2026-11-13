@@ -3,7 +3,7 @@
 
   import { formatNumber } from '../../shared/format.js'
   import type { VideoView, ViewState } from '../../shared/messages.js'
-  import { bridge, merged } from '../bridge.js'
+  import { bridge } from '../bridge.js'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -70,7 +70,7 @@
         return
       }
       if (message.kind !== 'state') return
-      view = merged(view, message.state)
+      view = message.state
       const offered = viewsOf(view).map(({ value }) => value)
       if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
         change({ views: settings.views.filter((shown) => offered.includes(shown)) })

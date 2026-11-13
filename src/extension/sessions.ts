@@ -6,7 +6,6 @@ import { join } from 'node:path'
 
 import * as vscode from 'vscode'
 
-import type { Target } from '../shared/contexts.js'
 import { failedWith } from '../shared/errors.js'
 import {
   type Command,
@@ -19,6 +18,7 @@ import {
   type View,
   viewId,
 } from '../shared/ids.js'
+import type { Target } from '../shared/menus.js'
 import {
   type Revision,
   revisionOf,
@@ -29,7 +29,7 @@ import {
 import { catalogFile } from './catalog.js'
 import { Client, unsteady } from './client.js'
 import { CaseFiles } from './files.js'
-import { noCase, Reporter } from './report.js'
+import { Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
 import { gone } from './solvers.js'
@@ -56,9 +56,6 @@ export class Sessions implements vscode.Disposable {
   readonly action = new vscode.EventEmitter<Action>()
   /** The context keys Studio last set, as VS Code holds them. */
   readonly contexts = new Map<ContextKey, unknown>()
-  /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
-   *  menu offers, and what it carries to the commands there. */
-  signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
   /** The panel views VS Code has shown, by kind, which `showView` brings up. */
   readonly panels = new Map<Extract<View, 'case' | 'monitor' | 'export'>, vscode.WebviewView>()
   readonly #all = new Map<string, Session>()
@@ -189,12 +186,6 @@ export class Sessions implements vscode.Disposable {
     return this.#all.get(uri)
   }
 
-  /** The session the views follow. */
-  current(): Session {
-    if (!this.#active) throw noCase()
-    return this.#active
-  }
-
   /** The session of `uri`, held for `why`: made, its file followed, and what it saved read again,
    *  as it is first held. */
   hold(uri: string, why: Hold): Session {
@@ -272,9 +263,8 @@ export class Sessions implements vscode.Disposable {
     const session = this.#all.get(uri)
     return {
       uri,
-      version: file?.summary?.version,
       settings: session?.settings,
-      bindings: session?.bindings,
+      mappings: session?.mappings,
       summary: file?.summary,
       stale: file?.stale,
       error: file?.error,
@@ -308,16 +298,15 @@ export class Sessions implements vscode.Disposable {
       }
   }
 
-  /** Drops the saved state of cases that no longer exist, as one deleted while VS Code was closed,
-   *  and of copies the views never follow, as Git's of an older version. A case that cannot be
-   *  reached now, on a remote or network drive, keeps its state. */
+  /** Drops whatever the workspace keeps that is not the saved state of a case that exists: that of
+   *  one deleted while VS Code was closed, and anything else. A case that cannot be reached now, on
+   *  a remote or network drive, keeps its state. */
   async prune(): Promise<void> {
     const { workspaceState } = this.context
     await Promise.all(
       workspaceState.keys().map(async (key) => {
         const uri = savedUri(key)
-        if (uri === undefined) return
-        if (!followed(uri) || (await gone(vscode.Uri.parse(uri))))
+        if (uri === undefined || !followed(uri) || (await gone(vscode.Uri.parse(uri))))
           await workspaceState.update(key, undefined)
       }),
     )

@@ -3,11 +3,11 @@ import { type Gpu, type Rect, View } from 'latkit'
 import type { TimeRange } from '../../shared/data.js'
 import type { Results, ViewState } from '../../shared/messages.js'
 import { holdsPlot, plotName } from '../../shared/plots.js'
-import { reader } from '../../shared/preferences.js'
-import { type FrameReads, FrameWindow } from '../frames.js'
+import { reader } from '../../shared/settings.js'
+import { type FrameReads, FrameWindow } from '../latkit/frames.js'
+import { plotScene } from '../latkit/scenes.js'
+import { nativeTheme } from '../latkit/theme.js'
 import { plotCamera, plotRequest } from '../monitor/plot.js'
-import { plotScene } from '../scenes.js'
-import { nativeTheme } from '../theme.js'
 
 /** Views of the Monitor's plots, drawn only into pictures. */
 interface PlotViews {

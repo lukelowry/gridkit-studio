@@ -7,18 +7,22 @@ import * as vscode from 'vscode'
 
 import { shownColumns, shownType, tableFields } from '../shared/cells.js'
 import { fieldDefinition, leaf, tableDefinition, tableLabel } from '../shared/document.js'
-import type { Commands, Context } from './context.js'
+import type { Summary } from '../shared/messages.js'
+import type { Commands, Context } from './commands.js'
 
-export function registerTable({ command, valueOf }: Commands) {
-  /** The type the Case panel shows, which its column commands change. */
-  const shownOf = (context: Context) => {
-    const type = shownType(context.summary, context.session.table)
-    if (!type || !tableDefinition(context.summary.definition, type))
+export function registerTable({ command, valuesOf }: Commands) {
+  /** The type the Case panel shows of the case `summary` describes, which its column commands
+   *  change. */
+  const shownOf = ({ session }: Context, summary: Summary) => {
+    const type = shownType(summary, session.table)
+    if (!type || !tableDefinition(summary.definition, type))
       throw new Error('This case has no elements to show.')
     return type
   }
-  command('chooseType', (context) => {
-    const { definition, counts } = context.summary
+  command('chooseType', async (context) => {
+    const { session } = context
+    const summary = await context.summary()
+    const { definition, counts } = summary
     type Item = vscode.QuickPickItem & { type: string }
     const items: Item[] = Object.entries(counts)
       .filter(([, count]) => count)
@@ -31,23 +35,24 @@ export function registerTable({ command, valueOf }: Commands) {
     picker.title = 'Show in Case'
     picker.placeholder = 'Element type'
     picker.items = items
-    const shown = shownType(context.summary, context.session.table)
+    const shown = shownType(summary, session.table)
     picker.activeItems = items.filter((item) => item.type === shown)
     picker.onDidAccept(() => {
       const type = picker.selectedItems[0]?.type
-      if (type) context.session.setTable({ type })
+      if (type) session.setTable({ type })
       picker.hide()
     })
     picker.onDidHide(() => picker.dispose())
     picker.show()
   })
   // Live, as a filter box is: each keystroke filters, and Escape puts the old text back.
-  command('filterRows', (context) => {
+  command('filterRows', async (context) => {
     const { session } = context
+    const summary = await context.summary()
     const before = session.table.filter
     let kept = false
     const input = vscode.window.createInputBox()
-    input.title = 'Filter ' + tableLabel(context.summary.definition, shownOf(context))
+    input.title = 'Filter ' + tableLabel(summary.definition, shownOf(context, summary))
     input.prompt = 'Rows whose name contains'
     input.value = before ?? ''
     input.onDidChangeValue((filter) => session.setTable({ filter }))
@@ -62,12 +67,14 @@ export function registerTable({ command, valueOf }: Commands) {
     input.show()
   })
   command('chooseColumns', async (context) => {
-    const { definition } = context.summary
-    const { table } = context.session
-    const type = shownOf(context)
-    const shown = shownColumns(context.summary, table, type)
+    const { session } = context
+    const summary = await context.summary()
+    const { definition } = summary
+    const { table } = session
+    const type = shownOf(context, summary)
+    const shown = shownColumns(summary, table, type)
     const selected = await vscode.window.showQuickPick(
-      tableFields(context.summary, type).map((field) => ({
+      tableFields(summary, type).map((field) => ({
         label: leaf(field),
         description: [
           field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
@@ -81,27 +88,30 @@ export function registerTable({ command, valueOf }: Commands) {
       { title: tableLabel(definition, type) + ' columns', canPickMany: true },
     )
     if (selected)
-      context.session.setTable({
+      session.setTable({
         columns: { ...table.columns, [type]: selected.map((item) => item.field) },
       })
   })
-  command('resetColumns', (context) => {
-    const { table } = context.session
-    const type = shownOf(context)
+  command('resetColumns', async (context) => {
+    const { session } = context
+    const { table } = session
+    const type = shownOf(context, await context.summary())
     if (table.columns?.[type])
-      context.session.setTable({
+      session.setTable({
         columns: Object.fromEntries(
           Object.entries(table.columns).filter(([each]) => each !== type),
         ),
       })
   })
-  command('hideColumn', (context) => {
-    const type = shownOf(context)
-    const { table } = context.session
-    context.session.setTable({
+  command('hideColumn', async (context) => {
+    const { session, field } = context
+    const summary = await context.summary()
+    const type = shownOf(context, summary)
+    const { table } = session
+    session.setTable({
       columns: {
         ...table.columns,
-        [type]: shownColumns(context.summary, table, type).filter((each) => each !== context.field),
+        [type]: shownColumns(summary, table, type).filter((each) => each !== field?.field),
       },
     })
   })
@@ -109,19 +119,18 @@ export function registerTable({ command, valueOf }: Commands) {
     ['sortAscending', 'ascending'],
     ['sortDescending', 'descending'],
   ] as const)
-    command(id, (context) => {
-      if (context.field) context.session.setTable({ order: { field: context.field, direction } })
+    command(id, ({ session, field }) => {
+      if (field) session.setTable({ order: { field: field.field, direction } })
     })
-  command('clearSort', (context) => context.session.setTable({ order: undefined }))
+  command('clearSort', ({ session }) => session.setTable({ order: undefined }))
   command('filterToValue', async (context) => {
-    const { element, type, field } = context
-    if (!element || !type || !field) return
-    const value = await valueOf(context, type, field, element.id)
+    const { session, element, field } = context
+    if (!element || !field) return
+    const summary = await context.summary()
+    const value = (await valuesOf(summary, field.table, [field.field], element.id))[field.field]
     if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'boolean')
-      throw new Error(leaf(field) + ' holds no single value to filter by.')
-    context.session.setTable({ type, equal: { field, value } })
+      throw new Error(leaf(field.field) + ' holds no single value to filter by.')
+    session.setTable({ type: field.table, equal: { field: field.field, value } })
   })
-  command('clearFilter', (context) =>
-    context.session.setTable({ filter: undefined, equal: undefined }),
-  )
+  command('clearFilter', ({ session }) => session.setTable({ filter: undefined, equal: undefined }))
 }

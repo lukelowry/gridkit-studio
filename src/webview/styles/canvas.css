@@ -7,9 +7,7 @@
   min-block-size: 0;
 }
 
-.canvas-host__canvas {
-  inline-size: 100%;
-  block-size: 100%;
+.canvas-host canvas {
   outline-offset: -2px;
 }
 

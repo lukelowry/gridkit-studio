@@ -1,6 +1,15 @@
-import { type Bindings, NUMERIC } from './bindings.js'
-import { fieldDefinition, networkRole, referenceFields, tableDefinition } from './document.js'
-import type { Element, Plot, Revision, Summary } from './messages.js'
+/** What Studio's menus are opened on, and the context keys that place their items. */
+
+import {
+  type Entity,
+  type Field,
+  fieldDefinition,
+  networkRole,
+  referenceFields,
+  tableDefinition,
+} from './document.js'
+import { channelsOf, type Mappings, NUMERIC } from './mappings.js'
+import type { Plot, Revision, Summary } from './messages.js'
 
 /** What a menu acts on: a whole element, one value of it, a column of the Case panel, or a plot. */
 type Scope = 'element' | 'value' | 'column' | 'plot'
@@ -8,11 +17,12 @@ type Scope = 'element' | 'value' | 'column' | 'plot'
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
   origin: 'network' | 'case' | 'monitor' | 'signals'
-  element?: Element
-  type?: string
-  field?: string
+  /** The element under the pointer, when one is. */
+  element?: Entity
+  /** The field it names: a cell's or a column's, a plot's, or a signal's. */
+  field?: Field
   /** Every element under the pointer. */
-  items?: Element[]
+  items?: Entity[]
   plot?: Plot
 }
 
@@ -34,18 +44,32 @@ export function signalContext(
   return SIGNAL_WORDS.filter((word) => word === 'field' || has[word]).join(' ')
 }
 
+/** Whether a network channel can show `field`, and whether one does. */
+export function mappingOf(
+  { definition }: Pick<Summary, 'definition'>,
+  mappings: Mappings,
+  field: Field | undefined,
+) {
+  return {
+    mappable:
+      !!field &&
+      !!networkRole(definition, field.table) &&
+      NUMERIC.has(fieldDefinition(definition, field.table, field.field)?.kind),
+    mapped: !!field && channelsOf(mappings, field).length > 0,
+  }
+}
+
 /** VS Code context keys for a menu on `target`, which carry the target to its commands; opening a
  *  menu never selects another row. Every view's menus take these keys, and only these. */
 export function menuContext(
   summary: Pick<Summary, 'definition'>,
   target: Target,
-  bindings: Bindings = {},
+  mappings: Mappings = {},
   rows: Rows = {},
 ) {
-  const type = target.type ?? target.element?.table
-  const field = target.field ?? target.element?.field
-  const definition = type && field ? fieldDefinition(summary.definition, type, field) : undefined
-  const network = type ? networkRole(summary.definition, type) : null
+  const { field } = target
+  const type = field?.table ?? target.element?.table
+  const definition = field && fieldDefinition(summary.definition, field.table, field.field)
   const scope: Scope = target.plot
     ? 'plot'
     : target.origin === 'case' && field
@@ -53,6 +77,7 @@ export function menuContext(
         ? 'value'
         : 'column'
       : 'element'
+  const { mappable, mapped } = mappingOf(summary, mappings, field)
   return {
     preventDefaultContextMenuItems: true,
     gridkitTarget: target,
@@ -70,12 +95,10 @@ export function menuContext(
     gridkitSampled:
       !!type &&
       tableDefinition(summary.definition, type)?.fields.some((spec) => spec.kind === 'sampled'),
-    gridkitBindable: !!network && NUMERIC.has(definition?.kind),
-    gridkitBound: Object.values(bindings).some(
-      (binding) => binding.table === type && binding.field === field,
-    ),
+    gridkitMappable: mappable,
+    gridkitMapped: mapped,
     gridkitOverlapping: (target.items?.length ?? 0) > 1,
-    gridkitSort: field && rows.sort?.field === field ? rows.sort.direction : '',
+    gridkitSort: field && rows.sort?.field === field.field ? rows.sort.direction : '',
     gridkitFiltered: !!rows.filtered,
   }
 }

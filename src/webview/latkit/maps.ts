@@ -1,6 +1,6 @@
 import { Data, type Mark, Tiles } from 'latkit'
 
-import type { SettingsReader } from '../shared/preferences.js'
+import type { SettingsReader } from '../../shared/settings.js'
 import type { Palette } from './theme.js'
 
 /** A map under the Network: the datasets it draws, its marks, and whose map it is. */
@@ -62,7 +62,7 @@ export async function borderMaps(
   }
 }
 
-export function streetMaps(url: string, palette: Palette): { source: Tiles; marks: Mark[] } {
+function streetMaps(url: string, palette: Palette): { source: Tiles; marks: Mark[] } {
   const source = new Tiles('map:streets', url)
   return {
     source,

@@ -4,10 +4,9 @@
 
 import * as vscode from 'vscode'
 
-import { channelsOf, NUMERIC } from '../shared/bindings.js'
-import { signalContext, type Target } from '../shared/contexts.js'
-import { fieldDefinition, fieldLabel, networkRole, tableLabel } from '../shared/document.js'
+import { fieldDefinition, fieldLabel, tableLabel } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
+import { mappingOf, signalContext, type Target } from '../shared/menus.js'
 import type { Summary } from '../shared/messages.js'
 import type { Sessions } from './sessions.js'
 
@@ -43,7 +42,7 @@ export function registerSignals(studio: Sessions) {
   const shown = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
-    return uri && summary ? { uri, summary, bindings: studio.get(uri)?.bindings ?? {} } : undefined
+    return uri && summary ? { uri, summary, mappings: studio.get(uri)?.mappings ?? {} } : undefined
   }
 
   const provider: vscode.TreeDataProvider<Signal> = {
@@ -52,7 +51,7 @@ export function registerSignals(studio: Sessions) {
     getChildren(parent) {
       const now = shown()
       if (!now || parent?.field !== undefined) return []
-      const { uri, summary, bindings } = now
+      const { uri, summary, mappings } = now
       const types = recordable(summary)
       if (!parent)
         return types.map(({ type, fields }) => {
@@ -69,7 +68,6 @@ export function registerSignals(studio: Sessions) {
       const { type } = parent
       const name = tableLabel(summary.definition, type)
       const total = summary.counts[type] ?? 0
-      const drawn = !!networkRole(summary.definition, type)
       return (types.find((each) => each.type === type)?.fields ?? []).map((field) => {
         const count = listed(summary, type, field)
         const label = fieldLabel(fieldDefinition(summary.definition, type, field)!)
@@ -86,11 +84,11 @@ export function registerSignals(studio: Sessions) {
         item.accessibilityInformation = {
           label: `${name} ${label}, recorded by ${count.toLocaleString()} of ${total.toLocaleString()}`,
         }
-        item.gridkitTarget = { uri, version: summary.version, origin: 'signals', type, field }
+        const named = { table: type, field }
+        item.gridkitTarget = { uri, version: summary.version, origin: 'signals', field: named }
         item.contextValue = signalContext({
           recorded: count > 0,
-          mappable: drawn && NUMERIC.has(fieldDefinition(summary.definition, type, field)?.kind),
-          mapped: channelsOf(bindings, { table: type, field }).length > 0,
+          ...mappingOf(summary, mappings, named),
         })
         return item
       })
@@ -101,19 +99,12 @@ export function registerSignals(studio: Sessions) {
     treeDataProvider: provider,
     showCollapseAll: true,
   })
-  studio.signalRow = (type, field) =>
-    (
-      provider.getChildren(
-        new Signal(type, undefined, '', vscode.TreeItemCollapsibleState.Collapsed),
-      ) as Signal[]
-    ).find((item) => item.field === field)
-
   let revision = ''
   /** Redraw when the active case, its revision, or what it maps changes: a mapping changes what a
    *  field's menu offers. */
   const refresh = () => {
     const now = shown()
-    const next = JSON.stringify([now?.uri, now?.summary.version, now?.bindings])
+    const next = JSON.stringify([now?.uri, now?.summary.version, now?.mappings])
     if (next === revision) return
     revision = next
     view.message =

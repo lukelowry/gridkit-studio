@@ -1,8 +1,6 @@
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 
-import type { CancellationToken } from 'vscode'
-
 import { terminateRuntime } from '../gridkit/index.js'
 import type {
   FromWorker,
@@ -12,21 +10,6 @@ import type {
   WorkerOptions,
 } from '../shared/messages.js'
 import { type Api, Caller } from '../shared/rpc.js'
-
-/** Run `run` with a signal that aborts when `token` is cancelled. */
-export async function cancellable<T>(
-  token: CancellationToken | undefined,
-  run: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const controller = new AbortController()
-  const subscription = token?.onCancellationRequested(() => controller.abort())
-  if (token?.isCancellationRequested) controller.abort()
-  try {
-    return await run(controller.signal)
-  } finally {
-    subscription?.dispose()
-  }
-}
 
 /** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
  *  One listener's failure leaves the others theirs, and is said as every failure is, by `failed`. */

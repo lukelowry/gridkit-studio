@@ -1,7 +1,7 @@
-﻿/** Bundle the extension and its two workers for Node, and the webviews for the browser, into dist/.
+/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
  *  `--watch` rebuilds on change, unminified. */
 
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,7 +32,6 @@ const builds = [
     entryPoints: ['src/extension/index.ts'],
     outfile: 'dist/extension.cjs',
     platform: 'node',
-    mainFields: ['module', 'main'],
     format: 'cjs',
     target: 'node22',
     external: ['vscode'],
@@ -68,6 +67,7 @@ const builds = [
 await Promise.all([
   cp(require.resolve('latkit/wasm'), resolve(output, 'webview/latkit.wasm')),
   cp(require.resolve('latkit/worker'), resolve(output, 'webview/latkit-worker.js')),
+  cp(require.resolve('latkit/shaders'), resolve(output, 'webview/latkit-shaders.bin')),
   cp(resolve(root, 'assets/maps'), resolve(output, 'webview/maps'), { recursive: true }),
   cp(resolve(packageRoot, 'NOTICES.md'), resolve(output, 'licenses/latkit-NOTICES.md')),
   cp(resolve(packageRoot, 'THIRD_PARTY.md'), resolve(output, 'licenses/latkit-THIRD_PARTY.md')),
@@ -77,9 +77,10 @@ for (const options of builds) {
   if (watch) await (await context(config)).watch()
   else {
     const result = await build(config)
-    await writeFile(
-      resolve(output, `metafile-${options.platform}-${options.format}.json`),
-      JSON.stringify(result.metafile),
-    )
+    // The VSIX ships no node_modules: every bundle holds all it imports but VS Code and Node.
+    for (const [file, bundle] of Object.entries(result.metafile.outputs))
+      for (const { path, external } of bundle.imports)
+        if (external && path !== 'vscode' && !path.startsWith('node:'))
+          throw new Error(`${file} imports ${path}, which is not bundled.`)
   }
 }

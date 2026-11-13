@@ -1,4 +1,4 @@
-﻿/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
+/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
@@ -18,7 +18,6 @@ import {
   PAGE_BYTES,
   PAYLOAD_BYTES,
   type TimeRange,
-  type VisualizationRun,
 } from '../shared/data.js'
 import { message, problem } from '../shared/errors.js'
 import {
@@ -37,13 +36,13 @@ import {
   recordedFields,
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
-import { rawRun } from './frames.js'
+import { rawRun, type VisualizationRun } from './frames.js'
 import { detail, Pyramid, type ReducedRun } from './pyramid.js'
 import { same, type Stamp, stampAt } from './stamp.js'
 import { fileKey, type LevelIndex, type RawIndex, type Store } from './store.js'
 
 export const closed = () => problem('results-closed', 'These results are closed.')
-export const lost = (name: string, cause: unknown) =>
+const lost = (name: string, cause: unknown) =>
   problem('results-lost', `What Studio kept of ${name} could not be read.`, { cause })
 export interface Reading {
   readonly revision: Revision
@@ -106,7 +105,10 @@ function picked(run: VisualizationRun, picks: Uint32Array, rows: number): Visual
 
 export class ResultsFile {
   #layout: ResultsLayout
-  readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] }
+  /** How far it is read: the ranges of its values always there, none while it holds no frame. */
+  readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] } & {
+    domains: NonNullable<ResultsProgress['domains']>
+  }
   readonly #decode: Layout = {}
   readonly #readers = new Map<AbortController, Promise<void>>()
   readonly #plans = new Map<string, FramePlan>()
@@ -117,6 +119,9 @@ export class ResultsFile {
   #opened?: Stamp
   #stamp?: Stamp
   #read = 0
+  /** Whether a later read can take the file up where the store stands: it holds the frames of
+   *  exactly the bytes kept of the file, which end, in a long layout, between two samples. */
+  #resumable = true
   #retired = false
   constructor(
     readonly kase: Case,
@@ -163,6 +168,7 @@ export class ResultsFile {
   }
   idle(): void {
     this.#plans.clear()
+    this.#deltas.clear()
   }
   get bytes(): number {
     return this.kase.bytes + this.store.bytes
@@ -227,6 +233,10 @@ export class ResultsFile {
       await Promise.allSettled([original.close(), cached.close()])
     }
   }
+  /** Reads the file on from what the store keeps of it, until `writer` is done and it holds no
+   *  more, telling `progress` of each segment kept. What the store then holds is written down
+   *  once, as the read ends, through or short, for a later read to take up: a window that goes
+   *  before then leaves a store that says nothing, and the file is read again. */
   async ingest(
     signal: AbortSignal,
     writer: () => Writer,
@@ -256,40 +266,49 @@ export class ResultsFile {
           await this.store.writeCsv(piece.bytes, this.#read)
           this.#read += piece.bytes.length
         } else if (piece.kind === 'segment') {
-          await readResults(
-            Readable.from([piece.bytes]),
-            this.kase,
-            { signal, first: this.#progress.frames, publish: (frames) => this.#add(frames) },
-            this.#decode,
-          )
-          await this.store.writeCsv(piece.bytes, this.#read)
-          this.#read += piece.bytes.length
-          await this.#checkpoint(false)
+          await this.#take(signal, piece.bytes)
           await progress()
         } else {
           // A long layout's only sample ends with the file its writer finished.
-          if (this.#decode.long && writer() === 'done')
-            await readResults(
-              Readable.from([]),
-              this.kase,
-              {
-                signal,
-                first: this.#progress.frames,
-                final: true,
-                publish: (frames) => this.#add(frames),
-              },
-              this.#decode,
-            )
+          if (this.#decode.long && writer() === 'done') await this.#take(signal)
           this.#stamp = piece.stamp
         }
       }
-      await this.#checkpoint(!!this.#stamp)
+      await this.#checkpoint()
     } catch (error) {
       if (!signal.aborted) this.#progress.error = message(error)
+      // What it kept before it stopped is written down all the same; a store that cannot say
+      // what it holds is let go of, and its file read again.
+      await this.#checkpoint().catch(() => {})
       throw error
     } finally {
       this.#progress.growing = false
     }
+  }
+  /** Takes a segment of the file, `bytes` of whole rows past those kept, or, with none, the sample
+   *  a long layout ends with. Its frames are decoded, then kept, then its bytes: a segment that
+   *  does not read leaves the store as it was, holding the frames of exactly the bytes kept. */
+  async #take(signal: AbortSignal, bytes?: Uint8Array): Promise<void> {
+    const decoded: Decoded[] = []
+    await readResults(
+      Readable.from(bytes ? [bytes] : []),
+      this.kase,
+      {
+        signal,
+        first: this.#progress.frames,
+        final: !bytes,
+        publish: (frames) => void decoded.push(frames),
+      },
+      this.#decode,
+    )
+    this.#resumable = false
+    for (const frames of decoded) await this.#add(frames)
+    if (bytes) {
+      await this.store.writeCsv(bytes, this.#read)
+      this.#read += bytes.length
+    }
+    const long = this.#decode.long
+    this.#resumable = !long || (long.sample < 0 && !long.pending)
   }
   #learned(): void {
     this.#layout = { ...this.#layout, outputs: recordedFields(this.fields) }
@@ -314,9 +333,8 @@ export class ResultsFile {
     )
       throw new Error('Result times must be nondecreasing.')
     await this.store.writeRaw(frames.firstFrame, frames.coordinates, frames.values)
-    const domains = (progress.domains ??= {})
     this.fields.forEach((field, f) => {
-      const ranges = (domains[field.table] ??= {})
+      const ranges = (progress.domains[field.table] ??= {})
       let [min, max] = ranges[field.field] ?? [Infinity, -Infinity]
       for (const value of frames.values[f]!)
         if (Number.isFinite(value)) {
@@ -341,11 +359,15 @@ export class ResultsFile {
       }
     for (const levels of this.#pending) levels.clear()
   }
-  async #checkpoint(complete: boolean): Promise<void> {
-    if (!this.#decode.header || !this.#opened) return
-    // A long layout resumes between samples, never partway through one.
+  /** Writes down what the store holds of the file, unless it says so already: all of it, once the
+   *  file is read through, or as far as a read that stopped short kept it, where a later one can
+   *  read on from. */
+  async #checkpoint(): Promise<void> {
+    const complete = !!this.#stamp
+    if (!this.#decode.header || !this.#opened || !(complete || this.#resumable)) return
+    const said = this.store.manifest
+    if (said?.read === this.#read && said.complete === complete) return
     const long = this.#decode.long
-    if (long && !complete && (long.sample >= 0 || long.pending)) return
     await this.#flushLevels()
     await this.store.checkpoint({
       path: this.#layout.path,
@@ -356,7 +378,7 @@ export class ResultsFile {
       ...(long && { long: long.columns }),
       frames: this.#progress.frames,
       domain: this.#progress.domain,
-      domains: this.#progress.domains ?? {},
+      domains: this.#progress.domains,
       complete,
       reducers: this.#reducers.map((reducer) => reducer.snapshot()),
     })

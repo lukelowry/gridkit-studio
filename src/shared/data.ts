@@ -2,7 +2,10 @@ import type { Id, QueryResult } from 'latkit'
 
 import type { Entity } from './document.js'
 
+/** Times, in seconds, from the first to the last. */
 export type TimeRange = readonly [number, number]
+/** Values of a field, from the lowest to the highest. */
+export type ValueRange = readonly [number, number]
 
 /** Whether `range` is two finite numbers, the low first. */
 export const isRange = (range: unknown): range is [number, number] =>
@@ -14,7 +17,7 @@ export interface ProjectionSelection {
 }
 
 export interface ProjectionCursor {
-  readonly phase: 'removals' | 'identities' | 'fields'
+  readonly phase: 'identities' | 'fields'
   readonly table: number
   readonly offset: number
 }
@@ -43,20 +46,13 @@ export interface RecordedField {
   readonly table: string
   readonly field: string
   readonly ids: readonly Id[]
-  readonly domain?: TimeRange
-}
-
-/** Authoritative scientific values, frame-major. */
-export interface FrameBlock {
-  readonly first: number
-  readonly at: Float64Array
-  readonly values: Float64Array
-  readonly rows: number
+  /** The values the results hold of it. */
+  readonly domain?: ValueRange
 }
 
 /** A window of a recorded field: a plot's, across the device pixel columns it draws in, sent only
  *  what the window it holds (`since`, the key it was sent under) lacks where that is the same
- *  window grown; or the frames ahead of the playhead a Network binding reads, within `bytes`. */
+ *  window grown; or the frames ahead of the playhead a field the Network maps reads, within `bytes`. */
 export type FrameRequest = {
   readonly results: string
   readonly table: string
@@ -74,13 +70,6 @@ export type FrameRequest = {
       readonly step: number
     }
 )
-
-export interface VisualizationRun {
-  readonly level: number
-  readonly first: number
-  readonly at: Float64Array
-  readonly values: Float32Array
-}
 
 export interface FramePage {
   readonly key: string

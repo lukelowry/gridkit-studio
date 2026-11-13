@@ -51,7 +51,7 @@ suite('Runs', function () {
       [['Bus', 'Vm', host.source.buses.length]],
     )
     assert.ok(Math.abs(results.domain[1] - 0.5) < 1e-9, 'the run reaches its end')
-    assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
+    assert.deepEqual(session.plots, [{ table: 'Bus', field: 'Vm' }])
     // The playhead rests at the end of the run, which the views read from the samples it wrote.
     assert.equal(session.transport.state.follow, false)
     assert.equal(session.transport.currentT(), results.domain[1])
@@ -65,9 +65,10 @@ suite('Runs', function () {
     assert.equal(typeof value, 'number')
   })
 
-  test('shows what its solver file wrote last, and runs it again', async () => {
+  test('shows what its solver file wrote last, and runs it again, plotting what that records', async () => {
     await host.run()
     const written = host.session.results!
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
     host.command('gridkitStudio.clearResults')
     await until(() => !host.session.results, 'the results go')
     host.command('gridkitStudio.showLastResults', host.solver)
@@ -76,16 +77,12 @@ suite('Runs', function () {
       'the last results show again',
     )
     assert.equal(host.session.results!.path, written.path)
+    // The plots stay until the next run, which plots what it recorded.
+    await host.record('Bus', ['Va'])
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
     const again = await host.run('gridkitStudio.runSimulationAgain')
     assert.equal(again.state, 'complete', again.message)
-  })
-
-  test('keeps its plots until the next run, which plots what it recorded', async () => {
-    await host.run()
-    await host.record('Bus', ['Va'])
-    assert.deepEqual(host.session.plots, [{ from: 'Bus', field: 'Vm' }])
-    await host.run()
-    assert.deepEqual(host.session.plots, [{ from: 'Bus', field: 'Va' }])
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Va' }])
   })
 
   test('follows a live run, and a stop keeps what it wrote', async () => {

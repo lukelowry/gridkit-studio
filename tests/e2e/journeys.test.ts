@@ -99,7 +99,7 @@ suite('Journeys', function () {
     )
     const image = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 network.png')
     await rm(image.fsPath, { force: true })
-    await bench.title('editor', 'Export Image')
+    await bench.title('Export Image')
     await bench.dialog(image.fsPath)
     const { width } = await png(image.fsPath)
     const shown = await network.evaluate<number>(

@@ -6,6 +6,13 @@ export interface Entity {
   readonly id: Id
 }
 
+/** A field of a type, by the type's name and the field's path in its records. */
+export interface Field {
+  readonly table: string
+  readonly field: string
+}
+
+/** An element, and, where one of its values is meant, the field that holds it. */
 export interface Element extends Entity {
   readonly field?: string
 }
@@ -17,16 +24,12 @@ export interface FieldDefinition {
   readonly kind: FieldKind
   readonly label: string
   readonly unit?: string
-  readonly required?: boolean
-  readonly integer?: boolean
   readonly target?: string
-  readonly direction?: 'in' | 'out'
 }
 
 export interface TableDefinition {
   readonly name: string
   readonly label: string
-  readonly identity: string
   readonly labelField: string
   readonly fields: readonly FieldDefinition[]
 }

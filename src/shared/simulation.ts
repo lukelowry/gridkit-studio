@@ -1,4 +1,4 @@
-import type { RecordedField, TimeRange } from './data.js'
+import type { RecordedField, TimeRange, ValueRange } from './data.js'
 import type { Revision } from './messages.js'
 
 /** Where GridKit runs: installed here, else in a container of an image. */
@@ -43,7 +43,7 @@ export interface ResultsProgress {
   readonly frames: number
   readonly domain: TimeRange
   /** Finite value ranges over every frame read, shared by all views and time windows. */
-  readonly domains?: Record<string, Record<string, TimeRange>>
+  readonly domains?: Record<string, Record<string, ValueRange>>
   /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
   readonly growing: boolean
   /** Why reading it stopped before its end, when it did. */
@@ -56,25 +56,6 @@ export interface Results extends ResultsLayout, ResultsProgress {
   /** The id the extension chose for it, which it holds the results by until it closes them. */
   readonly id: string
 }
-
-/** What of results a view draws: which they are, how far they are read, whether more come, what
- *  they hold, and the times and values they span. Two readings alike in it draw alike. A file's
- *  outputs are fixed once its header is read: whether they are is all that changes, so their row
- *  indexes are never compared or written out again. */
-export const drawnOf = (results: Results | undefined) =>
-  results && [
-    results.id,
-    results.frames,
-    results.growing,
-    results.outputs.length,
-    results.domain,
-    results.span,
-    results.domains,
-  ]
-
-/** Whether `a` and `b` draw alike. */
-export const sameDrawn = (a: Results | undefined, b: Results | undefined): boolean =>
-  a === b || (!!a && !!b && JSON.stringify(drawnOf(a)) === JSON.stringify(drawnOf(b)))
 
 /** A run of GridKit's DynamicSimulation on a solver file. */
 export interface Run {
@@ -99,6 +80,8 @@ export interface RunRequest extends Revision {
   solver: string
   /** Where GridKit writes its samples, as the solver file and its case say. */
   output: string
+  /** The state file the solver file names, which GridKit reads beside the case. */
+  state?: string
   /** When the run ends, for its progress. */
   tmax: number
   /** The folder a container mounts. */

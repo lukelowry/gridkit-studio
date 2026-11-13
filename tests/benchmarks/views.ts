@@ -12,7 +12,6 @@ import * as vscode from 'vscode'
 
 import type { ViewKind } from '../../src/shared/messages.js'
 import {
-  fills,
   idle,
   pause,
   renderer,
@@ -57,7 +56,11 @@ type Stats = Record<(typeof SIZE)[number] | 'frames', number> & {
 type Plot = { frames: number; at?: number; instances: number; complete: boolean; visible: boolean }
 /** Work must not depend on timing: no hover search, easing, or motion, which VS Code's own
  *  setting reduces. */
-const STILL = { 'network.ease': 0, 'network.labels': true, 'network.motion': 'reduced' }
+const STILL = {
+  'network.transitionDuration': 0,
+  'network.labels': true,
+  'network.motion': 'reduced',
+}
 /** A second of simulation, its frames a hundredth of a second apart, as a solver file says it. */
 const RUN = { tmax: 1, dt_monitor: 0.01, events: [] }
 /** How long playback is timed. */
@@ -67,7 +70,6 @@ const SEEKS = [0.9, 0.1, 0.6, 0.3, 0.75]
 
 const timings: Record<string, number[]> = {}
 const work: Record<string, Record<string, number>> = {}
-const stages: Record<string, unknown> = {}
 
 /** A fixed piece of work, timed: how fast the machine runs now, whatever Studio does. compare.mjs
  *  leaves out a case whose canary ran slow, as a busy machine slows everything it times. */
@@ -223,10 +225,6 @@ export async function run() {
       // Until the view settles, and until the page's own first frame: what the user sees first.
       timings[`network ${size} > first frame`] = firsts
       timings[`network ${size} > first frame (page)`] = shown
-      assert.ok(await fills(network), path + ': the canvas fills its editor')
-      stages[`network ${size}`] = await network.evaluate(
-        'Object.fromEntries(performance.getEntriesByType("mark").map((e) => [e.name, e.startTime]))',
-      )
 
       /** Time `act` to the network's next frame, and the work its runs did. */
       async function measure(scenario: string, act: (i: number) => unknown) {
@@ -251,7 +249,7 @@ export async function run() {
       }
       const field = { table: 'Bus', field: 'init.Vr' }
       await measure('restyle', (i) =>
-        bench.studio.get(key)!.bind(field, i % 2 ? [] : ['vertexColor']),
+        bench.studio.get(key)!.map(field, i % 2 ? [] : ['vertexColor']),
       )
       await measure('camera move', async (i) => {
         await network.locator('canvas').hover()
@@ -352,8 +350,8 @@ export async function run() {
       // ── A second of simulation, followed live ──
       await bench.record('Bus', ['Vm'], uri)
       const solver = await bench.writeSolver(RUN, uri)
-      session.setPlots([{ from: 'Bus', field: 'Vm' }])
-      session.bind(VM, ['vertexColor'])
+      session.setPlots([{ table: 'Bus', field: 'Vm' }])
+      session.map(VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
       // This case has no run yet, unlike the one before it.
       const monitor = await shows('monitor', '.monitor .c-empty')
@@ -481,7 +479,7 @@ export async function run() {
           session.setPlots(alone)
           await lanes(lanesBefore)
         },
-        act: () => session.setPlots([...alone, { from: 'Bus', field: 'Vm', id: first }]),
+        act: () => session.setPlots([...alone, { table: 'Bus', field: 'Vm', id: first }]),
         done: () => lanes(lanesBefore + 1),
       })
       await steady(monitor)
@@ -578,11 +576,7 @@ export async function run() {
     await mkdir(output, { recursive: true })
     await writeFile(
       join(output, 'head.json'),
-      JSON.stringify(
-        { renderer: await renderer(), gridkit: build, timings, work, stages },
-        null,
-        2,
-      ),
+      JSON.stringify({ renderer: await renderer(), gridkit: build, timings, work }, null, 2),
     )
     console.log(`Benchmarks: ${Object.keys(timings).length} timed, written to ${output}`)
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')

@@ -1,10 +1,10 @@
-﻿import { createRequire } from 'node:module'
+import { createRequire } from 'node:module'
 
 import { Data } from 'latkit'
 import { beforeAll, expect, it, vi } from 'vitest'
 
-import { loadNative } from '../workers/native.js'
-import { borderMaps, streetMaps } from './maps.js'
+import { loadNative } from '../../workers/native.js'
+import { borderMaps } from './maps.js'
 import type { Palette } from './theme.js'
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 const palette = { text2: '#aaaaaa', background: '#000000', surface2: '#111111' } as Palette
@@ -28,9 +28,4 @@ it('cleans all successful map loads when one bundled border fails', async () => 
   } finally {
     read.mockRestore()
   }
-})
-it('makes optional street-map marks inert to selection and picking', () => {
-  const { source, marks } = streetMaps('https://maps.example/{z}/{x}/{y}.pbf', palette)
-  expect(source.name).toBe('map:streets')
-  expect(marks.every((mark) => mark.pick === false && mark.select === false)).toBe(true)
 })

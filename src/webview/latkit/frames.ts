@@ -1,13 +1,18 @@
 import type { Data } from 'latkit'
 
-import { type FramePage, type FrameRequest, PAYLOAD_BYTES, type TimeRange } from '../shared/data.js'
-import { failedWith } from '../shared/errors.js'
-import type { Results } from '../shared/messages.js'
-import { bridge } from './bridge.js'
-import { DatasetSlot } from './datasets.js'
-import { loadRenderer } from './runtime.js'
+import {
+  type FramePage,
+  type FrameRequest,
+  PAYLOAD_BYTES,
+  type TimeRange,
+} from '../../shared/data.js'
+import { failedWith } from '../../shared/errors.js'
+import type { Results } from '../../shared/messages.js'
+import { bridge } from '../bridge.js'
+import { DatasetSlot } from './data.js'
+import { loadLatkit } from './load.js'
 
-/** Shared by every plot and network binding in this page. Cached patch bytes are immutable. */
+/** Shared by every plot and mapped field in this page. Cached patch bytes are immutable. */
 export class FrameReads {
   readonly #cache = new Map<string, FramePage>()
   readonly #waiters = new Set<() => void>()
@@ -182,7 +187,7 @@ export class FrameWindow {
     const asked = held === undefined ? request : { ...request, since: held }
     const task = (async () => {
       try {
-        await loadRenderer()
+        await loadLatkit()
         const first = await this.reads.page(asked, version, controller.signal)
         const reads = this.reads
         async function* pages() {

@@ -146,6 +146,20 @@ describe("GridKit's long layout", () => {
     })
   })
 
+  it('reads a sample as wide as a large case records', async () => {
+    // More variables than one call takes arguments.
+    const wide = 150_000
+    const sample = Array.from(
+      { length: wide },
+      (_, i) => `0,0,Bus,b${i},Vm,${i}
+`,
+    ).join('')
+    const { names, frames } = await long([header + sample, ''], true)
+    expect(names).toHaveLength(1 + wide)
+    expect(frames).toHaveLength(1)
+    expect(frames[0]!.at(-1)).toBe(wide - 1)
+  })
+
   it('refuses a sample that records what the first does not', async () => {
     await expect(long([header + samples[0]! + '1,0.5,Genrou,g2,speed,0.1\n'])).rejects.toThrow(
       'Sample 1 records Genrou_g2_speed, which the first sample does not.',

@@ -1,14 +1,14 @@
-﻿import { type Gpu, type Placed, type Rect, View } from 'latkit'
+import { type Gpu, type Placed, type Rect, View } from 'latkit'
 
 import { type Results, type ViewState } from '../../shared/messages.js'
-import { reader } from '../../shared/preferences.js'
+import { reader } from '../../shared/settings.js'
 import { bridge } from '../bridge.js'
-import { FrameReads, PlayheadFeed } from '../frames.js'
-import { type Background, backgroundOf } from '../maps.js'
-import { CaseProjection } from '../projections.js'
-import { asset, openGpu } from '../runtime.js'
-import { caseFit, sampledFields, sceneFields, sceneOf } from '../scenes.js'
-import { nativeTheme, theme } from '../theme.js'
+import { CaseProjection } from '../latkit/data.js'
+import { FrameReads, PlayheadFeed } from '../latkit/frames.js'
+import { asset, openGpu } from '../latkit/load.js'
+import { type Background, backgroundOf } from '../latkit/maps.js'
+import { caseFit, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
+import { nativeTheme, theme } from '../latkit/theme.js'
 import { caseStem } from './image.js'
 import { plotViews } from './plots.js'
 import { exportVideo, framed, type VideoJob, videoOutput, type VideoProgress } from './video.js'
@@ -59,7 +59,7 @@ export async function renderVideo(
     const framing = await bridge.request('framing', { uri: shown.uri }, signal)
     gpu = await openGpu()
     signal.throwIfAborted()
-    const selection = job.views.includes('network') ? sceneFields(definition, app.bindings) : []
+    const selection = job.views.includes('network') ? sceneFields(definition, app.mappings) : []
     await projection.receive({ results: results.id, fields: selection }, selection, signal)
     const data = projection.slot.current!.data
     if (job.views.includes('network') && definition.drawing.geographic)
@@ -71,7 +71,7 @@ export async function renderVideo(
         signal,
       )
     const fields = job.views.includes('network')
-      ? sampledFields(definition, app.bindings, results)
+      ? sampledFields(definition, app.mappings, results)
       : []
     const sources = () => [data, ...background.sources, ...feed.sources]
     let network: View | undefined
@@ -110,7 +110,7 @@ export async function renderVideo(
         placed.push(...lanes.placed)
       } else {
         const scene = sceneOf(data, definition, settings, nativeTheme(settings, 'network'), {
-          bindings: app.bindings,
+          mappings: app.mappings,
           results,
           sampled: feed.source,
           background: background.marks,

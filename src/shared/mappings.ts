@@ -1,6 +1,9 @@
-/** The network's display channels, and which numeric field drives each. */
+/** What the Network maps: its display channels, and the numeric field each one shows. */
 
-/** Every channel, vertices' then edges'; `option` is the renderer style option it sets. */
+import type { ValueRange } from './data.js'
+import type { Field } from './document.js'
+
+/** Every channel, vertices' then edges'; `option` is the mark option it sets. */
 export const CHANNELS = {
   vertexColor: { label: 'Vertex Color', placement: 'vertex', style: 'color', option: 'color' },
   vertexSize: { label: 'Vertex Size', placement: 'vertex', style: 'size', option: 'radius' },
@@ -19,22 +22,17 @@ export type Channel = keyof typeof CHANNELS
 
 const ALL = Object.keys(CHANNELS) as Channel[]
 
-export interface FieldRef {
-  readonly table: string
-  readonly field: string
+/** A field mapped to a channel, over the values `range` gives: without one, over those it holds. */
+export interface Mapping extends Field {
+  readonly range?: ValueRange
 }
 
-/** A field driving a channel; without a `domain` the renderer measures the values' range. */
-interface Binding extends FieldRef {
-  readonly domain?: readonly [number, number]
-}
+export type Mappings = Readonly<Partial<Record<Channel, Mapping>>>
 
-export type Bindings = Readonly<Partial<Record<Channel, Binding>>>
-
-/** The field data types that can drive a channel. */
+/** The kinds of field a channel can show. */
 export const NUMERIC: ReadonlySet<unknown> = new Set(['number', 'sampled'])
 
-const sameField = (a: FieldRef | undefined, b: FieldRef): boolean =>
+const sameField = (a: Field | undefined, b: Field): boolean =>
   a !== undefined && a.table === b.table && a.field === b.field
 
 /** The channels a type drawn as `placement` offers. */
@@ -42,36 +40,32 @@ export function channelsFor(placement: 'vertex' | 'edge' | null): readonly Chann
   return ALL.filter((channel) => CHANNELS[channel].placement === placement)
 }
 
-/** The value range `field` is mapped over; none measures its values. */
-export function domainOf(
-  bindings: Bindings,
-  field: FieldRef,
-): readonly [number, number] | undefined {
-  return ALL.map((channel) => bindings[channel]).find((binding) => sameField(binding, field))
-    ?.domain
+/** The values `field` is mapped over; none measures those it holds. */
+export function rangeOf(mappings: Mappings, field: Field): ValueRange | undefined {
+  return ALL.map((channel) => mappings[channel]).find((mapping) => sameField(mapping, field))?.range
 }
 
-/** The channels bound to `field`. */
-export function channelsOf(bindings: Bindings, field: FieldRef): Channel[] {
-  return ALL.filter((channel) => sameField(bindings[channel], field))
+/** The channels `field` is mapped to. */
+export function channelsOf(mappings: Mappings, field: Field): Channel[] {
+  return ALL.filter((channel) => sameField(mappings[channel], field))
 }
 
-/** `bindings` with `field` bound to exactly `channels` of `allowed`: its other allowed channels are
- *  released, and the listed ones are taken from whichever fields held them. */
-export function bound(
-  bindings: Bindings,
+/** `mappings` with `field` mapped to exactly `channels` of `allowed`: its other allowed channels are
+ *  let go of, and the listed ones are taken from whichever fields held them. */
+export function mapped(
+  mappings: Mappings,
   allowed: readonly Channel[],
-  field: FieldRef,
+  field: Field,
   channels: readonly Channel[],
-  domain?: readonly [number, number],
-): Bindings {
+  range?: ValueRange,
+): Mappings {
   const refused = channels.find((channel) => !allowed.includes(channel))
   if (refused !== undefined)
     throw new Error(`${field.field} cannot drive ${CHANNELS[refused].label}.`)
-  const next: Partial<Record<Channel, Binding>> = { ...bindings }
+  const next: Partial<Record<Channel, Mapping>> = { ...mappings }
   for (const channel of allowed) {
     if (channels.includes(channel))
-      next[channel] = { table: field.table, field: field.field, ...(domain && { domain }) }
+      next[channel] = { table: field.table, field: field.field, ...(range && { range }) }
     else if (sameField(next[channel], field)) delete next[channel]
   }
   return next

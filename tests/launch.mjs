@@ -111,14 +111,11 @@ try {
       '--disable-renderer-backgrounding',
       ...(process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1'
         ? [
-            '--enable-unsafe-webgpu',
-            '--use-webgpu-adapter=swiftshader',
+            // WebGL2 drawn on the CPU, which Chromium offers only when asked.
             '--use-angle=swiftshader',
-            '--enable-features=Vulkan',
-            '--use-vulkan=swiftshader',
-            '--disable-vulkan-surface',
+            '--enable-unsafe-swiftshader',
             // A large plot drawn on the CPU outlasts the watchdog, which would end the GPU process
-            // and, after twice, WebGPU for the rest of the run.
+            // and, after twice, WebGL for the rest of the run.
             '--disable-gpu-watchdog',
           ]
         : []),

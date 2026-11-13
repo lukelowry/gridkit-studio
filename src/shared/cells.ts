@@ -1,4 +1,4 @@
-﻿import type { Id, QueryResult } from 'latkit'
+import type { Id, QueryResult } from 'latkit'
 
 import { type Entity, entityLabel } from './document.js'
 import type { Summary, TableState } from './messages.js'

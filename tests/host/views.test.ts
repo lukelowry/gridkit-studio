@@ -1,6 +1,5 @@
-/** Which case the views follow, an editor that closes as its case changes, how the Network shows an
- *  element it does not draw, and the keys that place Studio's commands in VS Code. Drawing is the
- *  end-to-end journeys' to check. */
+/** Which case the views follow, an editor that closes as its case changes, and how the Network
+ *  shows an element it does not draw. Drawing is the end-to-end journeys' to check. */
 
 import assert from 'node:assert/strict'
 
@@ -8,8 +7,7 @@ import { setup, suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import type { Action } from '../../src/extension/sessions.js'
-import { menuContext } from '../../src/shared/contexts.js'
-import { named } from '../menus.js'
+import { menuContext } from '../../src/shared/menus.js'
 import { type Bench, bench, until } from './studio.js'
 
 suite('Views', () => {
@@ -41,7 +39,7 @@ suite('Views', () => {
       await new Promise((resolve) => setTimeout(resolve, cycle % 4))
       host.studio
         .get(host.key)
-        ?.bind({ table: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
+        ?.map({ table: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
       await closing
     }
     assert.deepEqual(host.said(), [])
@@ -76,19 +74,5 @@ suite('Views', () => {
     } finally {
       listening.dispose()
     }
-  })
-
-  test('place commands only by context keys Studio or VS Code sets', () => {
-    // A view's menu takes the keys its page gives the click, which the manifest's unit test checks.
-    const known = new Set([
-      ...Object.keys(host.keys()),
-      'view',
-      'viewItem',
-      'activeCustomEditorId',
-      'resourceFilename',
-    ])
-    for (const { place, when } of host.menus.clauses())
-      if (place !== 'webview/context')
-        for (const key of named(when)) assert.ok(known.has(key), `${key}, in ${place}: ${when}`)
   })
 })

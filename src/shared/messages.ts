@@ -2,9 +2,8 @@
 
 import type { Camera, Id } from 'latkit'
 
-import type { CaseDefinition, Element, Entity } from './document.js'
+import type { CaseDefinition, Element, Entity, Field } from './document.js'
 export type { Element, Entity } from './document.js'
-import type { Bindings } from './bindings.js'
 import type {
   ExactSample,
   ExactSampleRequest,
@@ -16,11 +15,12 @@ import type {
   TablePage,
   TableRequest,
   TimeRange,
+  ValueRange,
 } from './data.js'
 import type { Problem } from './errors.js'
-import type { ViewCommandName } from './ids.js'
-import type { SettingsValues } from './preferences.js'
+import type { Mappings } from './mappings.js'
 import type { Cancel, Reply, Request } from './rpc.js'
+import type { ViewSettings } from './settings.js'
 import type {
   Results,
   ResultsLayout,
@@ -60,7 +60,7 @@ export interface SourceRange {
 
 export interface Issue extends SourceRange {
   message: string
-  severity: 'info' | 'warning' | 'error'
+  severity: 'warning' | 'error'
   entity?: Entity
   field?: string
 }
@@ -210,12 +210,11 @@ export type ViewKind = 'network' | 'case' | 'monitor' | 'export'
 /** A view a video export can draw. */
 export type VideoView = 'network' | 'monitor'
 
-export interface Plot {
-  from: string
-  field: string
-  id?: Id
-  /** The values it shows, low to high. Without them, it fits the values shown. */
-  range?: readonly [number, number]
+/** What the Monitor plots: a recorded field of a type, of every element or of the one `id`
+ *  names, over the values `range` gives, or, without one, fitting those it shows. */
+export interface Plot extends Field {
+  readonly id?: Id
+  readonly range?: ValueRange
 }
 
 /** What the Case panel shows: a type, the columns chosen for each type, the order of its rows, and
@@ -233,10 +232,9 @@ export interface TableState {
 
 export interface ViewState {
   uri?: string
-  version?: number
-  settings?: SettingsValues
+  settings?: ViewSettings
   table?: TableState
-  bindings?: Bindings
+  mappings?: Mappings
   summary?: Summary
   /** Whether the file has moved past `summary`: it changed, and is read again, or does not read. */
   stale?: boolean
@@ -276,10 +274,15 @@ export function framingOf(value: unknown): Framing | undefined {
 /** What a command asks of a view. */
 export type ViewAction = 'fit' | 'reloadView' | 'neighborhood' | 'exportImage'
 
-/** A view's state as it is sent: the summary, the settings and the results' outputs, which weigh
- *  most and change seldom, are left out once the view holds them. */
-export type SentState = Omit<ViewState, 'results'> & {
-  results?: Omit<Results, 'outputs'> & { outputs?: Results['outputs'] }
+/** The parts of a view's state that changed since it was last sent: each as it is now, or null once
+ *  it is gone. Results leave their outputs out while the page holds them: they weigh most, and are
+ *  fixed once the file's header is read. */
+export type StateChange = {
+  [K in keyof ViewState]?:
+    | (K extends 'results'
+        ? Omit<Results, 'outputs'> & { outputs?: Results['outputs'] }
+        : ViewState[K])
+    | null
 }
 
 /** Which showing of which case a message between a view and the extension is of. The extension
@@ -297,7 +300,7 @@ export type ToView =
   /** Whether VS Code shows the view: the page's own, of any case. */
   | { kind: 'shown'; shown: boolean }
   | ({ of: Of } & (
-      | { kind: 'state'; state: SentState }
+      | { kind: 'state'; changed: StateChange }
       /** The clock settled at send time; `seq` is the last of this showing's changes it reflects. */
       | { kind: 'clock'; clock: ClockState; seq: number }
       | { kind: 'action'; command: ViewAction; value?: unknown }
@@ -306,9 +309,7 @@ export type ToView =
 
 /** A change a view makes to the clock; its `seq` lets the view recognize the echo. */
 export type TransportAction =
-  | { action: 'seek' | 'rate'; value: number }
-  | { action: 'step'; value: 1 | -1 }
-  | { action: 'playPause' | 'goLive' }
+  { action: 'seek'; value: number } | { action: 'step'; value: 1 | -1 } | { action: 'playPause' }
 
 /** The revision `summary` describes, as a request names it. */
 export const revisionOf = ({ uri, version }: Revision): Revision => ({ uri, version })
@@ -337,15 +338,17 @@ export interface ViewApi extends Pick<WorkerApi, 'project' | 'page' | 'frames' |
 /** What a view says of the case it shows. Its bridge names the showing on each, and the extension
  *  drops one of a showing past. */
 export type ViewMessage =
-  | { kind: 'command'; command: ViewCommandName; value?: unknown }
   | { kind: 'select'; element: Element | null }
+  /** The element the user opened: selected, and shown in the case's file. */
+  | { kind: 'open'; element: Element }
   /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: TimeRange }
-  /** The values the user chose for a plot to show; null, the values it shows. */
-  | { kind: 'range'; plot: Plot; range: readonly [number, number] | null }
+  /** The plot fits the values it shows again, in place of a range it was given. */
+  | { kind: 'fitValues'; plot: Plot }
+  | { kind: 'removePlot'; plot: Plot }
   /** What the user framed in the Network: its camera, and the canvas's size. */
   | { kind: 'framing'; framing: unknown }
-  | { kind: 'display'; values: Partial<SettingsValues> }
+  | { kind: 'display'; values: Partial<ViewSettings> }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   /** A change the user made in the Case panel to what it shows, which the session takes. */
   | { kind: 'table'; change: Partial<TableState> }

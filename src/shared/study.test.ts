@@ -20,6 +20,13 @@ describe('a solver file as Studio reads it', () => {
       output: 'IEEE39.csv',
       layout: 'wide',
     })
+    // A state file is one more file the run reads, named as written.
+    expect(
+      readSolver(
+        'a.solver.json',
+        '{"system_model_file":"a.case.json","tmax":1,"state_file":"../a.state.json"}',
+      ).state,
+    ).toBe('../a.state.json')
     // GridKit reads the layout without regard to case.
     expect(
       readSolver(

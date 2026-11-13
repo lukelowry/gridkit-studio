@@ -1,45 +1,55 @@
+<!-- @component
+  A latkit view on a canvas of its own: made while `active`, on `gpu`, and kept to what its props
+  say. `onready` hears the view once it is made, and may return what to undo as it ends.
+-->
 <script lang="ts">
-  import type { Camera, Gpu, Scene, Source, View } from 'latkit'
+  import type { Camera, Gpu, Scene, Source } from 'latkit'
   import { untrack } from 'svelte'
 
-  import { ViewHost } from '../host.js'
+  import { CanvasView } from './canvas.js'
 
   let {
     gpu,
     scene,
     sources,
-    at = 0,
+    at,
     active = true,
     camera,
     onready,
+    ondrawn,
     onerror,
     label,
   }: {
     gpu: Gpu
     scene: Scene
     sources: readonly Source[]
+    /** The time the view shows, where its owner does not set it itself. */
     at?: number
     active?: boolean
-    camera?: Camera
-    onready: (view: View, canvas: HTMLCanvasElement) => (() => void) | void
+    /** Where the view looks first; without one, it frames everything. */
+    camera?: Partial<Camera>
+    onready: (view: CanvasView) => (() => void) | void
+    /** Hears once a frame first draws the view whole. */
+    ondrawn?: () => void
     onerror: (error: unknown) => void
     label: string
   } = $props()
 
-  let host = $state.raw<ViewHost>()
+  let shown = $state.raw<CanvasView>()
 
   function attach(canvas: HTMLCanvasElement) {
     const device = gpu
     if (!active) return
     let ended = false
-    let owned: ViewHost | undefined
+    let owned: CanvasView | undefined
     let disconnect: (() => void) | void
     const options = untrack(() => ({ gpu: device, sources, ...(camera ? { camera } : {}) }))
-    void ViewHost.open(
+    void CanvasView.open(
       canvas,
       untrack(() => scene),
       options,
       onerror,
+      () => untrack(() => ondrawn)?.(),
     ).then(
       (opened) => {
         if (ended) {
@@ -48,8 +58,8 @@
         }
         owned = opened
         try {
-          disconnect = untrack(() => onready(opened.view, canvas))
-          host = opened
+          disconnect = untrack(() => onready(opened))
+          shown = opened
         } catch (error) {
           opened.destroy()
           owned = undefined
@@ -66,19 +76,19 @@
         disconnect?.()
       } finally {
         owned?.destroy()
-        if (host === owned) host = undefined
+        if (shown === owned) shown = undefined
       }
     }
   }
 
   $effect(() => {
-    if (host) host.view.sources = sources
+    if (shown) shown.view.sources = sources
   })
   $effect(() => {
-    if (host) host.scene = scene
+    if (shown) shown.scene = scene
   })
   $effect(() => {
-    if (host) host.view.at = at
+    if (shown && at !== undefined) shown.view.at = at
   })
 </script>
 

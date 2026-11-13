@@ -15,14 +15,25 @@ export const nameOf = (uri: string) => decodeURIComponent(uri.split('/').at(-1) 
 /** The UTF-8 byte order mark, which VS Code leaves out of a file's text. */
 const BOM = [0xef, 0xbb, 0xbf]
 
-/** The case file at `uri`, read whole with `catalog` as GridKit reads it. Where it does not read,
- *  the error says where as VS Code counts: by line and character. */
-export async function readCase(uri: string, catalog: Catalog, signal?: AbortSignal): Promise<Case> {
+/** The bytes of the case file at `uri`, read whole: past a byte order mark, as VS Code shows the
+ *  file, so places and fingerprints are its text's. */
+export async function caseBytes(uri: string, signal?: AbortSignal): Promise<Buffer> {
   const bytes = await readFile(fileURLToPath(uri), { signal })
-  // Past a byte order mark, as VS Code shows the file, so places and fingerprints are its text's.
-  const file = BOM.every((byte, at) => bytes[at] === byte) ? bytes.subarray(BOM.length) : bytes
+  return BOM.every((byte, at) => bytes[at] === byte) ? bytes.subarray(BOM.length) : bytes
+}
+
+/** The case `file` holds, the bytes of the file at `uri` and of the fingerprint `version`, read
+ *  with `catalog` as GridKit reads it. Where it does not read, the error says where as VS Code
+ *  counts: by line and character. */
+export async function parseCase(
+  file: Buffer,
+  uri: string,
+  catalog: Catalog,
+  version: string,
+  signal?: AbortSignal,
+): Promise<Case> {
   try {
-    return await Case.parse(file, catalog, nameOf(uri), signal)
+    return await Case.parse(file, catalog, { name: nameOf(uri), signal, version })
   } catch (error) {
     throw placed(file, error)
   }

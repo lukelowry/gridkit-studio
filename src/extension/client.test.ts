@@ -5,8 +5,8 @@ import { pathToFileURL } from 'node:url'
 
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
+import { bundle, OPTIONS } from '../../tests/rig.js'
 import type { RunRequest } from '../shared/messages.js'
-import { bundle, OPTIONS } from '../workers/rig.js'
 import { Client } from './client.js'
 
 /** The worker as the extension ships it. */

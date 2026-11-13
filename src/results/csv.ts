@@ -192,7 +192,9 @@ async function* longMessages(
     return { kind: 'schema', names: ['t', ...long.names] }
   }
   const close = () => {
-    out.push(long.time, ...long.values)
+    // One by one: a sample is as wide as its case, and a call takes only so many arguments.
+    out.push(long.time)
+    for (const value of long.values) out.push(value)
     frames++
     long.sample = -1
     long.values = []

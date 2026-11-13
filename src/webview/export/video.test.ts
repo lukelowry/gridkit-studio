@@ -47,7 +47,7 @@ describe('a video', () => {
     expect(exportable({ ...job, width: 2 }, state)).toBe(false)
     expect(exportable({ ...job, rate: 0 }, state)).toBe(false)
     // The Monitor's part needs a plot the results hold.
-    const plotted: ViewState = { ...state, plots: [{ from: 'Bus', field: 'Vm' }] }
+    const plotted: ViewState = { ...state, plots: [{ table: 'Bus', field: 'Vm' }] }
     expect(exportable({ ...job, views: ['monitor'] }, plotted)).toBe(false)
     const held = { ...results([0, 2]), outputs: [{ table: 'Bus', field: 'Vm', ids: [1] }] }
     expect(exportable({ ...job, views: ['monitor'] }, { ...plotted, results: held })).toBe(true)

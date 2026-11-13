@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import type { Data, Gpu, Id, View } from 'latkit'
   import { onMount, untrack } from 'svelte'
 
@@ -6,17 +6,18 @@
   import { fieldDefinition } from '../../shared/document.js'
   import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
   import { holdsPlot, plotName } from '../../shared/plots.js'
-  import { reader } from '../../shared/preferences.js'
+  import { reader } from '../../shared/settings.js'
   import { clamp } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
-  import { FrameReads, FrameWindow } from '../frames.js'
-  import { bindInteractions } from '../interactions.js'
+  import type { CanvasView } from '../latkit/canvas.js'
+  import { FrameReads, FrameWindow } from '../latkit/frames.js'
+  import { bindInteractions } from '../latkit/interactions.js'
+  import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
+  import { plotScene } from '../latkit/scenes.js'
+  import { nativeTheme } from '../latkit/theme.js'
   import { nativeMenu } from '../menu.js'
-  import { plotScene } from '../scenes.js'
-  import { nativeTheme } from '../theme.js'
   import Icon from '../ui/Icon.svelte'
-  import LatkitCanvas from '../ui/LatkitCanvas.svelte'
   import { PlotFeed } from './feed.js'
   import { plotCamera, plotRequest, sameWindow, SETTLE_MS } from './plot.js'
 
@@ -67,7 +68,7 @@
   const results = $derived(app.results)
   const recorded = $derived(holdsPlot(results, plot))
   const ids = $derived(
-    results?.outputs.find((output) => output.table === plot.from && output.field === plot.field)
+    results?.outputs.find((output) => output.table === plot.table && output.field === plot.field)
       ?.ids ?? [],
   )
   const enabled = $derived(active && visible)
@@ -78,7 +79,7 @@
   const framed = $derived(plotCamera(plot, shown))
   const sampleId = $derived(inspected ?? plot.id ?? ids[Math.min(trace, ids.length - 1)])
   const unit = $derived(
-    app.summary ? fieldDefinition(app.summary.definition, plot.from, plot.field)?.unit : undefined,
+    app.summary ? fieldDefinition(app.summary.definition, plot.table, plot.field)?.unit : undefined,
   )
   /** The trace read at the playhead while the plot holds focus or the pointer. */
   const reading = $derived.by(() => {
@@ -135,8 +136,8 @@
     if (!native || !source) return
     const selected = app.selection
     native.selection =
-      selected?.table === plot.from && ids.includes(selected.id)
-        ? [{ data: source.name, table: plot.from, ids: [selected.id] }]
+      selected?.table === plot.table && ids.includes(selected.id)
+        ? [{ data: source.name, table: plot.table, ids: [selected.id] }]
         : []
   })
   $effect(() => {
@@ -145,7 +146,7 @@
     const controller = new AbortController()
     const request = {
       results: results.id,
-      table: plot.from,
+      table: plot.table,
       field: plot.field,
       id: sampleId,
       at: t,
@@ -166,26 +167,15 @@
     }
   })
 
-  function ready(view: View, canvas: HTMLCanvasElement) {
+  function ready({ view, canvas }: CanvasView) {
     native = view
     const unregister = register(view)
     const disconnect = bindInteractions(view, {
       select(element) {
         bridge.send({ kind: 'select', element: element ? { ...element, field: plot.field } : null })
       },
-      open(element) {
-        bridge.send({ kind: 'select', element: { ...element, field: plot.field } })
-        bridge.command('revealInSource')
-      },
-      menu: (point, elements) =>
-        nativeMenu(
-          canvas,
-          point,
-          elements.map((element) => ({ ...element, field: plot.field })),
-          app,
-          'monitor',
-          plot,
-        ),
+      open: (element) => bridge.send({ kind: 'open', element: { ...element, field: plot.field } }),
+      menu: (point, elements) => nativeMenu(canvas, point, elements, app, 'monitor', plot),
       camera(next) {
         if ('x' in next && !sameWindow(next.x, shown)) onwindow(next.x)
       },
@@ -248,7 +238,7 @@
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
       clock.act({ action: 'step', value: event.key === 'ArrowLeft' ? -1 : 1 })
     else if (event.key === 'Home' && results?.domain) {
-      if (plot.range) bridge.send({ kind: 'range', plot, range: null })
+      if (plot.range) bridge.send({ kind: 'fitValues', plot })
       onwindow(results.domain)
     } else return
     event.preventDefault()
@@ -270,13 +260,7 @@
       class="c-icon-btn lane__close"
       title="Remove plot"
       aria-label={`Remove ${title}`}
-      onclick={() =>
-        bridge.command('removePlot', {
-          uri: app.uri,
-          version: app.summary?.version,
-          origin: 'monitor',
-          plot,
-        })}
+      onclick={() => bridge.send({ kind: 'removePlot', plot })}
     >
       <Icon name="close" />
     </button>

@@ -6,7 +6,8 @@ import * as vscode from 'vscode'
 import { failedWith, type Problem, quiet, superseded } from '../shared/errors.js'
 import { type Element, revisionOf, type SourceRange, type Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
-import { diagnosed } from './report.js'
+import { diagnosed, notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
+import { nameOf } from './solvers.js'
 
 /** How long a file rests after it changes before it is read again, so a save written in parts, or
  *  a checkout of many files, reads once. */
@@ -104,6 +105,21 @@ export class CaseFiles implements vscode.Disposable {
       } catch (error) {
         if (!failedWith(error, 'superseded')) throw error
       }
+    }
+  }
+
+  /** The case at `uri` as its file reads now, for something the user asked that needs it: where
+   *  the file does not read, a notice says it has problems to fix `before` that, which Problems
+   *  lists. */
+  async readable(uri: string, before?: string): Promise<Summary> {
+    try {
+      return await this.read(uri)
+    } catch (error) {
+      if (!saidInProblems(error)) throw error
+      throw notice(
+        `${nameOf(vscode.Uri.parse(uri))} has problems to fix ${before ? 'before ' + before : 'first'}.`,
+        SHOW_PROBLEMS,
+      )
     }
   }
 

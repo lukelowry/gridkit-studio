@@ -59,7 +59,7 @@ export interface Placed {
   readonly range: SourceRange
 }
 
-/** An error of `code` saying `message`, with `more` besides: the one way Studio makes one. */
+/** An error of `code` saying `message`, with `more` besides. */
 export function problem(code: Code, message: string, more: object = {}): Error & { code: Code } {
   return Object.assign(new Error(message), more, { code })
 }

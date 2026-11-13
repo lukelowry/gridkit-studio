@@ -2,7 +2,7 @@
 
 import type { Theme as NativeTheme } from 'latkit'
 
-import type { SettingsReader } from '../shared/preferences.js'
+import type { SettingsReader } from '../../shared/settings.js'
 
 /** Each renderer color's token, and its color when the theme leaves the token out. */
 const PALETTE = {
@@ -84,12 +84,12 @@ export function nativeTheme(settings: SettingsReader, kind: 'network' | 'monitor
     focus: { selected: palette.focus, hover: palette.primaryText },
     vertex: { color: palette.network },
     // Native endpoint blending follows static and sampled vertex colors. A mark's explicit
-    // edge-color binding still takes precedence, including in exported network scenes.
+    // edge-color mapping still takes precedence, including in exported network scenes.
     edge: { color: null },
     line: { color: palette.primaryText },
     earth: {
-      ground: settings.get('network.map.ground') ?? palette.editor,
-      night: settings.get('network.map.night'),
+      ground: settings.get('network.map.groundColor') ?? palette.editor,
+      night: settings.get('network.map.nightBrightness'),
     },
   }
 }

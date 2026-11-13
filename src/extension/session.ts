@@ -9,18 +9,13 @@ import { randomUUID } from 'node:crypto'
 import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
-import {
-  type Bindings,
-  bound,
-  type Channel,
-  channelsFor,
-  type FieldRef,
-} from '../shared/bindings.js'
 import { changedTable } from '../shared/cells.js'
-import { type Entity, networkRole } from '../shared/document.js'
+import type { ValueRange } from '../shared/data.js'
+import { type Entity, type Field, networkRole } from '../shared/document.js'
 import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { followed, savedKey, savedUri } from '../shared/ids.js'
+import { type Channel, channelsFor, mapped, type Mappings } from '../shared/mappings.js'
 import {
   type Element,
   type Framing,
@@ -36,7 +31,7 @@ import {
   type TableState,
 } from '../shared/messages.js'
 import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
-import type { SettingsValues } from '../shared/preferences.js'
+import type { ViewSettings } from '../shared/settings.js'
 import { Transport } from '../shared/transport.js'
 import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
 import type { Sessions } from './sessions.js'
@@ -49,7 +44,7 @@ export type Hold = 'document' | 'active' | 'run' | 'export'
 
 /** What a session saves for its case, to open with again. */
 interface Saved {
-  readonly bindings?: Bindings
+  readonly mappings?: Mappings
   readonly plots?: Plot[]
   readonly table?: TableState
   /** The results file the Monitor showed, and the solver file whose run wrote it. */
@@ -107,8 +102,8 @@ export class Session {
    *  run under way, until another claim takes the say from it, which stops it. Till then, what
    *  showed before stays on show, so a run that never writes changes nothing. */
   #claimant?: Running
-  #settings: SettingsValues
-  #bindings: Bindings
+  #settings: ViewSettings
+  #mappings: Mappings
   #plots: Plot[]
   #table: TableState
   /** How many rows the Case panel's filters leave. */
@@ -137,7 +132,7 @@ export class Session {
   ) {
     this.#studio = studio
     const saved = studio.context.workspaceState.get<Saved>(savedKey(uri), {})
-    this.#bindings = saved.bindings ?? {}
+    this.#mappings = saved.mappings ?? {}
     this.#plots = saved.plots ?? []
     this.#table = saved.table ?? {}
     this.#pending = saved.results
@@ -149,8 +144,8 @@ export class Session {
   /** Takes up what its case saved under the name it had before it was renamed or moved, as the
    *  session was made under its new name before the move said so: what it saves next keeps it. */
   resume(saved: unknown): void {
-    const { bindings, plots, table, results } = (saved ?? {}) as Saved
-    this.#bindings = bindings ?? this.#bindings
+    const { mappings, plots, table, results } = (saved ?? {}) as Saved
+    this.#mappings = mappings ?? this.#mappings
     this.#plots = plots ?? this.#plots
     this.#table = table ?? this.#table
     if (results && !this.#results && !this.#pending) {
@@ -162,11 +157,11 @@ export class Session {
     this.#changed()
   }
 
-  get settings(): SettingsValues {
+  get settings(): ViewSettings {
     return this.#settings
   }
-  get bindings(): Bindings {
-    return this.#bindings
+  get mappings(): Mappings {
+    return this.#mappings
   }
   get plots(): readonly Plot[] {
     return this.#plots
@@ -521,12 +516,13 @@ export class Session {
     }
   }
 
-  /** Makes `field` drive exactly `channels`, over `domain` when given. */
-  bind(field: FieldRef, channels: readonly Channel[], domain?: readonly [number, number]): void {
+  /** Maps `field` to exactly `channels`, over the values `range` gives, or, with none, over those
+   *  it holds. */
+  map(field: Field, channels: readonly Channel[], range?: ValueRange): void {
     const definition = this.#studio.files.get(this.uri)?.summary?.definition
     if (!definition) throw noCase()
     const allowed = channelsFor(networkRole(definition, field.table))
-    this.#bindings = bound(this.#bindings, allowed, field, channels, domain)
+    this.#mappings = mapped(this.#mappings, allowed, field, channels, range)
     this.#save()
     this.#changed()
   }
@@ -561,7 +557,7 @@ export class Session {
   }
 
   /** Shows `plot` over the values `range`; with none, over the values it shows. */
-  plotRange(plot: Plot, range?: readonly [number, number]): void {
+  plotRange(plot: Plot, range?: ValueRange): void {
     this.setPlots(
       this.#plots.map((each) => (samePlot(each, plot) ? plotWith(each, each.id, range) : each)),
     )
@@ -598,9 +594,12 @@ export class Session {
     this.#framing = framing
   }
 
-  /** Reads its display settings again, as they change. */
+  /** Reads its display settings again, as VS Code's settings change: those that leave how its
+   *  views look as it was change nothing. */
   reconfigure(): void {
-    this.#settings = displayOf(vscode.Uri.parse(this.uri))
+    const settings = displayOf(vscode.Uri.parse(this.uri))
+    if (JSON.stringify(settings) === JSON.stringify(this.#settings)) return
+    this.#settings = settings
     this.#changed()
   }
 
@@ -739,7 +738,7 @@ export class Session {
       ? { path: shown.path, ...(shown.solver && { solver: shown.solver }) }
       : this.#pending
     const saved: Saved = {
-      bindings: this.#bindings,
+      mappings: this.#mappings,
       plots: this.#plots,
       table: this.#table,
       ...(results && { results }),

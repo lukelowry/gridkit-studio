@@ -49,8 +49,14 @@ export function isValid(chunk: Chunk, at: number): boolean {
 export function valueAt(chunk: Chunk, at: number): Value {
   return isValid(chunk, at) ? (chunk[at] as Value) : null
 }
-export function utf8(bytes: Uint8Array, start: number, end: number): string {
-  return Buffer.from(bytes.buffer, bytes.byteOffset + start, end - start).toString('utf8')
+/** The text of `bytes` from `start` to `end`. */
+export const utf8 = (bytes: Buffer, start: number, end: number): string =>
+  bytes.toString('utf8', start, end)
+/** `array` in a copy twice as long. */
+export function grown<T extends Int32Array | Uint32Array | Float64Array>(array: T): T {
+  const next = new (array.constructor as new (length: number) => T)(array.length * 2)
+  next.set(array)
+  return next
 }
 export function hash(bytes: Uint8Array, start: number, end: number): number {
   let h = 0x811c9dc5
@@ -90,20 +96,11 @@ export function builder(kind: DecodeKind): Builder {
   if (kind === 'path') return new PathBuilder()
   return new NumericBuilder()
 }
-export function chunkOf(kind: DecodeKind, values: readonly Value[]): Chunk {
-  const target = builder(kind)
-  for (const value of values) target.push(value)
-  return target.finish()
-}
 export class NumericBuilder implements Builder {
   #values = new Float64Array(256)
   #length = 0
   pushNumber(value: number): void {
-    if (this.#length === this.#values.length) {
-      const next = new Float64Array(this.#values.length * 2)
-      next.set(this.#values)
-      this.#values = next
-    }
+    if (this.#length === this.#values.length) this.#values = grown(this.#values)
     this.#values[this.#length++] = value
   }
   push(value: Value): void {
@@ -124,9 +121,6 @@ class BooleanBuilder implements Builder {
 }
 export class TextBuilder implements Builder {
   readonly #values: (string | null)[] = []
-  pushUtf8(source: Uint8Array, start: number, end: number): void {
-    this.#values.push(utf8(source, start, end))
-  }
   push(value: Value): void {
     this.#values.push(typeof value === 'string' ? value : null)
   }

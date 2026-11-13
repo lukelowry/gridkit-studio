@@ -16,17 +16,13 @@ import { available } from '../../src/gridkit/index.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { Bench, extension, folder } from '../host/studio.js'
 
-export { extension, folder, type Solver } from '../host/studio.js'
+export { extension, type Solver } from '../host/studio.js'
 
 const TIMEOUT = 30_000
 /** How long a read of what the page shows now waits for it: a moment, not a timeout. */
 const READ = { timeout: 1000 }
 /** The results file the suites play: a second of every bus's voltage. */
 const SYNTHETIC = 'Synthetic waveform.csv'
-
-/** The title bars `title` runs commands from: a panel or side bar view's, or the custom editor's
- *  in front. */
-export type TitleBar = 'case' | 'monitor' | 'signals' | 'export' | 'editor'
 
 /** The window size every suite starts from. */
 export const VIEWPORT = { width: 1600, height: 1000 }
@@ -106,9 +102,6 @@ const held = (frame: Frame) =>
 export const stats = <T extends { frames: number } = { frames: number }>(frame: Frame) =>
   frame.evaluate<T>('gridkitStats()')
 
-/** How many frames a canvas view has drawn. */
-export const frames = (frame: Frame) => frame.evaluate<number>('gridkitStats().frames')
-
 /** Wait for a canvas view to stop drawing, and return its counters. One that draws on says so. */
 export async function idle<T extends { frames: number } = { frames: number }>(
   frame: Frame,
@@ -136,14 +129,6 @@ export function replaying(studio: Sessions, session: Session): vscode.Disposable
     if (uri === session.uri && status === 'paused' && t >= span[1]) transport.play()
   })
 }
-
-/** Whether a canvas view's canvas fills its webview edge to edge, with no padding around it. */
-export const fills = (frame: Frame) =>
-  frame.evaluate<boolean>(`(() => {
-  const r = document.querySelector('canvas').getBoundingClientRect()
-  return [r.x, r.y, r.width - innerWidth, r.height - innerHeight].every((v) => Math.abs(v) < 1) &&
-    getComputedStyle(document.body).padding === '0px'
-})()`)
 
 /** VS Code's own file dialog, which a test can type a path into; `undefined` restores the OS's. */
 export const simpleDialog = (on: true | undefined) =>
@@ -327,21 +312,18 @@ export class TestHost extends Bench {
   // The manifest decides what each title bar and menu offers, and the command runs with what
   // VS Code passes it there, without waiting on a popup VS Code may drop.
 
-  /** Choose `item` from the title bar of `where`, its More Actions included, once it is offered
-   *  there and enabled. */
-  async title(where: TitleBar, item: string): Promise<void> {
+  /** Choose `item` from the title bar of the editor in front, its More Actions included, once it
+   *  is offered there and enabled. */
+  async title(item: string): Promise<void> {
     const editor = () => vscode.window.tabGroups.activeTabGroup.activeTab?.input
-    const place = where === 'editor' ? 'editor/title' : 'view/title'
     const keys = () => {
       const active = editor()
       return {
         ...this.keys(),
-        ...(where === 'editor'
-          ? { activeCustomEditorId: active instanceof vscode.TabInputCustom ? active.viewType : '' }
-          : { view: 'gridkitStudio.' + where }),
+        activeCustomEditorId: active instanceof vscode.TabInputCustom ? active.viewType : '',
       }
     }
-    const find = () => this.menus.find(place, item, keys())
+    const find = () => this.menus.find('editor/title', item, keys())
     const { command } = await until(
       () => {
         try {
@@ -359,9 +341,8 @@ export class TestHost extends Bench {
         }
       },
     )
-    // An editor's title bar gives its command the editor's file; a view's gives nothing.
-    if (where === 'editor') this.command(command, (editor() as vscode.TabInputCustom).uri)
-    else this.command(command)
+    // An editor's title bar gives its command the editor's file.
+    this.command(command, (editor() as vscode.TabInputCustom).uri)
   }
 
   /** Choose `item` from the Explorer's menu on the file `uri`, the solver file unless given, as a
@@ -446,15 +427,11 @@ export class TestHost extends Bench {
   }
 
   /** Results of `frames` frames over `seconds`, every bus's voltage a little out of step with the
-   *  last, written beside the case as `name` and shown once they are read; with `digits`, values
-   *  are written to that many decimals, which keeps a long run's file small. */
-  async waveform(name: string, frames: number, seconds: number, digits?: number): Promise<Results> {
+   *  last, written beside the case as `name` and shown once they are read. */
+  async waveform(name: string, frames: number, seconds: number): Promise<Results> {
     const csv = vscode.Uri.joinPath(this.uri, '..', name)
     const { buses } = this.source
-    const voltage = (i: number, k: number) => {
-      const value = 1 + 0.1 * Math.sin(i / 10 + k)
-      return digits === undefined ? value : value.toFixed(digits)
-    }
+    const voltage = (i: number, k: number) => 1 + 0.1 * Math.sin(i / 10 + k)
     await vscode.workspace.fs.writeFile(
       csv,
       new TextEncoder().encode(
@@ -476,7 +453,7 @@ export class TestHost extends Bench {
 
   /** Plot the first bus's voltage in the Monitor. */
   plot(): void {
-    this.session.setPlots([{ from: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
+    this.session.setPlots([{ table: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
   }
 
   /** Which GridKit the runs use: the image's ID, which stays the same however its tags move, or the

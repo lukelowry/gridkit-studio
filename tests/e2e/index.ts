@@ -1,24 +1,16 @@
-/** The Mocha entry for the end-to-end journeys, run inside the VS Code that holds the extension. */
+/** The entry for the end-to-end journeys, run inside the VS Code that holds the extension. */
 
-import Mocha from 'mocha'
-
+import { suites } from '../host/mocha.js'
 import { extension, failed, finish, notifications } from './harness.js'
 
-export async function run(): Promise<void> {
-  const mocha = new Mocha({
-    ui: 'tdd',
-    color: true,
+export const run = () =>
+  suites({
     timeout: 60_000,
-    // One journey by name, such as GRIDKIT_TEST_GREP=Runs; never `.only`, which would let
-    // a run pass on the tests it left out.
-    grep: process.env.GRIDKIT_TEST_GREP,
-    forbidOnly: true,
-  })
-  mocha.rootHooks({
-    async afterEach(this: Mocha.Context) {
-      if (this.currentTest?.state === 'failed') {
-        console.error(this.currentTest.err?.stack)
-        await failed(this.currentTest.fullTitle())
+    load: () => import('./journeys.test.js'),
+    async afterEach(test) {
+      if (test?.state === 'failed') {
+        console.error(test.err?.stack)
+        await failed(test.fullTitle())
       }
       // An error the user would see only in the log fails the test, as does a notification; a
       // test that expects one takes it first.
@@ -29,19 +21,3 @@ export async function run(): Promise<void> {
     },
     afterAll: finish,
   })
-  // Suites register as their modules load, so Mocha's globals must exist first.
-  mocha.suite.emit('pre-require', globalThis, 'VS Code', mocha)
-  await import('./journeys.test.js')
-  let pending = 0
-  let passed = 0
-  const failures = await new Promise<number>((resolve) =>
-    mocha
-      .run(resolve)
-      .on('pending', () => pending++)
-      .on('pass', () => passed++),
-  )
-  // A required run allows no skips, so the GridKit suites cannot pass by skipping.
-  if (process.env.GRIDKIT_TEST_REQUIRED === '1' && (pending || !passed))
-    throw new Error(`Required journeys: ${pending} skipped, ${passed} passed.`)
-  if (failures) throw new Error(failures + (failures === 1 ? ' test' : ' tests') + ' failed.')
-}

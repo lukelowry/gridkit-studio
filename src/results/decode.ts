@@ -192,10 +192,10 @@ function layoutOf(header: readonly string[], kase: Case): { fields: readonly Fie
   const columns: Int32Array[] = []
   for (const table of kase.tables.values()) {
     const type = fold(table.shape.type)
-    if (!table.shape.outputOrder.size || !table.records.length) continue
+    if (!table.shape.outputs.length || !table.records.length) continue
     if (!type.includes('_') && !classes.has(type)) continue
     const stems = Array.from(table.records, (_, row) => fold(stemOf(kase, table, row)))
-    for (const [name] of table.shape.outputOrder) {
+    for (const name of table.shape.outputs) {
       const output = fold(outputName(table, name))
       const rows: number[] = []
       const placed: number[] = []

@@ -94,6 +94,7 @@ try {
   for (const asset of [
     'webview/latkit.wasm',
     'webview/latkit-worker.js',
+    'webview/latkit-shaders.bin',
     'licenses/latkit-NOTICES.md',
     'licenses/latkit-THIRD_PARTY.md',
     'webview/maps/coastline.geojson.gz',
@@ -110,6 +111,8 @@ try {
   for (const entry of entries)
     await run(process.execPath, [join(root, 'tests/launch.mjs'), ...flags, entry], {
       ELECTRON_RUN_AS_NODE: undefined,
+      // The VS Code the VSIX was installed into runs it.
+      VSCODE_EXECUTABLE_PATH: executable,
       GRIDKIT_TEST_EXTENSION_PATH: target,
       GRIDKIT_TEST_OUTPUT: scratch,
     })

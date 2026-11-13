@@ -4,6 +4,7 @@
 
 import { fileURLToPath } from 'node:url'
 
+import { versionOf } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
 import { type Case, diagnose, rangeIn, sourceRange } from '../gridkit/index.js'
 import { networkSelectionOf } from '../gridkit/inspection.js'
@@ -12,7 +13,7 @@ import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
 import type { Revision, Summary, WorkerApi } from '../shared/messages.js'
 import type { Handlers } from '../shared/rpc.js'
-import { nameOf, readCase, Recent, summarize } from './parsed.js'
+import { caseBytes, nameOf, parseCase, Recent, summarize } from './parsed.js'
 
 /** A file as last read: its case, what the extension was told of it, the stamp of the file it was
  *  read from, once the file had rested before it, and the queries of its tables, once asked. */
@@ -59,13 +60,17 @@ export function caseFiles(catalog: Catalog) {
       // A file that changed just before may change again and keep its stamp: it reads again
       // each time until it rests.
       const kept = settled(stamp, at) ? stamp : undefined
-      const kase = await readCase(uri, catalog, signal)
+      const bytes = await caseBytes(uri, signal)
       current()
-      // Written again as it was, as by a save that changed nothing: the case read stands.
-      if (before?.kase.version === kase.version) {
+      // Written again as it was, as by a save that changed nothing: the case read stands, known
+      // by its fingerprint before any of the file is read into another.
+      const fingerprint = versionOf(catalog, bytes)
+      if (before?.kase.version === fingerprint) {
         before.stamp = kept
         return before.summary
       }
+      const kase = await parseCase(bytes, uri, catalog, fingerprint, signal)
+      current()
       const summary = await summarize(kase, { uri, version }, signal)
       current()
       before?.queries?.destroy()

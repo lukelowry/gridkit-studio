@@ -290,6 +290,8 @@ export class Bench {
     const session = await this.follow()
     await this.settled()
     this.clean(session)
+    // No Network is open to frame it, so how one last did is gone with it.
+    session.setFraming(undefined)
     session.clear()
     this.said()
   }
@@ -306,14 +308,13 @@ export class Bench {
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
   }
 
-  /** Lets go of what `session` shows: nothing selected, mapped, plotted, framed or filtered, and
-   *  its clock at its own pace. */
+  /** Lets go of what `session` shows: nothing selected, mapped, plotted or filtered, and its clock
+   *  at its own pace. How the Network frames it stays the Network's, which says it as it changes. */
   protected clean(session: Session): void {
     session.select()
     session.setPlots([])
-    for (const { table, field } of Object.values(session.bindings))
-      session.bind({ table, field }, [])
-    session.setFraming(undefined)
+    for (const { table, field } of Object.values(session.mappings))
+      session.map({ table, field }, [])
     session.setTable({
       type: undefined,
       columns: undefined,

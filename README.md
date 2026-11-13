@@ -12,7 +12,7 @@ View and simulate [GridKit](https://github.com/ORNL/GridKit) power-system cases 
 
 ## Install
 
-Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
+Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later.
 
 ## GridKit
 

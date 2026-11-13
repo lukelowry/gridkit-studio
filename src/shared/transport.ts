@@ -22,7 +22,7 @@ export const IDLE: ClockState = {
   follow: false,
 }
 
-/** The speeds a playhead plays at, in simulated seconds per second, which a video plays at too. */
+/** The speeds a playhead plays at, in simulated seconds per second. */
 export const RATES = [0.25, 0.5, 1, 2, 4] as const
 
 /** Where a playhead lands in its span, and whether it ran into the end. */

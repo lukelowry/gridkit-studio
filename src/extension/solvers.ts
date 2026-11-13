@@ -1,4 +1,5 @@
-/** Solver files, read where they are: the case each names, and the file its runs write. */
+/** Solver files, read where they are: the case each names, the state file it starts that case
+ *  from, and the file its runs write. */
 
 import { isAbsolute } from 'node:path'
 
@@ -14,11 +15,16 @@ export const nameOf = (uri: vscode.Uri) => uri.path.split('/').at(-1)!
 const near = (solver: vscode.Uri, path: string) =>
   isAbsolute(path) ? vscode.Uri.file(path) : vscode.Uri.joinPath(solver, '..', path)
 
-/** The solver file at `solver` as saved, what it says, and the case it names. */
+/** The solver file at `solver` as saved, what it says, the case it names, and the state file it
+ *  names, if any. */
 export async function solverAt(solver: vscode.Uri) {
   const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(solver))
   const study = readSolver(nameOf(solver), text)
-  return { study, model: near(solver, study.model) }
+  return {
+    study,
+    model: near(solver, study.model),
+    ...(study.state !== undefined && { state: near(solver, study.state) }),
+  }
 }
 
 /** The file a run of `solver`, which `study` says, writes its samples to for the case `summary`

@@ -46,7 +46,7 @@ function projectionKey(
 }
 
 /** Validate the field set and establish reference targets before any references are written. */
-export function included(document: ProjectedDocument, selection: readonly ProjectionSelection[]) {
+function included(document: ProjectedDocument, selection: readonly ProjectionSelection[]) {
   const tables = new Map<string, readonly string[]>()
   for (const { table, fields } of selection) {
     const definition = document.definition.tables.find((item) => item.name === table)

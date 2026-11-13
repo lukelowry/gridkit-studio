@@ -62,10 +62,6 @@ export const COMMANDS = [
 ] as const
 export type Command = (typeof COMMANDS)[number]
 
-/** The commands a webview runs itself. */
-export type ViewCommandName = Extract<Command, 'revealInSource' | 'removePlot'>
-export const VIEW_COMMANDS: readonly ViewCommandName[] = ['revealInSource', 'removePlot']
-
 /** The views Studio contributes: the Network editor, its three webview panels, and Monitored
  *  Signals. */
 export const VIEWS = ['network', 'case', 'monitor', 'export', 'signals'] as const
@@ -90,12 +86,6 @@ export const contextKey = (key: ContextKey) => `${PREFIX}.${key}` as const
 /** The settings of `category`, as the Settings editor searches for them. */
 export const settingsOf = (category: string) => `${PREFIX}.${category}` as const
 
-/** The view a contributed id names, if it names one of Studio's. */
-export function viewOf(id: string): View | undefined {
-  const name = id.startsWith(PREFIX + '.') ? id.slice(PREFIX.length + 1) : ''
-  return (VIEWS as readonly string[]).includes(name) ? (name as View) : undefined
-}
-
 /** A GridKit case, by its file's name. */
 export const CASE_FILE = /\.case\.json$/i
 /** Whether the views follow the case at `uri`, and Studio saves what they show of it: a case file
@@ -103,7 +93,7 @@ export const CASE_FILE = /\.case\.json$/i
 export const followed = (uri: string) => uri.startsWith('file:') && CASE_FILE.test(uri)
 
 /** The key a case's saved state is kept under in the workspace's state. */
-const SAVED = 'case-native-1:'
+const SAVED = 'case:'
 export const savedKey = (uri: string) => SAVED + uri
 /** The case a saved state's key names, if it names one. */
 export const savedUri = (key: string) =>

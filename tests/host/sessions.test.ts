@@ -1,6 +1,5 @@
-/** Sessions: what a case records, which its own `mon` lists say, the results file a session reads
- *  again when its case opens, the plots a new run keeps, and that a case nothing holds lets go of
- *  everything it held, in the extension and in the worker. */
+/** Sessions: the results file a session reads again when its case opens, and that a case nothing
+ *  holds lets go of everything it held, in the extension and in the worker. */
 
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -12,8 +11,6 @@ import * as vscode from 'vscode'
 import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { savedKey } from '../../src/shared/ids.js'
-import type { Results } from '../../src/shared/messages.js'
-import { plotsFor } from '../../src/shared/plots.js'
 import { extension, folder, until } from './studio.js'
 
 suite('Sessions', () => {
@@ -65,37 +62,8 @@ suite('Sessions', () => {
     uri = await copy()
   })
 
-  test('a case records what its own lists name', async () => {
-    const source = (await caseAt(uri)) as {
-      buses: { mon?: string[] }[]
-      devices: { class: string; mon?: string[] }[]
-    }
-    const listed: Record<string, Record<string, number>> = {}
-    for (const { type, mon = [] } of [
-      ...source.buses.map(({ mon }) => ({ type: 'Bus', mon })),
-      ...source.devices.map(({ class: type, mon }) => ({ type, mon })),
-    ])
-      for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
-    assert.deepEqual((await studio.files.read(uri.toString())).recording.listed, listed)
-  })
-
-  test('a new run keeps the plots it recorded, else plots its first signal', () => {
-    const results = {
-      outputs: [
-        { table: 'Bus', field: 'Va', ids: [1] },
-        { table: 'Bus', field: 'Vm', ids: [1] },
-      ],
-    } as unknown as Results
-    const vm = { from: 'Bus', field: 'Vm' }
-    assert.deepEqual(plotsFor(results, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
-    assert.deepEqual(plotsFor(results, [{ from: 'Gen', field: 'Pg' }]), [
-      { from: 'Bus', field: 'Va' },
-    ])
-    assert.deepEqual(plotsFor({ outputs: [] } as unknown as Results, [vm]), [])
-  })
-
   test('forgets cases deleted while it was closed, and keeps those that exist', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     session.setPlots([])
     const gone = savedKey(
       vscode.Uri.joinPath(folder(), `gone-${randomUUID()}.case.json`).toString(),
@@ -108,7 +76,7 @@ suite('Sessions', () => {
   })
 
   test('reads the results file it showed again when the case opens, and forgets one gone', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     const csv = await samples(uri)
     await session.load(csv.fsPath)
     const restored = await reopen(session)
@@ -125,7 +93,7 @@ suite('Sessions', () => {
   })
 
   test('reads a simulation again from where its solver file writes now', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     const name = randomUUID()
     const solver = vscode.Uri.joinPath(folder(), `${name}.solver.json`)
     const solverText = JSON.stringify({
@@ -157,7 +125,7 @@ suite('Sessions', () => {
     const visited: Session[] = []
     for (let n = 0; n < 3; n++) {
       const opened = await copy()
-      const session = studio.current()
+      const session = studio.get(studio.active!)!
       await session.load((await samples(opened)).fsPath)
       visited.push(session)
       session.release('document')

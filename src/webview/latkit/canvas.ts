@@ -1,11 +1,11 @@
-import { type Fit, type Scene, View } from 'latkit'
+import { type Fit, type Gpu, type Scene, View } from 'latkit'
 
-import { drew } from './runtime.js'
+import { drew } from './load.js'
 
 /** A latkit view on a canvas, from its creation to its end: what the Network and each Monitor plot
- *  share. It marks its canvas once a frame draws it whole, waits on latkit as long as
- *  it lasts, and hands latkit a scene only when it draws differently from the last. */
-export class ViewHost {
+ *  share. It marks its canvas once a frame draws it whole, waits on latkit as long as it lasts,
+ *  and hands latkit a scene only when it draws differently from the last. */
+export class CanvasView {
   readonly #lifetime = new AbortController()
   #fitting = Promise.resolve()
   #drawn: string
@@ -26,14 +26,14 @@ export class ViewHost {
     options: Parameters<typeof View.create>[2],
     fail: (error: unknown) => void,
     drawn?: () => void,
-  ): Promise<ViewHost> {
-    const host = new ViewHost(await View.create(canvas, scene, options), canvas, scene, fail)
-    void host.view.done({ signal: host.lifetime }).then(() => {
+  ): Promise<CanvasView> {
+    const opened = new CanvasView(await View.create(canvas, scene, options), canvas, scene, fail)
+    void opened.view.done({ signal: opened.lifetime }).then(() => {
       canvas.dataset.rendered = 'true'
       drew()
       drawn?.()
     }, fail)
-    return host
+    return opened
   }
 
   /** Aborts once the view ends: what its waits on latkit last for, however slowly it draws. */
@@ -69,4 +69,17 @@ export class ViewHost {
     delete this.canvas.dataset.rendered
     this.view.destroy()
   }
+}
+
+/** Shows `now()` in each of `views()` on every frame `gpu` draws, as playback moves the playhead;
+ *  returns what stops it. */
+export function followPlayback(
+  gpu: Gpu,
+  views: () => Iterable<View>,
+  now: () => number,
+): () => void {
+  return gpu.on('frame', () => {
+    const at = now()
+    for (const view of views()) view.at = at
+  })
 }

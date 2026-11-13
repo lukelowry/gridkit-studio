@@ -61,8 +61,10 @@ export async function simulate(
   stores: Stores,
   context: RunContext,
 ): Promise<ResultsFile> {
-  const { solver, output, root, gridkit, tmax } = request
-  const place = { root, solver, touches: [fileURLToPath(request.uri), output] }
+  const { solver, output, state, root, gridkit, tmax } = request
+  // Every file the run reads or writes, which a container must reach.
+  const touches = [fileURLToPath(request.uri), output, ...(state ? [state] : [])]
+  const place = { root, solver, touches }
   // Where GridKit runs is settled before anything is touched: a run that cannot start leaves the
   // last run's file as it was.
   const runtime = await placed(gridkit, place, context.signal)

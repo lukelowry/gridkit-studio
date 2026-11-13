@@ -5,79 +5,82 @@ import * as vscode from 'vscode'
 
 import { display } from '../shared/cells.js'
 import {
-  type Entity,
   entityLabel,
   fieldDefinition,
   fieldLabel,
+  isEntity,
   referenceFields,
 } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
-import type { Commands } from './context.js'
+import type { Commands } from './commands.js'
 
-export function registerElements({
-  studio,
-  register,
-  command,
-  targetOf,
-  focus,
-  valuesOf,
-  valueOf,
-  referred,
-}: Commands) {
-  register('openCase', async () => {
-    const selected = await vscode.window.showOpenDialog({
-      filters: { 'GridKit case': ['case.json'] },
-      canSelectMany: false,
-    })
-    if (selected?.[0])
-      await vscode.commands.executeCommand('vscode.openWith', selected[0], viewId('network'))
-  })
+export function registerElements({ studio, registrations, command, focus, valuesOf }: Commands) {
+  registrations.push(
+    studio.command('openCase', async () => {
+      const selected = await vscode.window.showOpenDialog({
+        filters: { 'GridKit case': ['case.json'] },
+        canSelectMany: false,
+      })
+      if (selected?.[0])
+        await vscode.commands.executeCommand('vscode.openWith', selected[0], viewId('network'))
+    }),
+  )
   // A file's menu opens the Network; an element's reveals the element there, or, where the Network
   // does not draw it, the elements nearest it.
   for (const id of ['openNetwork', 'revealInNetwork'] as const)
-    command(id, async (context) => {
+    command(id, async ({ session, element }) => {
       await vscode.commands.executeCommand(
         'vscode.openWith',
-        vscode.Uri.parse(context.session.uri),
+        vscode.Uri.parse(session.uri),
         viewId('network'),
         vscode.ViewColumn.Active,
       )
-      if (context.element) context.session.select(context.element)
+      if (element) session.select(element)
     })
   for (const id of ['openCasePanel', 'revealInCase'] as const)
-    command(id, (context) => focus(context.session, 'case', context.element))
-  command('openMonitor', (context) => focus(context.session, 'monitor', context.element))
-  register('openSource', (value, supplied) => studio.files.reveal(targetOf(value, supplied).uri))
-  command('revealInSource', (context) => studio.files.reveal(context.session.uri, context.element))
+    command(id, ({ session, element }) => focus(session, 'case', element))
+  command('openMonitor', ({ session }) => focus(session, 'monitor'))
+  command('openSource', ({ session }) => studio.files.reveal(session.uri))
+  // The element in the file, at its field when the field in context is one of its own.
+  command('revealInSource', ({ session, element, field }) =>
+    studio.files.reveal(
+      session.uri,
+      element && {
+        ...element,
+        ...(field?.table === element.table && { field: field.field }),
+      },
+    ),
+  )
   // The element a reference of the element in context names: the field in context's, or, of an
   // element, the one of its references the user picks, when it has several.
   command('goToReference', async (context) => {
-    const { session, summary, element, type } = context
-    if (!element || !type) return
+    const { session, element } = context
+    if (!element) return
+    const summary = await context.summary()
+    const { definition } = summary
+    const type = element.table
     // A field in context counts only as a reference: the cursor may rest on any.
-    const field =
-      context.field &&
-      fieldDefinition(summary.definition, type, context.field)?.kind === 'reference'
-        ? context.field
+    const named =
+      context.field?.table === type &&
+      fieldDefinition(definition, type, context.field.field)?.kind === 'reference'
+        ? context.field.field
         : undefined
-    const fields = field
-      ? [field]
-      : referenceFields(summary.definition, type).map((each) => each.name)
-    const values = await valuesOf(context, type, fields, element.id)
-    const found = await Promise.all(
-      fields.map(async (each) => ({ field: each, id: referred(values[each]) })),
-    )
-    const targets = found.filter((each): each is { field: string; id: Entity } => !!each.id)
+    const fields = named ? [named] : referenceFields(definition, type).map((each) => each.name)
+    const values = await valuesOf(summary, type, fields, element.id)
+    const targets = fields.flatMap((field) => {
+      const id = values[field]
+      return isEntity(id) ? [{ field, id }] : []
+    })
     if (!targets.length)
       throw new Error(
-        field ? 'This reference is disconnected.' : `${element.id} refers to no element.`,
+        named ? 'This reference is disconnected.' : `${element.id} refers to no element.`,
       )
     const target =
       targets.length === 1
         ? targets[0]
         : await vscode.window.showQuickPick(
             targets.map((each) => ({
-              label: fieldLabel(fieldDefinition(summary.definition, type, each.field)!),
+              label: fieldLabel(fieldDefinition(definition, type, each.field)!),
               description: entityLabel(each.id),
               ...each,
             })),
@@ -89,22 +92,18 @@ export function registerElements({
     if (element) await vscode.env.clipboard.writeText(String(element.id))
   })
   command('copyValue', async (context) => {
-    if (context.element && context.type && context.field)
-      await vscode.env.clipboard.writeText(
-        display(await valueOf(context, context.type, context.field, context.element.id)),
-      )
+    const { element, field } = context
+    if (!element || !field) return
+    const values = await valuesOf(await context.summary(), field.table, [field.field], element.id)
+    await vscode.env.clipboard.writeText(display(values[field.field]))
   })
   // A Case panel column's, or a Monitored Signals field's.
-  command('copyFieldPath', (context) => vscode.env.clipboard.writeText(context.field ?? ''))
-  command('selectOverlapping', async (context) => {
+  command('copyFieldPath', ({ field }) => vscode.env.clipboard.writeText(field?.field ?? ''))
+  command('selectOverlapping', async ({ session, target }) => {
     const selected = await vscode.window.showQuickPick(
-      (context.target?.items ?? []).map((element) => ({
-        label: entityLabel(element),
-        description: element.field,
-        element,
-      })),
+      (target?.items ?? []).map((element) => ({ label: entityLabel(element), element })),
       { title: 'Elements under the pointer' },
     )
-    if (selected) context.session.select(selected.element)
+    if (selected) session.select(selected.element)
   })
 }

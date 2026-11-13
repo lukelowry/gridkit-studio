@@ -3,16 +3,16 @@ import { createRequire } from 'node:module'
 import { Patch } from 'latkit'
 import { afterEach, expect, test, vi } from 'vitest'
 
-import type { FramePage, FrameRequest } from '../shared/data.js'
-import { loadNative } from '../workers/native.js'
+import type { FramePage, FrameRequest } from '../../shared/data.js'
+import { loadNative } from '../../workers/native.js'
 import { FrameReads, FrameWindow, PlayheadFeed, type Sampled } from './frames.js'
 
 const request = vi.hoisted(() => vi.fn())
-vi.mock('./bridge.js', () => ({ bridge: { request } }))
-vi.mock('./runtime.js', () => ({
-  loadRenderer: async () => {
+vi.mock('../bridge.js', () => ({ bridge: { request } }))
+vi.mock('./load.js', () => ({
+  loadLatkit: async () => {
     const { createRequire } = await import('node:module')
-    const { loadNative } = await import('../workers/native.js')
+    const { loadNative } = await import('../../workers/native.js')
     await loadNative(createRequire(import.meta.url).resolve('latkit/wasm'))
   },
 }))

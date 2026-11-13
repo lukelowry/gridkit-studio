@@ -17,24 +17,25 @@ export const BUS_CODE = 0
 export const SIGNAL_CODE = 1
 export const DEVICE_CODES = 2
 export const CASE_ROW = 'case'
-/** The member of a record a port is written under: a device's `ports`, a bus's `ports_in` and
- *  `ports_out`. */
-export type PortKey = 'ports' | 'ports_in' | 'ports_out'
 type Identity = Shape['identity']
 /** The member each array's records are known by, as GridKit names it. */
-export const IDENTITY: Readonly<Record<ArrayName, Identity>> = {
+const IDENTITY: Readonly<Record<ArrayName, Identity>> = {
   buses: { name: 'number', type: 'unsigned' },
   signals: { name: 'signal_id', type: 'unsigned' },
   devices: { name: 'id', type: 'text' },
 }
-type FieldSource =
-  | {
-      readonly kind:
-        'identity' | 'record' | 'parameter' | 'initial' | 'extension' | 'header' | 'output'
-      readonly name: string
-    }
-  | { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
-  | { readonly kind: 'found'; readonly path: readonly string[]; readonly json: boolean }
+/** The member a record's class is written under, and the one that lists the outputs it records. */
+export const CLASS = 'class'
+export const MON = 'mon'
+/** The members a bus or a device groups its values under, then those it writes its ports under. */
+const VALUES = ['params', 'init', 'extension'] as const
+const PORTS = ['ports', 'ports_in', 'ports_out'] as const
+/** The members a record is known and named by, whose names an output never takes for its own. */
+const NAMES: ReadonlySet<string> = new Set([
+  ...Object.values(IDENTITY).map(({ name }) => name),
+  'name',
+  CLASS,
+])
 /** What a text field may hold, as GridKit checks it: a pattern, and the rule it keeps in words. */
 interface TextRule {
   readonly pattern: RegExp
@@ -44,15 +45,23 @@ export interface FieldPlan {
   readonly name: string
   readonly definition: FieldDefinition
   readonly decode: DecodeKind
-  readonly source: FieldSource
+  /** What the field is of its record: the identity it is known by, a value or a port it writes, or
+   *  an output it may record. */
+  readonly role: 'identity' | 'value' | 'port' | 'output'
+  /** Where its record writes it: the keys to it, from the record's own. An output is listed in
+   *  `mon`. */
+  readonly path: readonly string[]
+  /** Whether GridKit refuses a record that does not write it. */
   readonly required?: boolean
   readonly choices?: readonly string[]
   readonly allowed?: TextRule
   readonly geographic?: boolean
 }
 interface PortPlan extends FieldPlan {
+  readonly role: 'port'
   readonly definition: FieldDefinition & { readonly kind: 'reference'; readonly target: string }
-  readonly source: { readonly kind: 'port'; readonly key: PortKey; readonly name: string }
+  /** Whether it reads the signal it names, or drives it; neither, of a bus it connects. */
+  readonly direction?: 'in' | 'out'
 }
 export interface Shape {
   readonly type: string
@@ -63,28 +72,44 @@ export interface Shape {
   readonly plan: ReadonlyMap<string, FieldPlan>
   readonly fields: readonly FieldPlan[]
   readonly ports: readonly PortPlan[]
-  readonly outputOrder: ReadonlyMap<string, number>
+  /** The outputs a record may list in its `mon`, in GridKit's order. */
+  readonly outputs: readonly string[]
+  /** The members a record groups its fields under, each an object read member by member. */
+  readonly groups: readonly string[]
+  /** The members GridKit refuses a record without, which are no field of it: a group, or, of the
+   *  case, an array. A field it refuses a record without says so itself. */
+  readonly required: readonly string[]
 }
 export interface Catalog {
   readonly text: string
-  readonly bus: string
   readonly shapes: ReadonlyMap<string, Shape>
   readonly codes: readonly Shape[]
   readonly definition: CaseDefinition
 }
-interface ClassSpec {
+/** A value a record writes, as the catalog gives it. */
+interface ValueSpec {
+  readonly id: string
+  readonly type: 'real' | 'integer' | 'flag' | 'text'
+  readonly unit?: string
+  readonly choices?: readonly string[]
+  readonly required?: boolean
+}
+/** What GridKit refuses a record of a kind without, by the names of its members. */
+interface RecordSpec {
+  readonly required?: readonly string[]
+}
+interface CaseSpec extends RecordSpec {
+  readonly header?: readonly ValueSpec[]
+  readonly params?: readonly ValueSpec[]
+}
+interface ClassSpec extends RecordSpec {
   readonly name: string
   readonly classes?: readonly string[]
   readonly label: string
-  readonly params?: readonly {
-    readonly id: string
-    readonly type: 'real' | 'integer' | 'flag' | 'text'
-    readonly unit?: string
-    readonly choices?: readonly string[]
-  }[]
+  readonly params?: readonly ValueSpec[]
   readonly init?: readonly { readonly id: string; readonly unit?: string }[]
   readonly ports?: readonly {
-    readonly key?: PortKey
+    readonly key?: (typeof PORTS)[number]
     readonly required?: boolean
     readonly name: string
     readonly kind: 'bus' | 'signal'
@@ -98,49 +123,69 @@ interface ClassSpec {
     readonly geographic?: boolean
   }[]
 }
-function field(name: string, decode: DecodeKind, source: FieldSource, unit?: string): FieldPlan {
-  const kind = decode === 'integer' || decode === 'unsigned' ? 'number' : decode
+/** A value a record writes at `path`, named by it. */
+function value(path: readonly string[], decode: DecodeKind, unit?: string): FieldPlan {
+  const name = path.join('.')
   return {
     name,
     decode,
-    source,
+    role: 'value',
+    path,
     definition: {
       name,
-      kind,
+      kind: decode === 'integer' || decode === 'unsigned' ? 'number' : decode,
       label: name,
       ...(unit !== undefined && { unit }),
-      ...((decode === 'integer' || decode === 'unsigned') && { integer: true }),
     },
+  }
+}
+/** `entries`, each top-level field among them that `required` names refused without, and the names
+ *  that are no such field: the members a record itself is refused without. */
+function requiring(
+  entries: readonly FieldPlan[],
+  required: readonly string[] = [],
+): { entries: readonly FieldPlan[]; members: readonly string[] } {
+  const own = (entry: FieldPlan) => entry.role === 'value' && entry.path.length === 1
+  return {
+    entries: entries.map((entry) =>
+      own(entry) && required.includes(entry.path[0]!) ? { ...entry, required: true } : entry,
+    ),
+    members: required.filter(
+      (name) => !entries.some((entry) => own(entry) && entry.path[0] === name),
+    ),
   }
 }
 export function catalogOf(json: unknown): Catalog {
   const raw = json as {
     identifier?: { pattern?: unknown; rule?: unknown }
+    case?: CaseSpec
     bus?: ClassSpec
+    signal?: RecordSpec
+    device?: RecordSpec
     classes?: ClassSpec[]
   } | null
-  if (typeof raw?.bus?.name !== 'string' || !Array.isArray(raw.classes))
-    throw problem('invalid-input', 'A catalog has a bus and a list of classes.')
+  if (
+    !raw?.case ||
+    typeof raw.case !== 'object' ||
+    typeof raw.bus?.name !== 'string' ||
+    !Array.isArray(raw.classes)
+  )
+    throw problem('invalid-input', 'A catalog has a case, a bus and a list of classes.')
   const text = JSON.stringify(json)
   const identifier = identifierOf(raw.identifier)
+  const { bus, device = {} } = raw
   const codes = [
-    shapeOf(raw.bus, 'bus', raw.bus.name, identifier),
-    signalShape(),
-    ...raw.classes.map((spec) => shapeOf(spec, 'device', raw.bus!.name, identifier)),
+    shapeOf(bus, 'bus', bus.name, identifier, bus.required),
+    signalShape(raw.signal),
+    ...raw.classes.map((spec) => shapeOf(spec, 'device', bus.name, identifier, device.required)),
   ]
   const shapes = new Map<string, Shape>()
-  for (const shape of [...codes, caseShape()]) {
+  for (const shape of [...codes, caseShape(raw.case)]) {
     if (shapes.has(shape.type))
       throw problem('invalid-input', `The catalog declares ${shape.type} twice.`)
     shapes.set(shape.type, shape)
   }
-  return {
-    text,
-    bus: raw.bus.name,
-    codes,
-    shapes,
-    definition: definitionsOf([...shapes.values()]),
-  }
+  return { text, codes, shapes, definition: definitionsOf([...shapes.values()]) }
 }
 /** The rule a bus's name and a device's id keep, as the catalog says it. */
 function identifierOf(
@@ -156,72 +201,61 @@ function identifierOf(
   }
 }
 const DECODES = { flag: 'boolean', integer: 'integer', real: 'number', text: 'text' } as const
+/** The values `specs` give under the member `group`, each of a type the catalog has. */
+function valuesOf(type: string, group: string, specs: readonly ValueSpec[] = []): FieldPlan[] {
+  return specs.map((spec) => {
+    if (!Object.hasOwn(DECODES, spec.type))
+      throw problem(
+        'invalid-input',
+        `${type}.${spec.id} is of type ${spec.type}, which is not real, integer, flag or text.`,
+      )
+    return {
+      ...value([group, spec.id], DECODES[spec.type], spec.unit),
+      ...(spec.choices && { choices: spec.choices }),
+      ...(spec.required && { required: true }),
+    }
+  })
+}
 function shapeOf(
   spec: ClassSpec,
   kind: 'bus' | 'device',
   bus: string,
   identifier: TextRule | undefined,
+  required: readonly string[] | undefined,
 ): Shape {
   const { params = [], init = [], ports = [], outputs = [] } = spec
   const parameters = new Set(params.map((param) => param.id))
   for (const port of ports)
     if (parameters.has(port.name))
       throw problem('invalid-input', `${spec.name}.${port.name} is both a parameter and a port.`)
-  for (const param of params)
-    if (!Object.hasOwn(DECODES, param.type))
-      throw problem(
-        'invalid-input',
-        `${spec.name}.${param.id} is of type ${param.type}, which is not real, integer, flag or text.`,
-      )
-  const keys = new Set(['number', 'id', 'name', 'class'])
-  return compile(
-    {
-      type: spec.name,
-      kind,
-      array: kind === 'bus' ? 'buses' : 'devices',
-      identity: IDENTITY[kind === 'bus' ? 'buses' : 'devices'],
-    },
-    spec.label,
+  const array = kind === 'bus' ? 'buses' : 'devices'
+  const { entries, members } = requiring(
     [
+      // A bus's class is a field of it, as its name is. A device's class is its table.
       ...(kind === 'bus'
         ? [
-            {
-              ...field('name', 'text', { kind: 'record', name: 'name' }),
-              ...(identifier && { allowed: identifier }),
-            },
-            {
-              ...field('class', 'text', { kind: 'record', name: 'class' }),
-              choices: spec.classes ?? [spec.name],
-            },
+            { ...value(['name'], 'text'), ...(identifier && { allowed: identifier }) },
+            { ...value([CLASS], 'text'), choices: spec.classes ?? [spec.name] },
           ]
         : []),
-      ...params.map((param) => ({
-        ...field(
-          `params.${param.id}`,
-          DECODES[param.type],
-          { kind: 'parameter', name: param.id },
-          param.unit,
-        ),
-        ...(param.choices && { choices: param.choices }),
-      })),
-      ...init.map((init) =>
-        field(`init.${init.id}`, 'number', { kind: 'initial', name: init.id }, init.unit),
-      ),
+      ...valuesOf(spec.name, 'params', params),
+      ...init.map((init) => value(['init', init.id], 'number', init.unit)),
       ...(spec.extension ?? []).map((extension) => ({
-        ...field(
-          `extension.${extension.id}`,
+        ...value(
+          ['extension', extension.id],
           extension.type === 'flag' ? 'boolean' : extension.type === 'route' ? 'path' : 'number',
-          { kind: 'extension', name: extension.id },
           extension.unit,
         ),
         geographic: extension.geographic,
       })),
       ...outputs.map((output): FieldPlan => {
-        const name = keys.has(output.id) ? `mon.${output.id}` : output.id
+        const name = NAMES.has(output.id) ? `${MON}.${output.id}` : output.id
         return {
           name,
           decode: 'number',
-          source: { kind: 'output', name: output.id },
+          role: 'output',
+          path: [MON],
+          // GridKit's own name for it, which its field keeps unless a record's member has it.
           definition: {
             name,
             label: output.id,
@@ -231,93 +265,118 @@ function shapeOf(
         }
       }),
       ...ports.map((port): PortPlan => {
-        const key = port.key ?? 'ports'
-        const name = `${key}.${port.name}`
+        const path = [port.key ?? PORTS[0], port.name]
+        const name = path.join('.')
         return {
           name,
           decode: 'unsigned',
-          source: { kind: 'port', key, name: port.name },
+          role: 'port',
+          path,
           required: port.required === true,
+          ...(port.direction !== 'both' && { direction: port.direction }),
           definition: {
             name,
             // A bus's in and out ports share their names, so each says which it is.
             label: port.key ? name : port.name,
             kind: 'reference',
             target: port.kind === 'bus' ? bus : SIGNAL,
-            required: port.required === true,
-            ...(port.direction !== 'both' && { direction: port.direction }),
           },
         }
       }),
     ],
+    required,
+  )
+  return compile(
+    { type: spec.name, kind, array, identity: IDENTITY[array], groups: [...VALUES, ...PORTS] },
+    spec.label,
+    entries,
+    members,
     kind === 'device' ? identifier : undefined,
   )
 }
-function signalShape(): Shape {
+function signalShape(spec: RecordSpec = {}): Shape {
+  const { entries, members } = requiring([value(['name'], 'text')], spec.required)
+  return compile(
+    { type: SIGNAL, kind: 'signal', array: 'signals', identity: IDENTITY.signals, groups: [] },
+    SIGNAL,
+    entries,
+    members,
+  )
+}
+/** The case's own row: what its `header` and `params` hold, and the members it is refused
+ *  without. */
+function caseShape(spec: CaseSpec): Shape {
+  const { entries, members } = requiring(
+    [...valuesOf(CASE, 'header', spec.header), ...valuesOf(CASE, 'params', spec.params)],
+    spec.required,
+  )
   return compile(
     {
-      type: SIGNAL,
-      kind: 'signal',
-      array: 'signals',
-      identity: IDENTITY.signals,
+      type: CASE,
+      kind: 'case',
+      array: null,
+      identity: { name: 'id', type: 'text' },
+      groups: ['header', 'params'],
     },
-    SIGNAL,
-    [field('name', 'text', { kind: 'record', name: 'name' })],
-  )
-}
-function caseShape(): Shape {
-  return compile(
-    { type: CASE, kind: 'case', array: null, identity: { name: 'id', type: 'text' } },
     CASE,
-    [
-      ...['case_name', 'case_description', 'case_comments'].map((name) =>
-        field(`header.${name}`, 'text', { kind: 'header', name }),
-      ),
-      ...['freq_base', 'va_base'].map((name) =>
-        field(`params.${name}`, 'number', { kind: 'parameter', name }),
-      ),
-    ],
+    entries,
+    members,
   )
 }
+/** The shape of a device class the catalog does not know: its records' members are found as they
+ *  are written. */
 export function unknownShape(type: string): Shape {
-  return compile({ type, kind: 'device', array: 'devices', identity: IDENTITY.devices }, type, [])
+  return compile(
+    {
+      type,
+      kind: 'device',
+      array: 'devices',
+      identity: IDENTITY.devices,
+      groups: [...VALUES, ...PORTS],
+    },
+    type,
+    [],
+  )
 }
+/** `shape` with the fields `found` in its records that it does not know. An output whose name one
+ *  of them takes is named by where it is listed. */
 export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
   const taken = new Set(found.map(({ name }) => name))
   return compile(
     shape,
     shape.definition.label,
     [...shape.plan.values()]
-      .filter(({ source }) => source.kind !== 'identity')
+      .filter(({ role }) => role !== 'identity')
       .map((plan) =>
-        plan.source.kind === 'output' && taken.has(plan.name)
+        plan.role === 'output' && taken.has(plan.name)
           ? {
               ...plan,
-              name: `mon.${plan.name}`,
-              definition: { ...plan.definition, name: `mon.${plan.name}` },
+              name: `${MON}.${plan.name}`,
+              definition: { ...plan.definition, name: `${MON}.${plan.name}` },
             }
           : plan,
       )
       .concat(found),
+    shape.required,
     shape.plan.get(shape.identity.name)?.allowed,
   )
 }
 /** A table's shape, its identity keeping `allowed` when given. */
 function compile(
-  table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity'>,
+  table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity' | 'groups'>,
   label: string,
   entries: readonly FieldPlan[],
+  required: readonly string[] = [],
   allowed?: TextRule,
 ): Shape {
   const plan = new Map<string, FieldPlan>()
   const fields: FieldPlan[] = []
   const ports: PortPlan[] = []
-  const outputOrder = new Map<string, number>()
+  const outputs: string[] = []
+  const { name, type } = table.identity
   const identity: FieldPlan = {
-    ...field(table.identity.name, table.identity.type, {
-      kind: 'identity',
-      name: table.identity.name,
-    }),
+    ...value([name], type),
+    role: 'identity',
     ...(allowed && { allowed }),
   }
   for (const entry of [identity, ...entries]) {
@@ -326,18 +385,9 @@ function compile(
     if (plan.has(entry.name))
       throw problem('invalid-input', `${table.type}.${entry.name} is declared twice.`)
     plan.set(entry.name, entry)
-    switch (entry.source.kind) {
-      case 'identity':
-        break
-      case 'output':
-        outputOrder.set(entry.name, outputOrder.size)
-        break
-      case 'port':
-        ports.push(entry as PortPlan)
-        break
-      default:
-        fields.push(entry)
-    }
+    if (entry.role === 'output') outputs.push(entry.name)
+    else if (entry.role === 'port') ports.push(entry as PortPlan)
+    else if (entry.role === 'value') fields.push(entry)
   }
   const generated: FieldDefinition[] = [
     { name: LABEL, kind: 'text', label: 'Identity' },
@@ -348,15 +398,19 @@ function compile(
     })),
   ]
   return {
-    ...table,
+    type: table.type,
+    kind: table.kind,
+    array: table.array,
+    identity: table.identity,
+    groups: table.groups,
+    required,
     plan,
     fields,
     ports,
-    outputOrder,
+    outputs,
     definition: {
       name: table.type,
       label,
-      identity: table.identity.name,
       labelField: plan.has('name') ? 'name' : LABEL,
       fields: [...plan.values()].map((item) => item.definition).concat(generated),
     },
@@ -373,7 +427,7 @@ export function definitionsOf(
     return fields.length >= 2 ? [fields[0]!.name, fields[1]!.name] : undefined
   }
   const joins = shapes.flatMap((shape) => {
-    const ports = shape.ports.filter((port) => !port.definition.direction)
+    const ports = shape.ports.filter((port) => !port.direction)
     return ports.length === 2 && ports[0]!.definition.target === ports[1]!.definition.target
       ? [
           {

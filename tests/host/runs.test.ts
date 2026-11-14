@@ -10,7 +10,7 @@ import * as vscode from 'vscode'
 import { type Bench, bench, folder, until } from './studio.js'
 
 suite('Runs', function () {
-  // A run lasts as long as GridKit does, a container's start included.
+  // Include solver initialization and result ingestion on slower hosts.
   this.timeout(120_000)
   let host: Bench
 
@@ -26,11 +26,8 @@ suite('Runs', function () {
 
   test('says why a case that records nothing runs nothing', async () => {
     await host.recordOnly('Bus', [])
-    host.command('gridkitStudio.runSimulation', host.solver)
-    const [said] = await until(() => {
-      const said = host.said()
-      return said.length ? said : undefined
-    }, 'why nothing runs')
+    await vscode.commands.executeCommand('gridkitStudio.runSimulation', host.solver)
+    const [said] = host.said()
     assert.match(said!, /records nothing/)
     assert.equal(host.session.run, undefined)
   })
@@ -51,11 +48,11 @@ suite('Runs', function () {
       [['Bus', 'Vm', host.source.buses.length]],
     )
     assert.ok(Math.abs(results.domain[1] - 0.5) < 1e-9, 'the run reaches its end')
-    assert.deepEqual(session.plots, [{ from: 'Bus', field: 'Vm' }])
+    assert.deepEqual(session.plots, [{ table: 'Bus', field: 'Vm' }])
     // The playhead rests at the end of the run, which the views read from the samples it wrote.
     assert.equal(session.transport.state.follow, false)
     assert.equal(session.transport.currentT(), results.domain[1])
-    const { value } = await host.studio.client.results.call('sample', {
+    const { value } = await host.studio.client.worker.call('sample', {
       results: results.id,
       table: 'Bus',
       field: 'Vm',
@@ -65,27 +62,21 @@ suite('Runs', function () {
     assert.equal(typeof value, 'number')
   })
 
-  test('shows what its solver file wrote last, and runs it again', async () => {
+  test('shows what its solver file wrote last, and runs it again, plotting what that records', async () => {
     await host.run()
     const written = host.session.results!
-    host.command('gridkitStudio.clearResults')
-    await until(() => !host.session.results, 'the results go')
-    host.command('gridkitStudio.showLastResults', host.solver)
-    await until(
-      () => host.session.results?.frames === written.frames,
-      'the last results show again',
-    )
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
+    await vscode.commands.executeCommand('gridkitStudio.clearResults')
+    assert.equal(host.studio.get(host.key)?.results, undefined)
+    await vscode.commands.executeCommand('gridkitStudio.showLastResults', host.solver)
+    assert.equal(host.session.results?.frames, written.frames)
     assert.equal(host.session.results!.path, written.path)
+    // The plots stay until the next run, which plots what it recorded.
+    await host.record('Bus', ['Va'])
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
     const again = await host.run('gridkitStudio.runSimulationAgain')
     assert.equal(again.state, 'complete', again.message)
-  })
-
-  test('keeps its plots until the next run, which plots what it recorded', async () => {
-    await host.run()
-    await host.record('Bus', ['Va'])
-    assert.deepEqual(host.session.plots, [{ from: 'Bus', field: 'Vm' }])
-    await host.run()
-    assert.deepEqual(host.session.plots, [{ from: 'Bus', field: 'Va' }])
+    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Va' }])
   })
 
   test('follows a live run, and a stop keeps what it wrote', async () => {
@@ -104,9 +95,9 @@ suite('Runs', function () {
     assert.equal(session.results?.span?.[1], 1000)
     session.transport.seek(0)
     assert.equal(session.transport.state.follow, false)
-    host.command('gridkitStudio.goToEnd')
-    await until(() => session.transport.state.follow, 'Go to End follows the run again')
-    host.command('gridkitStudio.stopSimulation')
+    await vscode.commands.executeCommand('gridkitStudio.goToEnd')
+    assert.equal(session.transport.state.follow, true, 'Go to End follows the run again')
+    await vscode.commands.executeCommand('gridkitStudio.stopSimulation')
     const run = await host.ran(before)
     assert.equal(run.state, 'cancelled')
     const results = await until(
@@ -115,8 +106,8 @@ suite('Runs', function () {
     )
     assert.ok(results.frames > 0 && results.domain[1] < 1000)
     assert.equal(results.span?.[1], 1000, 'a stopped run keeps its window')
-    host.command('gridkitStudio.previousSample')
-    await until(() => session.transport.currentT() < results.domain[1], 'what it wrote plays')
+    await vscode.commands.executeCommand('gridkitStudio.previousSample')
+    assert.ok(session.transport.currentT() < results.domain[1], 'what it wrote plays')
   })
 
   test('says once why GridKit could not finish, and runs again', async () => {
@@ -131,17 +122,23 @@ suite('Runs', function () {
     assert.equal((await host.run()).state, 'complete')
   })
 
-  test('starts the program GridKit Program names', async () => {
+  test('selects native only with an explicit path, and returns to WASM when cleared', async () => {
     const settings = vscode.workspace.getConfiguration('gridkitStudio')
     const global = vscode.ConfigurationTarget.Global
-    // A program no install or image has: the run, under its name, fails wherever GridKit runs.
+    const previous = settings.inspect<string>('gridkitPath')?.globalValue
     await settings.update('gridkitProgram', 'NoSuchSimulation', global)
+    await settings.update('gridkitPath', folder().fsPath, global)
     try {
       const run = await host.run()
       assert.equal(run.state, 'failed')
       assert.equal(run.command, 'NoSuchSimulation IEEE39.solver.json')
       assert.ok(host.said().some((said) => said.includes(run.message!)))
+      await settings.update('gridkitPath', '', global)
+      const bundled = await host.run()
+      assert.equal(bundled.state, 'complete', bundled.message)
+      assert.equal(bundled.command, 'DynamicSimulation IEEE39.solver.json')
     } finally {
+      await settings.update('gridkitPath', previous, global)
       await settings.update('gridkitProgram', undefined, global)
     }
   })

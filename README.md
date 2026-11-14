@@ -12,31 +12,21 @@ View and simulate [GridKit](https://github.com/ORNL/GridKit) power-system cases 
 
 ## Install
 
-Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later and WebGPU.
+Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later.
 
 ## GridKit
 
-Studio runs GridKit from an install or from a container image.
-
-**Install.** Set the folder GridKit is installed in. Leave it empty if GridKit is on your `PATH`.
+GridKit is included on desktop and web. To use your own installation, set its directory or executable path:
 
 ```json
 "gridkitStudio.gridkitPath": "/opt/gridkit"
 ```
 
-**Image.** Pull the image with Docker or Podman. It is the default, so the setting only changes for another image.
-
-```sh
-docker pull ghcr.io/birchfieldresearchgroup/gridkit:develop-perf
-```
-
-```json
-"gridkitStudio.gridkitImage": "ghcr.io/birchfieldresearchgroup/gridkit:develop-perf"
-```
+Clear the setting to use the included solver again. In remote workspaces, the path is on the remote machine.
 
 ## How to use
 
-Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. GridKit runs in the solver file's folder, the same as it would from a shell, and the Monitor plots what it writes.
+Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. The Monitor plots results as GridKit runs. On the web, results stay in your browser; use **Export CSV** to download them.
 
 - **Monitored Signals** shows what the case records. Right-click a signal there to plot it, or to map it onto the network.
 - **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.

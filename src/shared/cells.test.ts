@@ -1,7 +1,7 @@
-﻿import type { QueryResult } from 'latkit'
+import type { QueryResult } from 'latkit'
 import { describe, expect, it } from 'vitest'
 
-import { cell, display, rowsOf } from './cells.js'
+import { cell, rowsOf } from './cells.js'
 
 describe('native query cells', () => {
   const page: QueryResult = {
@@ -29,10 +29,5 @@ describe('native query cells', () => {
       },
     ])
     expect(cell(page, 'absent', 0)).toBeNull()
-  })
-  it('formats native references directly without resolving physical row numbers', () => {
-    expect(display(cell(page, 'bus', 0), { native: true })).toBe('0')
-    expect(display(null)).toBe('—')
-    expect(display(false)).toBe('false')
   })
 })

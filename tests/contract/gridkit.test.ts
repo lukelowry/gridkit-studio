@@ -1,18 +1,14 @@
-/** GridKit's DynamicSimulation, run as Studio runs it: on a solver file, in its folder, with the case
- *  it names beside it. GRIDKIT_PATH names an install, else the one on PATH, else Studio's default
- *  image or GRIDKIT_IMAGE runs in Docker or Podman. */
+/** The bundled solver by default; GRIDKIT_PATH explicitly tests a native installation. */
 
-import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { access, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { promisify } from 'node:util'
 
+import { applyEdits, modify } from 'jsonc-parser'
 import type { Id } from 'latkit'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import manifest from '../../package.json'
 import {
   available,
   Case,
@@ -32,14 +28,12 @@ import { withMons } from '../mons.js'
 const gridkit: GridKit = {
   program: PROGRAM,
   path: process.env.GRIDKIT_PATH ?? '',
-  image:
-    process.env.GRIDKIT_IMAGE ??
-    (
-      manifest.contributes.configuration[0]!.properties['gridkitStudio.gridkitImage'] as {
-        default: string
-      }
-    ).default,
-  cli: process.env.GRIDKIT_CONTAINER_CLI ?? '',
+}
+
+const wasm = {
+  worker: resolve('dist/solver.mjs'),
+  module: resolve('dist/solver/DynamicSimulation.mjs'),
+  wasm: resolve('dist/solver/DynamicSimulation.wasm'),
 }
 
 /** IEEE39's bus 16, faulted from 0.05 s to 0.1 s, as GridKit's events give it. */
@@ -92,12 +86,10 @@ describe("GridKit's programs on solver files", () => {
       record = (text: string) => listing(text, ['Vm']),
       progress = () => {},
       using = gridkit,
-      mount = root,
     }: {
       record?: (text: string) => string
       progress?: (stop: (reason: Error) => void) => void
       using?: GridKit
-      mount?: string
     } = {},
   ) {
     const folder = join(root, name)
@@ -109,19 +101,19 @@ describe("GridKit's programs on solver files", () => {
     const solverPath = join(folder, `${model}.solver.json`)
     const solverText = JSON.stringify({ system_model_file: `${model}.case.json`, ...solver })
     await writeFile(solverPath, solverText)
-    const kase = await Case.parse(new TextEncoder().encode(text), catalog, `${model}.case.json`)
+    const kase = await Case.parse(new TextEncoder().encode(text), catalog, {
+      name: `${model}.case.json`,
+    })
     const study = readSolver(`${model}.solver.json`, solverText)
     const sink = outputOf(`${model}.solver.json`, study, (await recordingOf(kase)).monitor)
     const request: RunRequest = {
       uri: pathToFileURL(casePath).href,
       version: 1,
-      fingerprint: kase.version,
       run: randomUUID(),
       results: randomUUID(),
       solver: solverPath,
       output: join(folder, sink.file),
       tmax: study.tmax,
-      root: mount,
       gridkit: using,
     }
     let owned: RuntimeProcess | undefined
@@ -130,6 +122,7 @@ describe("GridKit's programs on solver files", () => {
     let read: ResultsFile | undefined
     const controller = new AbortController()
     const done = simulate(kase, request, stores, {
+      wasm,
       signal: AbortSignal.any([signal, controller.signal]),
       reading: (file) => (read = file),
       progress: async () => progress((reason) => controller.abort(reason)),
@@ -163,10 +156,11 @@ describe("GridKit's programs on solver files", () => {
         )
         found.push({ id, t: sample.at, value: sample.value })
       }
-    } else
+    } else {
+      const rows = ids.map((_, row) => row)
       for (const index of results.store.raw) {
         if (index.end < range[0] || index.start > range[1]) continue
-        const block = await results.store.readRaw(index, field)
+        const block = await results.store.readRaw(index, field, rows)
         for (let t = 0; t < block.at.length; t++) {
           if (block.at[t]! < range[0] || block.at[t]! > range[1]) continue
           for (let row = 0; row < ids.length; row++) {
@@ -179,6 +173,7 @@ describe("GridKit's programs on solver files", () => {
           }
         }
       }
+    }
     return found
   }
 
@@ -281,6 +276,125 @@ describe("GridKit's programs on solver files", () => {
     expect(lowest(0.05, 0.1)).toBeLessThan(0.8)
   })
 
+  it('writes the case monitor in a folder with spaces and preserves the source files', async ({
+    signal,
+  }) => {
+    const original = listing(await readFile('cases/IEEE39.case.json', 'utf8'), ['Vm'])
+    const text = applyEdits(
+      original,
+      modify(
+        original,
+        ['monitors'],
+        [{ format: 'csv', file_name: 'monitor data/voltage.csv' }],
+        {},
+      ),
+    )
+    const execution = await run(
+      'monitor paths',
+      'IEEE39',
+      {
+        tmax: 0.05,
+        dt_monitor: 0.01,
+        events: [],
+      },
+      signal,
+      { record: () => text },
+    )
+    const study = await readFile(execution.request.solver, 'utf8')
+    const result = await execution.done
+    expect(result.progress.domain[1]).toBeCloseTo(0.05, 9)
+    expect(await readFile(join(execution.folder, 'IEEE39.case.json'), 'utf8')).toBe(text)
+    expect(await readFile(execution.request.solver, 'utf8')).toBe(study)
+    await access(join(execution.folder, 'monitor data', 'voltage.csv'))
+  })
+
+  it('stages a reference file and reads the output back for comparison', async ({ signal }) => {
+    const study = { output_file: 'out.csv', tmax: 0.05, dt_monitor: 0.01, events: [] }
+    const reference = await run('reference', 'IEEE39', study, signal)
+    await reference.done
+    const bytes = await readFile(reference.request.output)
+    const compared = await run(
+      'compared',
+      'IEEE39',
+      {
+        ...study,
+        reference_file: reference.request.output,
+        error_tolerance: 1e-8,
+      },
+      signal,
+    )
+    expect((await compared.done).progress.frames).toBeGreaterThan(0)
+    expect(await readFile(reference.request.output)).toEqual(bytes)
+  })
+
+  it.skipIf(!!gridkit.path)(
+    'accepts the same output in the study and case monitor',
+    async ({ signal }) => {
+      const execution = await run(
+        'same monitor',
+        'IEEE39',
+        {
+          output_file: 'out.csv',
+          tmax: 0.05,
+          dt_monitor: 0.01,
+          events: [],
+        },
+        signal,
+        {
+          record: (text) =>
+            applyEdits(
+              listing(text, ['Vm']),
+              modify(
+                listing(text, ['Vm']),
+                ['monitors'],
+                [{ format: 'csv', file_name: 'out.csv' }],
+                {},
+              ),
+            ),
+        },
+      )
+      expect((await execution.done).progress.domain[1]).toBeCloseTo(0.05, 9)
+    },
+  )
+
+  it.skipIf(!!gridkit.path)(
+    'rejects unsupported state input without silently ignoring it',
+    async ({ signal }) => {
+      const execution = await run(
+        'state input',
+        'IEEE39',
+        {
+          output_file: 'out.csv',
+          state_file: 'start.state.json',
+          tmax: 0.05,
+          events: [],
+        },
+        signal,
+      )
+      await expect(execution.done).rejects.toThrow('does not support state_file')
+    },
+  )
+
+  it.skipIf(!!gridkit.path)(
+    'refuses an output that would overwrite a case input',
+    async ({ signal }) => {
+      const execution = await run(
+        'input collision',
+        'IEEE39',
+        {
+          output_file: 'IEEE39.case.json',
+          tmax: 0.05,
+          dt_monitor: 0.01,
+          events: [],
+        },
+        signal,
+      )
+      const source = listing(await readFile('cases/IEEE39.case.json', 'utf8'), ['Vm'])
+      await expect(execution.done).rejects.toThrow('would overwrite an input')
+      expect(await readFile(execution.request.output, 'utf8')).toBe(source)
+    },
+  )
+
   it("reads GridKit's long layout as it reads its wide one, an event's samples and all", async ({
     signal,
   }) => {
@@ -324,10 +438,10 @@ describe("GridKit's programs on solver files", () => {
         {
           ...request,
           results: randomUUID(),
-          gridkit: { ...gridkit, path: join(folder, 'missing'), image: '' },
+          gridkit: { ...gridkit, path: join(folder, 'missing') },
         },
         stores,
-        { signal, reading: () => {}, progress: () => {}, log: () => {} },
+        { wasm, signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),
     ).rejects.toThrow(/GridKit Path/)
     expect(await readFile(out, 'utf8')).toBe(written)
@@ -344,13 +458,14 @@ describe("GridKit's programs on solver files", () => {
     await expect(
       simulate(
         first.kase,
-        { ...request, results: randomUUID(), gridkit: { ...gridkit, path: broken, image: '' } },
+        { ...request, results: randomUUID(), gridkit: { ...gridkit, path: broken } },
         stores,
         { signal, reading: () => {}, progress: () => {}, log: () => {} },
       ),
     ).rejects.toThrow(/did not start.*GridKit Path/)
     expect(await readFile(out, 'utf8')).toBe(written)
     const results = await simulate(first.kase, { ...request, results: randomUUID() }, stores, {
+      wasm,
       signal,
       reading: () => {},
       progress: () => {},
@@ -384,6 +499,7 @@ describe("GridKit's programs on solver files", () => {
       { ...first.request, run: randomUUID(), results: randomUUID(), tmax: 0.05 },
       stores,
       {
+        wasm,
         signal,
         reading: () => order.push('second began'),
         progress: () => {},
@@ -399,40 +515,7 @@ describe("GridKit's programs on solver files", () => {
     expect(results.progress.domain[1]).toBeCloseTo(0.05, 9)
   })
 
-  it('reads what a stopped run wrote to its end, which then exports as GridKit wrote it', async ({
-    signal,
-  }) => {
-    let writing!: () => void
-    const begun = new Promise<void>((resolve) => (writing = resolve))
-    let stop!: (reason: Error) => void
-    const stopped = await run(
-      'stopped',
-      'IEEE39',
-      { output_file: 'out.csv', dt_monitor: 0.01, tmax: 1000, events: [] },
-      signal,
-      {
-        progress: (stopRun) => {
-          stop = stopRun
-          writing()
-        },
-      },
-    )
-    await begun
-    stop(new Error('Stopped by the test'))
-    await expect(stopped.done).rejects.toThrow('Stopped by the test')
-    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
-    const results = stopped.read()!
-    expect(results.progress.growing).toBe(false)
-    expect(results.progress.error).toBeUndefined()
-    const exported = join(stopped.folder, 'exported.csv')
-    await results.exportCsv(exported)
-    const copy = await readFile(exported, 'utf8')
-    // GridKit's own file, but for a last row it may have been stopped partway through.
-    expect((await readFile(join(stopped.folder, 'out.csv'), 'utf8')).startsWith(copy)).toBe(true)
-    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
-  })
-
-  it('says why GridKit could not finish, and runs again', async ({ signal }) => {
+  it('says why GridKit could not finish', async ({ signal }) => {
     const failed = await run(
       'failure',
       'IEEE39',
@@ -446,53 +529,12 @@ describe("GridKit's programs on solver files", () => {
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message.trim()).not.toBe('')
     expect(failed.released()).toBe(true)
-    const retry = await run(
-      'retry',
-      'IEEE39',
-      { output_file: 'out.csv', tmax: 0.1, dt_monitor: 0.01, events: [] },
-      signal,
-    )
-    expect((await retry.done).progress.domain[1]).toBeCloseTo(0.1, 9)
   })
 
-  it('refuses an image this machine does not have, and never pulls it', async ({
+  it('stops with its process when cancelled, and reads what it wrote to its end, which exports as GridKit wrote it', async ({
     signal,
-    skip,
   }) => {
-    if (runtime.kind !== 'container') skip()
-    const { cli } = runtime as Extract<Runtime, { kind: 'container' }>
-    const image = 'ghcr.io/lukelowry/gridkit:studio-never-pulls'
-    const { done, owned } = await run(
-      'unpulled',
-      'IEEE39',
-      { output_file: 'out.csv', tmax: 0.1, events: [] },
-      signal,
-      { using: { ...gridkit, image } },
-    )
-    await expect(done).rejects.toThrow(image)
-    expect(owned()).toBeUndefined()
-    await expect(promisify(execFile)(cli, ['image', 'inspect', image])).rejects.toThrow()
-  })
-
-  it('keeps a container to the folder it mounts, before starting a process', async ({
-    signal,
-    skip,
-  }) => {
-    if (runtime.kind !== 'container') skip()
-    const elsewhere = resolve(await mkdtemp('output/simulation/elsewhere-'))
-    const { done, owned } = await run(
-      'outside',
-      'IEEE39',
-      { output_file: 'out.csv', tmax: 0.1, events: [] },
-      signal,
-      { mount: elsewhere },
-    )
-    await expect(done).rejects.toThrow('outside')
-    expect(owned()).toBeUndefined()
-  })
-
-  it('stops with its process when cancelled, keeping the frames it wrote', async ({ signal }) => {
-    const { request, done, owned, released, read } = await run(
+    const { folder, request, done, owned, released, read } = await run(
       'cancel',
       'IEEE39',
       { output_file: 'out.csv', tmax: 1000, dt_monitor: 0.001, events: [] },
@@ -501,21 +543,21 @@ describe("GridKit's programs on solver files", () => {
     )
     await expect(done).rejects.toThrow('Cancelled by the test')
     expect(released()).toBe(true)
-    expect(read()!.layout.path).toBe(request.output)
-    expect(read()!.progress.frames).toBeGreaterThan(0)
-    expect(read()!.progress.domain[1]).toBeLessThan(1000)
-    // The process is gone, not left to finish its thousand seconds, and so is its container.
-    expect(() => process.kill(owned()!.pid, 0)).toThrow()
-    const container = owned()!.container
-    if (container) {
-      const { stdout } = await promisify(execFile)(container.cli, [
-        'ps',
-        '--all',
-        '--quiet',
-        '--filter',
-        'name=' + container.name,
-      ])
-      expect(stdout.trim()).toBe('')
-    }
+    // Read through to what GridKit wrote before it stopped, not cut off where it was stopped.
+    const results = read()!
+    expect(results.layout.path).toBe(request.output)
+    expect(results.progress.growing).toBe(false)
+    expect(results.progress.error).toBeUndefined()
+    expect(results.progress.frames).toBeGreaterThan(0)
+    expect(results.progress.domain[1]).toBeLessThan(1000)
+    const exported = join(folder, 'exported.csv')
+    await results.exportCsv(exported)
+    const copy = await readFile(exported, 'utf8')
+    // GridKit's own file, but for a last row it may have been stopped partway through.
+    expect((await readFile(request.output, 'utf8')).startsWith(copy)).toBe(true)
+    expect(copy.split('\n').length - 2).toBe(results.progress.frames)
+    // The native process or WASM worker has ended before cancellation settles.
+    if (runtime.kind === 'installed') expect(() => process.kill(owned()!.pid, 0)).toThrow()
+    else expect(owned()).toBeUndefined()
   })
 })

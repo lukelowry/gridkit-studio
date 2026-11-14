@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
-
 import { Data, type Expr, field, type Fields, Patch, type Query } from 'latkit'
 
+import { createHash } from '../platform/crypto.js'
 import {
   PAGE_BYTES,
   type ProjectionCursor,
@@ -20,7 +19,7 @@ const ROWS_PER_STEP = 4096
 /** The patch `write` makes of as many of `rows` rows as fit a page: all of them, halved until they
  *  do, so a case goes to a view in as few pages as its bytes take. One row always goes, whatever it
  *  weighs. */
-export async function paged(
+async function paged(
   rows: number,
   write: (count: number) => Uint8Array,
   turns: Turns,
@@ -34,7 +33,7 @@ export async function paged(
   }
 }
 
-export function projectionKey(
+function projectionKey(
   document: ProjectedDocument,
   selection: readonly ProjectionSelection[],
 ): string {
@@ -46,7 +45,7 @@ export function projectionKey(
 }
 
 /** Validate the field set and establish reference targets before any references are written. */
-export function included(document: ProjectedDocument, selection: readonly ProjectionSelection[]) {
+function included(document: ProjectedDocument, selection: readonly ProjectionSelection[]) {
   const tables = new Map<string, readonly string[]>()
   for (const { table, fields } of selection) {
     const definition = document.definition.tables.find((item) => item.name === table)

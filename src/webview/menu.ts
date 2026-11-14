@@ -1,14 +1,15 @@
 /** The case's elements as the views find them and offer them to VS Code's native menu. */
 
-import { menuContext, type Target } from '../shared/contexts.js'
-import type { Element, Plot, ViewState } from '../shared/messages.js'
+import type { Entity } from '../shared/document.js'
+import { menuContext, type Target } from '../shared/menus.js'
+import type { Plot, ViewState } from '../shared/messages.js'
 
 /** Opens VS Code's menu for `elements` at `point`. Latkit picks asynchronously, so a synthetic
  *  event on a temporary node carries the exact hit's context. */
 export function nativeMenu(
   canvas: HTMLCanvasElement,
   point: readonly [number, number],
-  elements: Element[],
+  elements: Entity[],
   state: ViewState,
   origin: Target['origin'],
   plot?: Plot,
@@ -24,11 +25,9 @@ export function nativeMenu(
         origin,
         element: elements[0],
         items: elements,
-        type: plot?.from,
-        field: plot?.field,
-        plot,
+        ...(plot && { field: { table: plot.table, field: plot.field }, plot }),
       },
-      state.bindings,
+      state.mappings,
     ),
   )
   document.body.append(node)

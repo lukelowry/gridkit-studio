@@ -6,7 +6,8 @@ import { join } from 'node:path'
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
-import type { Channel, FieldRef } from '../../src/shared/bindings.js'
+import type { Field } from '../../src/shared/document.js'
+import type { Channel } from '../../src/shared/mappings.js'
 import { idle, pause, type Solver, type TestHost, testHost, until, visible, VM } from './harness.js'
 
 const ROOT = process.env.GRIDKIT_TEST_ROOT!
@@ -22,7 +23,7 @@ const NOTCHES_OUT = 4
 async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promise<void> {
   const session = bench.studio.get(uri.toString())!
   const previous = session.run?.id
-  bench.run('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
+  bench.explorer('Run Dynamic Simulation', await bench.writeSolver(solver, uri))
   await until(
     () => session.run?.id !== previous && session.run?.state !== 'running',
     'the run ends',
@@ -71,9 +72,9 @@ async function hub(path: string): Promise<number> {
 }
 
 /** Show the case at `path` alone, full window, with `map` driving `channels`. */
-async function show(bench: TestHost, path: string, map: FieldRef, channels: Channel[]) {
+async function show(bench: TestHost, path: string, map: Field, channels: Channel[]) {
   const { uri, network } = await bench.openCase(path)
-  bench.studio.get(uri.toString())!.bind(map, channels)
+  bench.studio.get(uri.toString())!.map(map, channels)
   await vscode.commands.executeCommand('workbench.action.closePanel')
   await vscode.commands.executeCommand('workbench.action.closeSidebar')
   return { uri, network, session: bench.studio.get(uri.toString())! }
@@ -174,13 +175,13 @@ export async function run() {
     await set('network.colormap', 'thermal')
     const ieee = await bench.open()
     await bench.record('Bus', ['Vm'])
-    bench.session.bind(VM, ['vertexColor'])
+    bench.session.map(VM, ['vertexColor'])
     await simulate(bench, bench.uri, {
       tmax: 5,
       dt_monitor: 0.01,
       events: faultAt(16, [0.5, 0.6], 0.01),
     })
-    bench.session.setPlots([{ from: VM.table, field: VM.field }])
+    bench.session.setPlots([{ table: VM.table, field: VM.field }])
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     const monitor = await bench.show('monitor')
     bench.session.transport.seek(0.55)

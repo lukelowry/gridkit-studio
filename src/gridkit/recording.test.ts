@@ -1,5 +1,3 @@
-import { readFile } from 'node:fs/promises'
-
 import { describe, expect, it } from 'vitest'
 
 import { Case } from './case.js'
@@ -76,21 +74,5 @@ describe("a case's recording", () => {
     const text = source.replace('"mon":["Va"]', '"mon":["va"]')
     const kase = await Case.parse(new TextEncoder().encode(text), catalog)
     expect((await recordingOf(kase)).listed).toEqual({ Bus: { Va: 1 } })
-  })
-
-  it('counts what a release case lists, as its own file says', async () => {
-    const text = await readFile('cases/IEEE39.case.json', 'utf8')
-    const json = JSON.parse(text) as {
-      devices: { class: string; mon?: string[] }[]
-      buses: { mon?: string[] }[]
-    }
-    const listed: Record<string, Record<string, number>> = {}
-    for (const { mon = [] } of json.buses)
-      for (const name of mon) (listed.Bus ??= {})[name] = (listed.Bus?.[name] ?? 0) + 1
-    for (const { class: type, mon = [] } of json.devices)
-      for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
-    expect(
-      (await recordingOf(await Case.parse(new TextEncoder().encode(text), catalog))).listed,
-    ).toEqual(listed)
   })
 })

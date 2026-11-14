@@ -1,8 +1,7 @@
 /** A results file followed as GridKit writes it: its header, then runs of whole frames. */
-import { type FileHandle, open } from 'node:fs/promises'
-import { basename } from 'node:path'
-import { setTimeout } from 'node:timers/promises'
-
+import { type FileHandle, open } from '../platform/files.js'
+import { basename } from '../platform/path.js'
+import { setTimeout } from '../platform/timing.js'
 import { problem } from '../shared/errors.js'
 import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
 import { same, type Stamp, stampOf } from './stamp.js'
@@ -65,7 +64,7 @@ export async function* follow(
   }
   try {
     /** The bytes read and not yet given, `from` to `to` of `buffer`, which grows to hold a row. */
-    let buffer = Buffer.allocUnsafe(2 * SEGMENT_BYTES)
+    let buffer = new Uint8Array(2 * SEGMENT_BYTES)
     let from = 0
     let to = 0
     /** How far the file has been read. */
@@ -95,10 +94,8 @@ export async function* follow(
       if (buffer.length - to < SEGMENT_BYTES) {
         const held = to - from
         const next =
-          held + SEGMENT_BYTES > buffer.length
-            ? Buffer.allocUnsafe(2 * (held + SEGMENT_BYTES))
-            : buffer
-        buffer.copy(next, 0, from, to)
+          held + SEGMENT_BYTES > buffer.length ? new Uint8Array(2 * (held + SEGMENT_BYTES)) : buffer
+        next.set(buffer.subarray(from, to), 0)
         scan -= from
         buffer = next
         from = 0

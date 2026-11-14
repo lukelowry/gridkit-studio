@@ -19,7 +19,7 @@ export default defineConfig({
           clearMocks: true,
         },
       },
-      // What GridKit writes and says, run where GridKit is installed or as GRIDKIT_IMAGE.
+      // What bundled WASM writes and says, or a native installation selected by GRIDKIT_PATH.
       {
         test: {
           name: 'contract',

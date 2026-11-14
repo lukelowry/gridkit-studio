@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { LABEL } from '../shared/document.js'
 import { Case } from './case.js'
 import { catalog } from './definition.js'
 import { diagnose } from './issues.js'
@@ -15,6 +16,16 @@ describe('the cases in cases/', () => {
       const kase = await Case.parse(await readFile(join('cases', name)), catalog)
       // Every class and member is one the catalog knows.
       expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
+      // Each table projects its rows under their own identities, in file order.
+      const projected = kase.projected()
+      expect(projected.key).toBe(kase.version)
+      for (const [type, table] of projected.tables) {
+        expect(table.ids.length).toBe(kase.table(type).records.length)
+        if (!table.ids.length) continue
+        const first = { table: type, id: table.ids[0]! }
+        expect(kase.locate(first)?.row).toBe(0)
+        expect(table.read(LABEL, 0, 1)).toEqual([String(first.id)])
+      }
     },
   )
 })

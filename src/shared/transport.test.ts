@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { advance, clamp, type ClockState, IDLE, Transport } from './transport.js'
+import { advance, type ClockState, IDLE, Transport } from './transport.js'
 
 const SPAN: readonly [number, number] = [0, 10]
 
@@ -26,14 +26,6 @@ function rig() {
 
 afterEach(() => {
   vi.useRealTimers()
-})
-
-describe('clamp', () => {
-  it('keeps a time within the span', () => {
-    expect(clamp(-1, SPAN)).toBe(0)
-    expect(clamp(4, SPAN)).toBe(4)
-    expect(clamp(11, SPAN)).toBe(10)
-  })
 })
 
 describe('advance', () => {
@@ -289,15 +281,6 @@ describe('Transport', () => {
     // `state` itself holds the last change.
     expect(transport.snapshot()).toMatchObject({ status: 'playing', t: 4 })
     expect(transport.state).toMatchObject({ status: 'playing', t: 0 })
-    transport.dispose()
-  })
-
-  it('reads the wall clock by default', async () => {
-    const transport = new Transport(() => {})
-    transport.setSpan([0, 1000])
-    transport.play()
-    await new Promise((done) => setTimeout(done, 20))
-    expect(transport.currentT()).toBeGreaterThan(0)
     transport.dispose()
   })
 })

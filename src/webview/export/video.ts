@@ -1,4 +1,4 @@
-﻿import { type Camera, type Placed, Shot, type Video, View } from 'latkit'
+import { type Camera, type Placed, Shot, type Video, View } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
 import type { Framing, VideoView, ViewState } from '../../shared/messages.js'

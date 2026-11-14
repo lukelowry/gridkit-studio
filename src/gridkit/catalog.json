@@ -3,10 +3,32 @@
     "pattern": "^[A-Za-z0-9 _.-]*$",
     "rule": "only ASCII letters, digits, spaces, _, . and -"
   },
+  "case": {
+    "required": ["header", "params", "buses", "devices"],
+    "header": [
+      { "id": "format_version", "type": "real" },
+      { "id": "format_revision", "type": "real" },
+      { "id": "case_name", "type": "text", "required": true },
+      { "id": "case_date_time", "type": "text" },
+      { "id": "case_description", "type": "text", "required": true },
+      { "id": "case_comments", "type": "text", "required": true }
+    ],
+    "params": [
+      { "id": "freq_base", "type": "real", "unit": "Hz", "required": true },
+      { "id": "va_base", "type": "real", "unit": "VA", "required": true }
+    ]
+  },
+  "signal": {
+    "required": ["name"]
+  },
+  "device": {
+    "required": ["params", "ports"]
+  },
   "bus": {
     "name": "Bus",
     "classes": ["Bus", "BusInfinite", "SignalVoltageIn", "SignalVoltageOut"],
     "label": "Bus",
+    "required": ["name", "class", "params"],
     "params": [
       {
         "id": "kv",

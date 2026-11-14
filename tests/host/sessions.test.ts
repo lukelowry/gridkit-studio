@@ -1,6 +1,5 @@
-/** Sessions: what a case records, which its own `mon` lists say, the results file a session reads
- *  again when its case opens, the plots a new run keeps, and that a case nothing holds lets go of
- *  everything it held, in the extension and in the results worker. */
+/** Sessions: the results file a session reads again when its case opens, and that a case nothing
+ *  holds lets go of everything it held, in the extension and in the worker. */
 
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
@@ -12,8 +11,6 @@ import * as vscode from 'vscode'
 import type { Session } from '../../src/extension/session.js'
 import type { Sessions } from '../../src/extension/sessions.js'
 import { savedKey } from '../../src/shared/ids.js'
-import type { Results } from '../../src/shared/messages.js'
-import { plotsFor } from '../../src/shared/plots.js'
 import { extension, folder, until } from './studio.js'
 
 suite('Sessions', () => {
@@ -65,37 +62,8 @@ suite('Sessions', () => {
     uri = await copy()
   })
 
-  test('a case records what its own lists name', async () => {
-    const source = (await caseAt(uri)) as {
-      buses: { mon?: string[] }[]
-      devices: { class: string; mon?: string[] }[]
-    }
-    const listed: Record<string, Record<string, number>> = {}
-    for (const { type, mon = [] } of [
-      ...source.buses.map(({ mon }) => ({ type: 'Bus', mon })),
-      ...source.devices.map(({ class: type, mon }) => ({ type, mon })),
-    ])
-      for (const name of mon) (listed[type] ??= {})[name] = (listed[type]?.[name] ?? 0) + 1
-    assert.deepEqual((await studio.files.read(uri.toString())).recording.listed, listed)
-  })
-
-  test('a new run keeps the plots it recorded, else plots its first signal', () => {
-    const results = {
-      outputs: [
-        { table: 'Bus', field: 'Va', ids: [1] },
-        { table: 'Bus', field: 'Vm', ids: [1] },
-      ],
-    } as unknown as Results
-    const vm = { from: 'Bus', field: 'Vm' }
-    assert.deepEqual(plotsFor(results, [vm, { from: 'Bus', field: 'Pg' }]), [vm])
-    assert.deepEqual(plotsFor(results, [{ from: 'Gen', field: 'Pg' }]), [
-      { from: 'Bus', field: 'Va' },
-    ])
-    assert.deepEqual(plotsFor({ outputs: [] } as unknown as Results, [vm]), [])
-  })
-
   test('forgets cases deleted while it was closed, and keeps those that exist', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     session.setPlots([])
     const gone = savedKey(
       vscode.Uri.joinPath(folder(), `gone-${randomUUID()}.case.json`).toString(),
@@ -108,7 +76,7 @@ suite('Sessions', () => {
   })
 
   test('reads the results file it showed again when the case opens, and forgets one gone', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     const csv = await samples(uri)
     await session.load(csv.fsPath)
     const restored = await reopen(session)
@@ -125,7 +93,7 @@ suite('Sessions', () => {
   })
 
   test('reads a simulation again from where its solver file writes now', async () => {
-    const session = studio.current()
+    const session = studio.get(studio.active!)!
     const name = randomUUID()
     const solver = vscode.Uri.joinPath(folder(), `${name}.solver.json`)
     const solverText = JSON.stringify({
@@ -150,14 +118,14 @@ suite('Sessions', () => {
     await vscode.workspace.fs.delete(solver)
   })
 
-  test('lets go of every case nothing holds, here and in the results worker, where they rest', async () => {
-    const stats = async () => (await studio.client.stats()).results
-    const held = (await stats()) ?? { files: 0, resting: 0, cases: 0 }
+  test('lets go of every case nothing holds, here and in the worker, where their results rest', async () => {
+    const stats = () => studio.client.stats()
+    const held = (await stats()) ?? { cases: 0, files: 0, resting: 0 }
     // Cases followed one after another, each showing results, each closed as the next is followed.
     const visited: Session[] = []
     for (let n = 0; n < 3; n++) {
       const opened = await copy()
-      const session = studio.current()
+      const session = studio.get(studio.active!)!
       await session.load((await samples(opened)).fsPath)
       visited.push(session)
       session.release('document')
@@ -167,15 +135,11 @@ suite('Sessions', () => {
     for (const session of visited.slice(0, -1))
       assert.equal(studio.get(session.uri), undefined, 'A case nothing holds closes')
     await until(async () => (await stats())!.files === held.files + 1, 'one results file held')
-    // What the cases before showed may rest in the worker, with its case, under the budget, to open
-    // again without reading anything: a case is read for the results held, and each that rests.
+    // What the cases before showed may rest in the worker, under the budget, to open again without
+    // reading anything, but the worker follows none of their files.
     const now = (await stats())!
     assert.ok(now.resting - held.resting <= 2, 'Only results let go of rest')
-    assert.equal(
-      now.cases,
-      held.cases + 1 + (now.resting - held.resting),
-      'The worker reads a case for the results held, and for each that rests',
-    )
+    assert.ok(now.cases <= held.cases + 1, 'The worker follows only the cases held')
     // The last lets go once another case is followed.
     await studio.open(uri.toString())
     assert.equal(studio.get(last!.uri), undefined)

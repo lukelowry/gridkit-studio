@@ -1,34 +1,27 @@
-/** A case Studio works on, in every process: what its views show of it, the results they draw, and
- *  the run that writes them. Something always holds a session while it lives: an editor has its
- *  case open, the views follow it, a run writes for it, or an export draws it. When the last lets
- *  go, it closes, and lets go of all it holds, here and in the results worker. What it saves stays,
- *  to open with again. */
-
-import { randomUUID } from 'node:crypto'
-
 import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
-import {
-  type Bindings,
-  bound,
-  type Channel,
-  channelsFor,
-  type FieldRef,
-} from '../shared/bindings.js'
+/** A case Studio works on, in every process: what its views show of it, the results they draw, and
+ *  the run that writes them. Something always holds a session while it lives: an editor has its
+ *  case open, the views follow it, a run writes for it, or an export draws it. When the last lets
+ *  go, it closes, and lets go of all it holds, here and in the worker. What it saves stays,
+ *  to open with again. */
+import { randomUUID } from '../platform/crypto.js'
 import { changedTable } from '../shared/cells.js'
-import { type Entity, networkRole } from '../shared/document.js'
+import type { ValueRange } from '../shared/data.js'
+import { type Entity, type Field, networkRole } from '../shared/document.js'
 import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { followed, savedKey, savedUri } from '../shared/ids.js'
+import { type Channel, channelsFor, mapped, type Mappings } from '../shared/mappings.js'
 import {
-  type CaseSource,
   type Element,
   type Framing,
   type Plot,
   type Results,
   type ResultsLayout,
   type ResultsProgress,
+  type Revision,
   revisionOf,
   type Run,
   type RunRequest,
@@ -36,12 +29,13 @@ import {
   type TableState,
 } from '../shared/messages.js'
 import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
-import type { SettingsValues } from '../shared/preferences.js'
+import type { ViewSettings } from '../shared/settings.js'
 import { Transport } from '../shared/transport.js'
 import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
 import type { Sessions } from './sessions.js'
 import { displayOf } from './settings.js'
 import { gone, nameOf, writtenNow } from './solvers.js'
+import { uriOf } from './uris.js'
 
 /** Why a session is kept: an editor has its case open, the views follow it, a run writes for it,
  *  or an export draws it. */
@@ -49,7 +43,7 @@ export type Hold = 'document' | 'active' | 'run' | 'export'
 
 /** What a session saves for its case, to open with again. */
 interface Saved {
-  readonly bindings?: Bindings
+  readonly mappings?: Mappings
   readonly plots?: Plot[]
   readonly table?: TableState
   /** The results file the Monitor showed, and the solver file whose run wrote it. */
@@ -65,8 +59,8 @@ export function savedResults(state: vscode.Memento): string[] {
 }
 
 /** What a run of the session's case takes besides the case: the solver file, where it writes, when
- *  it ends, the folder a container mounts, and where GridKit runs. */
-export type RunPlan = Omit<RunRequest, keyof CaseSource | 'run' | 'results'>
+ *  it ends, and where GridKit runs. */
+type RunPlan = Omit<RunRequest, keyof Revision | 'run' | 'results'>
 
 /** Whether `results` were read to their end and stopped short of it. */
 const unread = (results?: Results) => !!results?.error && !results.growing
@@ -78,7 +72,7 @@ interface Running {
   /** The results it writes. */
   readonly results: string
   readonly stop: AbortController
-  /** Whether the results worker said it began; until it does, the run ends with its request. */
+  /** Whether the worker said it began; until it does, the run ends with its request. */
   began: boolean
   /** How far it has written. */
   written?: Results
@@ -94,7 +88,7 @@ export class Session {
   #closed = false
   /** Whether its case was renamed, moved or deleted. */
   #moved = false
-  /** The results file it saved, or that the results worker held as it stopped, until it is read
+  /** The results file it saved, or that the worker held as it stopped, until it is read
    *  again or other results take its place. */
   #pending?: Saved['results']
   /** When that file is due to be read again: as the views follow the session, or, as the case did
@@ -107,8 +101,8 @@ export class Session {
    *  run under way, until another claim takes the say from it, which stops it. Till then, what
    *  showed before stays on show, so a run that never writes changes nothing. */
   #claimant?: Running
-  #settings: SettingsValues
-  #bindings: Bindings
+  #settings: ViewSettings
+  #mappings: Mappings
   #plots: Plot[]
   #table: TableState
   /** How many rows the Case panel's filters leave. */
@@ -123,12 +117,12 @@ export class Session {
   #window?: readonly [number, number]
   /** The results file the views draw: a run's, or one opened. */
   #results?: Results
-  /** The case the results on show were read against, as the results worker read it: asked once
+  /** The case the results on show were read against, as the worker read it: asked once
    *  for each results, and unknown until it answers. */
   #described?: { readonly results: string; summary?: Summary }
-  /** The latest run of the case, as the results worker last told of it. */
+  /** The latest run of the case, as the worker last told of it. */
   #run?: Run
-  /** The run under way, from its start until the results worker's last word of it. */
+  /** The run under way, from its start until the worker's last word of it. */
   #running?: Running
 
   constructor(
@@ -137,7 +131,7 @@ export class Session {
   ) {
     this.#studio = studio
     const saved = studio.context.workspaceState.get<Saved>(savedKey(uri), {})
-    this.#bindings = saved.bindings ?? {}
+    this.#mappings = saved.mappings ?? {}
     this.#plots = saved.plots ?? []
     this.#table = saved.table ?? {}
     this.#pending = saved.results
@@ -149,8 +143,8 @@ export class Session {
   /** Takes up what its case saved under the name it had before it was renamed or moved, as the
    *  session was made under its new name before the move said so: what it saves next keeps it. */
   resume(saved: unknown): void {
-    const { bindings, plots, table, results } = (saved ?? {}) as Saved
-    this.#bindings = bindings ?? this.#bindings
+    const { mappings, plots, table, results } = (saved ?? {}) as Saved
+    this.#mappings = mappings ?? this.#mappings
     this.#plots = plots ?? this.#plots
     this.#table = table ?? this.#table
     if (results && !this.#results && !this.#pending) {
@@ -162,11 +156,11 @@ export class Session {
     this.#changed()
   }
 
-  get settings(): SettingsValues {
+  get settings(): ViewSettings {
     return this.#settings
   }
-  get bindings(): Bindings {
-    return this.#bindings
+  get mappings(): Mappings {
+    return this.#mappings
   }
   get plots(): readonly Plot[] {
     return this.#plots
@@ -192,7 +186,7 @@ export class Session {
   get results(): Results | undefined {
     return this.#results
   }
-  /** The case the results on show were read against, once the results worker says what it is. */
+  /** The case the results on show were read against, once the worker says what it is. */
   get described(): Summary | undefined {
     const described = this.#described
     return described?.results === this.#results?.id ? described?.summary : undefined
@@ -220,7 +214,7 @@ export class Session {
     if (why === 'active') this.restore('following')
   }
 
-  /** Reads again the results file it saved, or that the results worker held as it stopped, once
+  /** Reads again the results file it saved, or that the worker held as it stopped, once
    *  that is due and the views follow the session: `because` they follow it now, or the case reads
    *  now. */
   restore(because: 'following' | 'read'): void {
@@ -294,7 +288,7 @@ export class Session {
   }
 
   /** Takes the say over what the views draw, as the user opens results or clears them: a run that
-   *  held it stops, as the results worker stops a run whose results are let go of, and what was due
+   *  held it stops, as the worker stops a run whose results are let go of, and what was due
    *  to be read again, or is being read, shows no more. */
   #claimed(): object {
     this.#claimant?.stop.abort()
@@ -357,10 +351,10 @@ export class Session {
     }
     this.#running = this.#claimant = running
     try {
-      await this.#studio.withCase(this.uri, (source) =>
-        this.#studio.client.results.call(
+      await this.#studio.withCase(this.uri, (revision) =>
+        this.#studio.client.worker.call(
           'run',
-          { ...source, ...plan, run: running.id, results: running.results },
+          { ...revision, ...plan, run: running.id, results: running.results },
           AbortSignal.any([signal, running.stop.signal]),
         ),
       )
@@ -380,7 +374,7 @@ export class Session {
     this.#running?.stop.abort()
   }
 
-  /** Takes what the results worker says of the run under way. As it begins, the log hears; as it
+  /** Takes what the worker says of the run under way. As it begins, the log hears; as it
    *  ends, the log hears how, and the user why it failed. What is said of any other run is past. */
   ran(next: Run): void {
     const running = this.#running
@@ -424,7 +418,7 @@ export class Session {
     this.release('run')
   }
 
-  /** The results worker stopped. A run under way was interrupted, and what was on show, or being
+  /** The worker stopped. A run under way was interrupted, and what was on show, or being
    *  read again, is read again from its file, as far as it was written, under an id the views start
    *  over with: at once while the views follow the session, unless `steady` says the worker keeps
    *  stopping, else once they follow it again. */
@@ -436,7 +430,7 @@ export class Session {
     this.#readAgain(steady)
   }
 
-  /** The results worker lost the results `id`, as what it kept of their file does not read: those
+  /** The worker lost the results `id`, as what it kept of their file does not read: those
    *  on show are read again from their file at once, under an id the views start over with. */
   dropped(id: string): void {
     if (this.#results?.id === id) this.#readAgain(true)
@@ -462,7 +456,7 @@ export class Session {
   /** Steps one frame through the results on show, then pauses. */
   async step(direction: 1 | -1): Promise<void> {
     if (!this.#results) return
-    const t = await this.#studio.client.results.call('step', {
+    const t = await this.#studio.client.worker.call('step', {
       results: this.#results.id,
       at: this.transport.currentT(),
       direction,
@@ -496,8 +490,8 @@ export class Session {
     if (!entity || !summary || stale) return
     let held: boolean
     try {
-      const page = await this.#studio.client.cases.call('page', {
-        ...revisionOf(summary),
+      const page = await this.#studio.client.worker.call('page', {
+        revision: revisionOf(summary),
         request: { table: entity.table, fields: [], ids: [entity.id], offset: 0, limit: 1 },
       })
       held = page.ids.length > 0
@@ -521,12 +515,13 @@ export class Session {
     }
   }
 
-  /** Makes `field` drive exactly `channels`, over `domain` when given. */
-  bind(field: FieldRef, channels: readonly Channel[], domain?: readonly [number, number]): void {
+  /** Maps `field` to exactly `channels`, over the values `range` gives, or, with none, over those
+   *  it holds. */
+  map(field: Field, channels: readonly Channel[], range?: ValueRange): void {
     const definition = this.#studio.files.get(this.uri)?.summary?.definition
     if (!definition) throw noCase()
     const allowed = channelsFor(networkRole(definition, field.table))
-    this.#bindings = bound(this.#bindings, allowed, field, channels, domain)
+    this.#mappings = mapped(this.#mappings, allowed, field, channels, range)
     this.#save()
     this.#changed()
   }
@@ -561,7 +556,7 @@ export class Session {
   }
 
   /** Shows `plot` over the values `range`; with none, over the values it shows. */
-  plotRange(plot: Plot, range?: readonly [number, number]): void {
+  plotRange(plot: Plot, range?: ValueRange): void {
     this.setPlots(
       this.#plots.map((each) => (samePlot(each, plot) ? plotWith(each, each.id, range) : each)),
     )
@@ -598,9 +593,12 @@ export class Session {
     this.#framing = framing
   }
 
-  /** Reads its display settings again, as they change. */
+  /** Reads its display settings again, as VS Code's settings change: those that leave how its
+   *  views look as it was change nothing. */
   reconfigure(): void {
-    this.#settings = displayOf(vscode.Uri.parse(this.uri))
+    const settings = displayOf(vscode.Uri.parse(this.uri))
+    if (JSON.stringify(settings) === JSON.stringify(this.#settings)) return
+    this.#settings = settings
     this.#changed()
   }
 
@@ -623,9 +621,16 @@ export class Session {
   async #restore(): Promise<void> {
     const saved = this.#pending
     if (!saved) return
+    let summary: Summary
+    try {
+      summary = await this.#studio.files.read(this.uri)
+    } catch {
+      // Why the case does not read is said as it fails: its results read once it does.
+      if (this.#pending === saved) this.#due = 'read'
+      return
+    }
     let path = saved.path
     try {
-      const summary = await this.#studio.files.read(this.uri)
       path = (saved.solver && (await writtenNow(saved.solver, summary))) || saved.path
       const results = await this.#read(path, saved.solver)
       if (this.#pending === saved) this.show(results)
@@ -638,7 +643,7 @@ export class Session {
         return
       }
       this.#studio.reporter.output.warn(`Could not read ${path} again: ${message(error)}`)
-      if ((await gone(vscode.Uri.file(path))) && this.#pending === saved) {
+      if ((await gone(uriOf(path))) && this.#pending === saved) {
         this.#pending = undefined
         this.#save()
       }
@@ -650,10 +655,10 @@ export class Session {
   async #read(path: string, solver?: string, signal?: AbortSignal): Promise<Results> {
     const results = randomUUID()
     try {
-      return await this.#studio.withCase(this.uri, (source) =>
-        this.#studio.client.results.call(
+      return await this.#studio.withCase(this.uri, (revision) =>
+        this.#studio.client.worker.call(
           'open',
-          { ...source, results, path, ...(solver && { solver }) },
+          { ...revision, results, path, ...(solver && { solver }) },
           signal,
         ),
       )
@@ -671,12 +676,12 @@ export class Session {
     if (shown && !this.#described) void this.#describe(shown.id)
   }
 
-  /** Asks the results worker which case the results `id` were read against. */
+  /** Asks the worker which case the results `id` were read against. */
   async #describe(id: string): Promise<void> {
     const described: { results: string; summary?: Summary } = { results: id }
     this.#described = described
     try {
-      described.summary = await this.#studio.client.results.call('describe', { results: id })
+      described.summary = await this.#studio.client.worker.call('describe', { results: id })
       if (this.#described === described) this.#changed()
     } catch (error) {
       if (this.#described === described) this.#described = undefined
@@ -688,11 +693,11 @@ export class Session {
   /** `entity` selected as the Network shows it, in the case `summary` describes: the element itself
    *  where the Network draws its type, else the nearest elements it draws, which may be none. */
   networkSelectionOf(entity: Entity, summary: Summary): Promise<Entity[]> {
-    return this.#studio.client.cases.call('networkSelection', { ...revisionOf(summary), entity })
+    return this.#studio.client.worker.call('networkSelection', { ...revisionOf(summary), entity })
   }
 
   /** Finds the selected `entity` as the Network shows it: an element it draws at once, with the
-   *  selection, and the nearest elements it draws once the case worker finds them. */
+   *  selection, and the nearest elements it draws once the worker finds them. */
   #selectInNetwork(entity: Entity): void {
     const { summary, stale } = this.#studio.files.get(this.uri) ?? {}
     if (!summary || stale) return
@@ -732,7 +737,7 @@ export class Session {
       ? { path: shown.path, ...(shown.solver && { solver: shown.solver }) }
       : this.#pending
     const saved: Saved = {
-      bindings: this.#bindings,
+      mappings: this.#mappings,
       plots: this.#plots,
       table: this.#table,
       ...(results && { results }),

@@ -1,15 +1,11 @@
-﻿/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
-import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
-
 import { type Id, Patch } from 'latkit'
 
 import type { Case } from '../gridkit/case.js'
-import { CaseQueries } from '../gridkit/projection.js'
+import { chunks, equal } from '../platform/bytes.js'
+/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
+import { createHash, randomUUID } from '../platform/crypto.js'
+import { mkdir, open, rename, rm } from '../platform/files.js'
+import { basename, dirname, join } from '../platform/path.js'
 import {
   ENTRY_BYTES,
   type ExactSample,
@@ -19,7 +15,6 @@ import {
   PAGE_BYTES,
   PAYLOAD_BYTES,
   type TimeRange,
-  type VisualizationRun,
 } from '../shared/data.js'
 import { message, problem } from '../shared/errors.js'
 import {
@@ -38,13 +33,13 @@ import {
   recordedFields,
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
-import { rawRun } from './frames.js'
+import { rawRun, type VisualizationRun } from './frames.js'
 import { detail, Pyramid, type ReducedRun } from './pyramid.js'
 import { same, type Stamp, stampAt } from './stamp.js'
 import { fileKey, type LevelIndex, type RawIndex, type Store } from './store.js'
 
 export const closed = () => problem('results-closed', 'These results are closed.')
-export const lost = (name: string, cause: unknown) =>
+const lost = (name: string, cause: unknown) =>
   problem('results-lost', `What Studio kept of ${name} could not be read.`, { cause })
 export interface Reading {
   readonly revision: Revision
@@ -68,6 +63,8 @@ interface FramePlan {
   first: number
   intervals: readonly Interval[]
   frames: number
+  /** The stored frames a playhead's window sends, in order, where it steps past others. */
+  picks?: Uint32Array
 }
 interface Cursor {
   key: string
@@ -88,9 +85,27 @@ function lowerBound(count: number, predicate: (index: number) => boolean): numbe
   return lo
 }
 
+/** The frames of `run`, read whole from the store, that `picks` names: renumbered by their place
+ *  among the picks, so a window's frames run on without gaps. */
+function picked(run: VisualizationRun, picks: Uint32Array, rows: number): VisualizationRun {
+  const from = lowerBound(picks.length, (i) => picks[i]! >= run.first)
+  const to = lowerBound(picks.length, (i) => picks[i]! >= run.first + run.at.length)
+  const at = new Float64Array(to - from)
+  const values = new Float32Array((to - from) * rows)
+  for (let pick = from; pick < to; pick++) {
+    const frame = picks[pick]! - run.first
+    at[pick - from] = run.at[frame]!
+    values.set(run.values.subarray(frame * rows, (frame + 1) * rows), (pick - from) * rows)
+  }
+  return { level: 0, first: from, at, values }
+}
+
 export class ResultsFile {
   #layout: ResultsLayout
-  readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] }
+  /** How far it is read: the ranges of its values always there, none while it holds no frame. */
+  readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] } & {
+    domains: NonNullable<ResultsProgress['domains']>
+  }
   readonly #decode: Layout = {}
   readonly #readers = new Map<AbortController, Promise<void>>()
   readonly #plans = new Map<string, FramePlan>()
@@ -101,8 +116,10 @@ export class ResultsFile {
   #opened?: Stamp
   #stamp?: Stamp
   #read = 0
+  /** Whether a later read can take the file up where the store stands: it holds the frames of
+   *  exactly the bytes kept of the file, which end, in a long layout, between two samples. */
+  #resumable = true
   #retired = false
-  #queries?: CaseQueries
   constructor(
     readonly kase: Case,
     readonly store: Store,
@@ -146,13 +163,9 @@ export class ResultsFile {
   get fields(): readonly Field[] {
     return this.#decode.read?.fields ?? []
   }
-  get queries(): CaseQueries {
-    return (this.#queries ??= new CaseQueries(this.kase.projected()))
-  }
   idle(): void {
-    this.#queries?.destroy()
-    this.#queries = undefined
     this.#plans.clear()
+    this.#deltas.clear()
   }
   get bytes(): number {
     return this.kase.bytes + this.store.bytes
@@ -196,8 +209,8 @@ export class ResultsFile {
     const original = await open(this.#layout.path, 'r')
     const cached = await open(join(this.store.folder, 'source.csv'), 'r')
     try {
-      const a = Buffer.alloc(64 << 10)
-      const b = Buffer.alloc(64 << 10)
+      const a = new Uint8Array(64 << 10)
+      const b = new Uint8Array(64 << 10)
       for (let at = 0; at < this.#read;) {
         signal.throwIfAborted()
         const length = Math.min(a.length, this.#read - at)
@@ -208,7 +221,7 @@ export class ResultsFile {
         if (
           x.bytesRead !== length ||
           y.bytesRead !== length ||
-          !a.subarray(0, length).equals(b.subarray(0, length))
+          !equal(a.subarray(0, length), b.subarray(0, length))
         )
           throw lost(this.#layout.name, new Error('The file changed before what was kept of it.'))
         at += length
@@ -217,6 +230,10 @@ export class ResultsFile {
       await Promise.allSettled([original.close(), cached.close()])
     }
   }
+  /** Reads the file on from what the store keeps of it, until `writer` is done and it holds no
+   *  more, telling `progress` of each segment kept. What the store then holds is written down
+   *  once, as the read ends, through or short, for a later read to take up: a window that goes
+   *  before then leaves a store that says nothing, and the file is read again. */
   async ingest(
     signal: AbortSignal,
     writer: () => Writer,
@@ -236,7 +253,7 @@ export class ResultsFile {
         if (piece.kind === 'header') {
           this.#opened = piece.stamp
           await readResults(
-            Readable.from([piece.bytes]),
+            chunks([piece.bytes]),
             this.kase,
             { signal, publish: () => {} },
             this.#decode,
@@ -246,40 +263,49 @@ export class ResultsFile {
           await this.store.writeCsv(piece.bytes, this.#read)
           this.#read += piece.bytes.length
         } else if (piece.kind === 'segment') {
-          await readResults(
-            Readable.from([piece.bytes]),
-            this.kase,
-            { signal, first: this.#progress.frames, publish: (frames) => this.#add(frames) },
-            this.#decode,
-          )
-          await this.store.writeCsv(piece.bytes, this.#read)
-          this.#read += piece.bytes.length
-          await this.#checkpoint(false)
+          await this.#take(signal, piece.bytes)
           await progress()
         } else {
           // A long layout's only sample ends with the file its writer finished.
-          if (this.#decode.long && writer() === 'done')
-            await readResults(
-              Readable.from([]),
-              this.kase,
-              {
-                signal,
-                first: this.#progress.frames,
-                final: true,
-                publish: (frames) => this.#add(frames),
-              },
-              this.#decode,
-            )
+          if (this.#decode.long && writer() === 'done') await this.#take(signal)
           this.#stamp = piece.stamp
         }
       }
-      await this.#checkpoint(!!this.#stamp)
+      await this.#checkpoint()
     } catch (error) {
       if (!signal.aborted) this.#progress.error = message(error)
+      // What it kept before it stopped is written down all the same; a store that cannot say
+      // what it holds is let go of, and its file read again.
+      await this.#checkpoint().catch(() => {})
       throw error
     } finally {
       this.#progress.growing = false
     }
+  }
+  /** Takes a segment of the file, `bytes` of whole rows past those kept, or, with none, the sample
+   *  a long layout ends with. Its frames are decoded, then kept, then its bytes: a segment that
+   *  does not read leaves the store as it was, holding the frames of exactly the bytes kept. */
+  async #take(signal: AbortSignal, bytes?: Uint8Array): Promise<void> {
+    const decoded: Decoded[] = []
+    await readResults(
+      chunks(bytes ? [bytes] : []),
+      this.kase,
+      {
+        signal,
+        first: this.#progress.frames,
+        final: !bytes,
+        publish: (frames) => void decoded.push(frames),
+      },
+      this.#decode,
+    )
+    this.#resumable = false
+    for (const frames of decoded) await this.#add(frames)
+    if (bytes) {
+      await this.store.writeCsv(bytes, this.#read)
+      this.#read += bytes.length
+    }
+    const long = this.#decode.long
+    this.#resumable = !long || (long.sample < 0 && !long.pending)
   }
   #learned(): void {
     this.#layout = { ...this.#layout, outputs: recordedFields(this.fields) }
@@ -304,9 +330,8 @@ export class ResultsFile {
     )
       throw new Error('Result times must be nondecreasing.')
     await this.store.writeRaw(frames.firstFrame, frames.coordinates, frames.values)
-    const domains = (progress.domains ??= {})
     this.fields.forEach((field, f) => {
-      const ranges = (domains[field.table] ??= {})
+      const ranges = (progress.domains[field.table] ??= {})
       let [min, max] = ranges[field.field] ?? [Infinity, -Infinity]
       for (const value of frames.values[f]!)
         if (Number.isFinite(value)) {
@@ -331,11 +356,15 @@ export class ResultsFile {
       }
     for (const levels of this.#pending) levels.clear()
   }
-  async #checkpoint(complete: boolean): Promise<void> {
-    if (!this.#decode.header || !this.#opened) return
-    // A long layout resumes between samples, never partway through one.
+  /** Writes down what the store holds of the file, unless it says so already: all of it, once the
+   *  file is read through, or as far as a read that stopped short kept it, where a later one can
+   *  read on from. */
+  async #checkpoint(): Promise<void> {
+    const complete = !!this.#stamp
+    if (!this.#decode.header || !this.#opened || !(complete || this.#resumable)) return
+    const said = this.store.manifest
+    if (said?.read === this.#read && said.complete === complete) return
     const long = this.#decode.long
-    if (long && !complete && (long.sample >= 0 || long.pending)) return
     await this.#flushLevels()
     await this.store.checkpoint({
       path: this.#layout.path,
@@ -346,7 +375,7 @@ export class ResultsFile {
       ...(long && { long: long.columns }),
       frames: this.#progress.frames,
       domain: this.#progress.domain,
-      domains: this.#progress.domains ?? {},
+      domains: this.#progress.domains,
       complete,
       reducers: this.#reducers.map((reducer) => reducer.snapshot()),
     })
@@ -364,6 +393,30 @@ export class ResultsFile {
     return (
       block.first + lowerBound(times.length, (i) => (strict ? times[i]! > at : times[i]! >= at))
     )
+  }
+  /** The stored frames from `first` to before `stop` a view shows, stepping `step` seconds through
+   *  `range`: of each time from `range[0]`, the last frame at or before it, each frame once. */
+  async #picks(first: number, stop: number, range: TimeRange, step: number): Promise<Uint32Array> {
+    const times = new Float64Array(stop - first)
+    for (let frame = first; frame < stop;) {
+      const block = this.#rawAt(frame)
+      const count = Math.min(stop, block.first + block.count) - frame
+      times.set(
+        await this.#stored(this.store.times(block, frame - block.first, count)),
+        frame - first,
+      )
+      frame += count
+    }
+    const picks: number[] = []
+    const last = Math.floor((range[1] - range[0]) / step)
+    for (let at = 0; at < times.length; at++) {
+      // The first time shown at or after this frame, which shows it unless a later frame comes first.
+      const shown = Math.max(0, Math.ceil((times[at]! - range[0]) / step - 1e-9))
+      if (shown > last) break
+      const next = times[at + 1]
+      if (next === undefined || range[0] + shown * step < next) picks.push(first + at)
+    }
+    return Uint32Array.from(picks)
   }
   #rawAt(frame: number): RawIndex {
     const blocks = this.store.raw
@@ -471,7 +524,9 @@ export class ResultsFile {
         ? !Number.isSafeInteger(request.columns) || request.columns < 1
         : !Number.isSafeInteger(request.bytes) ||
           request.bytes < 1024 ||
-          request.bytes > PAYLOAD_BYTES) ||
+          request.bytes > PAYLOAD_BYTES ||
+          !Number.isFinite(request.step) ||
+          request.step < 0) ||
       frames > this.#progress.frames ||
       frames < 0
     )
@@ -498,7 +553,7 @@ export class ResultsFile {
           frames,
           request.range,
           request.purpose,
-          request.purpose === 'plot' ? request.columns : request.bytes,
+          request.purpose === 'plot' ? request.columns : [request.bytes, request.step],
         ]),
       )
       .digest('hex')
@@ -514,11 +569,16 @@ export class ResultsFile {
       ? Math.min(frames, (await this.#bound(request.range[1], true, frames)) + 1)
       : 0
     signal.throwIfAborted()
-    // A plot holds buckets no wider than its columns; the playhead reads frames.
+    // A plot holds buckets no wider than its columns; the playhead reads frames, those it shows.
     const level = request.purpose === 'plot' ? detail(stop - first, request.columns) : 0
     const intervals = this.#intervals(field, level, first, stop)
+    const picks =
+      request.purpose === 'playhead' && request.step > 0
+        ? await this.#picks(first, stop, request.range, request.step)
+        : undefined
+    signal.throwIfAborted()
     if (request.purpose === 'playhead') {
-      const entries = intervals.reduce((sum, item) => sum + item.count, 0)
+      const entries = picks?.length ?? intervals.reduce((sum, item) => sum + item.count, 0)
       const bytes = entries * (8 + places.length * 4) + intervals.length * 128 + ids.length * 16
       if (bytes > request.bytes)
         throw problem(
@@ -526,7 +586,18 @@ export class ResultsFile {
           'This window exceeds the visualization budget. Choose fewer rows or a narrower time range.',
         )
     }
-    const plan: FramePlan = { key, source, field, ids, places, level, first, intervals, frames }
+    const plan: FramePlan = {
+      key,
+      source,
+      field,
+      ids,
+      places,
+      level,
+      first,
+      intervals,
+      frames,
+      ...(picks && { picks }),
+    }
     this.#plans.set(key, plan)
     while (this.#plans.size > 16) this.#plans.delete(this.#plans.keys().next().value!)
     return plan
@@ -604,13 +675,18 @@ export class ResultsFile {
       cursor || lacking
         ? new Patch(plan.source)
         : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids, fields)
-    const runs: VisualizationRun[] = []
-    let bytes = make().toBytes()
-    if (bytes.byteLength > ENTRY_BYTES)
+    // The page is written once: each run it takes is measured alone, then added.
+    const patch = make()
+    if (patch.byteLength > ENTRY_BYTES)
       throw problem('limit', 'Visualization identities exceed 16 MiB.')
+    const empty = new Patch(plan.source).byteLength
+    let runs = 0
+    // The share of the frames read that a playhead's window sends, which sizes each read.
+    const stored = plan.intervals.reduce((sum, item) => sum + item.count, 0)
+    const share = plan.picks ? Math.max(plan.picks.length, 1) / Math.max(stored, 1) : 1
     // Disk blocks follow ingestion boundaries; a wire page combines them up to its byte
     // budget. This avoids one RPC per small live-ingestion block during later playback.
-    page: while (part < intervals.length && runs.length < 64) {
+    page: while (part < intervals.length && runs < 64) {
       const interval = intervals[part]!
       const first = interval.first + offset
       const block =
@@ -618,15 +694,15 @@ export class ResultsFile {
           ? this.#rawAt(first)
           : this.#levelAt(plan.field, interval.level, first)!
       const entryBytes = (interval.level ? 2 : 1) * (8 + plan.ids.length * 4)
-      if (runs.length && bytes.byteLength + entryBytes + 256 > PAGE_BYTES) break
+      if (runs && patch.byteLength + entryBytes + 256 > PAGE_BYTES) break
       let count = Math.min(
         interval.count - offset,
         block.first + block.count - first,
-        Math.max(1, Math.floor((PAGE_BYTES - bytes.byteLength - 1024) / entryBytes)),
+        Math.max(1, Math.floor((PAGE_BYTES - patch.byteLength - 1024) / (entryBytes * share))),
       )
       for (;;) {
         signal.throwIfAborted()
-        const run =
+        const read =
           interval.level === 0
             ? rawRun(
                 await this.#stored(
@@ -642,15 +718,19 @@ export class ResultsFile {
             : await this.#stored(
                 this.store.readLevel(block as LevelIndex, plan.places, first - block.first, count),
               )
+        // A playhead's window sends the frames it shows of those read.
+        const run = plan.picks ? picked(read, plan.picks, plan.ids.length) : read
         signal.throwIfAborted()
-        const patch = make()
-        for (const held of runs) patch.frames(request.table, request.field, held)
-        const encoded = patch.frames(request.table, request.field, run).toBytes()
-        if (encoded.byteLength <= PAGE_BYTES || (!runs.length && count === 1)) {
-          if (encoded.byteLength > ENTRY_BYTES)
+        const adds = run.at.length
+          ? new Patch(plan.source).frames(request.table, request.field, run).byteLength - empty
+          : 0
+        if (patch.byteLength + adds <= PAGE_BYTES || (!runs && count === 1)) {
+          if (patch.byteLength + adds > ENTRY_BYTES)
             throw problem('limit', 'A visualization frame exceeds 16 MiB.')
-          runs.push(run)
-          bytes = encoded
+          if (run.at.length) {
+            patch.frames(request.table, request.field, run)
+            runs++
+          }
           offset += count
           if (offset === interval.count) {
             part++
@@ -662,6 +742,7 @@ export class ResultsFile {
         count = Math.max(1, Math.floor(count / 2))
       }
     }
+    const bytes = patch.toBytes()
     const complete = part === intervals.length
     const next: Cursor = {
       key: plan.key,
@@ -684,14 +765,28 @@ export class ResultsFile {
   async exportCsv(path: string): Promise<void> {
     if (this.of(path)) throw new Error('Choose a different file from the open results.')
     if (!this.#read) throw new Error('No results have been read yet.')
+    const size = this.#read
     const source = await open(join(this.store.folder, 'source.csv'), 'r')
     const draft = `${path}.${randomUUID().slice(0, 8)}.part`
     try {
       await mkdir(dirname(path), { recursive: true })
-      await pipeline(
-        source.createReadStream({ start: 0, end: this.#read - 1, autoClose: false }),
-        createWriteStream(draft),
-      )
+      const target = await open(draft, 'w')
+      try {
+        const bytes = new Uint8Array(1 << 20)
+        for (let at = 0; at < size;) {
+          const { bytesRead } = await source.read(bytes, 0, Math.min(bytes.length, size - at), at)
+          if (!bytesRead) throw new Error('The stored results are truncated.')
+          for (let written = 0; written < bytesRead;) {
+            const next = await target.write(bytes, written, bytesRead - written, at + written)
+            if (!next.bytesWritten) throw new Error('Export write made no progress.')
+            written += next.bytesWritten
+          }
+          at += bytesRead
+        }
+        await target.sync()
+      } finally {
+        await target.close()
+      }
       await rename(draft, path)
     } finally {
       await rm(draft, { force: true })

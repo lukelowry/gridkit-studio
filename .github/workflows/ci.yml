@@ -29,25 +29,44 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm quality
-      # An odd minor version (0.5.x) is a pre-release, as VS Code recommends: the Marketplace keeps
-      # each version number to one channel.
-      - shell: bash
-        run: |
-          pnpm package $(node -p "require('./package.json').version.split('.')[1] % 2 ? '--pre-release' : ''")
+      # Packaged as any build is: an odd minor version is a pre-release.
+      - run: pnpm package
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
         with:
           name: gridkit-studio
           path: dist/gridkit-studio-*.vsix
           if-no-files-found: error
-  # Real GridKit, from Studio's default image: what it writes and says, then the VSIX in the oldest
-  # and newest VS Code, driven through its commands. Nothing here reads what a window draws; the
-  # views a suite opens draw on the software GPU, unwatched.
-  gridkit:
+  # The real bundled WASM solver: what it writes and says, as Studio runs it.
+  contract:
     needs: check
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:contract
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: contract
+          path: output/simulation
+  # The VSIX in the oldest and newest VS Code, driven through its commands, with real GridKit.
+  # Nothing here reads what a window draws; the views a suite opens draw on the software GPU,
+  # unwatched.
+  gridkit:
+    needs: check
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, windows-latest]
         vscode: ['1.140.0', stable]
       fail-fast: false
     env:
@@ -73,23 +92,40 @@ jobs:
         with:
           name: gridkit-studio
           path: dist
-      # The image Studio runs GridKit from by default. Studio never pulls; the runner does, as a
-      # user would.
-      - run: docker pull "$(jq -r '.contributes.configuration[].properties["gridkitStudio.gridkitImage"].default // empty' package.json)"
-      - run: pnpm test:contract
-      - run: dbus-run-session -- xvfb-run -a pnpm test:package
+      - if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a pnpm test:package
+      - if: runner.os == 'Windows'
+        run: pnpm test:package
       # Workspace Trust, against the same VSIX.
-      - run: dbus-run-session -- xvfb-run -a pnpm test:package --untrusted tests/host/trust.ts
+      - if: runner.os == 'Linux'
+        run: dbus-run-session -- xvfb-run -a pnpm test:package --untrusted tests/host/trust.ts
+      - if: runner.os == 'Windows'
+        run: pnpm test:package --untrusted tests/host/trust.ts
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: gridkit-${{ matrix.vscode }}
-          path: output/simulation
+          name: gridkit-${{ matrix.os }}-${{ matrix.vscode }}
+          path: output/packaged-*/logs
+  web:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: node tests/browser.mjs --install-deps
   # The one check main's branch protection requires: every job above passed. Its name stays the
   # same when the jobs or their matrices change.
   required:
     if: always()
-    needs: [check, gridkit]
+    needs: [check, contract, gridkit, web]
     runs-on: ubuntu-latest
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
@@ -98,7 +134,7 @@ jobs:
   # pre-release, any other as the latest release.
   release:
     if: github.ref_type == 'tag'
-    needs: [check, gridkit]
+    needs: [check, contract, gridkit, web]
     runs-on: ubuntu-latest
     permissions:
       contents: write

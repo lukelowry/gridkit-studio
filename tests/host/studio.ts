@@ -101,7 +101,8 @@ const solverText = (name: string, solver: Solver) =>
 /** The text of the file at `uri` as it is on disk. */
 const textOf = (uri: vscode.Uri) => readFile(uri.fsPath, 'utf8')
 
-/** IEEE39, the case every suite starts from, followed alone with its file as found. */
+/** IEEE39, the case every suite starts from, followed alone with its file as found. The local
+ *  end-to-end suites drive the same bench from outside the window too. */
 export class Bench {
   /** The case's file as found. */
   readonly text: string
@@ -115,7 +116,7 @@ export class Bench {
   /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
 
-  private constructor(text: string, solver: string) {
+  protected constructor(text: string, solver: string) {
     this.text = text
     this.solverText = solver
     this.source = JSON.parse(this.text)
@@ -172,13 +173,6 @@ export class Bench {
     await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text))
   }
 
-  /** Whether every element of `type` records `field` in the case `uri` as Studio last read it. */
-  recorded(type: string, field: string, uri = this.uri): boolean {
-    const summary = this.studio.state(uri.toString()).summary
-    const count = summary?.recording.listed[type]?.[field] ?? 0
-    return count > 0 && count === summary?.counts[type]
-  }
-
   /** Make every element of `type` record `fields` and no other sampled field, and with `only`,
    *  every other element nothing: their `mon` lists written into the file at `uri` as a user
    *  writes them. Waits for Studio to read the case so. */
@@ -202,10 +196,20 @@ export class Bench {
           : undefined,
     )
     await this.write(listed, uri)
+    // Fixture setup must not depend on the OS watcher having started or delivered an event.
     await until(
-      () =>
-        sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
-        !this.studio.state(key).stale,
+      async () => {
+        const { recording, counts } = await this.studio.files.read(key)
+        return (
+          sampled.every(
+            (field) =>
+              (recording.listed[type]?.[field] ?? 0) ===
+              (fields.includes(field) ? counts[type] : 0),
+          ) &&
+          (!only || Object.keys(recording.listed).every((of) => of === type)) &&
+          !this.studio.state(key).stale
+        )
+      },
       `${type} records ${fields.join(', ')}`,
     )
   }
@@ -215,18 +219,24 @@ export class Bench {
     return this.record(type, fields, this.uri, true)
   }
 
-  /** Write the solver file beside the case, its members `solver`. */
-  async writeSolver(solver: Solver): Promise<vscode.Uri> {
-    const text = solverText('IEEE39', solver)
-    await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(text))
-    return this.solver
+  /** Write the solver file beside the case `uri`, its members `solver`. */
+  async writeSolver(solver: Solver, uri = this.uri): Promise<vscode.Uri> {
+    const name = basename(uri.path).replace(/\.case\.json$/i, '')
+    const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
+    await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(solverText(name, solver)))
+    return file
   }
 
   /** Run the solver file as its Explorer menu does, and wait for the run to end. */
   async run(command = 'gridkitStudio.runSimulation', ...args: unknown[]): Promise<Run> {
     const before = this.studio.get(this.key)?.run?.id
-    this.command(command, ...(args.length ? args : [this.solver]))
-    return this.ran(before)
+    await vscode.commands.executeCommand(command, ...(args.length ? args : [this.solver]))
+    const run = this.studio.get(this.key)?.run
+    assert.ok(
+      run && run.id !== before && run.state !== 'running',
+      this.studio.reporter.errors.join('\n') || 'The command did not finish a new run',
+    )
+    return run
   }
 
   /** The run after the one `before` names, once it ends. */
@@ -259,7 +269,7 @@ export class Bench {
     }
   }
 
-  /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
+  /** Whether GridKit runs here: bundled WASM, or an explicit native install. A required run fails
    *  without it. */
   async gridkit(): Promise<boolean> {
     const runtime = available(gridkitOf(this.uri))
@@ -284,6 +294,18 @@ export class Bench {
    *  run, selected, mapped or plotted. */
   async reset(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
+    await this.restore()
+    const session = await this.follow()
+    await this.settled()
+    this.clean(session)
+    // No Network is open to frame it, so how one last did is gone with it.
+    session.setFraming(undefined)
+    session.clear()
+    this.said()
+  }
+
+  /** Stops a run under way, and writes the case's file and solver file back as found. */
+  protected async restore(): Promise<void> {
     const running = this.studio.get(this.key)
     if (running?.running) {
       running.stop()
@@ -292,13 +314,15 @@ export class Bench {
     if ((await textOf(this.uri)) !== this.text) await this.write(this.text)
     if ((await textOf(this.solver)) !== this.solverText)
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
-    const session = await this.follow()
-    await this.settled()
+  }
+
+  /** Lets go of what `session` shows: nothing selected, mapped, plotted or filtered, and its clock
+   *  at its own pace. How the Network frames it stays the Network's, which says it as it changes. */
+  protected clean(session: Session): void {
     session.select()
     session.setPlots([])
-    for (const { table, field } of Object.values(session.bindings))
-      session.bind({ table, field }, [])
-    session.setFraming(undefined)
+    for (const { table, field } of Object.values(session.mappings))
+      session.map({ table, field }, [])
     session.setTable({
       type: undefined,
       columns: undefined,
@@ -306,9 +330,7 @@ export class Bench {
       filter: undefined,
       equal: undefined,
     })
-    session.clear()
     session.transport.setRate(1)
-    this.said()
   }
 }
 

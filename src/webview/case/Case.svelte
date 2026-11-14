@@ -5,9 +5,7 @@
   import type { Id } from 'latkit'
   import { onMount, tick } from 'svelte'
 
-  import { channelsOf, shortNames } from '../../shared/bindings.js'
   import { changedTable, display, rowsOf, shownColumns, shownType } from '../../shared/cells.js'
-  import { menuContext } from '../../shared/contexts.js'
   import type { TableRequest } from '../../shared/data.js'
   import {
     type Entity,
@@ -16,8 +14,10 @@
     leaf,
     tableDefinition,
   } from '../../shared/document.js'
+  import { channelsOf, shortNames } from '../../shared/mappings.js'
+  import { menuContext } from '../../shared/menus.js'
   import { revisionOf, type TableState, type ViewState } from '../../shared/messages.js'
-  import { bridge, merged } from '../bridge.js'
+  import { bridge } from '../bridge.js'
 
   type Row = ReturnType<typeof rowsOf>[number]
 
@@ -77,6 +77,15 @@
       ]),
     ),
   )
+  /** What heads each column: its field's last name, or its whole path where another column shown
+   *  ends in the same name, as a bus's `ports_in.vr` and `ports_out.vr` do. */
+  const headers = $derived.by(() => {
+    const shared = new Map<string, number>()
+    for (const field of fields) shared.set(leaf(field), (shared.get(leaf(field)) ?? 0) + 1)
+    return new Map(
+      fields.map((field) => [field, shared.get(leaf(field))! > 1 ? field : leaf(field)]),
+    )
+  })
   /** The field each row is known by, shown as the row's own header. */
   const identity = $derived(summary?.identities[type])
   /** A cell as text: a number to six significant digits, which hover shows whole. */
@@ -88,7 +97,7 @@
   const mapped = $derived(
     new Map(
       fields.flatMap((field) => {
-        const channels = channelsOf(view.bindings ?? {}, { table: type, field })
+        const channels = channelsOf(view.mappings ?? {}, { table: type, field })
         return channels.length ? [[field, shortNames(channels)] as const] : []
       }),
     ),
@@ -110,11 +119,10 @@
               uri: summary.uri,
               version: summary.version,
               origin: 'case',
-              type,
-              field,
-              ...(id !== null ? { element: { table: type, id, ...(field ? { field } : {}) } } : {}),
+              ...(field && { field: { table: type, field } }),
+              ...(id !== null && { element: { table: type, id } }),
             },
-            view.bindings,
+            view.mappings,
             // The panel's own view of its rows, for the items that change it.
             { sort: order, filtered: !!(filter || equal) },
           ),
@@ -294,7 +302,7 @@
         // The selection the panel had in sight: none of a case it has yet to read.
         const before =
           other || !view.summary || !view.selection ? undefined : entityKey(view.selection)
-        view = merged(view, message.state)
+        view = message.state
         // Another case's rows go with it; its own load once it reads.
         if (other) {
           controller?.abort()
@@ -347,7 +355,9 @@
               data-field={field}
             >
               <button onclick={() => sort(field)} title={field}>
-                {leaf(field)}{#if unit && leaf(field).toLowerCase() !== unit.toLowerCase()}<span
+                {headers.get(
+                  field,
+                )}{#if unit && leaf(field).toLowerCase() !== unit.toLowerCase()}<span
                     class="case__unit"
                   >
                     {unit}

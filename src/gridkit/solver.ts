@@ -8,7 +8,7 @@ export interface SolverLine {
 }
 
 /** How much of one line Studio keeps: a debug dump of a whole case's values says no more past it. */
-export const LINE_CHARS = 4096
+const LINE_CHARS = 4096
 
 /** `line`, past LINE_CHARS cut short, saying by how much. */
 export const clipped = (line: string) =>

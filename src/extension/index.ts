@@ -1,24 +1,25 @@
 import type { ExtensionContext } from 'vscode'
 
+import { catalogFile } from './catalog.js'
 import { registerCommands } from './commands.js'
-import { registerPlayback } from './playback.js'
-import { registerRuns } from './runs.js'
+import { Reporter } from './report.js'
 import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
 import { registerViews } from './views.js'
+import { workspaceAccess } from './workspace.js'
 let studio: Sessions | undefined
-export function activate(context: ExtensionContext) {
+export async function activate(context: ExtensionContext) {
   const started = performance.now()
-  studio = new Sessions(context)
+  workspaceAccess()
+  const reporter = new Reporter()
+  studio = new Sessions(context, await catalogFile((error) => reporter.report(error)), reporter)
   context.subscriptions.push(
     ...registerViews(studio),
     ...registerCommands(studio),
-    ...registerRuns(studio),
     ...registerSignals(studio),
-    ...registerPlayback(studio),
   )
   studio.reporter.output.info(
-    `Activated in ${(performance.now() - started).toFixed(1)} ms; the workers start on demand.`,
+    `Activated in ${(performance.now() - started).toFixed(1)} ms; the worker starts on demand.`,
   )
   return { studio }
 }

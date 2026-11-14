@@ -1,29 +1,28 @@
-/** A view's side of its channel to the extension: what it sends, the requests it makes, and the
- *  messages it hears. */
+/** A view's side of its channel to the extension: the state it is sent, what it says back, the
+ *  requests it makes, and the messages it hears. */
 
 import { problemOf, quiet, superseded } from '../shared/errors.js'
-import type { ViewCommandName } from '../shared/ids.js'
-import type {
-  FromView,
-  Of,
-  SentState,
-  ToView,
-  ViewApi,
-  ViewMessage,
-  ViewState,
-} from '../shared/messages.js'
+import type { FromView, Of, ToView, ViewApi, ViewMessage, ViewState } from '../shared/messages.js'
 import { Caller } from '../shared/rpc.js'
-import { sameDrawn } from '../shared/simulation.js'
+import { applied } from '../shared/state.js'
+
 declare function acquireVsCodeApi(): {
   postMessage(message: unknown): void
   getState(): unknown
   setState(value: unknown): void
 }
+
+/** What a page hears: the extension's messages, with the state whole in place of its changes. */
+export type Heard =
+  Exclude<ToView, { kind: 'state' | 'reply' }> | { kind: 'state'; of: Of; state: ViewState }
+
 const api = acquireVsCodeApi()
-const listeners = new Set<(message: ToView) => void>()
+const listeners = new Set<(message: Heard) => void>()
 /** The showing of the case the view shows, as the last state it was sent says: what the view says
  *  and asks is of it, and what the extension says of another is no longer the view's. */
 let of: Of = { uri: undefined, showing: 0 }
+/** The state of that showing, as the extension's changes leave it. */
+let state: ViewState = {}
 const extension = new Caller<ViewApi>((message) =>
   api.postMessage({ ...message, of } satisfies FromView),
 )
@@ -38,23 +37,20 @@ export const bridge = {
   send(message: ViewMessage, from: Of = of) {
     api.postMessage({ ...message, of: from } satisfies FromView)
   },
-  command(command: ViewCommandName, value?: unknown) {
-    bridge.send({ kind: 'command', command, value })
-  },
   /** Tells the extension the page has loaded, and listens. */
   ready() {
     api.postMessage({ kind: 'ready' } satisfies FromView)
   },
-  on(listener: (message: ToView) => void) {
+  on(listener: (message: Heard) => void) {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
+  /** What the page kept for itself, which outlasts its being hidden, or `fallback`. */
   state<T>(fallback: T): T {
-    const saved = api.getState() as { format?: string; value?: T } | undefined
-    return saved?.format === 'view-native-1' ? (saved.value ?? fallback) : fallback
+    return (api.getState() as T | undefined) ?? fallback
   },
   save(value: unknown) {
-    api.setState({ format: 'view-native-1', value })
+    api.setState(value)
   },
   /** Tell the user why something failed, in the one place Studio does: a notification from the
    *  extension. A failure that is none says nothing. */
@@ -71,45 +67,31 @@ export const bridge = {
     return extension.call(method, input, signal)
   },
 }
-/** The small parts of a state message, which are compared whole. */
-const SMALL = ['bindings', 'plots', 'selection', 'networkSelection', 'table', 'window'] as const
 
-/** Applies a state message. Each carries the whole state except `summary` and `settings`, which
- *  are large and sent only when they change, as they do with the case a view shows, and the
- *  results' outputs, sent only when they change. A part that did not change stays the object it
- *  was, so what a view made of it is not made again. */
-export function merged(state: ViewState, incoming: SentState): ViewState {
-  const { results, ...rest } = incoming
-  const next: ViewState = {
-    ...(incoming.uri === state.uri && { summary: state.summary, settings: state.settings }),
-    ...rest,
-    ...(results && {
-      results: { ...results, outputs: results.outputs ?? state.results?.outputs ?? [] },
-    }),
-  }
-  const kept = next as Record<(typeof SMALL)[number], unknown>
-  for (const key of SMALL)
-    if (JSON.stringify(incoming[key]) === JSON.stringify(state[key])) kept[key] = state[key]
-  if (sameDrawn(state.results, next.results)) next.results = state.results
-  return next
-}
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
-  if (message.kind !== 'shown') {
-    if (message.kind === 'state' && message.of.showing !== of.showing) {
+  let heard: Heard
+  if (message.kind === 'shown') {
+    document.body.dataset.shown = String(message.shown)
+    heard = message
+  } else if (message.kind === 'state') {
+    if (message.of.showing !== of.showing) {
+      // A showing begins with its state: what the view held and asked of the one before is past.
       of = message.of
-      // What the view asked of the showing before is answered no more.
+      state = {}
       extension.fail(superseded())
-    } else if (message.of?.showing !== of.showing) return
-    if (message.kind === 'reply') return extension.settle(message)
-  }
-  if (message.kind === 'shown') document.body.dataset.shown = String(message.shown)
-  if (message.kind === 'state') document.body.dataset.uri = message.state.uri ?? ''
+    }
+    state = applied(state, message.changed)
+    document.body.dataset.uri = state.uri ?? ''
+    heard = { kind: 'state', of, state }
+  } else if (message.of?.showing !== of.showing) return
+  else if (message.kind === 'reply') return extension.settle(message)
+  else heard = message
   // One listener's failure leaves the others their message.
   for (const listener of listeners)
     try {
-      listener(message)
+      listener(heard)
     } catch (error) {
       bridge.report(error)
     }

@@ -47,34 +47,28 @@ describe('Menus', () => {
     contributes: {
       commands: [
         { command: 'sort', title: 'Sort Ascending', enablement: 'ready' },
-        { command: 'edit', title: 'Edit Field…' },
-        { command: 'hidden', title: 'Hidden' },
+        { command: 'copy', title: 'Copy Value' },
       ],
       menus: {
         'webview/context': [
           { command: 'sort', when: 'scope == column' },
-          { command: 'edit', when: 'scope == value' },
+          { command: 'copy', when: 'scope == value' },
         ],
-        commandPalette: [{ command: 'hidden', when: 'false' }],
       },
     },
   })
   it('offers what its clauses hold for, by title', () => {
     expect(menus.offered('webview/context', { scope: 'value' })).toEqual([
-      { command: 'edit', title: 'Edit Field…' },
+      { command: 'copy', title: 'Copy Value' },
     ])
-    expect(menus.find('webview/context', 'Edit Field', { scope: 'value' }).command).toBe('edit')
+    expect(menus.find('webview/context', 'Copy', { scope: 'value' }).command).toBe('copy')
   })
   it('names what a place offers instead of an item it does not', () => {
-    expect(() => menus.find('webview/context', 'Sort', { scope: 'value' })).toThrow(/Edit Field/)
+    expect(() => menus.find('webview/context', 'Sort', { scope: 'value' })).toThrow(/Copy Value/)
   })
   it('enables a command by its enablement', () => {
     expect(menus.enabled('sort', {})).toBe(false)
     expect(menus.enabled('sort', { ready: true })).toBe(true)
-    expect(menus.enabled('edit', {})).toBe(true)
-  })
-  it('keeps what the Command Palette hides out of it', () => {
-    expect(menus.palette('Edit Field…', {}).command).toBe('edit')
-    expect(() => menus.palette('Hidden', {})).toThrow(/hides/)
+    expect(menus.enabled('copy', {})).toBe(true)
   })
 })

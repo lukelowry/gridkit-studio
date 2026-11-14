@@ -1,13 +1,34 @@
-import { randomUUID } from 'node:crypto'
-import { type FileHandle, open, rename, rm } from 'node:fs/promises'
-import { extname } from 'node:path'
-
 import * as vscode from 'vscode'
+
+import { randomUUID } from '../platform/crypto.js'
+import { type FileHandle, mkdir, open, readFile, rename, rm } from '../platform/files.js'
+import { browser, tmpdir } from '../platform/host.js'
+import { dirname, extname, join } from '../platform/path.js'
+import { download } from './download.js'
+import { reference } from './uris.js'
 
 /** What each export is saved as, by its file's extension. */
 const KINDS: Record<string, { title: string; filters: Record<string, string[]> }> = {
   '.mp4': { title: 'Export video', filters: { 'MP4 video': ['mp4'] } },
   '.png': { title: 'Export image', filters: { 'PNG image': ['png'] } },
+}
+
+/** Publish through the provider only when the staged file is complete. */
+export async function publish(path: string, uri: vscode.Uri): Promise<void> {
+  if (browser) await download(path, uri.path.split('/').at(-1))
+  else if (uri.scheme === 'file') {
+    await rename(path, reference(uri))
+    return
+  } else {
+    const staged = uri.with({ path: uri.path + '.' + randomUUID() + '.tmp' })
+    try {
+      await vscode.workspace.fs.writeFile(staged, await readFile(path))
+      await vscode.workspace.fs.rename(staged, uri, { overwrite: true })
+    } finally {
+      await Promise.resolve(vscode.workspace.fs.delete(staged)).catch(() => {})
+    }
+  }
+  await rm(path, { force: true })
 }
 
 /** An exported video or image, written sequentially and published to its destination on close. */
@@ -17,17 +38,24 @@ export class ExportFile {
   #closed = false
   #aborted = false
   #tail: Promise<void> = Promise.resolve()
-  /** The file in memory, for non-`file` destinations that cannot be written in place. */
-  #bytes = new Uint8Array(0)
   #length = 0
   private constructor(readonly uri: vscode.Uri) {
-    this.#temporary = uri.with({ path: `${uri.path}.${randomUUID()}.tmp` })
+    this.#temporary =
+      !browser && uri.scheme === 'file'
+        ? uri.with({ path: `${uri.path}.${randomUUID()}.tmp` })
+        : browser
+          ? vscode.Uri.from({
+              scheme: 'opfs',
+              path: `/gridkit/exports/${randomUUID()}-${uri.path.split('/').at(-1)}`,
+            })
+          : vscode.Uri.file(join(tmpdir(), `gridkit-export-${randomUUID()}.tmp`))
   }
 
   /** Stage a file beside its destination; the destination changes only after writing succeeds. */
   static async create(uri: vscode.Uri): Promise<ExportFile> {
     const file = new ExportFile(uri)
-    if (uri.scheme === 'file') file.#handle = await open(file.#temporary.fsPath, 'wx')
+    await mkdir(dirname(reference(file.#temporary)), { recursive: true })
+    file.#handle = await open(reference(file.#temporary), 'wx')
     return file
   }
 
@@ -35,6 +63,7 @@ export class ExportFile {
   static async choose(beside: vscode.Uri, name: string): Promise<ExportFile | undefined> {
     const kind = KINDS[extname(name).toLowerCase()]
     if (!kind) throw new Error(`Studio does not export ${extname(name)} files.`)
+    if (browser) return ExportFile.create(vscode.Uri.from({ scheme: 'opfs', path: '/' + name }))
     const uri = await vscode.window.showSaveDialog({
       title: kind.title,
       defaultUri: vscode.Uri.joinPath(beside, '..', name),
@@ -51,13 +80,8 @@ export class ExportFile {
 
   async #write(bytes: Uint8Array) {
     if (this.#aborted) throw new Error('The export was cancelled.')
+    // Every write goes after the last: the file is written from its start to its end.
     const position = this.#length
-    if (
-      !Number.isSafeInteger(position) ||
-      position < 0 ||
-      !Number.isSafeInteger(position + bytes.length)
-    )
-      throw new Error('Invalid export write.')
     if (this.#handle) {
       for (let written = 0; written < bytes.length;) {
         const { bytesWritten } = await this.#handle.write(
@@ -72,14 +96,6 @@ export class ExportFile {
       this.#length += bytes.length
       return
     }
-    const end = position + bytes.length
-    if (end > this.#bytes.length) {
-      const grown = new Uint8Array(Math.max(end, this.#bytes.length * 2, 1 << 20))
-      grown.set(this.#bytes.subarray(0, this.#length))
-      this.#bytes = grown
-    }
-    this.#bytes.set(bytes, position)
-    this.#length = Math.max(this.#length, end)
   }
 
   async close() {
@@ -87,15 +103,10 @@ export class ExportFile {
     this.#closed = true
     await this.#tail
     if (this.#aborted) throw new Error('The export was cancelled.')
-    if (this.#handle) {
-      await this.#handle.close()
-      // Same file system, so the rename is atomic and a failure leaves the old file.
-      await rename(this.#temporary.fsPath, this.uri.fsPath)
-    } else {
-      await vscode.workspace.fs.writeFile(this.#temporary, this.#bytes.subarray(0, this.#length))
-      await vscode.workspace.fs.rename(this.#temporary, this.uri, { overwrite: true })
-    }
-    this.#bytes = new Uint8Array(0)
+    await this.#handle!.sync()
+    await this.#handle!.close()
+    this.#handle = undefined
+    await publish(reference(this.#temporary), this.uri)
   }
 
   /** Discard the export's temporary file; the destination is untouched. Safe after close or failure. */
@@ -104,12 +115,7 @@ export class ExportFile {
     this.#aborted = true
     await this.#tail.catch(() => {})
     await this.#handle?.close().catch(() => {})
-    this.#bytes = new Uint8Array(0)
-    if (this.uri.scheme === 'file') await rm(this.#temporary.fsPath, { force: true })
-    else
-      await Promise.resolve(vscode.workspace.fs.delete(this.#temporary)).catch((error) => {
-        if (!(error instanceof vscode.FileSystemError) || error.code !== 'FileNotFound') throw error
-      })
+    await rm(reference(this.#temporary), { force: true })
   }
 }
 
@@ -150,7 +156,7 @@ export class ExportFiles {
       await file.abort()
       throw error
     }
-    return abort ? null : file.uri.fsPath
+    return abort ? null : reference(file.uri)
   }
 
   /** Asks the user where to save `name`, next to `beside`, and writes `bytes` there whole: the

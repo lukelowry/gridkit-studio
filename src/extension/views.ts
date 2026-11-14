@@ -1,20 +1,16 @@
-import { randomBytes, randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
-
 import * as vscode from 'vscode'
 
+import { nonce as makeNonce, randomUUID } from '../platform/crypto.js'
+import { basename } from '../platform/path.js'
 import { shownType } from '../shared/cells.js'
 import { isRange } from '../shared/data.js'
 import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
-import { commandId, followed, VIEW_COMMANDS, viewId } from '../shared/ids.js'
+import { followed, viewId } from '../shared/ids.js'
 import {
   framingOf,
   type FromView,
   type Of,
-  type Results,
-  type SentState,
-  type Summary,
   type TableState,
   type ToView,
   type ViewApi,
@@ -22,9 +18,10 @@ import {
   type ViewMessage,
   type ViewState,
 } from '../shared/messages.js'
-import { type SettingsValues, validateSettings } from '../shared/preferences.js'
+import { isPlot } from '../shared/plots.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
-import { drawnOf } from '../shared/simulation.js'
+import { validateSettings, type ViewSettings } from '../shared/settings.js'
+import { changes } from '../shared/state.js'
 import { ExportFiles } from './exports.js'
 import { packed } from './packed.js'
 import type { Sessions } from './sessions.js'
@@ -84,56 +81,12 @@ function tableChange(change: unknown): Partial<TableState> {
   return kept
 }
 
-/** What each view reads of the state, besides the summary and settings, which are compared on
- *  their own; a view is sent state only when this changes. While a run writes, the frames read so
- *  far send a view that draws them state again, which is how it hears there are more to ask for. */
-const SHOWN: Record<ViewKind, (state: ViewState) => unknown> = {
-  case: ({ uri, version, stale, error, selection, bindings, table }) => [
-    uri,
-    version,
-    stale,
-    error,
-    selection,
-    bindings,
-    table,
-  ],
-  // The times the results hold mark which ones the network can draw, and their ranges color it.
-  network: ({ uri, stale, error, networkSelection, bindings, results }) => [
-    uri,
-    stale,
-    error,
-    networkSelection,
-    bindings,
-    drawnOf(results),
-  ],
-  // Results the plots show have a fixed span while a run writes them, else the times they hold.
-  monitor: ({ uri, stale, selection, bindings, plots, window, results }) => [
-    uri,
-    stale,
-    selection,
-    bindings,
-    plots,
-    window,
-    drawnOf(results),
-  ],
-  // An export shows the times the Monitor shows.
-  export: ({ uri, stale, error, bindings, plots, window, results }) => [
-    uri,
-    stale,
-    error,
-    bindings,
-    plots,
-    window,
-    drawnOf(results),
-  ],
-}
-
 /** What happens to a hidden view's webview: destroyed, kept idle, or kept working. */
 type Hidden = 'destroyed' | 'idle' | 'working'
 
 /** The page of a view of `kind`, whose script and styles are the bundle of the same name. */
 function html(webview: vscode.Webview, context: vscode.ExtensionContext, kind: ViewKind) {
-  const nonce = randomBytes(18).toString('base64')
+  const nonce = makeNonce()
   const escape = (value: string) =>
     value
       .replaceAll('&', '&amp;')
@@ -147,6 +100,7 @@ function html(webview: vscode.Webview, context: vscode.ExtensionContext, kind: V
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource} https:;">
 <meta name="latkit-wasm" content="${asset('dist/webview/latkit.wasm')}">
 <meta name="latkit-worker" content="${asset('dist/webview/latkit-worker.js')}">
+<meta name="latkit-shaders" content="${asset('dist/webview/latkit-shaders.bin')}">
 <meta name="latkit-assets" content="${asset('dist/webview/')}">
 <link rel="stylesheet" href="${asset('dist/webview/' + kind + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + kind + '.js')}"></script></body></html>`
@@ -162,13 +116,13 @@ class View {
   readonly #exports = new ExportFiles()
   /** The showing of the case the view shows. */
   #of: Of
-  #summary?: Summary
-  #settings?: SettingsValues
-  /** The results' outputs last sent, which a state of the same results leaves out. */
-  #outputs?: Results['outputs']
+  /** The state the page holds, as it was last sent: the session replaces a part only as it
+   *  changes, so a part that is the same object is the same. */
+  #sent: ViewState = {}
+  /** Whether this showing has been sent its state: its first says which showing the page shows. */
+  #stated = false
   /** The results the page holds of its own, as an export does while it reads them. */
   readonly #shares = new Set<string>()
-  #shown = ''
   #ready = false
   #disposed = false
   /** Whether another update is due, and the update in progress. */
@@ -265,8 +219,8 @@ class View {
   #show(uri: string | undefined) {
     this.#of = { uri, showing: this.#of.showing + 1 }
     this.#seq = 0
-    this.#shown = ''
-    this.#summary = this.#settings = this.#outputs = undefined
+    this.#sent = {}
+    this.#stated = false
     this.#answer()
   }
 
@@ -366,13 +320,16 @@ class View {
         session.setWindow(bounds)
         return
       }
-      case 'range': {
-        const range = message.range
-        if (this.kind !== 'monitor' || !session) return
-        if (range && !isRange(range)) return
-        session.plotRange(message.plot, range ?? undefined)
+      case 'fitValues':
+        if (this.kind === 'monitor' && isPlot(message.plot)) session?.plotRange(message.plot)
         return
-      }
+      case 'removePlot':
+        if (this.kind === 'monitor' && isPlot(message.plot)) session?.removePlot(message.plot)
+        return
+      case 'open':
+        if (!session || !uri || !isEntity(message.element)) return
+        session.select(message.element)
+        return this.studio.files.reveal(uri, message.element)
       case 'framing': {
         const framing = framingOf(message.framing)
         if (framing && this.kind === 'network') session?.setFraming(framing)
@@ -383,8 +340,8 @@ class View {
         const values = validateSettings(message.values)
         const allowed = new Set(['network.projection', 'network.tilt', 'network.orbit'])
         if (Object.keys(values).some((key) => !allowed.has(key))) return
-        for (const [key, value] of Object.entries(values))
-          await setDisplay(vscode.Uri.parse(uri), key, value)
+        for (const key of Object.keys(values) as (keyof ViewSettings)[])
+          await setDisplay(vscode.Uri.parse(uri), key, values[key]!)
         return
       }
       case 'transport': {
@@ -393,9 +350,7 @@ class View {
         if (!session) return
         const { transport } = session
         if (message.action === 'seek') transport.seek(Number(message.value))
-        else if (message.action === 'rate') transport.setRate(Number(message.value))
         else if (message.action === 'playPause') transport.playPause()
-        else if (message.action === 'goLive') transport.goLive()
         else if (message.action === 'step') await session.step(message.value === -1 ? -1 : 1)
         return
       }
@@ -408,12 +363,6 @@ class View {
         return
       case 'busy':
         return this.#work(message.busy === true ? uri : undefined)
-      case 'command':
-        if (VIEW_COMMANDS.includes(message.command) && uri && followed(uri)) {
-          this.studio.activate(uri)
-          await vscode.commands.executeCommand(commandId(message.command), message.value, { uri })
-        }
-        return
     }
   }
 
@@ -433,23 +382,13 @@ class View {
    *  and the videos and images it exports. A revision a newer one replaced is refused, quietly. */
   #handlers(): Handlers<ViewApi> {
     const { studio } = this
-    const { client } = studio
+    const { worker } = studio.client
     return {
-      frames: (input, signal) => client.results.call('frames', input, signal),
-      sample: (input, signal) => client.results.call('sample', input, signal),
-      project: (input, signal) =>
-        'results' in input
-          ? client.results.call('project', input, signal)
-          : client.cases.call(
-              'project',
-              { ...input.revision, fields: input.fields, cursor: input.cursor },
-              signal,
-            ),
+      frames: (input, signal) => worker.call('frames', input, signal),
+      sample: (input, signal) => worker.call('sample', input, signal),
+      project: (input, signal) => worker.call('project', input, signal),
       page: (input, signal) => {
-        const read =
-          'results' in input
-            ? client.results.call('page', input, signal)
-            : client.cases.call('page', { ...input.revision, request: input.request }, signal)
+        const read = worker.call('page', input, signal)
         if (this.kind === 'case')
           void vscode.window.withProgress({ location: { viewId: viewId('case') } }, () =>
             read.catch(() => {}),
@@ -468,7 +407,7 @@ class View {
         const id = randomUUID()
         this.#shares.add(id)
         try {
-          const shared = await client.results.call('share', { results, as: id }, signal)
+          const shared = await worker.call('share', { results, as: id }, signal)
           signal.throwIfAborted()
           return shared
         } catch (error) {
@@ -508,11 +447,13 @@ class View {
     })())
   }
 
-  /** Sends the view its state, when what it shows of it changed, and the clock after it: a page
-   *  hears a clock only of the showing its last state named, so one sent before that state is lost.
-   *  The Monitor and an export draw the case their results were read against, once the session
-   *  has it: a page that shows the case keeps what it draws till then, and one that follows it now
-   *  is told at once of the case, and of the results once they are known. */
+  /** Sends the view the parts of its state that changed, and the clock after them: a page hears a
+   *  clock only of the showing its last state named, so one sent before that state is lost. While
+   *  a run writes, the frames read so far change the results, which is how a view that draws them
+   *  hears there are more to ask for. The Monitor and an export draw the case their results were
+   *  read against, once the session has it: a page that shows the case keeps what it draws till
+   *  then, and one that follows it now is told at once of the case, and of the results once they
+   *  are known. */
   async #once() {
     // A hidden view catches up when it shows; one kept working works on while hidden.
     if (!this.#ready || (!this.#visible && !(this.hidden === 'working' && this.busy))) return
@@ -522,32 +463,18 @@ class View {
     if ((this.kind === 'monitor' || this.kind === 'export') && state.results?.frames) {
       const described = session?.described
       if (described) state.summary = described
-      else if (this.#shown) return
+      else if (this.#stated) return
       else delete state.results
     }
-    const signature = JSON.stringify(SHOWN[this.kind](state))
-    if (
-      signature !== this.#shown ||
-      state.summary !== this.#summary ||
-      state.settings !== this.#settings
-    ) {
-      // The summary, settings and results' outputs are large and change seldom; each is sent only
-      // when it changed.
-      const sent: SentState = { ...state }
-      if (state.summary === this.#summary) delete sent.summary
-      if (state.settings === this.#settings) delete sent.settings
-      const { results } = state
-      if (results && results.outputs === this.#outputs) {
-        const { outputs: _, ...rest } = results
-        sent.results = rest
-      }
-      this.#shown = signature
-      this.#summary = state.summary
-      this.#settings = state.settings
-      this.#outputs = results?.outputs
-      await this.send({ kind: 'state', of: this.#of, state: sent })
-      this.tick()
-    }
+    const changed = changes(this.kind, state, this.#sent)
+    if (this.#stated && !changed) return
+    // The page holds what reached it, and only that: what did not goes with the next change. A
+    // showing begun meanwhile is sent all it shows.
+    const of = this.#of
+    if (!(await this.send({ kind: 'state', of, changed: changed ?? {} })) || of !== this.#of) return
+    this.#sent = state
+    this.#stated = true
+    this.tick()
   }
 
   dispose() {
@@ -568,7 +495,7 @@ export function registerViews(studio: Sessions) {
     // win. Studio shows case files on disk, which it reads itself.
     openCustomDocument(uri) {
       const key = uri.toString()
-      if (!followed(key)) throw new Error('GridKit Studio shows .case.json files on disk.')
+      if (!followed(key)) throw new Error('GridKit Studio shows saved .case.json files.')
       studio.hold(key, 'document')
       return { uri, dispose: () => studio.release(key, 'document') }
     },

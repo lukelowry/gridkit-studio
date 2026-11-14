@@ -1,12 +1,11 @@
 /** Every case Studio works on, each a Session kept while something holds it, and what they share:
- *  the workers, the case files, the log, and the events the views and native UI follow. */
-
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+ *  the worker, the case files, the log, and the events the views and native UI follow. */
 
 import * as vscode from 'vscode'
 
-import type { Target } from '../shared/contexts.js'
+import { createHash } from '../platform/crypto.js'
+import { browser, tmpdir } from '../platform/host.js'
+import { join } from '../platform/path.js'
 import { failedWith } from '../shared/errors.js'
 import {
   type Command,
@@ -19,14 +18,21 @@ import {
   type View,
   viewId,
 } from '../shared/ids.js'
-import type { CaseSource, ViewAction, ViewState, WorkerEvent } from '../shared/messages.js'
-import { catalogFile } from './catalog.js'
+import type { Target } from '../shared/menus.js'
+import {
+  type Revision,
+  revisionOf,
+  type ViewAction,
+  type ViewState,
+  type WorkerEvent,
+} from '../shared/messages.js'
 import { Client, unsteady } from './client.js'
 import { CaseFiles } from './files.js'
-import { noCase, Reporter } from './report.js'
+import { Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
 import { gone } from './solvers.js'
+import { reference } from './uris.js'
 
 /** A command's ask of the views of a case: of every one, or of those of the kind its menu was
  *  opened on. */
@@ -40,7 +46,6 @@ export interface Action {
 }
 
 export class Sessions implements vscode.Disposable {
-  readonly reporter = new Reporter()
   readonly client: Client
   readonly files: CaseFiles
   /** Fires when what a case's views show changes. */
@@ -50,35 +55,38 @@ export class Sessions implements vscode.Disposable {
   readonly action = new vscode.EventEmitter<Action>()
   /** The context keys Studio last set, as VS Code holds them. */
   readonly contexts = new Map<ContextKey, unknown>()
-  /** The Monitored Signals row of `type`'s `field`, as VS Code holds it, for the tests: what its
-   *  menu offers, and what it carries to the commands there. */
-  signalRow?: (type: string, field: string) => vscode.TreeItem | undefined
   /** The panel views VS Code has shown, by kind, which `showView` brings up. */
   readonly panels = new Map<Extract<View, 'case' | 'monitor' | 'export'>, vscode.WebviewView>()
   readonly #all = new Map<string, Session>()
   #active?: Session
   readonly #disposables: vscode.Disposable[]
 
-  constructor(readonly context: vscode.ExtensionContext) {
+  constructor(
+    readonly context: vscode.ExtensionContext,
+    catalog?: unknown,
+    readonly reporter = new Reporter(),
+  ) {
     // The runs of every window on this machine are written down in one folder.
     const { globalStorageUri, storageUri, workspaceState } = context
     const runs =
-      globalStorageUri.scheme === 'file'
+      !browser && globalStorageUri.scheme === 'file'
         ? vscode.Uri.joinPath(globalStorageUri, 'runs').fsPath
         : undefined
     // The results read are kept with the workspace, where its sessions are saved; each window's
     // in a folder of its own, wherever windows share one, as empty windows do.
     const kept = [storageUri, globalStorageUri].find((uri) => uri?.scheme === 'file')
-    const store = kept
-      ? vscode.Uri.joinPath(kept, 'results').fsPath
-      : join(tmpdir(), 'gridkit-studio-results')
-    // Both workers start with the catalog of GridKit's classes the user's file holds, if any.
-    const workers = { catalog: catalogFile((error) => this.reporter.report(error)) }
+    const store = browser
+      ? `opfs:/gridkit/stores/${createHash('sha256')
+          .update((storageUri ?? globalStorageUri).toString())
+          .digest('hex')}`
+      : kept
+        ? vscode.Uri.joinPath(kept, 'results').fsPath
+        : join(tmpdir(), 'gridkit-studio-results')
+    // The worker reads cases with the catalog of GridKit's classes the user's file holds, if any.
     this.client = new Client(
-      vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
-      workers,
+      reference(vscode.Uri.joinPath(context.extensionUri, 'dist')),
       () => ({
-        ...workers,
+        catalog,
         cacheBytes: cacheBytes(),
         store,
         saved: savedResults(workspaceState),
@@ -89,15 +97,16 @@ export class Sessions implements vscode.Disposable {
     this.files = new CaseFiles(this.client, (error) => this.reporter.report(error))
     this.#disposables = [
       this.changed.event(() => this.updateContexts()),
-      // Either worker stopping is said. A new results worker holds none of the old one's results,
-      // so each session reads its own again.
-      this.client.cases.failure.event((error) => this.reporter.report(this.files.restart(error))),
-      this.client.results.failure.event((error) => {
-        const { steady } = this.client.results
-        this.reporter.report(
-          steady ? error : unsteady(error, 'reads results again once you show them.'),
-        )
+      // The worker stopping is said. A new worker holds none of the old one's cases or results,
+      // so the files are read again, and each session reads its results again.
+      this.client.worker.failure.event((error) => {
+        const { steady } = this.client.worker
+        const said = steady
+          ? error
+          : unsteady(error, 'reads each case, and its results, again once its file changes.')
+        this.files.restart(error, steady ? undefined : said)
         for (const session of this.#all.values()) session.lost(error, steady)
+        this.reporter.report(said)
       }),
       this.files.changed.event((uri) => {
         this.changed.fire(uri)
@@ -117,8 +126,8 @@ export class Sessions implements vscode.Disposable {
       vscode.workspace.onDidChangeConfiguration((event) => {
         for (const session of this.#all.values())
           if (affects(event, vscode.Uri.parse(session.uri))) session.reconfigure()
-        if (affects(event, undefined, 'resultCacheMiB') && this.client.results.running)
-          void this.client.results
+        if (affects(event, undefined, 'resultCacheMiB') && this.client.worker.running)
+          void this.client.worker
             .call('configure', { cacheBytes: cacheBytes() })
             .catch((error) => this.reporter.report(error))
       }),
@@ -183,12 +192,6 @@ export class Sessions implements vscode.Disposable {
     return this.#all.get(uri)
   }
 
-  /** The session the views follow. */
-  current(): Session {
-    if (!this.#active) throw noCase()
-    return this.#active
-  }
-
   /** The session of `uri`, held for `why`: made, its file followed, and what it saved read again,
    *  as it is first held. */
   hold(uri: string, why: Hold): Session {
@@ -219,8 +222,7 @@ export class Sessions implements vscode.Disposable {
   /** Makes `uri`'s case the one the views follow, letting go of the one they followed: a case file on
    *  disk, never a copy another extension shows. */
   activate(uri: string): Session {
-    if (!followed(uri))
-      throw new Error('GridKit Studio works on a .case.json on disk, not on a copy of one.')
+    if (!followed(uri)) throw new Error('Open a saved .case.json file.')
     // Tabs change often, as a case's editor turns dirty: only another case is news, but for
     // results due to be read again as the views follow it.
     if (this.#active?.uri === uri) {
@@ -241,25 +243,23 @@ export class Sessions implements vscode.Disposable {
     return session
   }
 
-  /** Asks the results worker `call` of the case at `uri` as its file reads now, by its
-   *  fingerprint: the worker reads the file itself. Changed on disk since, it is read again and
-   *  asked again. */
-  async withCase<T>(uri: string, call: (source: CaseSource) => Promise<T>): Promise<T> {
+  /** Asks the worker `call` of the case at `uri` as its file reads now, by its revision. A file
+   *  read again meanwhile supersedes it: it is asked again of the newer one. */
+  async withCase<T>(uri: string, call: (revision: Revision) => Promise<T>): Promise<T> {
     for (;;) {
-      const { version, fingerprint } = await this.files.read(uri)
+      const summary = await this.files.read(uri)
       try {
-        return await call({ uri, version, fingerprint })
+        return await call(revisionOf(summary))
       } catch (error) {
-        if (!failedWith(error, 'case-changed')) throw error
+        if (!failedWith(error, 'superseded')) throw error
       }
     }
   }
 
-  /** Lets go of the results `id` names in the results worker, which a worker that stopped holds no
-   *  more. */
+  /** Lets go of the results `id` names in the worker, which a worker that stopped holds no more. */
   closeResults(id: string): void {
-    if (this.client.results.running)
-      void this.client.results.call('close', { results: id }).catch(() => {})
+    if (this.client.worker.running)
+      void this.client.worker.call('close', { results: id }).catch(() => {})
   }
 
   /** What the views of the case at `uri` show. */
@@ -268,9 +268,8 @@ export class Sessions implements vscode.Disposable {
     const session = this.#all.get(uri)
     return {
       uri,
-      version: file?.summary?.version,
       settings: session?.settings,
-      bindings: session?.bindings,
+      mappings: session?.mappings,
       summary: file?.summary,
       stale: file?.stale,
       error: file?.error,
@@ -304,16 +303,15 @@ export class Sessions implements vscode.Disposable {
       }
   }
 
-  /** Drops the saved state of cases that no longer exist, as one deleted while VS Code was closed,
-   *  and of copies the views never follow, as Git's of an older version. A case that cannot be
-   *  reached now, on a remote or network drive, keeps its state. */
+  /** Drops whatever the workspace keeps that is not the saved state of a case that exists: that of
+   *  one deleted while VS Code was closed, and anything else. A case that cannot be reached now, on
+   *  a remote or network drive, keeps its state. */
   async prune(): Promise<void> {
     const { workspaceState } = this.context
     await Promise.all(
       workspaceState.keys().map(async (key) => {
         const uri = savedUri(key)
-        if (uri === undefined) return
-        if (!followed(uri) || (await gone(vscode.Uri.parse(uri))))
+        if (uri === undefined || !followed(uri) || (await gone(vscode.Uri.parse(uri))))
           await workspaceState.update(key, undefined)
       }),
     )

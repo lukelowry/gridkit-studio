@@ -6,38 +6,41 @@ export interface Entity {
   readonly id: Id
 }
 
+/** A field of a type, by the type's name and the field's path in its records. */
+export interface Field {
+  readonly table: string
+  readonly field: string
+}
+
+/** An element, and, where one of its values is meant, the field that holds it. */
 export interface Element extends Entity {
   readonly field?: string
 }
 
-export type FieldKind = 'number' | 'boolean' | 'text' | 'reference' | 'path' | 'json' | 'sampled'
+type FieldKind = 'number' | 'boolean' | 'text' | 'reference' | 'path' | 'json' | 'sampled'
 
 export interface FieldDefinition {
   readonly name: string
   readonly kind: FieldKind
   readonly label: string
   readonly unit?: string
-  readonly required?: boolean
-  readonly integer?: boolean
   readonly target?: string
-  readonly direction?: 'in' | 'out'
 }
 
 export interface TableDefinition {
   readonly name: string
   readonly label: string
-  readonly identity: string
   readonly labelField: string
   readonly fields: readonly FieldDefinition[]
 }
 
-export interface VertexDefinition {
+interface VertexDefinition {
   readonly table: string
   readonly label?: string
   readonly position: [string, string]
 }
 
-export interface EdgeDefinition {
+interface EdgeDefinition {
   readonly table: string
   readonly ends?: [string, string]
   readonly bends?: string
@@ -65,7 +68,7 @@ export function entityLabel(entity: Entity): string {
   return `${entity.table} ${String(entity.id)}`
 }
 
-export function withUnit(name: string, unit: string | undefined): string {
+function withUnit(name: string, unit: string | undefined): string {
   return unit ? `${name} [${unit}]` : name
 }
 

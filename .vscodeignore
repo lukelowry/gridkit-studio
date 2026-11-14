@@ -2,8 +2,11 @@
 **
 !assets/{gridkit.png,gridkit.svg,monitor.svg,walkthrough.md}
 !dist/extension.cjs
-!dist/{cases,results}.mjs
-!dist/webview/*.{js,css,wasm}
+!dist/browser/*.{cjs,mjs}
+!dist/worker.mjs
+!dist/solver.mjs
+!dist/solver/**
+!dist/webview/*.{js,css,wasm,bin}
 !dist/webview/maps/*.geojson.gz
 !dist/licenses/*.md
 !LICENSE

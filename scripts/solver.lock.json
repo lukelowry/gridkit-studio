@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "revision": "0ff72a120d6b0a895ccefd3db5e2b259e2d25d0f",
+  "profile": "develop-perf-wasm",
+  "download": {
+    "repository": "birchfieldresearchgroup/gridkit-wasm",
+    "sha256": "3001de68b8efb3773394e91aa97668395df27e4611356092a3be1196b9741bb7"
+  },
+  "files": {
+    "DynamicSimulation.mjs": "69967748f14e2a0664fb80810d02046e9d8bdcbba67c8443ecc6d16a1eb9a284",
+    "DynamicSimulation.wasm": "ac4b6345c733e9c46c8a9aaff6569ebf62567cfc830424c17ac124c74be3779f"
+  }
+}

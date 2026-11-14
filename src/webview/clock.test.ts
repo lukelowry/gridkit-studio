@@ -1,17 +1,18 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-import type { Of, ToView } from '../shared/messages.js'
+import type { Of } from '../shared/messages.js'
 import { IDLE } from '../shared/transport.js'
+import type { Heard } from './bridge.js'
 
 const transport = vi.hoisted(() => ({
-  listener: (_message: ToView) => {},
+  listener: (_message: Heard) => {},
   report: vi.fn(),
   send: vi.fn(),
   of: { uri: 'file:///case.case.json', showing: 1 } as Of,
 }))
 vi.mock('./bridge.js', () => ({
   bridge: {
-    on: (listener: (message: ToView) => void) => {
+    on: (listener: (message: Heard) => void) => {
       transport.listener = listener
       return () => {}
     },

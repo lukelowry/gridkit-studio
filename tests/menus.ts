@@ -1,7 +1,6 @@
 /** Where Studio's manifest offers its commands, read as VS Code reads it: what a menu, a title bar or
- *  the Command Palette shows in a context, and whether each command there is enabled. The VS Code
- *  suites run a command from where the user finds it through this, so no test waits on VS Code's
- *  own popups; the Native menus suite checks those popups against it. */
+ *  shows in a context, and whether each command there is enabled. The VS Code suites run a command
+ *  from where the user finds it through this, so no test waits on VS Code's own popups. */
 
 /** Context keys and their values, as VS Code holds them. */
 export type Keys = Readonly<Record<string, unknown>>
@@ -145,16 +144,10 @@ export class Menus {
         ...(entry.group && { group: entry.group }),
       }))
   }
-  /** What `place` shows for `keys` whose title starts with `title`, of the groups `group` takes when
-   *  it is given, as a tree row's inline actions apart from its menu; throws naming what it shows
+  /** What `place` shows for `keys` whose title starts with `title`; throws naming what it shows
    *  instead when it shows none, or more than one. */
-  find(
-    place: string,
-    title: string,
-    keys: Keys,
-    group?: (group: string | undefined) => boolean,
-  ): Offered {
-    const shown = this.offered(place, keys).filter((each) => !group || group(each.group))
+  find(place: string, title: string, keys: Keys): Offered {
+    const shown = this.offered(place, keys)
     const found = shown.filter((each) => each.title.startsWith(title))
     if (found.length !== 1)
       throw new Error(
@@ -166,16 +159,6 @@ export class Menus {
   /** Whether `command` runs for `keys`: its enablement holds. */
   enabled(command: string, keys: Keys): boolean {
     return holds(this.#enablement.get(command), keys)
-  }
-  /** The command whose title is `title`, if the Command Palette shows it for `keys`. */
-  palette(title: string, keys: Keys): Offered {
-    const command = [...this.#titles].find(([, each]) => each === title)?.[0]
-    if (!command) throw new Error(`No command is titled "${title}"`)
-    const listed = this.manifest.contributes.menus.commandPalette?.find(
-      (entry) => entry.command === command,
-    )
-    if (!holds(listed?.when, keys)) throw new Error(`The Command Palette hides "${title}" here`)
-    return { command, title }
   }
   title(command: string): string {
     const title = this.#titles.get(command)

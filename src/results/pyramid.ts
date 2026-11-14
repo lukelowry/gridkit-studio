@@ -1,5 +1,4 @@
-import type { VisualizationRun } from '../shared/data.js'
-import { visualValues } from './frames.js'
+import { type VisualizationRun, visualValues } from './frames.js'
 
 interface Bucket {
   readonly index: number
@@ -62,8 +61,7 @@ export class Pyramid {
     for (let frame = 0; frame < at.length; frame++) {
       const offset = frame * this.rows
       const rowValues = values.subarray(offset, offset + this.rows)
-      const gaps = Uint8Array.from(rowValues, (value) => (Number.isNaN(value) ? 1 : 0))
-      this.#add(1, first + frame, at[frame]!, at[frame]!, rowValues, rowValues, gaps)
+      this.#add(1, first + frame, at[frame]!, at[frame]!, rowValues, rowValues)
     }
     this.#next += at.length
   }
@@ -124,6 +122,8 @@ export class Pyramid {
     this.#next = state.next
   }
 
+  /** Takes the child `child` of `level`'s bucket in progress: a bucket below it, with the rows it
+   *  found gaps in, or, with none given, a frame, whose gaps are the values it lacks. */
   #add(
     level: number,
     child: number,
@@ -131,7 +131,7 @@ export class Pyramid {
     end: number,
     low: Float32Array,
     high: Float32Array,
-    gaps: Uint8Array,
+    gaps?: Uint8Array,
   ): void {
     if (level > 21) return
     const index = Math.floor(child / 8)
@@ -154,7 +154,7 @@ export class Pyramid {
     for (let row = 0; row < this.rows; row++) {
       if (Number.isFinite(low[row])) bucket.low[row] = Math.min(bucket.low[row]!, low[row]!)
       if (Number.isFinite(high[row])) bucket.high[row] = Math.max(bucket.high[row]!, high[row]!)
-      bucket.gaps[row]! |= gaps[row]!
+      if (gaps ? gaps[row] : Number.isNaN(low[row])) bucket.gaps[row] = 1
     }
     if (bucket.count !== 8) return
     this.#levels[level] = undefined

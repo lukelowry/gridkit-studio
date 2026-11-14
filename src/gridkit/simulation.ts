@@ -1,16 +1,17 @@
 /** One run of GridKit's DynamicSimulation on a solver file, in its folder, as a shell runs it, read
  *  while it writes its output. */
 
-import { mkdir } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
+import { mkdir } from '../platform/files.js'
+import { lockOutput } from '../platform/host.js'
+import { basename, dirname } from '../platform/path.js'
 import { fileKey, ResultsFile, stampAt, type Stores } from '../results/index.js'
 import type { RunRequest } from '../shared/simulation.js'
 import type { Case } from './case.js'
-import { type Launch, launch, placed } from './runtime.js'
+import { available, type Launch, launch } from './runtime.js'
+import { launchWasm, solverBytes, type WasmAssets } from './wasm.js'
 
-export interface RunContext extends Launch {
+interface RunContext extends Launch {
+  readonly wasm?: WasmAssets
   /** Hears of the results file the run reads as soon as it reads it, so views can ask it for
    *  frames as it fills. */
   readonly reading: (file: ResultsFile) => void
@@ -61,13 +62,19 @@ export async function simulate(
   stores: Stores,
   context: RunContext,
 ): Promise<ResultsFile> {
-  const { solver, output, root, gridkit, tmax } = request
-  const place = { root, solver, touches: [fileURLToPath(request.uri), output] }
+  const { solver, output, gridkit, tmax } = request
   // Where GridKit runs is settled before anything is touched: a run that cannot start leaves the
   // last run's file as it was.
-  const runtime = await placed(gridkit, place, context.signal)
+  const runtime = await available(gridkit, context.signal)
+  if (runtime.kind === 'wasm') {
+    if (!context.wasm) throw new Error('Bundled GridKit WebAssembly assets are unavailable.')
+    await solverBytes(context.wasm.wasm)
+    context.signal.throwIfAborted()
+  }
   const end = await turn(output, context.signal)
+  let unlock: (() => void) | undefined
   try {
+    unlock = await lockOutput(output, context.signal)
     // GridKit opens its output without making the folder it names.
     await mkdir(dirname(output), { recursive: true })
     // The file the last run left stays until GridKit writes over it, as a shell's run leaves it: a
@@ -80,12 +87,22 @@ export async function simulate(
       span: [0, tmax],
     })
     context.reading(file)
-    const process = launch(runtime, place, context)
+    const process =
+      runtime.kind === 'wasm'
+        ? await launchWasm(request, context.wasm!, context)
+        : launch(runtime, solver, context)
     try {
+      // A quick rerun can keep the same file stamp. Wait for WASM to open its new output.
+      if ('started' in process) await process.started
       // Stopping the run stops GridKit: what it wrote is read to its end, as any stopped writer's
       // file is, and only letting go of the results stops the reading.
       await file.use(undefined, (signal) =>
-        file.ingest(signal, process.writer, context.progress, last),
+        file.ingest(
+          signal,
+          process.writer,
+          context.progress,
+          'started' in process ? undefined : last,
+        ),
       )
       await process.done
       if (!file.progress.frames)
@@ -105,6 +122,7 @@ export async function simulate(
       await file.settle()
     }
   } finally {
+    unlock?.()
     end()
   }
 }

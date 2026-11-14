@@ -1,4 +1,4 @@
-﻿import { expect, it } from 'vitest'
+import { expect, it } from 'vitest'
 
 import type { Results } from '../../shared/messages.js'
 import { monitorWindow, plotCamera, plotRequest, sameWindow } from './plot.js'
@@ -12,7 +12,7 @@ it("shows the chosen window, else the run's whole span, and never an empty one",
   expect(sameWindow([1, 2], [1, 3])).toBe(false)
 })
 it('asks for and frames one element, or every one, over the values a plot was given', () => {
-  const one = { from: 'Bus', field: 'Vm', id: 7, range: [0.9, 1.1] as const }
+  const one = { table: 'Bus', field: 'Vm', id: 7, range: [0.9, 1.1] as const }
   expect(plotRequest({ id: 'r' }, one, [0, 2], 440)).toEqual({
     results: 'r',
     table: 'Bus',
@@ -22,9 +22,9 @@ it('asks for and frames one element, or every one, over the values a plot was gi
     purpose: 'plot',
     columns: 440,
   })
-  expect(plotRequest({ id: 'r' }, { from: 'Bus', field: 'Vm' }, [0, 2], 440)).not.toHaveProperty(
+  expect(plotRequest({ id: 'r' }, { table: 'Bus', field: 'Vm' }, [0, 2], 440)).not.toHaveProperty(
     'ids',
   )
   expect(plotCamera(one, [0, 2])).toEqual({ x: [0, 2], y: [0.9, 1.1] })
-  expect(plotCamera({ from: 'Bus', field: 'Vm' }, [0, 2])).toEqual({ x: [0, 2], y: null })
+  expect(plotCamera({ table: 'Bus', field: 'Vm' }, [0, 2])).toEqual({ x: [0, 2], y: null })
 })

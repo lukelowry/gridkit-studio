@@ -86,7 +86,7 @@ export async function run() {
     const key = uri.toString()
     const session = bench.studio.get(key)!
     await bench.record('Bus', ['Vm', 'Va'], uri)
-    bench.run(
+    bench.explorer(
       'Run Dynamic Simulation',
       await bench.writeSolver(
         {
@@ -109,9 +109,9 @@ export async function run() {
     const { transport } = session
     transport.pause()
     transport.seek(0)
-    session.setPlots([{ from: 'Bus', field: 'Vm' }])
-    session.bind({ table: 'Bus', field: 'Vm' }, ['vertexColor'])
-    session.bind({ table: 'Bus', field: 'Va' }, ['vertexHeight'])
+    session.setPlots([{ table: 'Bus', field: 'Vm' }])
+    session.map({ table: 'Bus', field: 'Vm' }, ['vertexColor'])
+    session.map({ table: 'Bus', field: 'Va' }, ['vertexHeight'])
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')

@@ -1,25 +1,18 @@
 import type { RecordedField, TimeRange, ValueRange } from './data.js'
 import type { Revision } from './messages.js'
 
-/** Where GridKit runs: installed here, else in a container of an image. */
+/** Where GridKit runs: bundled WebAssembly, or an explicit installation on the workspace host. */
 export interface GridKit {
   /** The program a run starts, with the solver file as its one argument. */
   readonly program: string
-  /** Its install folder, or its program; empty finds GridKit on PATH. */
+  /** Its install folder, or its program; empty selects bundled WebAssembly. */
   readonly path: string
-  /** An image with GridKit's programs on its PATH, used when GridKit is not installed here; the
-   *  user pulls it, never Studio. Empty for none. */
-  readonly image: string
-  /** The container CLI: docker, podman, or a path to either; empty finds docker, else podman. */
-  readonly cli: string
 }
 
 /** A running simulation, which the extension stops if the worker cannot. */
 export interface RuntimeProcess {
   pid: number
   executable: string
-  /** The container it runs in, which `cli` removes by name. */
-  container?: { cli: string; name: string }
 }
 
 /** What a GridKit results file read for a case is: fixed once its header is read. */
@@ -84,7 +77,5 @@ export interface RunRequest extends Revision {
   state?: string
   /** When the run ends, for its progress. */
   tmax: number
-  /** The folder a container mounts. */
-  root: string
   gridkit: GridKit
 }

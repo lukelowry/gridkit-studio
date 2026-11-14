@@ -2,13 +2,12 @@
  *  and the extension read of it. A file changed on disk is read again whole; one written again as
  *  it was keeps its case. */
 
-import { fileURLToPath } from 'node:url'
-
 import { versionOf } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
 import { type Case, diagnose, rangeIn, sourceRange } from '../gridkit/index.js'
 import { networkSelectionOf } from '../gridkit/inspection.js'
 import { CaseQueries } from '../gridkit/projection.js'
+import { fileURLToPath } from '../platform/path.js'
 import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
 import type { Revision, Summary, WorkerApi } from '../shared/messages.js'

@@ -10,7 +10,7 @@ import * as vscode from 'vscode'
 import { type Bench, bench, folder, until } from './studio.js'
 
 suite('Runs', function () {
-  // A run lasts as long as GridKit does, a container's start included.
+  // Include solver initialization and result ingestion on slower hosts.
   this.timeout(120_000)
   let host: Bench
 
@@ -128,17 +128,23 @@ suite('Runs', function () {
     assert.equal((await host.run()).state, 'complete')
   })
 
-  test('starts the program GridKit Program names', async () => {
+  test('selects native only with an explicit path, and returns to WASM when cleared', async () => {
     const settings = vscode.workspace.getConfiguration('gridkitStudio')
     const global = vscode.ConfigurationTarget.Global
-    // A program no install or image has: the run, under its name, fails wherever GridKit runs.
+    const previous = settings.inspect<string>('gridkitPath')?.globalValue
     await settings.update('gridkitProgram', 'NoSuchSimulation', global)
+    await settings.update('gridkitPath', folder().fsPath, global)
     try {
       const run = await host.run()
       assert.equal(run.state, 'failed')
       assert.equal(run.command, 'NoSuchSimulation IEEE39.solver.json')
       assert.ok(host.said().some((said) => said.includes(run.message!)))
+      await settings.update('gridkitPath', '', global)
+      const bundled = await host.run()
+      assert.equal(bundled.state, 'complete', bundled.message)
+      assert.equal(bundled.command, 'DynamicSimulation IEEE39.solver.json')
     } finally {
+      await settings.update('gridkitPath', previous, global)
       await settings.update('gridkitProgram', undefined, global)
     }
   })

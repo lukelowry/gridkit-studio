@@ -2,6 +2,13 @@
 
 GridKit Studio bundles the software below, and its repository holds GridKit's example cases. The full text of each license follows the list.
 
+## Bundled GridKit WebAssembly
+
+GridKit's solver, SUNDIALS, SuiteSparse/KLU, and Emscripten runtime are shipped
+in `dist/solver/`. Their notices and license texts are included in
+`dist/solver/licenses/`. The source revision and artifact checksums are recorded
+in `dist/solver/build.json`; the build pins its download in `scripts/solver.lock.json`.
+
 ## latkit
 
 Copyright (c) 2026 Luke Lowery. MIT License.
@@ -12,6 +19,10 @@ The bundled native runtime and standalone worker include the notices in
 ## GridKit Server
 
 The catalog compiler, parser and result readers adapt code from GridKit Server d0824fc. Copyright (c) 2026 Luke Lowery. MIT License.
+
+## @noble/hashes and vscode-uri
+
+Their MIT license texts are included in `dist/licenses/`.
 
 ## jsonc-parser
 

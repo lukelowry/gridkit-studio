@@ -1,9 +1,8 @@
 /** A loaded case: its tables as column chunks, what views project of them, and the file as read. */
-import { createHash } from 'node:crypto'
-
 import { printParseErrorCode, visit } from 'jsonc-parser'
 import { type Id, reference } from 'latkit'
 
+import { createHash } from '../platform/crypto.js'
 import type { CaseDefinition, Entity } from '../shared/document.js'
 import { LABEL, NETWORK_POSITION } from '../shared/document.js'
 import type { SourceError, SourceProblem } from '../shared/errors.js'
@@ -103,9 +102,7 @@ export class Case {
   ): Promise<Case> {
     signal?.throwIfAborted()
     // One view of the bytes, which whatever reads their text reads it from.
-    const bytes = Buffer.isBuffer(file)
-      ? file
-      : Buffer.from(file.buffer, file.byteOffset, file.byteLength)
+    const bytes = file
     let layout: Layout
     try {
       layout = await scan(bytes, signal)
@@ -164,7 +161,7 @@ export class Case {
     readonly definition: CaseDefinition,
     readonly tables: ReadonlyMap<string, Table>,
     /** The file as read. */
-    readonly file: Buffer,
+    readonly file: Uint8Array,
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
     /** The case's own members, in file order: its header, params, arrays and monitors. */
     readonly members: readonly Member[],
@@ -256,7 +253,7 @@ export class Case {
  *  fields', then its ports', as references, then those of the members the catalog does not know.
  *  Its identities are indexed, so an id two rows share fails it. */
 function built(
-  file: Buffer,
+  file: Uint8Array,
   layout: Layout,
   parsed: Parsed,
   catalog: Catalog,
@@ -336,7 +333,7 @@ function built(
 
 /** Where record `record` of `records` lies in `file`. */
 function recordSpan(
-  file: Buffer,
+  file: Uint8Array,
   records: Records | undefined,
   record: unknown,
 ): { offset: number; length: number } | undefined {
@@ -405,7 +402,7 @@ function columnOf(kind: DecodeKind, parts: readonly IndexedChunk[], starts: Uint
  *  numbers, booleans or strings as they are, anything else, or a mix of them, as its JSON text. A
  *  null is a missing value, which a column of any type holds. Decoded on its first read. */
 function foundField(
-  file: Buffer,
+  file: Uint8Array,
   { path, rows, spans, kinds }: FoundColumn,
   starts: Uint32Array,
 ): { plan: FieldPlan; column: Column; row: number } {

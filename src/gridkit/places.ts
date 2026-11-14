@@ -29,7 +29,7 @@ function recordOf(kase: Case, table: Table, row: number): Bytes {
 
 /** The value `path` leads to, key by key, from the value at `from`; undefined where a key names
  *  no member, or leads into what is no object. */
-function within(file: Buffer, from: Bytes, path: readonly string[]): Bytes | undefined {
+function within(file: Uint8Array, from: Bytes, path: readonly string[]): Bytes | undefined {
   let [value, end] = from
   for (const key of path) {
     if (file[value] !== OPEN_OBJECT) return undefined

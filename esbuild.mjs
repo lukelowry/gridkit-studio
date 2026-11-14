@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { build, context } from 'esbuild'
 import svelte from 'esbuild-svelte'
 
+import { browserPlatform } from './scripts/platform.mjs'
+import { copySolver } from './scripts/solver.mjs'
+
 const root = dirname(fileURLToPath(import.meta.url))
 const output = resolve(root, 'dist')
 const watch = process.argv.includes('--watch')
@@ -30,6 +33,27 @@ const common = {
 const builds = [
   {
     entryPoints: ['src/extension/index.ts'],
+    outfile: 'dist/browser/extension.cjs',
+    platform: 'browser',
+    format: 'cjs',
+    target: 'es2022',
+    external: ['vscode'],
+    plugins: [browserPlatform],
+  },
+  {
+    entryPoints: { worker: 'src/workers/worker.ts', solver: 'src/workers/solver.ts' },
+    outdir: 'dist/browser',
+    outExtension: { '.js': '.mjs' },
+    platform: 'browser',
+    format: 'esm',
+    target: 'es2022',
+    plugins: [browserPlatform],
+    define: { 'import.meta.url': 'self.location.href' },
+    banner: { js: '(async () => {' },
+    footer: { js: '})().catch(error => { setTimeout(() => { throw error }) });' },
+  },
+  {
+    entryPoints: ['src/extension/index.ts'],
     outfile: 'dist/extension.cjs',
     platform: 'node',
     format: 'cjs',
@@ -37,7 +61,7 @@ const builds = [
     external: ['vscode'],
   },
   {
-    entryPoints: { worker: 'src/workers/worker.ts' },
+    entryPoints: { worker: 'src/workers/worker.ts', solver: 'src/workers/solver.ts' },
     outdir: 'dist',
     outExtension: { '.js': '.mjs' },
     platform: 'node',
@@ -53,6 +77,7 @@ const builds = [
       case: 'src/webview/case.ts',
       monitor: 'src/webview/monitor.ts',
       export: 'src/webview/export.ts',
+      download: 'src/webview/download.ts',
     },
     outdir: 'dist/webview',
     platform: 'browser',
@@ -65,6 +90,15 @@ const builds = [
   },
 ]
 await Promise.all([
+  copySolver(resolve(output, 'solver')),
+  cp(
+    resolve(dirname(require.resolve('@noble/hashes/sha2.js')), 'LICENSE'),
+    resolve(output, 'licenses/noble-hashes.md'),
+  ),
+  cp(
+    resolve(dirname(require.resolve('vscode-uri')), '../../LICENSE.md'),
+    resolve(output, 'licenses/vscode-uri.md'),
+  ),
   cp(require.resolve('latkit/wasm'), resolve(output, 'webview/latkit.wasm')),
   cp(require.resolve('latkit/worker'), resolve(output, 'webview/latkit-worker.js')),
   cp(require.resolve('latkit/shaders'), resolve(output, 'webview/latkit-shaders.bin')),

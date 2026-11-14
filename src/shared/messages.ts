@@ -101,6 +101,7 @@ export type Source = { readonly revision: Revision } | OfResults
 /** What the extension starts its worker with. */
 export interface WorkerOptions {
   readonly wasmPath: string
+  readonly solver?: { readonly worker: string; readonly module: string; readonly wasm: string }
   /** The catalog of GridKit's classes the user's file holds, read in place of the bundled one. */
   readonly catalog?: unknown
   /** How many bytes of results files nothing holds stay open, so they open again at once. */

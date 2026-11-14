@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
-
 import { Data, type Expr, field, type Fields, Patch, type Query } from 'latkit'
 
+import { createHash } from '../platform/crypto.js'
 import {
   PAGE_BYTES,
   type ProjectionCursor,

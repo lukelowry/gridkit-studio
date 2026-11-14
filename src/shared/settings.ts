@@ -126,31 +126,19 @@ export const TILTED = 45
  *  pixels, so a thinner line is a faint sliver that hides nothing behind it, and where many cross,
  *  the most numerous color shows whichever is nearest. */
 export const EDGE_WIDTH = 2
-/** The image Studio runs GridKit from where GridKit is not installed. */
-const IMAGE = 'ghcr.io/birchfieldresearchgroup/gridkit:develop-perf'
-
 /** The settings by id, in the order VS Code lists them: first those of GridKit itself, then each
  *  view's, which its id starts with. */
 export const SETTINGS = {
   gridkitPath: machine(
-    text('', 'Where GridKit is installed, such as `/opt/gridkit`. Empty finds GridKit on `PATH`.'),
-  ),
-  gridkitImage: machine(
-    text(
-      IMAGE,
-      `The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (\`docker pull ${IMAGE}\`): GridKit Studio never pulls images. Empty runs only an installed GridKit.`,
-    ),
-  ),
-  containerCli: machine(
     text(
       '',
-      'The container CLI that runs **GridKit Image**: `docker`, `podman`, or a path to either. Empty uses `docker`, else `podman`, on `PATH`.',
+      'GridKit installation directory or executable. Leave empty to use the included solver. Relative paths start at the workspace folder.',
     ),
   ),
   gridkitProgram: machine(
     text(
       'DynamicSimulation',
-      'The GridKit program a run starts, with the solver file as its one argument. It is found under **GridKit Path**, on `PATH`, or in **GridKit Image**.',
+      'Executable name to use when GridKit Path is an installation directory.',
     ),
   ),
   catalog: machine(

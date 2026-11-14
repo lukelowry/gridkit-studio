@@ -1,7 +1,7 @@
-import { join } from 'node:path'
-import { Worker } from 'node:worker_threads'
-
 import { terminateRuntime } from '../gridkit/index.js'
+import { browser } from '../platform/host.js'
+import { join } from '../platform/path.js'
+import { Worker } from '../platform/thread.js'
 import type {
   FromWorker,
   RuntimeProcess,
@@ -164,7 +164,7 @@ export class Client {
     const wasmPath = join(folder, 'webview', 'latkit.wasm')
     this.event = new Emitter(failed)
     this.worker = new Thread(
-      join(folder, 'worker.mjs'),
+      join(folder, ...(browser ? ['browser'] : []), 'worker.mjs'),
       {
         hear: (event) => {
           if (event.kind !== 'process') return this.event.fire(event)
@@ -174,7 +174,15 @@ export class Client {
         release: () => this.#terminate(),
       },
       failed,
-      () => ({ ...options(), wasmPath }),
+      () => ({
+        ...options(),
+        wasmPath,
+        solver: {
+          worker: join(folder, ...(browser ? ['browser'] : []), 'solver.mjs'),
+          module: join(folder, 'solver', 'DynamicSimulation.mjs'),
+          wasm: join(folder, 'solver', 'DynamicSimulation.wasm'),
+        },
+      }),
     )
   }
 

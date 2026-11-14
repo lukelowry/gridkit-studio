@@ -60,11 +60,14 @@
     "bench:compare": "node tests/benchmarks/compare.mjs output/bench/base.json output/bench/head.json",
     "screenshots": "pnpm build && node tests/launch.mjs tests/e2e/screenshots.ts",
     "package": "node scripts/package.mjs",
-    "vscode:prepublish": "node esbuild.mjs"
+    "vscode:prepublish": "node esbuild.mjs",
+    "test:web": "pnpm build && node tests/browser.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "^2.4.0",
     "jsonc-parser": "3.3.1",
-    "latkit": "0.7.1"
+    "latkit": "0.7.1",
+    "vscode-uri": "^3.2.0"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",
@@ -74,6 +77,7 @@
     "@typescript-eslint/parser": "^8.71.1",
     "@vitest/coverage-v8": "5.0.3",
     "@vscode/test-electron": "3.1.0",
+    "@vscode/test-web": "^0.0.81",
     "@vscode/vsce": "4.0.0",
     "esbuild": "^0.28.2",
     "esbuild-svelte": "^0.9.5",
@@ -87,6 +91,7 @@
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "svelte-eslint-parser": "^1.8.1",
+    "tar": "^7.5.23",
     "typescript": "^6.0.3",
     "vitest": "5.0.3"
   },
@@ -101,17 +106,12 @@
       "description": "Inspect cases. Simulation requires Workspace Trust.",
       "restrictedConfigurations": [
         "gridkitStudio.gridkitPath",
-        "gridkitStudio.gridkitImage",
-        "gridkitStudio.containerCli",
         "gridkitStudio.gridkitProgram",
         "gridkitStudio.catalog",
         "gridkitStudio.network.map.tilesUrl"
       ]
     },
-    "virtualWorkspaces": {
-      "supported": false,
-      "description": "GridKit Studio reads case files on the workspace host."
-    }
+    "virtualWorkspaces": true
   },
   "contributes": {
     "commands": [
@@ -1059,41 +1059,27 @@
             "default": "",
             "scope": "machine-overridable",
             "order": 0,
-            "markdownDescription": "Where GridKit is installed, such as `/opt/gridkit`. Empty finds GridKit on `PATH`.",
-            "type": "string"
-          },
-          "gridkitStudio.gridkitImage": {
-            "default": "ghcr.io/birchfieldresearchgroup/gridkit:develop-perf",
-            "scope": "machine-overridable",
-            "order": 1,
-            "markdownDescription": "The container image GridKit runs from, in Docker or Podman, when GridKit is not installed where the workspace is. Pull it yourself first (`docker pull ghcr.io/birchfieldresearchgroup/gridkit:develop-perf`): GridKit Studio never pulls images. Empty runs only an installed GridKit.",
-            "type": "string"
-          },
-          "gridkitStudio.containerCli": {
-            "default": "",
-            "scope": "machine-overridable",
-            "order": 2,
-            "markdownDescription": "The container CLI that runs **GridKit Image**: `docker`, `podman`, or a path to either. Empty uses `docker`, else `podman`, on `PATH`.",
+            "markdownDescription": "GridKit installation directory or executable. Leave empty to use the included solver. Relative paths start at the workspace folder.",
             "type": "string"
           },
           "gridkitStudio.gridkitProgram": {
             "default": "DynamicSimulation",
             "scope": "machine-overridable",
-            "order": 3,
-            "markdownDescription": "The GridKit program a run starts, with the solver file as its one argument. It is found under **GridKit Path**, on `PATH`, or in **GridKit Image**.",
+            "order": 1,
+            "markdownDescription": "Executable name to use when GridKit Path is an installation directory.",
             "type": "string"
           },
           "gridkitStudio.catalog": {
             "default": "",
             "scope": "machine-overridable",
-            "order": 4,
+            "order": 2,
             "markdownDescription": "A catalog of GridKit's classes to use in place of GridKit Studio's own, in the same form, for a GridKit build whose classes differ. A relative path starts at the first workspace folder. It is read when the window opens.",
             "type": "string"
           },
           "gridkitStudio.resultCacheMiB": {
             "default": 256,
             "scope": "window",
-            "order": 5,
+            "order": 3,
             "markdownDescription": "Memory per window for results no view shows, in MiB, so they open again at once. Past it, those unused longest are closed.",
             "type": "number",
             "minimum": 0
@@ -1505,5 +1491,6 @@
         ]
       }
     ]
-  }
+  },
+  "browser": "./dist/browser/extension.cjs"
 }

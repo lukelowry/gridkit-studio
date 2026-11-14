@@ -2,10 +2,10 @@
  *  results files Studio reads, each against a case it read. Results keep the case they were read
  *  against, so the views of results read that case as it was, whatever its file reads since. */
 
-import { workerData } from 'node:worker_threads'
-
 import { type Case, catalog as bundled, catalogOf } from '../gridkit/index.js'
 import { projectionPage } from '../gridkit/projection.js'
+import { onExit } from '../platform/host.js'
+import { workerData } from '../platform/worker.js'
 import { superseded } from '../shared/errors.js'
 import type { Source, WorkerApi, WorkerOptions } from '../shared/messages.js'
 import { caseFiles } from './cases.js'
@@ -48,7 +48,7 @@ serve<WorkerApi>(
   ['validate', 'run'],
 )
 
-process.once('exit', () => {
+onExit(() => {
   cases.dispose()
   results.dispose()
 })

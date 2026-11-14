@@ -261,7 +261,7 @@ export class Bench {
     }
   }
 
-  /** Whether GridKit runs here: installed, or its image on this machine. A required run fails
+  /** Whether GridKit runs here: bundled WASM, or an explicit native install. A required run fails
    *  without it. */
   async gridkit(): Promise<boolean> {
     const runtime = available(gridkitOf(this.uri))

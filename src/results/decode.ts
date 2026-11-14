@@ -1,10 +1,9 @@
 /** Decodes GridKit's CSV results a batch of frames at a time, never a whole run at once. */
-import { addAbortSignal, type Readable } from 'node:stream'
-import { setImmediate } from 'node:timers/promises'
 
 import type { Id } from 'latkit'
 
 import { type Case, outputName, type Table } from '../gridkit/index.js'
+import { setImmediate } from '../platform/timing.js'
 import type { RecordedField } from '../shared/data.js'
 import { problem } from '../shared/errors.js'
 import { csvMessages, type LongReading } from './csv.js'
@@ -66,7 +65,7 @@ function chunkFrames(fields: readonly Field[]): number {
  *  what the file holds, so a run's file and one opened alone read alike. Once `layout` holds the
  *  header's names, `source` is rows alone; a header alone learns them. */
 export async function readResults(
-  source: Readable,
+  source: AsyncIterable<Uint8Array>,
   kase: Case,
   reading: Reading,
   layout: Layout,
@@ -80,7 +79,7 @@ export async function readResults(
   let yielded = performance.now()
   try {
     reading.signal.throwIfAborted()
-    const chunks = addAbortSignal(reading.signal, source)
+    const chunks = source
     for await (const message of csvMessages(chunks, layout.header, first, layout, reading.final)) {
       reading.signal.throwIfAborted()
       if (message.kind === 'schema') {

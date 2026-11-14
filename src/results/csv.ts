@@ -1,3 +1,4 @@
+import { concat } from '../platform/bytes.js'
 /** GridKit's numeric CSV results, under a header of UTF-8 names: a column per variable (its wide
  *  layout), or a row per variable and sample (its long layout), read as the wide. */
 import { problem } from '../shared/errors.js'
@@ -262,7 +263,7 @@ async function* textChunks(
   const decoder = new TextDecoder('utf-8', { fatal: true })
   let carried: Uint8Array = new Uint8Array(0)
   for await (const part of source) {
-    const bytes = carried.length ? Buffer.concat([carried, part]) : part
+    const bytes = carried.length ? concat(carried, part) : part
     const end = bytes.length - unfinished(bytes)
     carried = bytes.slice(end)
     let text: string

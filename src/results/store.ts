@@ -1,5 +1,5 @@
 /** Persistent scientific blocks and native visualization levels, committed by one atomic watermark. */
-import { randomUUID } from 'node:crypto'
+import { randomUUID } from '../platform/crypto.js'
 import {
   type FileHandle,
   mkdir,
@@ -9,11 +9,10 @@ import {
   rename,
   rm,
   writeFile,
-} from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
-
+} from '../platform/files.js'
+import { alive, caseless, owner as ownerId } from '../platform/host.js'
+import { dirname, join, resolve } from '../platform/path.js'
 import type { TimeRange } from '../shared/data.js'
-import { alive } from '../shared/processes.js'
 import type { LongColumns } from './csv.js'
 import type { FrameBlock, VisualizationRun } from './frames.js'
 import type { PyramidState, ReducedRun } from './pyramid.js'
@@ -74,7 +73,7 @@ export type Checkpoint = Omit<
 >
 export function fileKey(path: string): string {
   const full = resolve(path)
-  return process.platform === 'win32' || process.platform === 'darwin' ? full.toLowerCase() : full
+  return caseless ? full.toLowerCase() : full
 }
 async function readAll(file: FileHandle, bytes: Uint8Array, position: number): Promise<void> {
   for (let read = 0; read < bytes.length;) {
@@ -464,7 +463,7 @@ export class Stores {
 
   constructor(
     readonly root: string,
-    owner = process.pid,
+    owner: string | number = ownerId,
   ) {
     this.root = join(root, FORMAT)
     this.#own = join(this.root, String(owner))
@@ -487,8 +486,8 @@ export class Stores {
       if (name !== FORMAT) await removed(join(formats, name))
     for (const name of await readdir(this.root).catch(() => [])) {
       const folder = join(this.root, name)
-      const window = /^\d+$/.test(name) ? Number(name) : undefined
-      if (folder === this.#own || (window !== undefined && alive(window))) continue
+      const window = /^(?:\d+|[\da-f-]{36})$/.test(name) ? name : undefined
+      if (folder === this.#own || (window !== undefined && (await alive(window)))) continue
       // A window gone leaves its stores to the next, moved within one folder, never copied; what
       // is no window's folder is no store of Studio's now.
       if (window !== undefined)

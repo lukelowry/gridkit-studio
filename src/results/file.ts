@@ -1,14 +1,11 @@
-/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
-import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
-
 import { type Id, Patch } from 'latkit'
 
 import type { Case } from '../gridkit/case.js'
+import { chunks, equal } from '../platform/bytes.js'
+/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
+import { createHash, randomUUID } from '../platform/crypto.js'
+import { mkdir, open, rename, rm } from '../platform/files.js'
+import { basename, dirname, join } from '../platform/path.js'
 import {
   ENTRY_BYTES,
   type ExactSample,
@@ -212,8 +209,8 @@ export class ResultsFile {
     const original = await open(this.#layout.path, 'r')
     const cached = await open(join(this.store.folder, 'source.csv'), 'r')
     try {
-      const a = Buffer.alloc(64 << 10)
-      const b = Buffer.alloc(64 << 10)
+      const a = new Uint8Array(64 << 10)
+      const b = new Uint8Array(64 << 10)
       for (let at = 0; at < this.#read;) {
         signal.throwIfAborted()
         const length = Math.min(a.length, this.#read - at)
@@ -224,7 +221,7 @@ export class ResultsFile {
         if (
           x.bytesRead !== length ||
           y.bytesRead !== length ||
-          !a.subarray(0, length).equals(b.subarray(0, length))
+          !equal(a.subarray(0, length), b.subarray(0, length))
         )
           throw lost(this.#layout.name, new Error('The file changed before what was kept of it.'))
         at += length
@@ -256,7 +253,7 @@ export class ResultsFile {
         if (piece.kind === 'header') {
           this.#opened = piece.stamp
           await readResults(
-            Readable.from([piece.bytes]),
+            chunks([piece.bytes]),
             this.kase,
             { signal, publish: () => {} },
             this.#decode,
@@ -291,7 +288,7 @@ export class ResultsFile {
   async #take(signal: AbortSignal, bytes?: Uint8Array): Promise<void> {
     const decoded: Decoded[] = []
     await readResults(
-      Readable.from(bytes ? [bytes] : []),
+      chunks(bytes ? [bytes] : []),
       this.kase,
       {
         signal,
@@ -768,14 +765,28 @@ export class ResultsFile {
   async exportCsv(path: string): Promise<void> {
     if (this.of(path)) throw new Error('Choose a different file from the open results.')
     if (!this.#read) throw new Error('No results have been read yet.')
+    const size = this.#read
     const source = await open(join(this.store.folder, 'source.csv'), 'r')
     const draft = `${path}.${randomUUID().slice(0, 8)}.part`
     try {
       await mkdir(dirname(path), { recursive: true })
-      await pipeline(
-        source.createReadStream({ start: 0, end: this.#read - 1, autoClose: false }),
-        createWriteStream(draft),
-      )
+      const target = await open(draft, 'w')
+      try {
+        const bytes = new Uint8Array(1 << 20)
+        for (let at = 0; at < size;) {
+          const { bytesRead } = await source.read(bytes, 0, Math.min(bytes.length, size - at), at)
+          if (!bytesRead) throw new Error('The stored results are truncated.')
+          for (let written = 0; written < bytesRead;) {
+            const next = await target.write(bytes, written, bytesRead - written, at + written)
+            if (!next.bytesWritten) throw new Error('Export write made no progress.')
+            written += next.bytesWritten
+          }
+          at += bytesRead
+        }
+        await target.sync()
+      } finally {
+        await target.close()
+      }
       await rename(draft, path)
     } finally {
       await rm(draft, { force: true })

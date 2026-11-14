@@ -1,6 +1,7 @@
 /** Lazy parser columns use native scalar arrays; no renderer row-space lives here. */
 import type { Geometry, Values } from 'latkit'
 
+import { text } from '../platform/bytes.js'
 import type { Value } from '../shared/messages.js'
 
 export type DecodeKind = 'number' | 'integer' | 'unsigned' | 'boolean' | 'text' | 'path' | 'json'
@@ -50,8 +51,8 @@ export function valueAt(chunk: Chunk, at: number): Value {
   return isValid(chunk, at) ? (chunk[at] as Value) : null
 }
 /** The text of `bytes` from `start` to `end`. */
-export const utf8 = (bytes: Buffer, start: number, end: number): string =>
-  bytes.toString('utf8', start, end)
+export const utf8 = (bytes: Uint8Array, start: number, end: number): string =>
+  text(bytes, start, end)
 /** `array` in a copy twice as long. */
 export function grown<T extends Int32Array | Uint32Array | Float64Array>(array: T): T {
   const next = new (array.constructor as new (length: number) => T)(array.length * 2)

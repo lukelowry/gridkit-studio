@@ -88,11 +88,18 @@ try {
   await verify(target)
   assert.deepEqual(
     (await readdir(join(target, 'dist'))).filter((name) => /\.(cjs|mjs)$/.test(name)).sort(),
-    ['extension.cjs', 'worker.mjs'],
-    'Ship only the native extension and its worker bundle',
+    ['extension.cjs', 'solver.mjs', 'worker.mjs'],
+    'Ship the extension, results worker, and isolated WASM solver worker',
   )
   for (const asset of [
+    'browser/extension.cjs',
+    'browser/worker.mjs',
+    'browser/solver.mjs',
+    'solver/DynamicSimulation.mjs',
+    'solver/DynamicSimulation.wasm',
+    'solver/build.json',
     'webview/latkit.wasm',
+    'webview/download.js',
     'webview/latkit-worker.js',
     'webview/latkit-shaders.bin',
     'licenses/latkit-NOTICES.md',
@@ -107,7 +114,7 @@ try {
   // Flags, such as --untrusted, go to each launch as they do to launch.mjs itself.
   const flags = process.argv.slice(2).filter((arg) => arg.startsWith('--'))
   const entries = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
-  if (!entries.length) entries.push('tests/host/index.ts')
+  if (!entries.length) entries.push('tests/host/wasm.ts', 'tests/host/index.ts')
   for (const entry of entries)
     await run(process.execPath, [join(root, 'tests/launch.mjs'), ...flags, entry], {
       ELECTRON_RUN_AS_NODE: undefined,

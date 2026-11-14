@@ -1,6 +1,6 @@
 /** Long work a worker does in turns, so its other requests are answered meanwhile. */
 
-import { setImmediate } from 'node:timers/promises'
+import { setImmediate } from '../platform/timing.js'
 
 /** How long a turn runs before the worker answers what else it was asked. */
 const TURN_MS = 8

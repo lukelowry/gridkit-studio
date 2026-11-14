@@ -40,7 +40,16 @@ const extensionTestsPath = path.join(
     .replace(/[\\/]/g, '-') + '.cjs',
 )
 await build({
-  entryPoints: [path.join(root, entry)],
+  stdin: {
+    contents: `import { run as suite } from ${JSON.stringify('./' + entry.replaceAll('\\', '/'))};
+import { writeFileSync } from 'node:fs';
+export async function run() {
+  await suite();
+  writeFileSync(process.env.GRIDKIT_TEST_COMPLETE, 'complete');
+}`,
+    resolveDir: root,
+    sourcefile: 'test-entry.mjs',
+  },
   outfile: extensionTestsPath,
   bundle: true,
   platform: 'node',
@@ -55,6 +64,7 @@ const output = process.env.GRIDKIT_TEST_OUTPUT ?? path.join(root, 'output')
 const testRoot = path.join(root, '.vscode-test')
 await mkdir(testRoot, { recursive: true })
 const run = await mkdtemp(path.join(testRoot, 'run-'))
+const completed = path.join(run, 'completed')
 let passed = false
 try {
   const profile = path.join(run, 'user-data')
@@ -79,12 +89,8 @@ try {
       'workbench.enableExperiments': false,
       'extensions.autoCheckUpdates': false,
       'extensions.autoUpdate': false,
-      // An install of GridKit other than the one on PATH, or an image other than the default.
+      // An explicit native installation; otherwise exercise bundled WebAssembly.
       ...(process.env.GRIDKIT_PATH && { 'gridkitStudio.gridkitPath': process.env.GRIDKIT_PATH }),
-      ...(process.env.GRIDKIT_IMAGE && { 'gridkitStudio.gridkitImage': process.env.GRIDKIT_IMAGE }),
-      ...(process.env.GRIDKIT_CONTAINER_CLI && {
-        'gridkitStudio.containerCli': process.env.GRIDKIT_CONTAINER_CLI,
-      }),
     }),
   )
   const workspace = path.join(run, 'workspace')
@@ -146,6 +152,7 @@ try {
         GRIDKIT_TEST_PROFILE: profile,
         GRIDKIT_TEST_ROOT: root,
         GRIDKIT_TEST_OUTPUT: output,
+        GRIDKIT_TEST_COMPLETE: completed,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
@@ -164,6 +171,10 @@ try {
     child.once('close', resolve)
   })
   if (code !== 0) throw new Error(`VS Code exited ${code}.`)
+  if ((await readFile(completed, 'utf8').catch(() => '')) !== 'complete')
+    throw new Error(
+      'VS Code exited before the test entry completed. Check the extension-host logs.',
+    )
   passed = true
 } finally {
   // A failed run keeps VS Code's logs, which say what its windows and extension hosts did.

@@ -1,11 +1,11 @@
 /** Every case Studio works on, each a Session kept while something holds it, and what they share:
  *  the worker, the case files, the log, and the events the views and native UI follow. */
 
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
 import * as vscode from 'vscode'
 
+import { createHash } from '../platform/crypto.js'
+import { browser, tmpdir } from '../platform/host.js'
+import { join } from '../platform/path.js'
 import { failedWith } from '../shared/errors.js'
 import {
   type Command,
@@ -26,13 +26,13 @@ import {
   type ViewState,
   type WorkerEvent,
 } from '../shared/messages.js'
-import { catalogFile } from './catalog.js'
 import { Client, unsteady } from './client.js'
 import { CaseFiles } from './files.js'
 import { Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
 import { gone } from './solvers.js'
+import { reference } from './uris.js'
 
 /** A command's ask of the views of a case: of every one, or of those of the kind its menu was
  *  opened on. */
@@ -46,7 +46,6 @@ export interface Action {
 }
 
 export class Sessions implements vscode.Disposable {
-  readonly reporter = new Reporter()
   readonly client: Client
   readonly files: CaseFiles
   /** Fires when what a case's views show changes. */
@@ -62,23 +61,30 @@ export class Sessions implements vscode.Disposable {
   #active?: Session
   readonly #disposables: vscode.Disposable[]
 
-  constructor(readonly context: vscode.ExtensionContext) {
+  constructor(
+    readonly context: vscode.ExtensionContext,
+    catalog?: unknown,
+    readonly reporter = new Reporter(),
+  ) {
     // The runs of every window on this machine are written down in one folder.
     const { globalStorageUri, storageUri, workspaceState } = context
     const runs =
-      globalStorageUri.scheme === 'file'
+      !browser && globalStorageUri.scheme === 'file'
         ? vscode.Uri.joinPath(globalStorageUri, 'runs').fsPath
         : undefined
     // The results read are kept with the workspace, where its sessions are saved; each window's
     // in a folder of its own, wherever windows share one, as empty windows do.
     const kept = [storageUri, globalStorageUri].find((uri) => uri?.scheme === 'file')
-    const store = kept
-      ? vscode.Uri.joinPath(kept, 'results').fsPath
-      : join(tmpdir(), 'gridkit-studio-results')
+    const store = browser
+      ? `opfs:/gridkit/stores/${createHash('sha256')
+          .update((storageUri ?? globalStorageUri).toString())
+          .digest('hex')}`
+      : kept
+        ? vscode.Uri.joinPath(kept, 'results').fsPath
+        : join(tmpdir(), 'gridkit-studio-results')
     // The worker reads cases with the catalog of GridKit's classes the user's file holds, if any.
-    const catalog = catalogFile((error) => this.reporter.report(error))
     this.client = new Client(
-      vscode.Uri.joinPath(context.extensionUri, 'dist').fsPath,
+      reference(vscode.Uri.joinPath(context.extensionUri, 'dist')),
       () => ({
         catalog,
         cacheBytes: cacheBytes(),
@@ -216,8 +222,7 @@ export class Sessions implements vscode.Disposable {
   /** Makes `uri`'s case the one the views follow, letting go of the one they followed: a case file on
    *  disk, never a copy another extension shows. */
   activate(uri: string): Session {
-    if (!followed(uri))
-      throw new Error('GridKit Studio works on a .case.json on disk, not on a copy of one.')
+    if (!followed(uri)) throw new Error('Open a saved .case.json file.')
     // Tabs change often, as a case's editor turns dirty: only another case is news, but for
     // results due to be read again as the views follow it.
     if (this.#active?.uri === uri) {

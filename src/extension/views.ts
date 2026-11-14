@@ -1,8 +1,7 @@
-import { randomBytes, randomUUID } from 'node:crypto'
-import { basename } from 'node:path'
-
 import * as vscode from 'vscode'
 
+import { nonce as makeNonce, randomUUID } from '../platform/crypto.js'
+import { basename } from '../platform/path.js'
 import { shownType } from '../shared/cells.js'
 import { isRange } from '../shared/data.js'
 import { isEntity, tableLabel } from '../shared/document.js'
@@ -87,7 +86,7 @@ type Hidden = 'destroyed' | 'idle' | 'working'
 
 /** The page of a view of `kind`, whose script and styles are the bundle of the same name. */
 function html(webview: vscode.Webview, context: vscode.ExtensionContext, kind: ViewKind) {
-  const nonce = randomBytes(18).toString('base64')
+  const nonce = makeNonce()
   const escape = (value: string) =>
     value
       .replaceAll('&', '&amp;')
@@ -496,7 +495,7 @@ export function registerViews(studio: Sessions) {
     // win. Studio shows case files on disk, which it reads itself.
     openCustomDocument(uri) {
       const key = uri.toString()
-      if (!followed(key)) throw new Error('GridKit Studio shows .case.json files on disk.')
+      if (!followed(key)) throw new Error('GridKit Studio shows saved .case.json files.')
       studio.hold(key, 'document')
       return { uri, dispose: () => studio.release(key, 'document') }
     },

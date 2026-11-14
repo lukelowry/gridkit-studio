@@ -2,11 +2,10 @@
  *  results stay read, and how each view looks. src/shared/settings.ts defines each setting and
  *  holds its one default. */
 
-import { dirname, resolve } from 'node:path'
-
 import * as vscode from 'vscode'
 
 import { PROGRAM } from '../gridkit/index.js'
+import { dirname, resolve } from '../platform/path.js'
 import { PREFIX } from '../shared/ids.js'
 import type { GridKit } from '../shared/messages.js'
 import {
@@ -30,17 +29,18 @@ export const affects = (
   id?: keyof Settings,
 ) => event.affectsConfiguration(id ? `${PREFIX}.${id}` : PREFIX, scope)
 
-/** The GridKit the settings name for the file at `uri`; a relative path resolves against its
- *  workspace folder. */
+/** Empty selects bundled WASM; an explicit native path resolves on the workspace host. */
 export function gridkitOf(uri: vscode.Uri): GridKit {
   const path = setting('gridkitPath', uri).trim()
+  if (path && uri.scheme !== 'file')
+    throw new Error(
+      'GridKit Path requires files on a desktop or remote machine. Clear it to use the included solver.',
+    )
   return {
-    program: setting('gridkitProgram', uri).trim() || PROGRAM,
+    program: path ? setting('gridkitProgram', uri).trim() || PROGRAM : PROGRAM,
     path: path
       ? resolve(vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? dirname(uri.fsPath), path)
       : '',
-    image: setting('gridkitImage', uri).trim(),
-    cli: setting('containerCli', uri).trim(),
   }
 }
 

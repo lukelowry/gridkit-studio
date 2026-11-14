@@ -2,7 +2,6 @@
  *  window's DevTools port. */
 
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 
@@ -456,19 +455,15 @@ export class TestHost extends Bench {
     this.session.setPlots([{ table: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
   }
 
-  /** Which GridKit the runs use: the image's ID, which stays the same however its tags move, or the
+  /** Which GridKit the runs use: the pinned WASM artifact or the
    *  installed program. Runs on different builds time different simulations. */
   async gridkitBuild(): Promise<string> {
     const runtime = await available(gridkitOf(this.uri))
     if (runtime.kind === 'installed') return runtime.program
-    return new Promise((resolve, reject) =>
-      execFile(
-        runtime.cli,
-        ['image', 'inspect', '--format', '{{.Id}}', runtime.image],
-        { windowsHide: true },
-        (error, stdout) => (error ? reject(error) : resolve(stdout.trim())),
-      ),
+    const bytes = await vscode.workspace.fs.readFile(
+      vscode.Uri.joinPath(extension().extensionUri, 'dist/solver/build.json'),
     )
+    return (JSON.parse(new TextDecoder().decode(bytes)) as { artifact: string }).artifact
   }
 
   /** Back to the case alone in its Network editor: its file as found, nothing selected or mapped,

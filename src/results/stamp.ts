@@ -1,7 +1,7 @@
 /** What says a results file is the one Studio read, whatever was done to it since. */
 
-import type { BigIntStats } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import type { BigIntStats } from '../platform/files.js'
+import { stat } from '../platform/files.js'
 
 /** A file as it stands: which file it is, how large, and when it, or what is said of it, last
  *  changed. A file replaced, written over in place, or written again with its time set back

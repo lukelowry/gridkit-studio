@@ -1,3 +1,4 @@
+import { text } from '../platform/bytes.js'
 /** A case's JSON bytes: members and records indexed once, in file order, then columns decoded on
  *  demand. A member the catalog does not know, or a device class, is found and kept for its own
  *  column or table; invalid values become null. */
@@ -74,7 +75,7 @@ export interface Layout {
 /** The case's members, and each array's records, found as the whole file is checked to be JSON
  *  with no object that repeats a key: what is read after takes the JSON as it is. Read a slice at a
  *  time, until `signal` lets go. */
-export async function scan(bytes: Buffer, signal = AbortSignal.any([])): Promise<Layout> {
+export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Promise<Layout> {
   const work = new Turns(signal)
   // A value's place is kept as a signed 32-bit number, where -1 says a record writes none.
   if (bytes.length > 0x7fffffff) throw problem('limit', 'A case file must be smaller than 2 GiB.')
@@ -112,7 +113,7 @@ export async function scan(bytes: Buffer, signal = AbortSignal.any([])): Promise
 /** The records of an array of `bytes` from `from`, just past the array's opening bracket, each
  *  checked as JSON whole, and where the array closes. */
 async function recordsFrom(
-  bytes: Buffer,
+  bytes: Uint8Array,
   from: number,
   work: Turns,
 ): Promise<{ close: number; starts: Uint32Array; ends: Uint32Array }> {
@@ -152,7 +153,7 @@ let keyHashes: Int32Array = new Int32Array(256)
 /** Just past the JSON value at `i`, checked as JSON whole: its grammar, without comments or trailing
  *  commas, and no object in it that repeats a key. A value nests as deep as it likes: the open
  *  objects and arrays are counted, never recursed into. */
-function checkValue(bytes: Buffer, start: number): number {
+function checkValue(bytes: Uint8Array, start: number): number {
   /** Per open container, 1 for an object, 0 for an array; where an object's keys begin; and, once
    *  it has many, its keys by hash. */
   const objects: number[] = []
@@ -249,14 +250,14 @@ const FALSE = UTF8.encode('false')
 const NULL = UTF8.encode('null')
 
 /** Just past the literal `word` at `i`. */
-function checkWord(bytes: Buffer, i: number, word: Uint8Array): number {
+function checkWord(bytes: Uint8Array, i: number, word: Uint8Array): number {
   for (let k = 0; k < word.length; k++) if (bytes[i + k] !== word[k]) malformed(i, 'a value')
   return i + word.length
 }
 
 /** Just past the JSON number at `i`: a sign, an integer part without leading zeros, and a fraction
  *  and an exponent, each with digits. */
-function checkNumber(bytes: Buffer, i: number): number {
+function checkNumber(bytes: Uint8Array, i: number): number {
   const start = i
   const digits = () => {
     const from = i
@@ -280,7 +281,7 @@ function checkNumber(bytes: Buffer, i: number): number {
 
 /** Just past the JSON string whose opening quote is at `i`: no control character in it, and each
  *  escape one JSON has. */
-function checkString(bytes: Buffer, i: number): number {
+function checkString(bytes: Uint8Array, i: number): number {
   for (let at = i + 1; at < bytes.length; at++) {
     const c = bytes[at]!
     if (c === QUOTE) return at + 1
@@ -303,7 +304,7 @@ const isHex = (c: number | undefined) =>
 
 /** Whether the keys at `[a, aEnd)` and `[b, bEnd)` name the same: their bytes, or, with escapes,
  *  the text they decode to. */
-function sameKey(bytes: Buffer, a: number, aEnd: number, b: number, bEnd: number): boolean {
+function sameKey(bytes: Uint8Array, a: number, aEnd: number, b: number, bEnd: number): boolean {
   if (aEnd - a === bEnd - b) {
     let same = true
     for (let k = 0; k < aEnd - a && same; k++) same = bytes[a + k] === bytes[b + k]
@@ -314,7 +315,7 @@ function sameKey(bytes: Buffer, a: number, aEnd: number, b: number, bEnd: number
 }
 
 /** Just past the JSON value at `i`, which `scan` has checked. */
-function skipValue(bytes: Buffer, i: number): number {
+function skipValue(bytes: Uint8Array, i: number): number {
   const first = bytes[i]
   if (first === QUOTE) return stringEnd(bytes, i)
   if (first === OPEN_OBJECT || first === OPEN_ARRAY) {
@@ -337,7 +338,7 @@ function skipValue(bytes: Buffer, i: number): number {
 }
 
 /** Just past the string whose opening quote is at `i`. */
-function stringEnd(bytes: Buffer, i: number): number {
+function stringEnd(bytes: Uint8Array, i: number): number {
   for (let at = i + 1; at < bytes.length; at++) {
     const c = bytes[at]
     if (c === BACKSLASH) at++
@@ -346,7 +347,7 @@ function stringEnd(bytes: Buffer, i: number): number {
   return malformed(i, 'a closed string')
 }
 
-function skipSpace(bytes: Buffer, i: number): number {
+function skipSpace(bytes: Uint8Array, i: number): number {
   while (i < bytes.length) {
     const c = bytes[i]
     if (c !== 0x20 && c !== 0x0a && c !== 0x0d && c !== 0x09) break
@@ -360,7 +361,7 @@ export class Members {
   spans = new Int32Array(256)
 
   /** Read the object at `open`; returns how many members it has. */
-  read(bytes: Buffer, open: number): number {
+  read(bytes: Uint8Array, open: number): number {
     expect(bytes, open, OPEN_OBJECT, 'an object')
     let count = 0
     let i = skipSpace(bytes, open + 1)
@@ -386,7 +387,7 @@ export class Members {
   }
 
   /** Which of the `count` members last read is named `key`, as its key spells it, or -1. */
-  find(bytes: Buffer, count: number, key: string): number {
+  find(bytes: Uint8Array, count: number, key: string): number {
     for (let m = 0; m < count; m++)
       if (jsonText(bytes, this.spans[4 * m]!, this.spans[4 * m + 1]!) === key) return m
     return -1
@@ -395,16 +396,16 @@ export class Members {
 
 /** A key's text, its quotes `start` and `end - 1`; escapes, which GridKit's keys never use, decoded
  *  the slow way. */
-const keyOf = (bytes: Buffer, start: number, end: number): string =>
+const keyOf = (bytes: Uint8Array, start: number, end: number): string =>
   jsonText(bytes, start + 1, end - 1)
 
 /** The text of a JSON string whose text inside its quotes is `[start, end)`, escapes decoded. */
-export function jsonText(bytes: Buffer, start: number, end: number): string {
+export function jsonText(bytes: Uint8Array, start: number, end: number): string {
   const raw = utf8(bytes, start, end)
   return raw.includes('\\') ? (JSON.parse('"' + raw + '"') as string) : raw
 }
 
-function expect(bytes: Buffer, i: number, code: number, what: string): void {
+function expect(bytes: Uint8Array, i: number, code: number, what: string): void {
   if (bytes[i] !== code) malformed(i, what)
 }
 
@@ -492,7 +493,7 @@ class Keys {
 
   /** The index of the key whose text inside its quotes is `[start, end)`, or -1. A key written with
    *  escapes is the key they spell, as the check for repeated keys reads it. */
-  find(bytes: Buffer, start: number, end: number): number {
+  find(bytes: Uint8Array, start: number, end: number): number {
     for (let i = start; i < end; i++)
       if (bytes[i] === BACKSLASH) {
         const spelled = UTF8.encode(jsonText(bytes, start, end))
@@ -534,13 +535,13 @@ const GROUP = -5
  *  finds the rows that write what it cannot read. A port's value is the number of the row it
  *  names. */
 function lazyColumn(
-  bytes: Buffer,
+  bytes: Uint8Array,
   spans: Int32Array,
   type: DecodeKind,
   port: boolean,
 ): IndexedChunk {
   // Held apart, so the decoded column keeps nothing of the file alive.
-  let unread: { bytes: Buffer; spans: Int32Array } | undefined = { bytes, spans }
+  let unread: { bytes: Uint8Array; spans: Int32Array } | undefined = { bytes, spans }
   const decode = deferred(() => {
     const { bytes, spans: own } = unread!
     unread = undefined
@@ -587,7 +588,7 @@ function lazyColumn(
  *  first bytes say so without reading it: JSON's syntax is checked by then, so a string, a boolean
  *  and a number each begin as nothing else does. A column nobody reads is checked so, and stays
  *  undecoded. Undefined for a type only reading a value says of. */
-function wrongOf(bytes: Buffer, spans: Int32Array, type: DecodeKind): Uint32Array | undefined {
+function wrongOf(bytes: Uint8Array, spans: Int32Array, type: DecodeKind): Uint32Array | undefined {
   if (type !== 'number' && type !== 'text' && type !== 'boolean') return undefined
   const wrong: number[] = []
   for (let row = 0; 2 * row < spans.length; row++) {
@@ -612,7 +613,7 @@ function wrongOf(bytes: Buffer, spans: Int32Array, type: DecodeKind): Uint32Arra
 
 /** Whether the JSON number at [start, end) is one a double holds: any written without an exponent
  *  in fewer digits than the largest double has, and of the rest, those that read as finite. */
-function finite(bytes: Buffer, start: number, end: number): boolean {
+function finite(bytes: Uint8Array, start: number, end: number): boolean {
   if (end - start < 300) {
     let i = start
     while (i < end && bytes[i] !== 0x65 && bytes[i] !== 0x45) i++
@@ -641,7 +642,7 @@ class Finding {
   ) {}
 
   /** Notes that `row` writes it as the value at `[value, end)`. */
-  push(row: number, bytes: Buffer, value: number, end: number): void {
+  push(row: number, bytes: Uint8Array, value: number, end: number): void {
     if (this.#count === this.#rows.length) {
       this.#rows = grown(this.#rows)
       this.#spans = grown(this.#spans)
@@ -697,7 +698,7 @@ class Rows {
 
   constructor(
     readonly shape: Shape,
-    readonly bytes: Buffer,
+    readonly bytes: Uint8Array,
   ) {
     const { fields, ports, groups, required } = shape
     this.width = fields.length + ports.length
@@ -762,7 +763,7 @@ class Rows {
   /** The column of the member the catalog does not know whose key's text inside its quotes is
    *  `[start, end)`, under the group `group` or, with -1, a record's own: made as it is first
    *  found. A key written with escapes is the key they spell. */
-  find(group: number, bytes: Buffer, start: number, end: number): Finding {
+  find(group: number, bytes: Uint8Array, start: number, end: number): Finding {
     let key: Uint8Array = bytes
     let spelled: string | undefined
     for (let i = start; i < end; i++)
@@ -849,7 +850,7 @@ class Rows {
 
 /** Reads a case's records into its tables, one record after another in file order. */
 export class Parser {
-  readonly #bytes: Buffer
+  readonly #bytes: Uint8Array
   readonly #layout: Layout
   readonly #own: Shape
   readonly #classes: Keys
@@ -867,7 +868,7 @@ export class Parser {
   readonly #problems: SourceProblem[] = []
 
   /** A parser of the case `bytes` hold, which `layout` lays out, read with `catalog`. */
-  constructor(catalog: Catalog, bytes: Buffer, layout: Layout) {
+  constructor(catalog: Catalog, bytes: Uint8Array, layout: Layout) {
     this.#bytes = bytes
     this.#layout = layout
     this.#own = catalog.shapes.get(CASE)!
@@ -1034,7 +1035,7 @@ export class Parser {
 
 /** The value at [value, end) into `target`, if it has the field's type. */
 function into(
-  bytes: Buffer,
+  bytes: Uint8Array,
   target: Builder,
   type: DecodeKind,
   value: number,
@@ -1072,7 +1073,7 @@ function into(
 }
 
 /** Whether the number at [start, end) is written without a fraction or an exponent. */
-function whole(bytes: Buffer, start: number, end: number): boolean {
+function whole(bytes: Uint8Array, start: number, end: number): boolean {
   for (let i = start; i < end; i++) {
     const c = bytes[i]!
     if (c === 0x2e || c === 0x65 || c === 0x45) return false
@@ -1081,7 +1082,7 @@ function whole(bytes: Buffer, start: number, end: number): boolean {
 }
 
 /** A JSON string's text into `target`. */
-function textInto(bytes: Buffer, target: TextBuilder, value: number, end: number): boolean {
+function textInto(bytes: Uint8Array, target: TextBuilder, value: number, end: number): boolean {
   if (bytes[value] !== QUOTE) return false
   target.push(jsonText(bytes, value + 1, end - 1))
   return true
@@ -1099,7 +1100,7 @@ const EXACT_TENTH = Math.floor(EXACT / 10)
 
 /** A JSON number: exact by Clinger's fast path while its digits are a whole number a double holds
  *  and its exponent is small, else by the platform's parser; NaN when it is not a JSON number. */
-export function parseNumber(bytes: Buffer, start: number, end: number): number {
+export function parseNumber(bytes: Uint8Array, start: number, end: number): number {
   let i = start
   const negative = bytes[i] === 0x2d
   if (negative) i++
@@ -1144,5 +1145,5 @@ export function parseNumber(bytes: Buffer, start: number, end: number): number {
     const value = exponent >= 0 ? mantissa * POW10[exponent]! : mantissa / POW10[-exponent]!
     return negative ? -value : value
   }
-  return Number(bytes.toString('latin1', start, end))
+  return Number(text(bytes, start, end))
 }

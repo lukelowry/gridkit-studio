@@ -87,16 +87,16 @@ suite('Source', () => {
     const said: unknown[] = []
     const read = () => catalogFile((error) => said.push(error))
     try {
-      assert.equal(read(), undefined, 'none named, the bundled catalog is read')
+      assert.equal(await read(), undefined, 'none named, the bundled catalog is read')
       // A relative path is in the first workspace folder.
       await settings.update('catalog', 'studio.catalog.json', global)
       await write(JSON.stringify(later))
-      assert.deepEqual(read(), later)
+      assert.deepEqual(await read(), later)
       assert.deepEqual(said, [])
       // A file that is no catalog is said, and the bundled catalog read in its place.
       for (const text of ['{', '{}']) {
         await write(text)
-        assert.equal(read(), undefined)
+        assert.equal(await read(), undefined)
       }
       assert.equal(said.length, 2)
       for (const error of said)

@@ -1,20 +1,14 @@
 /** A worker thread's side of the extension's requests: each answered by its handler, and the events
  *  the worker sends besides. */
 
-import { parentPort } from 'node:worker_threads'
-
 import { awaitedWork } from '../gridkit/turns.js'
-import type { FromWorker, Memory } from '../shared/messages.js'
+import { port, ready } from '../platform/worker.js'
+import type { FromWorker } from '../shared/messages.js'
 import { answerer, type Api, type Handlers } from '../shared/rpc.js'
 import { transferables } from './transfer.js'
 
-const port = parentPort!
-
 /** How much memory this worker holds. */
-export function memory(): Memory {
-  const { heapUsed, arrayBuffers } = process.memoryUsage()
-  return { heapUsed, arrayBuffers }
-}
+export { memory } from '../platform/host.js'
 
 /** Send the extension `message`, moving `buffers` rather than copying them. */
 export function send(message: FromWorker, buffers: readonly ArrayBufferLike[] = []) {
@@ -50,4 +44,5 @@ export function serve<A extends Api<A>>(
     moving.has(method) ? transferables(value) : [],
   )
   port.on('message', receive)
+  ready()
 }

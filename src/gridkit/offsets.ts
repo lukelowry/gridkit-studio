@@ -1,8 +1,7 @@
 /** Where a byte of a case's file is in its text, as VS Code counts: in UTF-16 units, and by line and
  *  character. One way for every reader, keyed by the file's bytes. */
 
-import { isAscii } from 'node:buffer'
-
+import { isAscii } from '../platform/bytes.js'
 import type { SourceRange } from '../shared/messages.js'
 
 const decoder = new TextDecoder()

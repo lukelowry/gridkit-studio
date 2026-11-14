@@ -2,11 +2,13 @@
  *  shows. Every picker of signals offers the same ones: those the results on show hold, or, before
  *  there are any, those the case records. */
 
-import { randomUUID } from 'node:crypto'
-
 import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
+import { randomUUID } from '../platform/crypto.js'
+import { rm } from '../platform/files.js'
+import { browser, tmpdir } from '../platform/host.js'
+import { join } from '../platform/path.js'
 import { display } from '../shared/cells.js'
 import {
   type CaseDefinition,
@@ -18,16 +20,12 @@ import {
 import type { Plot, Summary } from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
 import { askRange, type Commands, type Context } from './commands.js'
+import { publish } from './exports.js'
 import type { Session } from './session.js'
+import { reference } from './uris.js'
 
 /** How long typing in a search rests before it searches. */
 const TYPING_MS = 90
-
-/** The file `uri` names on this machine; the worker reads and writes files only there. */
-function localPath(uri: vscode.Uri): string {
-  if (uri.scheme !== 'file') throw new Error('Choose a file on this machine.')
-  return uri.fsPath
-}
 
 /** The signals there are to plot, of `type` alone when it is given. */
 function plottable(session: Session, summary: Summary, type?: string): Plot[] {
@@ -222,7 +220,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
       filters: { 'GridKit results': ['csv'] },
       canSelectMany: false,
     })
-    if (selected?.[0]) await session.load(localPath(selected[0]))
+    if (selected?.[0]) await session.load(reference(selected[0]))
   })
   command('exportCsv', async ({ session }) => {
     const { results } = session
@@ -231,8 +229,20 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
     const held = randomUUID()
     await studio.client.worker.call('share', { results: results.id, as: held })
     try {
-      const path = await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
-      if (path) await studio.client.worker.call('export', { results: held, path: localPath(path) })
+      const uri = browser
+        ? vscode.Uri.from({ scheme: 'opfs', path: '/results.csv' })
+        : await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
+      if (!uri) return
+      const staged = browser || uri.scheme !== 'file'
+      const path = staged
+        ? join(tmpdir(), 'gridkit-export-' + randomUUID() + '.csv')
+        : reference(uri)
+      try {
+        await studio.client.worker.call('export', { results: held, path })
+        if (staged) await publish(path, uri)
+      } finally {
+        if (staged) await rm(path, { force: true })
+      }
     } finally {
       studio.closeResults(held)
     }

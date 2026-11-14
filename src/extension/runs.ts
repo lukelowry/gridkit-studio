@@ -12,11 +12,11 @@ import type { Results } from '../shared/messages.js'
 import type { Commands } from './commands.js'
 import { gridkitOf } from './settings.js'
 import { exists, nameOf, solverAt, writtenBy } from './solvers.js'
+import { reference, uriOf } from './uris.js'
 
-/** The solver file a menu was opened on, which must be on this machine. */
+/** The solver file a menu was opened on, wherever its workspace is. */
 function solverOf(target: unknown, doing: string): vscode.Uri {
-  if (!(target instanceof vscode.Uri) || target.scheme !== 'file')
-    throw new Error(`Right-click a .solver.json on this machine to ${doing}.`)
+  if (!(target instanceof vscode.Uri)) throw new Error(`Right-click a .solver.json to ${doing}.`)
   return target
 }
 
@@ -65,9 +65,9 @@ export function registerRuns({ studio, registrations, command }: Commands) {
     const output = writtenBy(solver, study, summary)
     // GridKit writes over the file it writes to, so that file must not be one the run reads.
     const read = [solver, model, ...(state ? [state] : [])]
-    if (read.some((file) => fileKey(file.fsPath) === fileKey(output.fsPath)))
+    if (read.some((file) => fileKey(reference(file)) === fileKey(reference(output))))
       throw new Error(`${nameOf(solver)} would write its samples over ${nameOf(output)}.`)
-    // As the settings of the folder it mounts say.
+    // Resolve an explicit installation on the workspace host, or select bundled WASM.
     const gridkit = gridkitOf(solver)
     await studio.showView('monitor')
     await vscode.window.withProgress(
@@ -83,15 +83,10 @@ export function registerRuns({ studio, registrations, command }: Commands) {
         await cancellable(token, (signal) =>
           session.start(
             {
-              solver: solver.fsPath,
-              output: output.fsPath,
-              ...(state && { state: state.fsPath }),
+              solver: reference(solver),
+              output: reference(output),
+              ...(state && { state: reference(state) }),
               tmax: study.tmax,
-              // What a container mounts: the solver file's workspace folder.
-              root: (
-                vscode.workspace.getWorkspaceFolder(solver)?.uri ??
-                vscode.Uri.joinPath(solver, '..')
-              ).fsPath,
               gridkit,
             },
             signal,
@@ -116,7 +111,7 @@ export function registerRuns({ studio, registrations, command }: Commands) {
     if (!(await exists(output)))
       throw new Error(`${nameOf(solver)} has written no ${nameOf(output)} yet. Run it first.`)
     await studio.showView('monitor')
-    await session.load(output.fsPath, solver.fsPath)
+    await session.load(reference(output), reference(solver))
   }
 
   // A run is of a solver file, which its menu names; the rest are of the case the views follow.
@@ -126,6 +121,6 @@ export function registerRuns({ studio, registrations, command }: Commands) {
   command('runSimulationAgain', ({ session }) => {
     const { solver } = session.results ?? {}
     if (!solver) throw new Error('These results were not written by a run of a solver file.')
-    return run(vscode.Uri.file(solver))
+    return run(uriOf(solver))
   })
 }

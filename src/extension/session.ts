@@ -1,14 +1,12 @@
+import type { Id } from 'latkit'
+import * as vscode from 'vscode'
+
 /** A case Studio works on, in every process: what its views show of it, the results they draw, and
  *  the run that writes them. Something always holds a session while it lives: an editor has its
  *  case open, the views follow it, a run writes for it, or an export draws it. When the last lets
  *  go, it closes, and lets go of all it holds, here and in the worker. What it saves stays,
  *  to open with again. */
-
-import { randomUUID } from 'node:crypto'
-
-import type { Id } from 'latkit'
-import * as vscode from 'vscode'
-
+import { randomUUID } from '../platform/crypto.js'
 import { changedTable } from '../shared/cells.js'
 import type { ValueRange } from '../shared/data.js'
 import { type Entity, type Field, networkRole } from '../shared/document.js'
@@ -37,6 +35,7 @@ import { noCase, notice, saidInProblems, SHOW_OUTPUT } from './report.js'
 import type { Sessions } from './sessions.js'
 import { displayOf } from './settings.js'
 import { gone, nameOf, writtenNow } from './solvers.js'
+import { uriOf } from './uris.js'
 
 /** Why a session is kept: an editor has its case open, the views follow it, a run writes for it,
  *  or an export draws it. */
@@ -60,7 +59,7 @@ export function savedResults(state: vscode.Memento): string[] {
 }
 
 /** What a run of the session's case takes besides the case: the solver file, where it writes, when
- *  it ends, the folder a container mounts, and where GridKit runs. */
+ *  it ends, and where GridKit runs. */
 type RunPlan = Omit<RunRequest, keyof Revision | 'run' | 'results'>
 
 /** Whether `results` were read to their end and stopped short of it. */
@@ -644,7 +643,7 @@ export class Session {
         return
       }
       this.#studio.reporter.output.warn(`Could not read ${path} again: ${message(error)}`)
-      if ((await gone(vscode.Uri.file(path))) && this.#pending === saved) {
+      if ((await gone(uriOf(path))) && this.#pending === saved) {
         this.#pending = undefined
         this.#save()
       }

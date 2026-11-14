@@ -5,11 +5,10 @@
  *  keeps, so the same file opened again reads nothing, and a store read through outlives the
  *  worker, so a window opened again reads its results without their CSV. */
 
-import { stat } from 'node:fs/promises'
-import { basename } from 'node:path'
-
 import { type Case, simulate, sweepOrphans } from '../gridkit/index.js'
 import { solverLine } from '../gridkit/solver.js'
+import { stat } from '../platform/files.js'
+import { basename } from '../platform/path.js'
 import { closed, PROGRESS_MS, ResultCache, ResultsFile, stampOf, Stores } from '../results/index.js'
 import { defect, detail, failedWith, message, quiet } from '../shared/errors.js'
 import type {
@@ -207,6 +206,7 @@ export function resultsFiles(
       send({ kind: 'run', run })
       await simulate(kase, input, stores, {
         signal,
+        wasm: options.solver,
         reading: (file) => {
           hold(input.results, file, false)
           tell = teller(file)

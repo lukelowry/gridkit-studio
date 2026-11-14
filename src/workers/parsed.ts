@@ -1,12 +1,11 @@
 /** The cases the worker reads from disk, and what they tell the extension of one. */
 
-import { readFile } from 'node:fs/promises'
-import { fileURLToPath } from 'node:url'
-
 import { Case } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
 import { rangeIn, type Span } from '../gridkit/offsets.js'
 import { recordingOf } from '../gridkit/recording.js'
+import { readFile } from '../platform/files.js'
+import { fileURLToPath } from '../platform/path.js'
 import { type Revision, revisionOf, type Summary } from '../shared/messages.js'
 
 /** The name of the case at `uri` when its header gives none: its file's, as the Explorer shows it. */
@@ -17,7 +16,7 @@ const BOM = [0xef, 0xbb, 0xbf]
 
 /** The bytes of the case file at `uri`, read whole: past a byte order mark, as VS Code shows the
  *  file, so places and fingerprints are its text's. */
-export async function caseBytes(uri: string, signal?: AbortSignal): Promise<Buffer> {
+export async function caseBytes(uri: string, signal?: AbortSignal): Promise<Uint8Array> {
   const bytes = await readFile(fileURLToPath(uri), { signal })
   return BOM.every((byte, at) => bytes[at] === byte) ? bytes.subarray(BOM.length) : bytes
 }
@@ -26,7 +25,7 @@ export async function caseBytes(uri: string, signal?: AbortSignal): Promise<Buff
  *  with `catalog` as GridKit reads it. Where it does not read, the error says where as VS Code
  *  counts: by line and character. */
 export async function parseCase(
-  file: Buffer,
+  file: Uint8Array,
   uri: string,
   catalog: Catalog,
   version: string,

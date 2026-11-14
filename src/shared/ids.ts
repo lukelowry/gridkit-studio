@@ -1,3 +1,5 @@
+import { URI } from 'vscode-uri'
+
 /** The names GridKit Studio contributes in its manifest, and the files it reads, in one place: the
  *  manifest's own test holds them to package.json. */
 
@@ -88,9 +90,11 @@ export const settingsOf = (category: string) => `${PREFIX}.${category}` as const
 
 /** A GridKit case, by its file's name. */
 export const CASE_FILE = /\.case\.json$/i
-/** Whether the views follow the case at `uri`, and Studio saves what they show of it: a case file
- *  on disk, never a copy another extension shows, as Git does of an older version. */
-export const followed = (uri: string) => uri.startsWith('file:') && CASE_FILE.test(uri)
+/** Saved case files, including virtual workspaces; Git previews and untitled copies stay separate. */
+export const followed = (uri: string) => {
+  const file = URI.parse(uri)
+  return !!file.scheme && !['git', 'untitled'].includes(file.scheme) && CASE_FILE.test(file.path)
+}
 
 /** The key a case's saved state is kept under in the workspace's state. */
 const SAVED = 'case:'

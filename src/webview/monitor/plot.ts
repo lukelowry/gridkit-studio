@@ -1,9 +1,9 @@
 import type { Camera } from 'latkit'
 
-import type { FrameRequest, TimeRange } from '../../shared/data.js'
+import type { TimeRange } from '../../shared/data.js'
 import type { Plot, Results } from '../../shared/messages.js'
 
-/** How long a zoom, pan or resize rests before the plots read the samples it shows. */
+/** How long a zoom or pan rests before the Monitor says the window it shows. */
 export const SETTLE_MS = 120
 
 export function monitorWindow(results: Results | undefined, chosen?: TimeRange): TimeRange {
@@ -13,22 +13,6 @@ export function monitorWindow(results: Results | undefined, chosen?: TimeRange):
 export function sameWindow(a: TimeRange | undefined, b: TimeRange | undefined): boolean {
   return a === b || (!!a && !!b && a[0] === b[0] && a[1] === b[1])
 }
-
-/** What `plot` reads of `results`: its frames over `range`, across `columns` device pixel columns. */
-export const plotRequest = (
-  results: Pick<Results, 'id'>,
-  plot: Plot,
-  range: TimeRange,
-  columns: number,
-): FrameRequest => ({
-  results: results.id,
-  table: plot.table,
-  field: plot.field,
-  ...(plot.id !== undefined ? { ids: [plot.id] } : {}),
-  range,
-  purpose: 'plot',
-  columns,
-})
 
 /** How `plot` frames `range`: the times, over the values the plot was given, else those it shows. */
 export const plotCamera = (plot: Plot, range: TimeRange): Camera => ({

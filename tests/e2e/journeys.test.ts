@@ -10,7 +10,16 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { idle, simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
+import {
+  idle,
+  simpleDialog,
+  stats,
+  type TestHost,
+  testHost,
+  until,
+  visible,
+  VM,
+} from './harness.js'
 
 /** A PNG at `path` once written, which draws more than its background. */
 async function png(path: string): Promise<PNG> {
@@ -61,6 +70,19 @@ suite('Journeys', function () {
     await until(() => bench.session.selection?.id === bus, 'the bus picked')
     await visible(table, 'tbody tr.selected')
     await bench.capture('journey-views')
+    // A GPU reset loses the device: latkit moves the view to a new one, which draws the case on,
+    // still showing the pick, and the page never starts over.
+    const before = await idle(network)
+    await network.evaluate('gridkitLose()')
+    await until(async () => {
+      const now = await stats<{ frames: number; complete: boolean; lost: boolean }>(network)
+      return !now.lost && now.complete && now.frames > before.frames
+    }, 'the Network drawn again on a new device')
+    assert.deepEqual(
+      await network.evaluate('gridkitSelection().entities'),
+      [{ table: 'Bus', id: bus }],
+      'the pick kept',
+    )
   })
 
   test('a run of the solver file is followed live, then played', async function () {

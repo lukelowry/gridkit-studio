@@ -15,7 +15,7 @@ import { dirname, join, resolve } from '../platform/path.js'
 import type { TimeRange } from '../shared/data.js'
 import type { LongColumns } from './csv.js'
 import type { FrameBlock, VisualizationRun } from './frames.js'
-import type { PyramidState, ReducedRun } from './pyramid.js'
+import type { PyramidState } from './pyramid.js'
 import { same, type Stamp } from './stamp.js'
 
 export const FORMAT = 'results-native-3'
@@ -33,8 +33,7 @@ export interface RawIndex {
   readonly fields: readonly number[]
 }
 /** A block of one field's buckets at one level: each bucket's first and last times, then each
- *  row's least values, a row's buckets together, then each row's greatest. `gapped` names the
- *  buckets that hold a frame with no value of a row that has values. */
+ *  row's least values, a row's buckets together, then each row's greatest. */
 export interface LevelIndex {
   readonly kind: 'level'
   readonly field: number
@@ -45,7 +44,6 @@ export interface LevelIndex {
   readonly end: number
   readonly at: number
   readonly values: number
-  readonly gapped: readonly number[]
 }
 export interface Manifest {
   readonly format: typeof FORMAT
@@ -270,7 +268,7 @@ export class Store {
     await this.#index(index)
     this.raw.push(index)
   }
-  async writeLevel(field: number, level: number, runs: readonly ReducedRun[]): Promise<void> {
+  async writeLevel(field: number, level: number, runs: readonly VisualizationRun[]): Promise<void> {
     if (!runs.length) return
     const rows = this.#rows[field]!
     const count = runs.length
@@ -309,9 +307,6 @@ export class Store {
       end: at.at(-1)!,
       at: timeOffset,
       values: valueOffset,
-      gapped: runs
-        .filter((run) => run.gaps.some((gap, row) => gap !== 0 && Number.isFinite(run.values[row])))
-        .map((run) => run.first),
     }
     await this.#index(index)
     this.#addLevel(index)

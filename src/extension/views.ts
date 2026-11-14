@@ -95,12 +95,12 @@ function html(webview: vscode.Webview, context: vscode.ExtensionContext, kind: V
       .replaceAll('>', '&gt;')
   const asset = (path: string) =>
     escape(webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, path)).toString())
-  // The map's worker starts from a blob, and its tiles come from wherever the tiles URL names.
+  // latkit fetches its worker through the page and starts it from a blob, and the map's tiles come
+  // from wherever the tiles URL names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource}; script-src 'nonce-${nonce}' 'wasm-unsafe-eval'; worker-src blob:; connect-src ${webview.cspSource} https:;">
 <meta name="latkit-wasm" content="${asset('dist/webview/latkit.wasm')}">
 <meta name="latkit-worker" content="${asset('dist/webview/latkit-worker.js')}">
-<meta name="latkit-shaders" content="${asset('dist/webview/latkit-shaders.bin')}">
 <meta name="latkit-assets" content="${asset('dist/webview/')}">
 <link rel="stylesheet" href="${asset('dist/webview/' + kind + '.css')}"></head>
 <body data-kind="${kind}"><div id="app"></div><script type="module" nonce="${nonce}" src="${asset('dist/webview/' + kind + '.js')}"></script></body></html>`
@@ -385,6 +385,7 @@ class View {
     const { worker } = studio.client
     return {
       frames: (input, signal) => worker.call('frames', input, signal),
+      tile: (input, signal) => worker.call('tile', input, signal),
       sample: (input, signal) => worker.call('sample', input, signal),
       project: (input, signal) => worker.call('project', input, signal),
       page: (input, signal) => {

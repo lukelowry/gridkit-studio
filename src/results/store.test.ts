@@ -5,7 +5,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import type { ReducedRun } from './pyramid.js'
+import type { VisualizationRun } from './frames.js'
 import type { Stamp } from './stamp.js'
 import { type Checkpoint, FORMAT, Stores } from './store.js'
 
@@ -99,7 +99,7 @@ describe('the stores of the results files a worker reads', () => {
     const [rows, buckets] = [5, 4]
     store.shape([rows])
     // Bucket b of row r spans 10 b + r to 10 b + r + 0.5, over frames 8 b to 8 b + 7.
-    const runs = Array.from({ length: buckets }, (_, b): ReducedRun => ({
+    const runs = Array.from({ length: buckets }, (_, b): VisualizationRun => ({
       level: 1,
       first: b,
       at: Float64Array.of(8 * b, 8 * b + 7),
@@ -107,7 +107,6 @@ describe('the stores of the results files a worker reads', () => {
         { length: 2 * rows },
         (_, i) => 10 * b + (i % rows) + (i < rows ? 0 : 0.5),
       ),
-      gaps: new Uint8Array(rows),
     }))
     await store.writeLevel(0, 1, runs)
     const [block] = store.levels.get('0:1')!

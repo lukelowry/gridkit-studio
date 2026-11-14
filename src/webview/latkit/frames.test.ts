@@ -25,8 +25,8 @@ const input: FrameRequest = {
   table: 'Bus',
   field: 'Vm',
   range: [0, 1],
-  purpose: 'plot',
-  columns: 800,
+  bytes: 1 << 20,
+  step: 0,
 }
 function page(key = 'one'): FramePage {
   return {

@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Explore and simulate power-system cases with native VS Code tools and Latkit.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -59,14 +59,14 @@
     "bench:scrub": "pnpm build && node tests/launch.mjs tests/benchmarks/scrub.ts",
     "bench:compare": "node tests/benchmarks/compare.mjs output/bench/base.json output/bench/head.json",
     "screenshots": "pnpm build && node tests/launch.mjs tests/e2e/screenshots.ts",
-    "package": "node scripts/package.mjs",
+    "package": "vsce package --no-dependencies --out dist/",
     "vscode:prepublish": "node esbuild.mjs",
     "test:web": "pnpm build && node tests/browser.mjs"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "jsonc-parser": "3.3.1",
-    "latkit": "0.7.1",
+    "latkit": "0.8.0",
     "vscode-uri": "^3.2.0"
   },
   "devDependencies": {

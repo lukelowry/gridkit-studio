@@ -24,6 +24,7 @@ import {
 import { type Channel, CHANNELS, type Mappings } from '../../shared/mappings.js'
 import type { Plot, Results } from '../../shared/messages.js'
 import type { SettingsReader } from '../../shared/settings.js'
+import { type Background, NO_MAP } from './maps.js'
 import { caseSpan, GAP } from './span.js'
 
 /** Background geography does not determine the extent of the case being inspected. */
@@ -140,14 +141,23 @@ export function stylesOf(
   })
 }
 
+/** The map a scene draws under a case: its marks, and whose map it is. */
+type Ground = Pick<Background, 'marks' | 'attribution'>
+
+/** The time the sun lights the earth at while the Daylight setting is `lit`: now, read once by
+ *  whoever draws, so every scene of one view lights alike. */
+export const daylightOf = (lit: boolean): number | null => (lit ? Date.now() / 1000 : null)
+
 /** What a scene of a case draws besides the case: its mappings' results and a map. */
 interface SceneExtras {
   readonly mappings?: Mappings
   readonly results?: Results
   /** The source of a mapped sampled field, once its frames are held. */
   readonly sampled?: (table: string, field: string) => Source | undefined
-  /** Marks drawn under the case's own, such as a map's. */
-  readonly background?: readonly Mark[]
+  /** The map drawn under the case. */
+  readonly background?: Ground
+  /** Seconds since the epoch the sun lights the earth at, or none to light it evenly. */
+  readonly daylight?: number | null
 }
 
 /** The Network of `data`, as the view and every export draws it. */
@@ -156,7 +166,7 @@ export function sceneOf(
   definition: CaseDefinition,
   settings: SettingsReader,
   theme: Theme,
-  { mappings = {}, results, sampled = () => undefined, background = [] }: SceneExtras,
+  { mappings = {}, results, sampled = () => undefined, background, daylight }: SceneExtras,
 ): Scene {
   const outputs =
     results?.outputs.map((output) => ({
@@ -170,6 +180,7 @@ export function sceneOf(
     theme,
     stylesOf(definition, mappings, outputs, sampled),
     background,
+    daylight,
   )
 }
 
@@ -205,7 +216,8 @@ export function networkScene(
   settings: SettingsReader,
   theme: Theme,
   styles: readonly Style[],
-  background: readonly Mark[] = [],
+  background: Ground = NO_MAP,
+  daylight: number | null = null,
 ): Scene {
   const sizes = networkSizes(settings)
   // The highest mapped value raises a vertex a share of the case's span, whatever the space's
@@ -232,12 +244,7 @@ export function networkScene(
   }))
   return {
     space: drawing.geographic
-      ? {
-          earth: {
-            projection: settings.get('network.projection'),
-            daylight: settings.get('network.map.daylight') ? Date.now() / 1000 : null,
-          },
-        }
+      ? { earth: { projection: settings.get('network.projection'), daylight } }
       : 'plane',
     layout: { stress: { gap: GAP } },
     theme,
@@ -246,7 +253,9 @@ export function networkScene(
     // The map under everything, then branches, then buses. Where depth varies, the nearest
     // opaque pixel shows, and a mark whose rows a mapped height raises draws them lowest first:
     // farthest first wherever they overlap, from any camera.
-    marks: [...background, ...edges, ...vertices],
+    marks: [...background.marks, ...edges, ...vertices],
+    // Whose map it is, in a corner over the marks, as the view and every picture of it say.
+    title: background.attribution ? { text: background.attribution, place: 'bottom-right' } : null,
   }
 }
 

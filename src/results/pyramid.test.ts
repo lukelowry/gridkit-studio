@@ -1,10 +1,11 @@
 import { expect, it } from 'vitest'
 
-import { detail, Pyramid, type ReducedRun } from './pyramid.js'
+import type { VisualizationRun } from './frames.js'
+import { Pyramid } from './pyramid.js'
 
 it('reduces exact eight-way boundaries with irregular times, gaps, and restart tails', () => {
-  const expected: ReducedRun[] = []
-  const actual: ReducedRun[] = []
+  const expected: VisualizationRun[] = []
+  const actual: VisualizationRun[] = []
   const times = Float64Array.from({ length: 71 }, (_, i) => Math.floor(i / 2) ** 2)
   const values = Float64Array.from(times, (_, i) => (i === 19 ? NaN : i === 20 ? 1000 : i))
   new Pyramid(1, (run) => expected.push(run)).push(0, times, values)
@@ -15,19 +16,43 @@ it('reduces exact eight-way boundaries with irregular times, gaps, and restart t
   second.push(37, times.slice(37), values.slice(37))
   expect(actual).toEqual(expected)
   expect(actual.filter((run) => run.level === 1)).toHaveLength(8)
+  // A frame without a value is left out of its buckets, as latkit's own levels leave it.
+  expect(actual.find((run) => run.level === 1 && run.first === 2)?.values).toEqual(
+    Float32Array.of(16, 1000),
+  )
   expect(actual.find((run) => run.level === 2)?.values).toEqual(Float32Array.of(0, 1000))
-  // A frame with no value is a gap of its bucket, and of each bucket over it, and of no other.
-  const gapped = (level: number, first: number) =>
-    actual.find((run) => run.level === level && run.first === first)?.gaps[0]
-  expect([gapped(1, 1), gapped(1, 2), gapped(1, 3), gapped(2, 0)]).toEqual([0, 1, 0, 1])
 })
 
-it('holds a plot in buckets no wider than a pixel column', () => {
-  for (const columns of [1, 37, 440, 2400])
-    for (const frames of [1, 2, 2403, 600_000, 9e15]) {
-      const level = detail(frames, columns)
-      // Each bucket spans at most a column; the next level's would span more.
-      if (level > 0) expect(frames / 8 ** level).toBeGreaterThanOrEqual(columns)
-      expect(frames / 8 ** (level + 1)).toBeLessThan(columns)
-    }
+it("ends each level with the bucket still filling, over every frame since the level's last", () => {
+  // 75 frames: 9 full buckets of 8 and one of 3 filling at level 1, 1 full and one of 11 at 2.
+  const pyramid = new Pyramid(2, () => {})
+  const at = Float64Array.from({ length: 75 }, (_, i) => i / 10)
+  pyramid.push(
+    0,
+    at,
+    Float64Array.from({ length: 150 }, (_, i) => (i % 2 ? -i : i)),
+  )
+  expect(pyramid.tail(1)).toEqual({
+    level: 1,
+    first: 9,
+    at: Float64Array.of(7.2, 7.4),
+    values: Float32Array.of(144, -149, 148, -145),
+  })
+  // Level 2's filling bucket holds level 1's full bucket of frames 64 to 71, and its filling one.
+  expect(pyramid.tail(2)).toEqual({
+    level: 2,
+    first: 1,
+    at: Float64Array.of(6.4, 7.4),
+    values: Float32Array.of(128, -149, 148, -129),
+  })
+  // All 75 lie in the bucket of 512 filling at level 3.
+  expect(pyramid.tail(3)?.first).toBe(0)
+  expect(pyramid.tail(3)?.at).toEqual(Float64Array.of(0, 7.4))
+  const even = new Pyramid(1, () => {})
+  even.push(
+    0,
+    Float64Array.from({ length: 8 }, (_, i) => i),
+    new Float64Array(8),
+  )
+  expect(even.tail(1)).toBeUndefined()
 })

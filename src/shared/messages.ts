@@ -14,6 +14,7 @@ import type {
   ProjectionSelection,
   TablePage,
   TableRequest,
+  TileRequest,
   TimeRange,
   ValueRange,
 } from './data.js'
@@ -156,6 +157,8 @@ export interface WorkerApi {
   /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
   frames: { input: FrameRequest & { next?: string }; output: FramePage }
+  /** A file of a recorded field's time tiles, read from the results' store. */
+  tile: { input: TileRequest; output: Uint8Array }
   sample: { input: ExactSampleRequest; output: ExactSample }
   /** The next sample time from `at` in `direction`; the first or last time when none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
@@ -317,7 +320,10 @@ export const revisionOf = ({ uri, version }: Revision): Revision => ({ uri, vers
 
 /** What a view asks of the extension. Each request names what it is of: a revision of a case, or
  *  results by their id. What it reads, the worker answers as it is asked. */
-export interface ViewApi extends Pick<WorkerApi, 'project' | 'page' | 'frames' | 'sample'> {
+export interface ViewApi extends Pick<
+  WorkerApi,
+  'project' | 'page' | 'frames' | 'tile' | 'sample'
+> {
   /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
    *  cancel. */
   exportOpen: { input: { uri: string; name: string }; output: number | null }

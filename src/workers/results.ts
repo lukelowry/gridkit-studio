@@ -325,7 +325,16 @@ export function resultsFiles(
 
   const handlers: Pick<
     Handlers<WorkerApi>,
-    'run' | 'open' | 'share' | 'close' | 'configure' | 'frames' | 'sample' | 'step' | 'export'
+    | 'run'
+    | 'open'
+    | 'share'
+    | 'close'
+    | 'configure'
+    | 'frames'
+    | 'tile'
+    | 'sample'
+    | 'step'
+    | 'export'
   > = {
     run: runCase,
     open: openResults,
@@ -340,6 +349,7 @@ export function resultsFiles(
       return null
     },
     frames: (input, signal) => using(input.results, signal, (file, s) => file.frames(input, s)),
+    tile: (input, signal) => using(input.results, signal, (file, s) => file.tile(input, s)),
     sample: (input, signal) => using(input.results, signal, (file, s) => file.sample(input, s)),
     step: ({ results, at, direction }, signal) =>
       using(results, signal, (file) => file.step(at, direction)),

@@ -116,7 +116,7 @@ it("frames whole case tables, and raises the highest mapped value a share of the
   expect(raised(plane, false)[1]).toBeCloseTo(0.2 * 4 * GAP)
 })
 
-it('draws the map, then branches, then the buses over them', () => {
+it('draws the map, then branches, then the buses over them, and says whose map it is', () => {
   using data = new Data('case').replace('Bus', [1], { x: [0], y: [0] })
   const drawing = {
     geographic: true,
@@ -124,10 +124,20 @@ it('draws the map, then branches, then the buses over them', () => {
     edges: [{ table: 'Branch' }],
   }
   const coast: Mark = { lines: ['map:coastline', 'lines'], name: 'map:coastline' }
-  const kinds = networkScene(data, drawing, reader(), {}, [], [coast]).marks!.map((mark) =>
+  const scene = networkScene(data, drawing, reader(), {}, [], {
+    marks: [coast],
+    attribution: '© the map',
+  })
+  const kinds = scene.marks!.map((mark) =>
     'lines' in mark ? 'lines' : 'vertices' in mark ? 'vertices' : 'edges',
   )
   expect(kinds).toEqual(['lines', 'edges', 'vertices'])
+  expect(scene.title).toEqual({ text: '© the map', place: 'bottom-right' })
+  // The sun lights the earth at the time given, so every scene of one view lights alike.
+  expect(networkScene(data, drawing, reader(), {}, [], undefined, 1000).space).toMatchObject({
+    earth: { daylight: 1000 },
+  })
+  expect(networkScene(data, drawing, reader(), {}, []).title).toBeNull()
 })
 
 it('draws a case at the sizes the settings give, a vertex past its edges', () => {

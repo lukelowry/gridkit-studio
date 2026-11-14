@@ -7,12 +7,6 @@ interface Bucket {
   count: number
   readonly low: Float32Array
   readonly high: Float32Array
-  readonly gaps: Uint8Array
-}
-
-/** The planner must refine a gapped bucket rather than join a line across a missing sample. */
-export interface ReducedRun extends VisualizationRun {
-  readonly gaps: Uint8Array
 }
 
 export interface PyramidState {
@@ -25,28 +19,30 @@ export interface PyramidState {
     readonly count: number
     readonly low: readonly (number | null)[]
     readonly high: readonly (number | null)[]
-    readonly gaps: readonly number[]
   })[]
 }
 
-/** The level a plot of `frames` frames across `columns` device pixel columns holds: the coarsest
- *  whose buckets each span at most one column. latkit draws a bucket as its least then its greatest
- *  value, at its middle, which steps visibly once a bucket spans more than a column. Held this fine,
- *  at most one level finer than latkit would choose, every step stays within a pixel. */
-export function detail(frames: number, columns: number): number {
-  let level = 0
-  while (level < 21 && frames / 8 ** (level + 1) >= Math.max(1, columns)) level++
-  return level
+/** The least and greatest values of each row, `low` then `high`, as Patch.frames takes a bucket's:
+ *  NaN for a row with none. */
+function bounds(rows: number, low: Float32Array, high: Float32Array): Float32Array {
+  const values = new Float32Array(rows * 2)
+  for (let row = 0; row < rows; row++) {
+    values[row] = low[row] === Infinity ? NaN : low[row]!
+    values[rows + row] = high[row] === -Infinity ? NaN : high[row]!
+  }
+  return values
 }
 
-/** Eight-way streaming min/max reduction; at most seven children per level stay resident. */
+/** Eight-way streaming min/max reduction, as latkit keeps a sampled field's levels of detail: at
+ *  level `k` each row's least and greatest value over buckets of `8^k` frames, the frames without a
+ *  value left out. At most seven children per level stay resident. */
 export class Pyramid {
   readonly #levels: Array<Bucket | undefined> = []
   #next = 0
 
   constructor(
     private readonly rows: number,
-    private readonly emit: (run: ReducedRun) => void,
+    private readonly emit: (run: VisualizationRun) => void,
   ) {
     if (!Number.isSafeInteger(rows) || rows < 1)
       throw new Error('A pyramid needs a positive row count.')
@@ -66,6 +62,33 @@ export class Pyramid {
     this.#next += at.length
   }
 
+  /** The bucket of `level` still filling, as latkit takes a level's last entry: each row's least
+   *  and greatest value over every frame reduced since its last full bucket, those of the finer
+   *  buckets still filling too. None while every frame lies in a full bucket of `level`. */
+  tail(level: number): VisualizationRun | undefined {
+    const stride = 8 ** level
+    if (level < 1 || this.#next % stride === 0) return undefined
+    const low = new Float32Array(this.rows).fill(Infinity)
+    const high = new Float32Array(this.rows).fill(-Infinity)
+    let [start, end] = [Infinity, -Infinity]
+    for (let finer = level; finer >= 1; finer--) {
+      const bucket = this.#levels[finer]
+      if (!bucket) continue
+      start = Math.min(start, bucket.start)
+      end = Math.max(end, bucket.end)
+      for (let row = 0; row < this.rows; row++) {
+        low[row] = Math.min(low[row]!, bucket.low[row]!)
+        high[row] = Math.max(high[row]!, bucket.high[row]!)
+      }
+    }
+    return {
+      level,
+      first: Math.floor(this.#next / stride),
+      at: Float64Array.of(start, end),
+      values: bounds(this.rows, low, high),
+    }
+  }
+
   snapshot(): PyramidState {
     return {
       rows: this.rows,
@@ -76,7 +99,6 @@ export class Pyramid {
               ...bucket,
               low: Array.from(bucket.low, (value) => (Number.isFinite(value) ? value : null)),
               high: Array.from(bucket.high, (value) => (Number.isFinite(value) ? value : null)),
-              gaps: Array.from(bucket.gaps),
             }
           : null,
       ),
@@ -104,7 +126,6 @@ export class Pyramid {
         bucket.index !== Math.floor(state.next / (stride * 8)) ||
         bucket.low.length !== this.rows ||
         bucket.high.length !== this.rows ||
-        bucket.gaps.length !== this.rows ||
         !Number.isFinite(bucket.start) ||
         !Number.isFinite(bucket.end) ||
         bucket.end < bucket.start
@@ -115,15 +136,13 @@ export class Pyramid {
         ...bucket,
         low: Float32Array.from(bucket.low, (value) => value ?? Infinity),
         high: Float32Array.from(bucket.high, (value) => value ?? -Infinity),
-        gaps: Uint8Array.from(bucket.gaps),
       }
     })
     this.#levels.push(...levels)
     this.#next = state.next
   }
 
-  /** Takes the child `child` of `level`'s bucket in progress: a bucket below it, with the rows it
-   *  found gaps in, or, with none given, a frame, whose gaps are the values it lacks. */
+  /** Takes the child `child` of `level`'s bucket in progress: a bucket below it, or a frame. */
   #add(
     level: number,
     child: number,
@@ -131,7 +150,6 @@ export class Pyramid {
     end: number,
     low: Float32Array,
     high: Float32Array,
-    gaps?: Uint8Array,
   ): void {
     if (level > 21) return
     const index = Math.floor(child / 8)
@@ -144,7 +162,6 @@ export class Pyramid {
         count: 0,
         low: new Float32Array(this.rows).fill(Infinity),
         high: new Float32Array(this.rows).fill(-Infinity),
-        gaps: new Uint8Array(this.rows),
       }
       this.#levels[level] = bucket
     }
@@ -154,32 +171,15 @@ export class Pyramid {
     for (let row = 0; row < this.rows; row++) {
       if (Number.isFinite(low[row])) bucket.low[row] = Math.min(bucket.low[row]!, low[row]!)
       if (Number.isFinite(high[row])) bucket.high[row] = Math.max(bucket.high[row]!, high[row]!)
-      if (gaps ? gaps[row] : Number.isNaN(low[row])) bucket.gaps[row] = 1
     }
     if (bucket.count !== 8) return
     this.#levels[level] = undefined
-    for (let row = 0; row < this.rows; row++) {
-      if (bucket.low[row] === Infinity) bucket.low[row] = NaN
-      if (bucket.high[row] === -Infinity) bucket.high[row] = NaN
-    }
-    const values = new Float32Array(this.rows * 2)
-    values.set(bucket.low)
-    values.set(bucket.high, this.rows)
     this.emit({
       level,
       first: bucket.index,
       at: Float64Array.of(bucket.start, bucket.end),
-      values,
-      gaps: bucket.gaps.slice(),
+      values: bounds(this.rows, bucket.low, bucket.high),
     })
-    this.#add(
-      level + 1,
-      bucket.index,
-      bucket.start,
-      bucket.end,
-      bucket.low,
-      bucket.high,
-      bucket.gaps,
-    )
+    this.#add(level + 1, bucket.index, bucket.start, bucket.end, bucket.low, bucket.high)
   }
 }

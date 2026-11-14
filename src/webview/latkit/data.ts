@@ -28,7 +28,6 @@ export class DatasetSlot {
     key: string,
     patches: AsyncIterable<Uint8Array>,
     signal: AbortSignal,
-    base?: string,
   ): Promise<boolean> {
     const generation = ++this.#generation
     this.#pending?.destroy()
@@ -37,14 +36,6 @@ export class DatasetSlot {
     const candidate = new Data(name)
     this.#pending = candidate
     try {
-      if (base !== undefined) {
-        const current = this.#current
-        if (!current || current.key !== base || current.data.name !== name) {
-          throw new Error('The dataset update has a different base revision.')
-        }
-        using snapshot = current.data.snapshot()
-        candidate.restore(snapshot)
-      }
       for await (const bytes of patches) {
         signal.throwIfAborted()
         if (generation !== this.#generation) return false

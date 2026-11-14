@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 
-import { Data } from 'latkit'
+import { Data, type Id } from 'latkit'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { Case, catalog } from '../gridkit/index.js'
-import { type FrameRequest, PAGE_BYTES, type TimeRange } from '../shared/data.js'
+import { type FrameRequest, PAGE_BYTES, type TileRequest, type TimeRange } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
 import { type Layout, readResults } from './decode.js'
 import { ResultsFile } from './file.js'
@@ -68,22 +68,33 @@ function following(file: ResultsFile, progress = () => {}) {
     },
   }
 }
-/** Every page of `request`, applied to `onto` or a dataset of their own, with the first page's key
- *  and base, and their bytes. */
-async function plotted(file: ResultsFile, request: FrameRequest, onto?: Data) {
-  let next: string | undefined
-  let first: { key: string; base?: string } | undefined
-  let data = onto
+/** What latkit's Tiles fetch of `file`'s voltages, every row's or `id`'s: the manifest, then the
+ *  base and every span of `level` (by default the manifest's highest), applied to a dataset of
+ *  their own, with the bytes of those spans. */
+async function tiled(file: ResultsFile, level?: number, id?: Id) {
+  const ask = (tile: TileRequest['file']) =>
+    file.tile(
+      { results: 'test', table: 'Bus', field: 'Vm', ...(id !== undefined && { id }), file: tile },
+      signal,
+    )
+  const manifest = JSON.parse(new TextDecoder().decode(await ask('frames.json'))) as {
+    data: string
+    chunk: number
+    url: string
+    frames: [{ table: string; field: string; levels: number; frames: [number, number] }]
+  }
+  const [{ levels, frames }] = manifest.frames
+  const at = level ?? levels
+  const data = new Data('tiles')
+  datasets.push(data)
+  data.apply(await ask('base.latk'))
   let bytes = 0
-  do {
-    const page = await file.frames({ ...request, next }, signal)
-    first ??= page
-    if (!data) datasets.push((data = new Data(page.source)))
-    data.apply(page.bytes)
-    bytes += page.bytes.byteLength
-    next = page.next
-  } while (next)
-  return { ...first!, bytes, data: data! }
+  for (let index = 0; index * manifest.chunk < Math.ceil(frames[1] / 8 ** at); index++) {
+    const span = await ask({ level: at, index })
+    bytes += span.byteLength
+    data.apply(span)
+  }
+  return { manifest, data, bytes }
 }
 const envelope = (data: Data, range: TimeRange, spans = 60) =>
   data.envelope({ table: 'Bus', field: 'Vm', range: [...range], spans })
@@ -97,7 +108,6 @@ function request(
     table: 'Bus',
     field: 'Vm',
     range: file.progress.domain,
-    purpose: 'playhead',
     bytes: 8 << 20,
     step: 0,
     ...more,
@@ -182,7 +192,7 @@ describe('indexed scientific results', () => {
       'No result columns match',
     )
   })
-  it('reads bracketing frames by timestamps, a plot by its columns, and every frame a page at a time', async () => {
+  it('reads bracketing frames by timestamps, every frame a page at a time, and tiles a plot at any level', async () => {
     // Enough frames for several blocks on disk, and more than a page of them.
     const count = 400_000
     const file = await through(
@@ -210,23 +220,20 @@ describe('indexed scientific results', () => {
     expect(all.describe().span).toEqual([0, (count - 1) / 1000])
     for (let i = 0; i < count; i += 7919)
       expect(all.get('Bus', 1, 'Vm', { at: i / 1000 })).toBe(i % 20)
-    const columns = 600
-    const plot = await capture(file, {
-      results: 'test',
-      table: 'Bus',
-      field: 'Vm',
-      range: file.progress.domain,
-      purpose: 'plot',
-      columns,
+    // A plot of the whole run fetches a coarse level: a sliver of every frame's bytes, which holds
+    // each bucket's least and greatest value, and reaches the last frame through the bucket still
+    // filling.
+    const plot = await tiled(file, 4)
+    expect(plot.manifest.frames[0]).toMatchObject({ levels: 6, frames: [0, count] })
+    expect(plot.bytes).toBeLessThan(every.bytes / 100)
+    expect(plot.data.describe().span).toEqual([0, (count - 1) / 1000])
+    expect(envelope(plot.data, file.progress.domain, 1)).toMatchObject({
+      least: Float32Array.of(0),
+      greatest: Float32Array.of(19),
     })
-    using overview = plot.data
-    // The level latkit draws across 600 columns: at most two buckets a column, each its first and
-    // last time and its least and greatest value, however many the frames.
-    expect(plot.bytes).toBeLessThan(2 * columns * (16 + 8) + (4 << 10))
-    expect(
-      overview.envelope({ table: 'Bus', field: 'Vm', range: [...file.progress.domain], spans: 1 })
-        .greatest[0],
-    ).toBe(19)
+    // Each span of a few rows of a wide field is about a mebibyte, so a level's spans are few.
+    expect(plot.manifest.chunk % 8).toBe(0)
+    expect(plot.manifest.chunk * 24).toBeLessThanOrEqual(1 << 20)
   })
   it('sends a playhead the frames it shows, as every frame would show them', async () => {
     // A frame each hundredth of a second, its value its number.
@@ -255,19 +262,13 @@ describe('indexed scientific results', () => {
     const file = await through(await create('gaps', HEADER + '0,1\n0.1,NaN\n10,5\n20,1e100\n'))
     expect((await exact(file, 20)).value).toBe(1e100)
     expect((await exact(file, 0.1)).value).toBeNull()
-    const { data } = await plotted(file, {
-      results: 'test',
-      table: 'Bus',
-      field: 'Vm',
-      range: [0, 20],
-      purpose: 'plot',
-      columns: 100,
-    })
+    const { data } = await tiled(file, 0)
     expect(data.get('Bus', 1, 'Vm', { at: 10 })).toBe(5)
+    expect(data.get('Bus', 1, 'Vm', { at: 0.1 })).toBeNull()
     expect(data.get('Bus', 1, 'Vm', { at: 20 })).toBeNull()
   })
-  it('refines a lone gap down to its frames, leaving the buckets around it whole', async () => {
-    // Buckets of 512 frames across eight columns, one frame of them missing, one a spike.
+  it('tiles a missing frame as a gap, left out of the buckets above it as latkit leaves it', async () => {
+    // Buckets of 512 frames, one frame of them missing, one a spike.
     const [count, missing, spike] = [8192, 4113, 6000]
     const file = await through(
       await create(
@@ -280,80 +281,65 @@ describe('indexed scientific results', () => {
       ),
     )
     const range: TimeRange = [0, count - 1]
-    const { data, bytes } = await plotted(file, {
-      results: 'test',
-      table: 'Bus',
-      field: 'Vm',
-      range,
-      purpose: 'plot',
-      columns: 8,
+    expect((await tiled(file, 0)).data.get('Bus', 1, 'Vm', { at: missing })).toBeNull()
+    const buckets = await tiled(file, 3)
+    expect(envelope(buckets.data, range, 1)).toMatchObject({
+      least: Float32Array.of(1),
+      greatest: Float32Array.of(10000),
     })
-    // The buckets, and the few finer ones and frames around the gap: a sliver of every frame.
-    expect(bytes).toBeLessThan((count * 12) / 10)
-    expect(data.get('Bus', 1, 'Vm', { at: missing })).toBeNull()
-    expect(envelope(data, range, 1).greatest[0]).toBe(10000)
   })
-  it('sends a plot whose window grew only what the window its page holds lacks', async () => {
+  it('tiles one row of a field alone, as a plot of one element reads it', async () => {
+    const three = await Case.parse(
+      new TextEncoder().encode(
+        JSON.stringify({
+          buses: ['A', 'B', 'C'].map((name, i) => ({ class: 'Bus', number: i + 1, name })),
+        }),
+      ),
+      catalog,
+    )
     const file = await through(
       await create(
-        'grown',
-        HEADER + Array.from({ length: 4000 }, (_, i) => `${i / 100},${(i * 7) % 13}\n`).join(''),
+        'one-row',
+        'time,Bus_A_Vm,Bus_B_Vm,Bus_C_Vm\n' +
+          Array.from({ length: 100 }, (_, i) => `${i},${i},${10 * i},${100 * i}\n`).join(''),
+        three,
       ),
     )
-    const plot = (range: TimeRange, since?: string): FrameRequest => ({
-      results: 'test',
-      table: 'Bus',
-      field: 'Vm',
-      range,
-      purpose: 'plot',
-      columns: 100,
-      ...(since && { since }),
-    })
-    const whole = await plotted(file, plot([0, 30]))
-    // A page holding the first ten seconds is sent what the window grown to thirty adds.
-    const held = await plotted(file, plot([0, 10]))
-    const grown = await plotted(file, plot([0, 30], held.key), held.data)
-    expect(grown.base).toBe(held.key)
-    expect(grown.bytes).toBeLessThan(whole.bytes * 0.8)
-    expect(envelope(grown.data, [0, 30])).toEqual(envelope(whole.data, [0, 30]))
-    // A window it covers at least as finely, as a zoom into it is, lacks nothing.
-    const zoomed = await plotted(file, plot([12, 20], grown.key), grown.data)
-    expect(zoomed.base).toBe(grown.key)
-    expect(zoomed.bytes).toBeLessThan(1024)
-    expect(envelope(zoomed.data, [0, 30])).toEqual(envelope(whole.data, [0, 30]))
-    // A window past it is read whole.
-    expect((await plotted(file, plot([5, 40], grown.key))).base).toBeUndefined()
+    const all = await tiled(file, 1)
+    const one = await tiled(file, 1, 2)
+    expect(one.data.query({ of: 'Bus' }).ids).toEqual([2])
+    expect(one.bytes).toBeLessThan(all.bytes)
+    // Each row keeps its place among the rows tiled, which colors its trace.
+    expect(one.data.get('Bus', 2, 'series')).toBe(0)
+    expect(all.data.get('Bus', 3, 'series')).toBe(2)
+    expect(envelope(one.data, [0, 99], 1).greatest).toEqual(Float32Array.of(990))
+    await expect(tiled(file, 1, 7)).rejects.toThrow('not recorded')
   })
-  it('sends a live plot what its run adds to each level its page holds', async () => {
+  it("tiles a live run's every frame read, each level ending in the bucket still filling", async () => {
     const rows = (from: number, to: number) =>
       Array.from({ length: to - from }, (_, i) => `${(from + i) / 100},${((from + i) * 7) % 13}\n`)
-    const file = await create('live-plot', HEADER + rows(0, 300).join(''))
+    let written = 300
+    const file = await create('live-plot', HEADER + rows(0, written).join(''))
     const reader = following(file)
-    // Four columns plot 300 to 2047 frames in buckets of 64, ending in finer ones.
-    const plot = (since?: string): FrameRequest => ({
-      results: 'test',
-      table: 'Bus',
-      field: 'Vm',
-      range: [0, 50],
-      purpose: 'plot',
-      columns: 4,
-      ...(since && { since }),
-    })
     try {
-      await reader.reach(300)
-      let held = await plotted(file, plot())
-      // Each append is stored as blocks of its own, so the finer tail a page holds comes to span
-      // several before buckets of 8, then of 64, take its place.
-      for (const frames of [303, 310, 318, 330, 400, 1000, 1001]) {
-        await appendFile(file.layout.path, rows(file.progress.frames, frames).join(''))
+      for (const frames of [300, 303, 310, 318, 330, 400, 1000, 1001]) {
+        if (frames > written) {
+          await appendFile(file.layout.path, rows(written, frames).join(''))
+          written = frames
+        }
         await reader.reach(frames)
-        const grown = await plotted(file, plot(held.key), held.data)
-        expect(grown.base).toBe(held.key)
-        held = grown
+        const end = (frames - 1) / 100
+        for (const level of [0, 1, 2]) {
+          const { manifest, data } = await tiled(file, level)
+          expect(manifest.frames[0].frames).toEqual([0, frames])
+          // Every level reaches the last frame read, and holds what every frame says.
+          expect(data.describe().span).toEqual([0, end])
+          expect(envelope(data, [0, end], 1)).toMatchObject({
+            least: Float32Array.of(0),
+            greatest: Float32Array.of(12),
+          })
+        }
       }
-      // Read whole, its first 960 frames are 15 buckets; the grown page holds the same.
-      const whole = await plotted(file, plot())
-      expect(envelope(held.data, [0, 9.6], 15)).toEqual(envelope(whole.data, [0, 9.6], 15))
     } finally {
       await reader.end()
     }
@@ -486,7 +472,7 @@ describe('indexed scientific results', () => {
     expect(read).not.toHaveBeenCalled()
     await expect(
       file.frames(
-        { ...request(file), next: JSON.stringify({ key: 'other', frames: 2, part: 0, offset: 0 }) },
+        { ...request(file), next: JSON.stringify({ key: 'other', frames: 2, offset: 0 }) },
         signal,
       ),
     ).rejects.toThrow('window changed')

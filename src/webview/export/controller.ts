@@ -5,10 +5,10 @@ import { reader } from '../../shared/settings.js'
 import { bridge } from '../bridge.js'
 import { CaseProjection } from '../latkit/data.js'
 import { FrameReads, PlayheadFeed } from '../latkit/frames.js'
-import { asset, openGpu } from '../latkit/load.js'
-import { type Background, backgroundOf } from '../latkit/maps.js'
-import { caseFit, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
-import { nativeTheme, theme } from '../latkit/theme.js'
+import { openGpu } from '../latkit/load.js'
+import { type Background, mapOf, NO_MAP } from '../latkit/maps.js'
+import { caseFit, daylightOf, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
+import { nativeTheme } from '../latkit/theme.js'
 import { caseStem } from './image.js'
 import { plotViews } from './plots.js'
 import { exportVideo, framed, type VideoJob, videoOutput, type VideoProgress } from './video.js'
@@ -29,7 +29,7 @@ export async function renderVideo(
   const placed: Placed[] = []
   /** Lets go of the Monitor's plots, whose views and frames are their own. */
   const released: Array<() => void> = []
-  let background: Background = { sources: [], marks: [] }
+  let background: Background = NO_MAP
   let gpu: Gpu | undefined
   let results: Results | undefined
   let file: number | null = null
@@ -62,14 +62,8 @@ export async function renderVideo(
     const selection = job.views.includes('network') ? sceneFields(definition, app.mappings) : []
     await projection.receive({ results: results.id, fields: selection }, selection, signal)
     const data = projection.slot.current!.data
-    if (job.views.includes('network') && definition.drawing.geographic)
-      background = await backgroundOf(
-        settings.get('network.map.source'),
-        settings,
-        new URL(asset('latkit-assets')),
-        theme().palette,
-        signal,
-      )
+    if (job.views.includes('network'))
+      background = await mapOf(settings, definition.drawing.geographic, signal)
     const fields = job.views.includes('network')
       ? sampledFields(definition, app.mappings, results)
       : []
@@ -95,16 +89,7 @@ export async function renderVideo(
       const region: Rect =
         job.layout === 'row' ? [index * share, 0, share, 1] : [0, index * share, 1, share]
       if (kind === 'monitor') {
-        const lanes = await plotViews(
-          app,
-          results,
-          gpu,
-          reads,
-          job.timeRange,
-          region,
-          job.width,
-          signal,
-        )
+        const lanes = await plotViews(app, results, gpu, job.timeRange, region, signal)
         released.push(lanes.release)
         views.push(...lanes.placed.map(({ view }) => view))
         placed.push(...lanes.placed)
@@ -113,10 +98,9 @@ export async function renderVideo(
           mappings: app.mappings,
           results,
           sampled: feed.source,
-          background: background.marks,
+          background,
+          daylight: daylightOf(settings.get('network.map.daylight')),
         })
-        if (background.attribution)
-          scene.title = { text: background.attribution, place: 'bottom-right' }
         // What the user framed in the Network, as they framed it; else the whole case, as the
         // Network first frames it.
         const view = await View.create(null, scene, {

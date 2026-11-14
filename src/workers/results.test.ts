@@ -101,7 +101,6 @@ async function everything(
       results: results.id,
       ...field,
       range: results.domain,
-      purpose: 'playhead',
       bytes: 96 << 20,
       step: 0,
       next,

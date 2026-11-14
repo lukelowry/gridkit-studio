@@ -101,7 +101,6 @@ await Promise.all([
   ),
   cp(require.resolve('latkit/wasm'), resolve(output, 'webview/latkit.wasm')),
   cp(require.resolve('latkit/worker'), resolve(output, 'webview/latkit-worker.js')),
-  cp(require.resolve('latkit/shaders'), resolve(output, 'webview/latkit-shaders.bin')),
   cp(resolve(root, 'assets/maps'), resolve(output, 'webview/maps'), { recursive: true }),
   cp(resolve(packageRoot, 'NOTICES.md'), resolve(output, 'licenses/latkit-NOTICES.md')),
   cp(resolve(packageRoot, 'THIRD_PARTY.md'), resolve(output, 'licenses/latkit-THIRD_PARTY.md')),

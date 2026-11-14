@@ -12,7 +12,15 @@ interface InteractionActions {
 
 const elementOf = ({ row }: Hit): Entity => ({ table: row.table, id: row.id })
 
-export function bindInteractions(view: View, actions: InteractionActions): () => void {
+/** Hears what the user does in `view`, on `canvas`; returns what stops it. */
+export function bindInteractions(
+  view: View,
+  canvas: HTMLCanvasElement,
+  actions: InteractionActions,
+): () => void {
+  // VS Code's menu opens for what latkit finds under the pointer, not for the canvas.
+  const ownMenu = (event: Event) => event.stopPropagation()
+  canvas.addEventListener('contextmenu', ownMenu)
   const stop = [
     view.on('selection', ({ rows, trigger }) => {
       // Data that drops selected rows says so with no trigger: only a user gesture changes the
@@ -31,6 +39,7 @@ export function bindInteractions(view: View, actions: InteractionActions): () =>
     }),
   ]
   return () => {
+    canvas.removeEventListener('contextmenu', ownMenu)
     for (const unsubscribe of stop) unsubscribe()
   }
 }

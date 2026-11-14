@@ -2,11 +2,10 @@
   rows a revision of the case draws and the GPU's view of them have lifetimes of their own: the
   view goes while the page is out of sight, and is made again where it looked. -->
 <script lang="ts">
-  import type { Camera, Data, Gpu, Scene, Source } from 'latkit'
+  import type { Camera, Data, Scene, Source } from 'latkit'
   import { onMount, tick } from 'svelte'
 
   import { type Entity, isEntity } from '../../shared/document.js'
-  import { quiet } from '../../shared/errors.js'
   import type { Mappings } from '../../shared/mappings.js'
   import { revisionOf, type Summary, type ViewState } from '../../shared/messages.js'
   import { reader, TILTED } from '../../shared/settings.js'
@@ -18,10 +17,10 @@
   import { FrameReads, PlayheadFeed, SHOWN_PER_SECOND } from '../latkit/frames.js'
   import { bindInteractions } from '../latkit/interactions.js'
   import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
-  import { asset, openGpu, startOver } from '../latkit/load.js'
-  import { type Background, backgroundOf } from '../latkit/maps.js'
-  import { caseFit, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
-  import { nativeTheme, theme, watchTheme } from '../latkit/theme.js'
+  import { type Background, mapKey, mapOf, NO_MAP } from '../latkit/maps.js'
+  import { LatkitPage } from '../latkit/page.svelte.js'
+  import { caseFit, daylightOf, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
+  import { nativeTheme } from '../latkit/theme.js'
   import { nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
 
@@ -56,46 +55,45 @@
   const keyOf = (entities: readonly Entity[]) =>
     JSON.stringify(entities.map(({ table, id }) => [table, id]))
 
+  /** latkit replaces a lost device itself; only once it stops does the page start over. A wait the
+   *  view let go of, as it went, is no failure. */
+  const page = new LatkitPage((error) => {
+    busy = false
+    bridge.report(error, { view: 'network', phase: 'draw' })
+  })
+  const fail = page.fail
   const cases = new CaseProjection()
   const reads = new FrameReads()
   /** The frames each mapped field of the results holds about the playhead. */
   const feed = new PlayheadFeed(reads)
   /** Lets go of an image being drawn once the page goes. */
-  const page = new AbortController()
+  const lifetime = new AbortController()
 
   let app = $state.raw<ViewState>({})
-  let gpu = $state.raw<Gpu>()
   let drawn = $state.raw<Drawn>()
   /** The view on show, while the page is in sight. */
   let shown = $state.raw<CanvasView>()
-  let background = $state.raw<Background>({ sources: [], marks: [] })
-  /** Whether VS Code shows the page, and the window it is in. */
-  let visible = $state(true)
-  let hidden = $state(document.hidden)
+  let background = $state.raw<Background>(NO_MAP)
   /** Until the case first draws, or cannot. */
   let busy = $state(true)
-  let themeVersion = $state(0)
   /** Counts the changes to the frames the mapped fields hold. */
   let framesVersion = $state(0)
-  /** Counts the times the view was made anew, as Reload View asks. */
-  let reloads = $state(0)
   /** Where the view that went last looked, until the next is made. */
   let left = $state.raw<Looked>()
 
-  let opening: Promise<void> | undefined
   let closed = false
   let playback: (() => void) | undefined
   let saving: ReturnType<typeof setTimeout> | undefined
   /** The selection the view shows, and the one last made here, as keys. */
   let selected = ''
   let own = ''
-  let mapKey = ''
+  let madeMap = ''
   let mapController: AbortController | undefined
   let received = 0
   /** The mappings last drawn, which stay until the rows hold the fields of those sent since. */
   let held: Mappings = {}
 
-  const active = $derived(visible && !hidden)
+  const active = $derived(page.active)
   const settings = $derived(reader(app.settings))
   const geographic = $derived(!!drawn?.summary.definition.drawing.geographic)
   const tilt = $derived(settings.get('network.tilt'))
@@ -106,6 +104,10 @@
         ? 'Tilt'
         : 'Flat',
   )
+  /** The sun's time, read once each time the Daylight setting turns on: a scene that differed on
+   *  every rebuild would be drawn anew on every rebuild. */
+  const lit = $derived(settings.get('network.map.daylight'))
+  const daylight = $derived(daylightOf(lit))
   /** What the view draws now: the mappings whose fields its rows hold. */
   const mappings = $derived.by(() => {
     if (!drawn) return held
@@ -116,7 +118,7 @@
     return held
   })
   const scene = $derived.by((): Scene | undefined => {
-    void themeVersion
+    void page.themeVersion
     void framesVersion
     return (
       drawn &&
@@ -124,7 +126,8 @@
         mappings,
         results: app.results,
         sampled: feed.source,
-        background: background.marks,
+        background,
+        daylight,
       })
     )
   })
@@ -138,31 +141,6 @@
     const looked = left ?? bridge.state<Looked>({})
     return looked.uri === app.uri ? looked.camera : undefined
   })
-
-  /** latkit replaces a lost device itself; only once it stops does the page start over. A wait the
-   *  view let go of, as it went, is no failure. */
-  function fail(error: unknown) {
-    if (quiet(error) || startOver(error)) return
-    busy = false
-    bridge.report(error, { view: 'network', phase: 'draw' })
-  }
-
-  /** Opens the GPU the view draws with. One that did not open is asked for again, as Reload View
-   *  does, or as the page comes back into sight. */
-  function device() {
-    if (gpu) return
-    opening ??= openGpu().then(
-      (made) => {
-        if (closed) return made.destroy()
-        gpu = made
-        mark('canvas:gpu')
-      },
-      (error: unknown) => {
-        opening = undefined
-        fail(error)
-      },
-    )
-  }
 
   /** Whether every sampled field mapped holds the frames at `at`. */
   function covered(at: number): boolean {
@@ -203,9 +181,9 @@
     playback?.()
     playback = undefined
     const view = shown?.view
-    if (!gpu || !view || !active || clock.state.status !== 'playing') return
+    if (!page.gpu || !view || !active || clock.state.status !== 'playing') return
     playback = followPlayback(
-      gpu,
+      page.gpu,
       () => (covered(clock.now()) ? [view] : []),
       () => {
         const at = clock.now()
@@ -240,7 +218,7 @@
     left = undefined
     selected = ''
     shown = made
-    const stop = bindInteractions(view, {
+    const stop = bindInteractions(view, canvas, {
       select(element) {
         own = keyOf(element ? [element] : [])
         bridge.send({ kind: 'select', element })
@@ -250,9 +228,6 @@
       camera: framing,
       error: fail,
     })
-    // VS Code's menu opens for what latkit finds under the pointer, not for the canvas.
-    const ownMenu = (event: Event) => event.stopPropagation()
-    canvas.addEventListener('contextmenu', ownMenu)
     // What it frames is said once its first fit applies: till then it shows only its background.
     const resizing = new ResizeObserver(framing)
     void made.framed().then(() => {
@@ -261,7 +236,6 @@
     return () => {
       left = { uri, camera: view.camera }
       stop()
-      canvas.removeEventListener('contextmenu', ownMenu)
       resizing.disconnect()
       clearTimeout(saving)
       if (shown === made) shown = undefined
@@ -273,27 +247,16 @@
     busy = false
   }
 
-  /** The map the settings choose under a case on the earth, read anew as they or the theme change. */
-  async function backgrounds(mode: 'borders' | 'streets' | 'none') {
-    const { palette } = theme()
-    const key = JSON.stringify([
-      mode,
-      settings.get('network.map.tilesUrl'),
-      settings.get('network.map.attribution'),
-      palette,
-    ])
-    if (mapKey === key) return
-    mapKey = key
+  /** The map the settings choose under a case on the earth, made anew once they or the theme
+   *  change what it draws. */
+  async function backgrounds() {
+    const key = mapKey(settings, geographic)
+    if (madeMap === key) return
+    madeMap = key
     mapController?.abort()
     const controller = (mapController = new AbortController())
     try {
-      const next = await backgroundOf(
-        mode,
-        settings,
-        new URL(asset('latkit-assets')),
-        palette,
-        controller.signal,
-      )
+      const next = await mapOf(settings, geographic, controller.signal)
       if (controller.signal.aborted || closed) {
         next.destroy?.()
         return
@@ -305,15 +268,15 @@
       old.destroy?.()
     } catch (error) {
       if (!controller.signal.aborted) {
-        mapKey = ''
+        madeMap = ''
         fail(error)
       }
     }
   }
 
   $effect(() => {
-    void themeVersion
-    void backgrounds(geographic ? settings.get('network.map.source') : 'none')
+    void page.themeVersion
+    void backgrounds()
   })
   $effect(() => {
     if (shown) shown.view.orbit = settings.get('network.orbit')
@@ -344,7 +307,8 @@
   })
   $effect(() => {
     void shown
-    if (active) device()
+    void page.gpu
+    void active
     follow()
   })
 
@@ -381,12 +345,9 @@
         }
         prefetch(clock.now())
         if (!app.summary && app.error) busy = false
-      } else if (message.kind === 'shown') visible = message.shown
-      else if (message.kind === 'action') {
-        if (message.command === 'reloadView') {
-          reloads++
-          device()
-        } else if (message.command === 'fit' && shown && drawn)
+      } else if (message.kind === 'action') {
+        if (message.command === 'reloadView') void page.open()
+        else if (message.command === 'fit' && shown && drawn)
           shown.fit(caseFit(drawn.data, drawn.summary.definition.drawing))
         else if (message.command === 'neighborhood' && shown && drawn) {
           // What the Network draws for the element in context, and what each of those links to.
@@ -405,29 +366,28 @@
           // The picture shows the view as framed, never its background before its first fit.
           void made
             .framed()
-            .then(() => saveImage(viewShot(made.view), uri, name, 'network', page.signal))
+            .then(() => saveImage(viewShot(made.view), uri, name, 'network', lifetime.signal))
             .catch(fail)
         }
       }
     })
-    const unwatch = watchTheme(() => themeVersion++)
-    const visibility = () => (hidden = document.hidden)
-    document.addEventListener('visibilitychange', visibility)
     const hooks = window as Window & {
       gridkitLifecycle?: () => unknown
       gridkitStats?: () => unknown
       gridkitSelection?: () => unknown
       gridkitLocate?: (entity: Entity) => unknown
+      gridkitLose?: () => void
     }
     hooks.gridkitLifecycle = () => ({
-      visible,
+      visible: page.visible,
       hidden: document.hidden,
       summary: drawn?.summary.version,
       projection: cases.slot.current?.key,
       view: !!shown,
-      gpu: !!gpu,
+      gpu: !!page.gpu,
     })
     hooks.gridkitStats = () => {
+      const gpu = page.gpu
       if (!shown || !gpu) return undefined
       const { view } = shown
       return {
@@ -438,6 +398,7 @@
         work: gpu.work,
         resident: gpu.resident,
         uploading: gpu.uploading,
+        lost: gpu.lost,
         at: view.at,
         requestedAt: clock.now(),
         covered: covered(clock.now()),
@@ -459,48 +420,43 @@
       shown && drawn
         ? shown.view.screenOf({ data: drawn.data.name, ...entity }, { signal: shown.lifetime })
         : null
+    // What a GPU reset does, so a test can check that the Network draws on.
+    hooks.gridkitLose = () => page.gpu?.lose()
     bridge.ready()
     return () => {
       closed = true
-      page.abort()
+      lifetime.abort()
       playback?.()
       off()
-      unwatch()
       clock.stop()
-      document.removeEventListener('visibilitychange', visibility)
       mapController?.abort()
       background.destroy?.()
       feed.clear()
       cases.clear()
       reads.clear()
-      gpu?.destroy()
+      page.destroy()
     }
   })
 </script>
 
 <main class="canvas-host" aria-busy={busy}>
-  {#if gpu && scene}
-    {#key reloads}
-      <LatkitCanvas
-        {gpu}
-        {scene}
-        {sources}
-        {active}
-        {camera}
-        onready={ready}
-        ondrawn={drew}
-        onerror={fail}
-        label="Network view. Right-click an element for actions."
-      />
-    {/key}
+  {#if page.gpu && scene}
+    <LatkitCanvas
+      gpu={page.gpu}
+      {scene}
+      {sources}
+      {active}
+      {camera}
+      onready={ready}
+      ondrawn={drew}
+      onerror={fail}
+      label="Network view. Right-click an element for actions."
+    />
   {/if}
   {#if busy}
     <div class="canvas-host__fallback c-empty" role="status">
       <p class="c-empty__text">Loading case…</p>
     </div>
-  {/if}
-  {#if background.attribution}
-    <div class="canvas-host__status" role="status">{background.attribution}</div>
   {/if}
   <div class="toolbar" data-testid="view-toolbar" role="toolbar" aria-label="Network display">
     {#each LOOKS as [label, glyph] (label)}

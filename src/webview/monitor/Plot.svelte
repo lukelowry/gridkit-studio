@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { Data, Gpu, Id, View } from 'latkit'
-  import { onMount, untrack } from 'svelte'
+  import type { Gpu, Id, View } from 'latkit'
+  import { untrack } from 'svelte'
 
   import type { ExactSample, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
@@ -11,24 +11,21 @@
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import type { CanvasView } from '../latkit/canvas.js'
-  import { FrameReads, FrameWindow } from '../latkit/frames.js'
   import { bindInteractions } from '../latkit/interactions.js'
   import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
+  import { refresher, resultTiles } from '../latkit/results.js'
   import { plotScene } from '../latkit/scenes.js'
   import { nativeTheme } from '../latkit/theme.js'
   import { nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
-  import { PlotFeed } from './feed.js'
-  import { plotCamera, plotRequest, sameWindow, SETTLE_MS } from './plot.js'
+  import { plotCamera, sameWindow } from './plot.js'
 
   let {
     plot,
     app,
     gpu,
-    reads,
     active,
     shown,
-    settling,
     t,
     clock,
     themeVersion,
@@ -39,11 +36,8 @@
     plot: Plotted
     app: ViewState
     gpu: Gpu
-    reads: FrameReads
     active: boolean
     shown: TimeRange
-    /** Whether a zoom or pan is under way, whose samples the plot reads once it settles. */
-    settling: boolean
     t: number
     clock: Clock
     themeVersion: number
@@ -51,22 +45,22 @@
     onwindow: (range: TimeRange) => void
     onerror: (error: unknown) => void
   } = $props()
-  const frames = new FrameWindow(untrack(() => reads))
-  let source = $state.raw<Data>()
+  /** The plot's samples, which the view fetches as its window needs them. The Monitor makes a plot
+   *  anew for other results, so these are the tiles of its results for as long as it lasts. */
+  const tiles = untrack(() => resultTiles(app.results!.id, plot.table, plot.field, plot.id))
   let native = $state.raw<View>()
-  /** The device pixel columns the lane spans, which latkit draws its traces across: none until the
-   *  lane is laid out. */
-  let columns = $state(0)
+  let lifetime = new AbortController()
   let visible = $state(true)
   let inspected = $state<Id>()
   let trace = $state(0)
   let exact = $state.raw<ExactSample>()
   let focused = $state(false)
-  let failed = $state(false)
   const title = $derived(plotName(app.summary?.definition, plot))
   const settings = $derived(reader(app.settings))
   const results = $derived(app.results)
   const recorded = $derived(holdsPlot(results, plot))
+  /** The frames recorded so far. */
+  const frames = $derived(results?.frames ?? 0)
   const ids = $derived(
     results?.outputs.find((output) => output.table === plot.table && output.field === plot.field)
       ?.ids ?? [],
@@ -74,7 +68,7 @@
   const enabled = $derived(active && visible)
   const scene = $derived.by(() => {
     void themeVersion
-    return source ? plotScene(source, plot, settings, nativeTheme(settings, 'monitor')) : undefined
+    return plotScene(tiles, plot, settings, nativeTheme(settings, 'monitor'))
   })
   const framed = $derived(plotCamera(plot, shown))
   const sampleId = $derived(inspected ?? plot.id ?? ids[Math.min(trace, ids.length - 1)])
@@ -89,55 +83,31 @@
   })
 
   function observe(element: HTMLElement) {
-    let resized: ReturnType<typeof setTimeout> | undefined
-    const size = new ResizeObserver(([entry]) => {
-      const box = entry?.devicePixelContentBoxSize[0]
-      if (!box) return
-      const next = Math.max(1, box.inlineSize)
-      clearTimeout(resized)
-      // The lane's first width reads at once; a resize, once it settles.
-      if (!columns) columns = next
-      else resized = setTimeout(() => (columns = next), SETTLE_MS)
-    })
     const intersection = new IntersectionObserver(([entry]) => {
       if (entry) visible = entry.isIntersecting
     })
-    size.observe(element, { box: 'device-pixel-content-box' })
     intersection.observe(element)
-    return () => {
-      clearTimeout(resized)
-      size.disconnect()
-      intersection.disconnect()
-    }
+    return () => intersection.disconnect()
   }
 
-  const feed = new PlotFeed({
-    read: (request, version, signal) => frames.receive(request, version, signal),
-    drawn: (signal) => untrack(() => native)?.done({ signal }),
-    version: () => results?.frames,
-    received() {
-      failed = false
-      source = frames.data
-    },
-    failed(error) {
-      failed = true
-      onerror(error)
-    },
-  })
+  /** A run that records more: the view fetches the manifest and each level's last span again,
+   *  once it drew what the last refresh fetched. */
+  const grow = refresher(tiles, () => native?.done({ signal: lifetime.signal }))
+  let refreshed = untrack(() => frames)
   $effect(() => {
-    if (enabled && !settling && columns && results?.frames && recorded)
-      feed.want(plotRequest(results, plot, shown, columns))
-    else feed.stop()
+    if (frames === refreshed) return
+    refreshed = frames
+    untrack(grow)
   })
   $effect(() => {
     if (native) native.camera = framed
   })
   $effect(() => {
-    if (!native || !source) return
+    if (!native) return
     const selected = app.selection
     native.selection =
       selected?.table === plot.table && ids.includes(selected.id)
-        ? [{ data: source.name, table: plot.table, ids: [selected.id] }]
+        ? [{ data: tiles.name, table: plot.table, ids: [selected.id] }]
         : []
   })
   $effect(() => {
@@ -167,10 +137,21 @@
     }
   })
 
+  /** The times the samples `view` fetched so far span. */
+  function fetched(view: View): [number, number] | null | undefined {
+    const held = view.snapshot(tiles.name)
+    try {
+      return held?.describe().span
+    } finally {
+      held?.destroy()
+    }
+  }
+
   function ready({ view, canvas }: CanvasView) {
     native = view
+    lifetime = new AbortController()
     const unregister = register(view)
-    const disconnect = bindInteractions(view, {
+    const disconnect = bindInteractions(view, canvas, {
       select(element) {
         bridge.send({ kind: 'select', element: element ? { ...element, field: plot.field } : null })
       },
@@ -195,9 +176,7 @@
       const point = view.position([event.offsetX, event.offsetY])
       if (point) clock.seek(clamp(point[0], clock.state.span))
     }
-    const stop = (event: Event) => event.stopPropagation()
     canvas.addEventListener('pointermove', seek)
-    canvas.addEventListener('contextmenu', stop)
     const hooks = canvas as HTMLCanvasElement & {
       gridkitPlot?: () => unknown
       gridkitPoint?: (at: number, value: number) => unknown
@@ -207,9 +186,10 @@
       ...view.stats,
       motion: typeof view.scene.controls === 'object' ? view.scene.controls.motion : undefined,
       complete: view.complete,
+      waiting: view.waiting,
       selection: view.selection,
       hovered: view.hovered,
-      span: source?.describe().span,
+      span: fetched(view),
       camera: view.camera,
       at: view.at,
       work: gpu.work,
@@ -219,11 +199,11 @@
     hooks.gridkitPoint = (at, value) => view.screen([at, value, 0])
     hooks.gridkitRead = (point) => view.pick(point)
     return () => {
+      lifetime.abort()
       unregister()
       disconnect()
       hover()
       canvas.removeEventListener('pointermove', seek)
-      canvas.removeEventListener('contextmenu', stop)
       delete hooks.gridkitPlot
       delete hooks.gridkitPoint
       delete hooks.gridkitRead
@@ -244,10 +224,6 @@
     event.preventDefault()
     event.stopPropagation()
   }
-  onMount(() => () => {
-    feed.stop()
-    frames.clear()
-  })
 </script>
 
 <section class="lane" aria-label={title} {@attach observe}>
@@ -272,11 +248,11 @@
     onfocusin={() => (focused = true)}
     onfocusout={() => (focused = false)}
   >
-    {#if scene && source}
+    {#if recorded && frames}
       <LatkitCanvas
         {gpu}
         {scene}
-        sources={[source]}
+        sources={[tiles]}
         at={t}
         active={enabled}
         camera={framed}
@@ -284,7 +260,7 @@
         {onerror}
         label={`${title}. Page Up and Page Down read traces. Space plays or pauses. Left and Right step samples.`}
       />
-    {:else if !failed && recorded}
+    {:else if recorded}
       <div class="c-empty"><p class="c-empty__text">Waiting for samples…</p></div>
     {/if}
   </div>

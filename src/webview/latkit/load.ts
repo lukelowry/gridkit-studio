@@ -1,12 +1,8 @@
-/** latkit in a page: its WebAssembly, shaders and worker, loaded once, and the GPU its views draw
- *  with. */
+/** latkit in a page: its WebAssembly and worker, and the GPU its views draw with. */
 
 import { Gpu, load } from 'latkit'
 
 import { failedWith } from '../../shared/errors.js'
-
-let loading: Promise<void> | undefined
-let worker: string | undefined
 
 /** Whether this page started over after latkit stopped, and has not drawn since. */
 const STOPPED = 'gridkitStudio.stopped'
@@ -18,28 +14,11 @@ export function asset(name: string): string {
   return value
 }
 
-/** Loads latkit once per page. A webview's own service worker serves its assets, and a worker
- *  fetching its script by URL would go around it, so the worker starts from the script's text,
- *  fetched while the WebAssembly compiles. Jobs start only once this resolves. */
-export function loadLatkit(): Promise<void> {
-  return (loading ??= (async () => {
-    const [script] = await Promise.all([
-      fetch(asset('latkit-worker')).then((response) => {
-        if (!response.ok) throw new Error(`Could not load the Latkit worker (${response.status}).`)
-        return response.text()
-      }),
-      load({
-        wasm: asset('latkit-wasm'),
-        shaders: asset('latkit-shaders'),
-        worker: () => new Worker(worker!),
-      }),
-    ])
-    worker = URL.createObjectURL(new Blob([script], { type: 'text/javascript' }))
-  })().catch((error: unknown) => {
-    loading = undefined
-    throw error
-  }))
-}
+/** Loads latkit. latkit loads once per page, shares that load, and tries a failed one again. The
+ *  worker sits on the webview's resource origin, so latkit fetches it through the page and starts
+ *  it from a blob. Jobs start only once this resolves. */
+export const loadLatkit = (): Promise<void> =>
+  load({ wasm: asset('latkit-wasm'), worker: asset('latkit-worker') })
 
 export async function openGpu(): Promise<Gpu> {
   await loadLatkit()

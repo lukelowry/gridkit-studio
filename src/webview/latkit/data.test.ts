@@ -36,9 +36,8 @@ it('keeps the complete displayed revision on failure, cancellation, and late com
     await slot.receive(
       'case',
       'c',
-      patches(new Patch('case').set('Bus', [1], { v: [3] }).toBytes()),
+      patches(new Patch('case').replace('Bus', [1], { v: [3] }).toBytes()),
       signal,
-      'a',
     )
     resolve()
     expect(await old).toBe(false)

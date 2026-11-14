@@ -12,7 +12,7 @@ import { bridge } from '../bridge.js'
 import { DatasetSlot } from './data.js'
 import { loadLatkit } from './load.js'
 
-/** Shared by every plot and mapped field in this page. Cached patch bytes are immutable. */
+/** Shared by every mapped field in this page. Cached patch bytes are immutable. */
 export class FrameReads {
   readonly #cache = new Map<string, FramePage>()
   readonly #waiters = new Set<() => void>()
@@ -55,6 +55,8 @@ export class FrameReads {
     this.#active++
   }
 
+  /** The page of `request` at the results' `version` of frames, read once for every window of this
+   *  page that asks for it. */
   async page(
     request: FrameRequest & { next?: string },
     version: number,
@@ -182,13 +184,10 @@ export class FrameWindow {
     if (signal?.aborted) abort()
     this.#key = key
     this.#requested = request.range
-    // A plot offers the window it holds, and is sent only what that lacks of a grown one.
-    const held = request.purpose === 'plot' ? this.slot.current?.key : undefined
-    const asked = held === undefined ? request : { ...request, since: held }
     const task = (async () => {
       try {
         await loadLatkit()
-        const first = await this.reads.page(asked, version, controller.signal)
+        const first = await this.reads.page(request, version, controller.signal)
         const reads = this.reads
         async function* pages() {
           let page = first
@@ -199,7 +198,7 @@ export class FrameWindow {
             if (page.complete) return
             if (!page.next || seen.has(page.next)) throw new Error('Invalid frame continuation.')
             seen.add(page.next)
-            page = await reads.page({ ...asked, next: page.next }, version, controller.signal)
+            page = await reads.page({ ...request, next: page.next }, version, controller.signal)
             if (page.key !== first.key || page.source !== first.source)
               throw new Error('The result window changed while loading.')
           }
@@ -209,7 +208,6 @@ export class FrameWindow {
           first.key,
           pages(),
           controller.signal,
-          first.base,
         )
         if (published) {
           this.#range = this.data?.describe().span ?? undefined
@@ -322,7 +320,6 @@ export class PlayheadFeed {
           table,
           field,
           range,
-          purpose: 'playhead',
           bytes: pace.bytes,
           step: playing ? rate / pace.shown : 0,
         },

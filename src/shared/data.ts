@@ -50,26 +50,19 @@ export interface RecordedField {
   readonly domain?: ValueRange
 }
 
-/** A window of a recorded field: a plot's, across the device pixel columns it draws in, sent only
- *  what the window it holds (`since`, the key it was sent under) lacks where that is the same
- *  window grown; or the frames ahead of the playhead a field the Network maps reads, within `bytes`. */
-export type FrameRequest = {
+/** The frames ahead of the playhead a field the Network maps reads, within `bytes`. */
+export interface FrameRequest {
   readonly results: string
   readonly table: string
   readonly field: string
   readonly ids?: readonly Id[]
   readonly range: TimeRange
-} & (
-  | { readonly purpose: 'plot'; readonly columns: number; readonly since?: string }
-  | {
-      readonly purpose: 'playhead'
-      readonly bytes: number
-      /** Seconds of the run between the frames a view shows, the rate over the frames it shows a
-       *  second: of the frames stored, those last at or before each such time from `range[0]` go,
-       *  so no more frames go than show. 0 sends every frame stored. */
-      readonly step: number
-    }
-)
+  readonly bytes: number
+  /** Seconds of the run between the frames a view shows, the rate over the frames it shows a
+   *  second: of the frames stored, those last at or before each such time from `range[0]` go, so
+   *  no more frames go than show. 0 sends every frame stored. */
+  readonly step: number
+}
 
 export interface FramePage {
   readonly key: string
@@ -78,9 +71,18 @@ export interface FramePage {
   readonly field: string
   readonly bytes: Uint8Array
   readonly complete: boolean
-  /** The key of the window these pages go on top of, when they hold only what it lacks. */
-  readonly base?: string
   readonly next?: string
+}
+
+/** A file of a recorded field's time tiles, as latkit's `Tiles` fetch them: the manifest, the
+ *  dataset of the rows without their samples, or span `index` of `level`. */
+export interface TileRequest {
+  readonly results: string
+  readonly table: string
+  readonly field: string
+  /** The one row tiled; without it, every row recorded. */
+  readonly id?: Id
+  readonly file: 'frames.json' | 'base.latk' | { readonly level: number; readonly index: number }
 }
 
 export interface ExactSampleRequest extends Entity {

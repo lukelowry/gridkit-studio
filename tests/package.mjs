@@ -101,7 +101,6 @@ try {
     'webview/latkit.wasm',
     'webview/download.js',
     'webview/latkit-worker.js',
-    'webview/latkit-shaders.bin',
     'licenses/latkit-NOTICES.md',
     'licenses/latkit-THIRD_PARTY.md',
     'webview/maps/coastline.geojson.gz',

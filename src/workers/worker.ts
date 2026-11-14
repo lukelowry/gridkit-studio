@@ -42,7 +42,7 @@ serve<WorkerApi>(
     },
     stats: async () => ({ memory: memory(), cases: cases.count, ...results.stats() }),
   },
-  ['project', 'page', 'frames'],
+  ['project', 'page', 'frames', 'tile'],
   // Nobody waits on a run, which the extension holds until it ends, nor on Problems, which fills
   // in once the views have what they wait on.
   ['validate', 'run'],

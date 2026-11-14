@@ -29,7 +29,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm quality
-      # Packaged as any build is: an odd minor version is a pre-release.
       - run: pnpm package
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
@@ -130,8 +129,7 @@ jobs:
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
-  # A tag whose version matches package.json publishes that VSIX: a pre-release VSIX as a GitHub
-  # pre-release, any other as the latest release.
+  # A tag whose version matches package.json publishes that VSIX as the latest release.
   release:
     if: github.ref_type == 'tag'
     needs: [check, contract, gridkit, web]
@@ -152,6 +150,5 @@ jobs:
             echo "::error::$GITHUB_REF_NAME does not match package.json, which is $version."
             exit 1
           fi
-          pre=$(unzip -p dist/gridkit-studio-*.vsix extension.vsixmanifest | grep -q 'PreRelease" Value="true"' && echo --prerelease || true)
-          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix $pre \
+          gh release create "$GITHUB_REF_NAME" dist/gridkit-studio-*.vsix --latest \
             --title "GridKit Studio $GITHUB_REF_NAME" --notes ""

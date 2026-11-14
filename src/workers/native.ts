@@ -14,9 +14,6 @@ export function loadNative(wasmPath: string): Promise<void> {
     const wasm = await WebAssembly.compile(bytes)
     const assets = browser
       ? {
-          shaders: URL.createObjectURL(
-            new Blob([await readFile(join(dirname(wasmPath), 'latkit-shaders.bin'))]),
-          ),
           worker: await readFile(join(dirname(wasmPath), 'latkit-worker.js')).then((source) => {
             const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
             return () => new globalThis.Worker(url)

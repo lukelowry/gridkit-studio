@@ -26,11 +26,8 @@ suite('Runs', function () {
 
   test('says why a case that records nothing runs nothing', async () => {
     await host.recordOnly('Bus', [])
-    host.command('gridkitStudio.runSimulation', host.solver)
-    const [said] = await until(() => {
-      const said = host.said()
-      return said.length ? said : undefined
-    }, 'why nothing runs')
+    await vscode.commands.executeCommand('gridkitStudio.runSimulation', host.solver)
+    const [said] = host.said()
     assert.match(said!, /records nothing/)
     assert.equal(host.session.run, undefined)
   })
@@ -69,13 +66,10 @@ suite('Runs', function () {
     await host.run()
     const written = host.session.results!
     assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
-    host.command('gridkitStudio.clearResults')
-    await until(() => !host.session.results, 'the results go')
-    host.command('gridkitStudio.showLastResults', host.solver)
-    await until(
-      () => host.session.results?.frames === written.frames,
-      'the last results show again',
-    )
+    await vscode.commands.executeCommand('gridkitStudio.clearResults')
+    assert.equal(host.studio.get(host.key)?.results, undefined)
+    await vscode.commands.executeCommand('gridkitStudio.showLastResults', host.solver)
+    assert.equal(host.session.results?.frames, written.frames)
     assert.equal(host.session.results!.path, written.path)
     // The plots stay until the next run, which plots what it recorded.
     await host.record('Bus', ['Va'])
@@ -101,9 +95,9 @@ suite('Runs', function () {
     assert.equal(session.results?.span?.[1], 1000)
     session.transport.seek(0)
     assert.equal(session.transport.state.follow, false)
-    host.command('gridkitStudio.goToEnd')
-    await until(() => session.transport.state.follow, 'Go to End follows the run again')
-    host.command('gridkitStudio.stopSimulation')
+    await vscode.commands.executeCommand('gridkitStudio.goToEnd')
+    assert.equal(session.transport.state.follow, true, 'Go to End follows the run again')
+    await vscode.commands.executeCommand('gridkitStudio.stopSimulation')
     const run = await host.ran(before)
     assert.equal(run.state, 'cancelled')
     const results = await until(
@@ -112,8 +106,8 @@ suite('Runs', function () {
     )
     assert.ok(results.frames > 0 && results.domain[1] < 1000)
     assert.equal(results.span?.[1], 1000, 'a stopped run keeps its window')
-    host.command('gridkitStudio.previousSample')
-    await until(() => session.transport.currentT() < results.domain[1], 'what it wrote plays')
+    await vscode.commands.executeCommand('gridkitStudio.previousSample')
+    assert.ok(session.transport.currentT() < results.domain[1], 'what it wrote plays')
   })
 
   test('says once why GridKit could not finish, and runs again', async () => {

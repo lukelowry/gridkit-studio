@@ -173,13 +173,6 @@ export class Bench {
     await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text))
   }
 
-  /** Whether every element of `type` records `field` in the case `uri` as Studio last read it. */
-  recorded(type: string, field: string, uri = this.uri): boolean {
-    const summary = this.studio.state(uri.toString()).summary
-    const count = summary?.recording.listed[type]?.[field] ?? 0
-    return count > 0 && count === summary?.counts[type]
-  }
-
   /** Make every element of `type` record `fields` and no other sampled field, and with `only`,
    *  every other element nothing: their `mon` lists written into the file at `uri` as a user
    *  writes them. Waits for Studio to read the case so. */
@@ -203,10 +196,20 @@ export class Bench {
           : undefined,
     )
     await this.write(listed, uri)
+    // Fixture setup must not depend on the OS watcher having started or delivered an event.
     await until(
-      () =>
-        sampled.every((field) => this.recorded(type, field, uri) === fields.includes(field)) &&
-        !this.studio.state(key).stale,
+      async () => {
+        const { recording, counts } = await this.studio.files.read(key)
+        return (
+          sampled.every(
+            (field) =>
+              (recording.listed[type]?.[field] ?? 0) ===
+              (fields.includes(field) ? counts[type] : 0),
+          ) &&
+          (!only || Object.keys(recording.listed).every((of) => of === type)) &&
+          !this.studio.state(key).stale
+        )
+      },
       `${type} records ${fields.join(', ')}`,
     )
   }
@@ -227,8 +230,13 @@ export class Bench {
   /** Run the solver file as its Explorer menu does, and wait for the run to end. */
   async run(command = 'gridkitStudio.runSimulation', ...args: unknown[]): Promise<Run> {
     const before = this.studio.get(this.key)?.run?.id
-    this.command(command, ...(args.length ? args : [this.solver]))
-    return this.ran(before)
+    await vscode.commands.executeCommand(command, ...(args.length ? args : [this.solver]))
+    const run = this.studio.get(this.key)?.run
+    assert.ok(
+      run && run.id !== before && run.state !== 'running',
+      this.studio.reporter.errors.join('\n') || 'The command did not finish a new run',
+    )
+    return run
   }
 
   /** The run after the one `before` names, once it ends. */

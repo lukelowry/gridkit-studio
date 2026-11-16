@@ -4,7 +4,6 @@
 
   import type { TimeRange } from '../../shared/data.js'
   import type { Monitor, ViewState } from '../../shared/messages.js'
-  import { reader } from '../../shared/settings.js'
   import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { imageOptions, picture, saveImage } from '../export/image.js'
@@ -98,7 +97,6 @@
   async function exportImage() {
     const gpu = page.gpu
     if (!gpu || !results || !viewState.uri || !viewState.summary || !area) return
-    const settings = reader(viewState.settings)
     const options = imageOptions(viewState.exportSettings)
     const plots = await plotViews(
       viewState,
@@ -108,7 +106,7 @@
       [0, 0, 1, 1],
       lifetime.signal,
       {
-        theme: nativeTheme(settings, 'monitor'),
+        theme: nativeTheme('monitor'),
         direction,
       },
     )

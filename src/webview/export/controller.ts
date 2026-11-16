@@ -16,7 +16,7 @@ import {
   sceneFields,
   sceneOf,
 } from '../latkit/scenes.js'
-import { exportTheme } from '../latkit/theme.js'
+import { nativeTheme, networkLook } from '../latkit/theme.js'
 import { imageOptions, saveImage } from './image.js'
 import { plotViews } from './plots.js'
 import { type ExportJob, exportVideo, framed, videoTimes } from './video.js'
@@ -43,8 +43,7 @@ async function compose(
   const definition = summary.definition
   const settings = reader(state.settings)
   const style = job.settings
-  const themeOf = (kind: 'network' | 'monitor') =>
-    exportTheme(settings, style['export.theme'], kind)
+  const themeOf = (kind: 'network' | 'monitor') => nativeTheme(kind, style['export.theme'])
   const caseRows = new CaseRows()
   /** Whether the feed's frames changed since the Network view's sources were last set. */
   let changed = false
@@ -79,8 +78,9 @@ async function compose(
     await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
     const data = caseRows.slot.current!.data
     const background: Background = network
-      ? await mapOf(settings, definition.drawing.geographic, signal)
+      ? await mapOf(settings, definition.drawing.geographic)
       : NO_MAP
+    signal.throwIfAborted()
     const fields = network ? sampledFields(definition, state.mappings, results) : []
     const sources = () => [data, ...background.sources, ...feed.sources]
     const framing = network ? await bridge.request('framing', { uri: summary.uri }, signal) : null
@@ -115,14 +115,20 @@ async function compose(
         views.push(...lanes.placed.map(({ view }) => view))
         continue
       }
-      const scene = sceneOf(data, definition, settings, themeOf('network'), {
-        mappings: state.mappings,
-        results,
-        sampled: feed.source,
-        background,
-        daylight: daylightOf(settings.get('network.map.daylight')),
-        legends: style['export.legend'],
-      })
+      const scene = sceneOf(
+        data,
+        definition,
+        settings,
+        networkLook(settings, style['export.theme']),
+        {
+          mappings: state.mappings,
+          results,
+          sampled: feed.source,
+          background,
+          daylight: daylightOf(settings.get('map.daylight')),
+          legends: style['export.legend'],
+        },
+      )
       const size = [
         (region[2] * style['export.width']) / style['export.scale'],
         (region[3] * style['export.height']) / style['export.scale'],

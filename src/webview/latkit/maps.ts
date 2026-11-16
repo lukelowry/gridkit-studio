@@ -1,131 +1,130 @@
-import { Data, field, type Mark, Tiles, when, zoom } from 'latkit'
+import { Data, field, type Mark, type TableInput, Tiles, when, zoom } from 'latkit'
 
+import { type Basemap, BASEMAPS } from '../../shared/basemaps.js'
 import type { SettingsReader } from '../../shared/settings.js'
 import { asset } from './load.js'
-import { type Palette, theme } from './theme.js'
+import type { MapColors } from './theme.js'
 
-/** A map drawn under the Network. Its datasets last as long as the page, so restyling it reads
- *  nothing again. */
+/** A map under the Network: its datasets, read once per page, and its marks in any colors, so a
+ *  new theme or an export in another one reads nothing again. */
 export interface Background {
   readonly sources: ReadonlyArray<Data | Tiles>
-  readonly marks: readonly Mark[]
+  readonly marks: (colors: MapColors) => Mark[]
   readonly attribution?: string
 }
 
-/** No map: a case that is not geographic, or the Map setting `none`. */
-export const NO_MAP: Background = { sources: [], marks: [] }
+/** No map: a case that is not geographic, or the Basemap setting None. */
+export const NO_MAP: Background = { sources: [], marks: () => [] }
 
-const modeOf = (settings: SettingsReader, geographic: boolean) =>
-  geographic ? settings.get('network.map.source') : 'none'
-
-/** Everything `mapOf` depends on; the map is rebuilt only when this changes. */
-export function mapKey(settings: SettingsReader, geographic: boolean): string {
-  return JSON.stringify([
-    modeOf(settings, geographic),
-    settings.get('network.map.tilesUrl'),
-    settings.get('network.map.attribution'),
-    theme().palette,
-  ])
-}
-
-export async function mapOf(
+/** The map the settings choose for a case: tiles at a URL, the included map without one, or null
+ *  for none. Custom without a URL is none. */
+function chosen(
   settings: SettingsReader,
   geographic: boolean,
-  signal: AbortSignal,
-): Promise<Background> {
-  const mode = modeOf(settings, geographic)
-  const { palette } = theme()
-  if (mode === 'borders') {
-    signal.throwIfAborted()
-    const data = await borderData(new URL(asset('latkit-assets')))
-    signal.throwIfAborted()
-    return {
-      sources: data,
-      marks: data.map((source, index): Mark => ({
-        lines: [source.name, 'lines'],
-        name: source.name,
-        geometry: 'geometry',
-        color: palette.text2,
-        width: index === 0 ? 0.6 : 1,
-        dash: index === 0,
-        pick: false,
-        select: false,
-      })),
-    }
+): Pick<Basemap, 'url' | 'attribution'> | null {
+  const id = geographic ? settings.get('map.basemap') : 'none'
+  if (id === 'none') return null
+  if (id === 'custom') {
+    const url = settings.get('map.tilesUrl').trim()
+    const attribution = settings.get('map.attribution').trim()
+    return url ? { url, ...(attribution && { attribution }) } : null
   }
-  if (mode === 'streets') {
-    const { source, marks } = streetMaps(settings.get('network.map.tilesUrl'), palette)
-    return { sources: [source], marks, attribution: settings.get('network.map.attribution') }
-  }
-  return NO_MAP
+  const { url, attribution }: Basemap = BASEMAPS[id]
+  return { url, attribution }
 }
 
-let borders: Promise<Data[]> | undefined
+/** What `mapOf` reads; the map is read again only when this changes. */
+export const mapKey = (settings: SettingsReader, geographic: boolean): string =>
+  JSON.stringify(chosen(settings, geographic))
 
-/** The bundled borders under `base`, provinces first. Read once per page; a failed read releases
- *  the borders that did load, and the next call reads them all again. */
-export function borderData(base: URL): Promise<Data[]> {
-  if (borders) return borders
-  const reading = (async () => {
-    const results = await Promise.allSettled(
-      ['provinces', 'countries', 'coastline'].map((name) =>
-        Data.read(new URL(`maps/${name}.geojson.gz`, base).href, { name: `map:${name}` }),
-      ),
-    )
-    const failure = results.find((result) => result.status === 'rejected')
-    if (failure) {
-      for (const result of results) if (result.status === 'fulfilled') result.value.destroy()
-      throw failure.reason
+export async function mapOf(settings: SettingsReader, geographic: boolean): Promise<Background> {
+  const map = chosen(settings, geographic)
+  if (!map) return NO_MAP
+  if (!map.url) {
+    const data = await naturalEarth()
+    // GeoJSON tables are named by geometry: the polygons are water and the lines boundaries.
+    return {
+      sources: [data],
+      marks: style({ water: [data.name, 'polygons'], boundary: [data.name, 'lines'] }),
     }
-    return results.map((result) => (result as PromiseFulfilledResult<Data>).value)
-  })()
-  borders = reading
+  }
+  const tiles = tilesAt(map.url)
+  return {
+    sources: [tiles],
+    marks: style(Object.fromEntries(LAYERS.map((layer) => [layer, [tiles.name, layer]]))),
+    attribution: map.attribution,
+  }
+}
+
+let included: Promise<Data> | undefined
+
+/** The included Natural Earth map, read once per page. A failed read is tried again next time. */
+function naturalEarth(): Promise<Data> {
+  if (included) return included
+  const url = new URL('maps/natural-earth.geojson.gz', asset('latkit-assets')).href
+  const reading = (included = Data.read(url, { name: 'map:natural-earth' }))
   reading.catch(() => {
-    if (borders === reading) borders = undefined
+    if (included === reading) included = undefined
   })
   return reading
 }
 
-const streets = new Map<string, Tiles>()
+const tiles = new Map<string, Tiles>()
 
-/** OpenMapTiles layers under a case. The tiles have no land layer, so land is the earth's ground
- *  color and only water differs. Minor roads appear from zoom 12; borders only for countries and
- *  states, on land. */
-function streetMaps(url: string, palette: Palette): { source: Tiles; marks: Mark[] } {
-  let source = streets.get(url)
-  if (!source) streets.set(url, (source = new Tiles('map:streets', url)))
-  const kind = field('class')
-  const major = kind
-    .is('motorway')
-    .or(kind.is('trunk'))
-    .or(kind.is('primary'))
-    .or(kind.is('secondary'))
-  const minor = kind.is('tertiary').or(kind.is('minor')).or(kind.is('service'))
-  const ground = { pick: false, select: false } as const
-  return {
-    source,
-    marks: [
-      { areas: [source.name, 'water'], color: palette.surface2, ...ground },
-      {
-        areas: [source.name, 'building'],
-        color: palette.border,
+/** One `Tiles` per URL for the page's life. */
+function tilesAt(url: string): Tiles {
+  let found = tiles.get(url)
+  if (!found) tiles.set(url, (found = new Tiles('map:tiles', url)))
+  return found
+}
+
+/** The OpenMapTiles layers a map draws. */
+const LAYERS = ['water', 'building', 'transportation', 'boundary'] as const
+
+/** The tables holding a map's layers. */
+type Layers = Partial<Record<(typeof LAYERS)[number], TableInput>>
+
+/** OpenMapTiles' layers in `colors`, for the layers in `tables`. The included Natural Earth map
+ *  names its fields as OpenMapTiles does, so this one style draws every map. Water lies over the
+ *  land's ground, so the coast is where they meet. Minor roads show past zoom 12 and buildings
+ *  past zoom 15. */
+function style(tables: Layers): Background['marks'] {
+  return (colors) => {
+    const kind = field('class')
+    const major = kind
+      .is('motorway')
+      .or(kind.is('trunk'))
+      .or(kind.is('primary'))
+      .or(kind.is('secondary'))
+    const minor = kind.is('tertiary').or(kind.is('minor')).or(kind.is('service'))
+    const level = field('admin_level')
+    const ground = { pick: false, select: false } as const
+    const marks: Mark[] = []
+    if (tables.water) marks.push({ areas: tables.water, color: colors.water, ...ground })
+    if (tables.building)
+      marks.push({
+        areas: tables.building,
+        color: colors.faint,
         visible: zoom().gt(15),
         ...ground,
-      },
-      {
-        lines: [source.name, 'transportation'],
-        color: palette.text2,
+      })
+    if (tables.transportation)
+      marks.push({
+        lines: tables.transportation,
+        color: colors.line,
         width: when(major).then(1.2).otherwise(0.6),
         visible: major.or(minor.and(zoom().gt(12))),
         ...ground,
-      },
-      {
-        lines: [source.name, 'boundary'],
-        color: palette.text2,
-        visible: field('admin_level').lt(5).and(field('maritime').fallback(0).lt(1)),
-        dash: field('admin_level').gt(2),
+      })
+    // Countries solid and states dashed, on land only.
+    if (tables.boundary)
+      marks.push({
+        lines: tables.boundary,
+        color: colors.line,
+        dash: level.gt(2),
+        visible: level.lt(5).and(field('maritime').fallback(0).lt(1)),
         ...ground,
-      },
-    ],
+      })
+    return marks
   }
 }

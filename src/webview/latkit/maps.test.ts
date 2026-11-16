@@ -1,39 +1,57 @@
 import { createRequire } from 'node:module'
 
-import { Data } from 'latkit'
-import { beforeAll, expect, it, vi } from 'vitest'
+import type { Mark } from 'latkit'
+import { beforeAll, expect, it } from 'vitest'
 
+import { reader } from '../../shared/settings.js'
 import { loadNative } from '../../workers/native.js'
-import { borderData } from './maps.js'
+import { mapKey, mapOf, NO_MAP } from './maps.js'
 
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 
-it('releases the borders that loaded when one fails, and reads them all again on the next call', async () => {
-  const a = new Data('map:a')
-  const b = new Data('map:b')
-  const destroyA = vi.spyOn(a, 'destroy')
-  const destroyB = vi.spyOn(b, 'destroy')
-  const read = vi
-    .spyOn(Data, 'read')
-    .mockResolvedValueOnce(a)
-    .mockRejectedValueOnce(new Error('Missing map'))
-    .mockResolvedValueOnce(b)
-  try {
-    await expect(borderData(new URL('https://bundled/'))).rejects.toThrow('Missing map')
-    expect(destroyA).toHaveBeenCalledOnce()
-    expect(destroyB).toHaveBeenCalledOnce()
-    expect(String(read.mock.calls[0]![0])).toBe('https://bundled/maps/provinces.geojson.gz')
-    // Read again after the failure and cached once it succeeds.
-    read.mockImplementation(async (_source, options) => new Data(options!.name!))
-    const kept = await borderData(new URL('https://bundled/'))
-    expect(kept.map((data) => data.name)).toEqual([
-      'map:provinces',
-      'map:countries',
-      'map:coastline',
-    ])
-    expect(await borderData(new URL('https://bundled/'))).toBe(kept)
-    expect(read).toHaveBeenCalledTimes(6)
-  } finally {
-    read.mockRestore()
-  }
+const COLORS = { land: '#1f1f1f', water: '#14354f', line: '#666666', faint: '#303030' }
+
+const tableOf = (mark: Mark) => ('areas' in mark ? mark.areas : 'lines' in mark ? mark.lines : null)
+
+it('reads a map again only for a new source, never for its colors', async () => {
+  // A case that is not geographic, None, and Custom without tiles have no map.
+  expect(await mapOf(reader(), false)).toBe(NO_MAP)
+  expect(await mapOf(reader({ 'map.basemap': 'none' }), true)).toBe(NO_MAP)
+  expect(await mapOf(reader({ 'map.basemap': 'custom' }), true)).toBe(NO_MAP)
+  expect(mapKey(reader({ 'map.waterColor': '#0000ff', 'map.landColor': '#ffffff' }), true)).toBe(
+    mapKey(reader(), true),
+  )
+  const custom = { 'map.basemap': 'custom', 'map.tilesUrl': ' https://tiles.test/planet ' } as const
+  const credited = { ...custom, 'map.attribution': '© test' }
+  expect(mapKey(reader(custom), true)).not.toBe(mapKey(reader(credited), true))
+  expect(mapKey(reader(custom), true)).not.toBe(
+    mapKey(reader({ 'map.basemap': 'openFreeMap' }), true),
+  )
+})
+
+it('draws tiles as OpenMapTiles layers, water first, in the colors given', async () => {
+  const map = await mapOf(
+    reader({
+      'map.basemap': 'custom',
+      'map.tilesUrl': 'https://tiles.test/planet',
+      'map.attribution': '© test',
+    }),
+    true,
+  )
+  expect(map.attribution).toBe('© test')
+  const marks = map.marks(COLORS)
+  expect(marks.map(tableOf)).toEqual(
+    ['water', 'building', 'transportation', 'boundary'].map((layer) => [
+      map.sources[0]!.name,
+      layer,
+    ]),
+  )
+  expect(marks[0]).toMatchObject({ color: COLORS.water, pick: false, select: false })
+  expect(map.marks({ ...COLORS, water: '#0000ff' })[0]).toMatchObject({ color: '#0000ff' })
+  // One dataset per URL for the page's life, whatever chose it.
+  const again = await mapOf(
+    reader({ 'map.basemap': 'custom', 'map.tilesUrl': 'https://tiles.test/planet' }),
+    true,
+  )
+  expect(again.sources[0]).toBe(map.sources[0])
 })

@@ -78,7 +78,8 @@ describe('the manifest', () => {
     expect(() => validateSettings({ 'network.vertexRadius': NaN })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.tilt': 2.5 })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.colormap': 'red' })).toThrow('Invalid value')
-    expect(() => validateSettings({ 'network.map.groundColor': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'map.waterColor': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'map.basemap': 'streets' })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.unknown': 1 })).toThrow('Unknown setting')
     // GridKit's location is a machine setting, never a view setting.
     expect(() => validateSettings({ gridkitPath: '/opt/gridkit' })).toThrow('Unknown setting')

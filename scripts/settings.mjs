@@ -33,7 +33,10 @@ function property(setting, order) {
         ...base,
         type: typeof setting.default,
         enum: setting.options.map((option) => option.value),
-        enumDescriptions: setting.options.map((option) => option.label),
+        enumItemLabels: setting.options.map((option) => option.label),
+        ...(setting.options.some((option) => option.description) && {
+          markdownEnumDescriptions: setting.options.map((option) => option.description ?? ''),
+        }),
       }
     case 'number':
       return {

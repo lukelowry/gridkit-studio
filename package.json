@@ -114,7 +114,7 @@
       "restrictedConfigurations": [
         "gridkitStudio.gridkitPath",
         "gridkitStudio.gridkitProgram",
-        "gridkitStudio.network.map.tilesUrl"
+        "gridkitStudio.map.tilesUrl"
       ]
     },
     "virtualWorkspaces": true
@@ -1041,7 +1041,7 @@
               "mercator",
               "globe"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Mercator",
               "Globe"
             ]
@@ -1131,7 +1131,7 @@
               "twilight",
               "turbo"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Amber",
               "Amp",
               "Batlow",
@@ -1200,7 +1200,7 @@
               "modifier",
               "off"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Wheel zooms",
               "Scroll pans, pinch zooms",
               "Modifier + wheel zooms",
@@ -1217,7 +1217,7 @@
               "full",
               "reduced"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "System",
               "Full",
               "Reduced"
@@ -1230,48 +1230,55 @@
             "markdownDescription": "How near the pointer finds an element, in CSS pixels.",
             "type": "integer",
             "minimum": 0
-          },
-          "gridkitStudio.network.map.source": {
-            "default": "borders",
+          }
+        }
+      },
+      {
+        "id": "gridkitStudio.map",
+        "title": "GridKit Studio: Map",
+        "order": 2,
+        "properties": {
+          "gridkitStudio.map.basemap": {
+            "default": "naturalEarth",
             "scope": "resource",
-            "order": 12,
+            "order": 0,
+            "markdownDescription": "The map under a geographic case.",
             "type": "string",
             "enum": [
-              "borders",
-              "streets",
+              "naturalEarth",
+              "openFreeMap",
+              "custom",
               "none"
             ],
-            "enumDescriptions": [
-              "Included borders",
-              "Street map",
+            "enumItemLabels": [
+              "Natural Earth",
+              "OpenFreeMap",
+              "Custom",
               "None"
+            ],
+            "markdownEnumDescriptions": [
+              "Included. Coasts, lakes, countries and states. Works offline.",
+              "OpenStreetMap streets from openfreemap.org, fetched as you move. No key.",
+              "OpenMapTiles vector tiles from `#gridkitStudio.map.tilesUrl#`.",
+              "No map."
             ]
           },
-          "gridkitStudio.network.map.tilesUrl": {
-            "default": "https://tiles.openfreemap.org/planet",
-            "scope": "resource",
-            "order": 13,
-            "markdownDescription": "The Street map's vector tiles: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
-            "type": "string"
-          },
-          "gridkitStudio.network.map.attribution": {
-            "default": "© OpenStreetMap contributors · OpenFreeMap",
-            "scope": "resource",
-            "order": 14,
-            "markdownDescription": "The credit shown on the Street map.",
-            "type": "string"
-          },
-          "gridkitStudio.network.map.daylight": {
-            "default": false,
-            "scope": "resource",
-            "order": 15,
-            "markdownDescription": "Shade the map by the sun's position now.",
-            "type": "boolean"
-          },
-          "gridkitStudio.network.map.groundColor": {
+          "gridkitStudio.map.waterColor": {
             "default": null,
             "scope": "resource",
-            "order": 16,
+            "order": 1,
+            "markdownDescription": "Leave empty for a blue that suits the color theme.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+            "format": "color-hex"
+          },
+          "gridkitStudio.map.landColor": {
+            "default": null,
+            "scope": "resource",
+            "order": 2,
             "markdownDescription": "Leave empty to follow the color theme.",
             "type": [
               "string",
@@ -1280,10 +1287,31 @@
             "pattern": "^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
             "format": "color-hex"
           },
-          "gridkitStudio.network.map.nightBrightness": {
+          "gridkitStudio.map.tilesUrl": {
+            "default": "",
+            "scope": "resource",
+            "order": 3,
+            "markdownDescription": "The Custom map's vector tiles, in OpenMapTiles' layers: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
+            "type": "string"
+          },
+          "gridkitStudio.map.attribution": {
+            "default": "",
+            "scope": "resource",
+            "order": 4,
+            "markdownDescription": "The credit shown under the Custom map.",
+            "type": "string"
+          },
+          "gridkitStudio.map.daylight": {
+            "default": false,
+            "scope": "resource",
+            "order": 5,
+            "markdownDescription": "Shade the map by the sun's position now.",
+            "type": "boolean"
+          },
+          "gridkitStudio.map.nightBrightness": {
             "default": 0.3,
             "scope": "resource",
-            "order": 17,
+            "order": 6,
             "markdownDescription": "Brightness of the night side, from 0 to 1.",
             "type": "number",
             "minimum": 0,
@@ -1294,7 +1322,7 @@
       {
         "id": "gridkitStudio.monitor",
         "title": "GridKit Studio: Monitor",
-        "order": 2,
+        "order": 3,
         "properties": {
           "gridkitStudio.monitor.interpolation": {
             "default": "linear",
@@ -1305,7 +1333,7 @@
               "linear",
               "step"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Linear",
               "Step"
             ]
@@ -1332,7 +1360,7 @@
               "tab20",
               "tableau10"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Dark2",
               "Okabe-Ito",
               "Paired",
@@ -1352,7 +1380,7 @@
               "modifier",
               "off"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Wheel zooms",
               "Modifier + wheel zooms",
               "Off"
@@ -1368,7 +1396,7 @@
               "full",
               "reduced"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "System",
               "Full",
               "Reduced"
@@ -1387,7 +1415,7 @@
       {
         "id": "gridkitStudio.export",
         "title": "GridKit Studio: Export",
-        "order": 3,
+        "order": 4,
         "properties": {
           "gridkitStudio.export.width": {
             "default": 1920,
@@ -1440,7 +1468,7 @@
               "jpeg",
               "webp"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "PNG",
               "JPEG",
               "WebP"
@@ -1473,7 +1501,7 @@
               "light",
               "dark"
             ],
-            "enumDescriptions": [
+            "enumItemLabels": [
               "Match VS Code",
               "Light",
               "Dark"

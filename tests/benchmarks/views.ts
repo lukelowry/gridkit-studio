@@ -245,12 +245,12 @@ export async function run() {
       })
       await measure('labels', (i) => settings.update('network.labels', i % 2 === 1, global))
       await settings.update('network.labels', true, global)
-      // The map draws only in Globe mode, after the first frame.
+      // The map draws only under a geographic case, the one kind Globe is enabled for.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {
         await measure('map', (i) =>
-          settings.update('network.map.source', i % 2 === 1 ? 'borders' : 'none', global),
+          settings.update('map.basemap', i % 2 === 1 ? 'naturalEarth' : 'none', global),
         )
-        await settings.update('network.map.source', undefined, global)
+        await settings.update('map.basemap', undefined, global)
         await network.waitForFunction('() => gridkitStats().complete', undefined, {
           timeout: 60_000,
         })
@@ -566,7 +566,7 @@ export async function run() {
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
   } finally {
     await simpleDialog(undefined)
-    for (const key of [...Object.keys(STILL), 'network.labels', 'network.map.source'])
+    for (const key of [...Object.keys(STILL), 'network.labels', 'map.basemap'])
       await settings.update(key, undefined, global)
     await workbench.update('reduceMotion', undefined, global)
     await bench.finish()

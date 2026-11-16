@@ -3,6 +3,8 @@
 
 import { type ColormapName, colormaps } from 'latkit'
 
+import { BASEMAP_IDS, BASEMAPS } from './basemaps.js'
+
 type Scope = 'resource' | 'machine-overridable' | 'window'
 
 /** One setting definition. A null color follows the theme. Numbers are bounded only where latkit
@@ -12,7 +14,11 @@ type Setting = { readonly scope: Scope; readonly description?: string } & (
   | {
       readonly kind: 'choice'
       readonly default: string | number
-      readonly options: readonly { readonly value: string | number; readonly label: string }[]
+      readonly options: readonly {
+        readonly value: string | number
+        readonly label: string
+        readonly description?: string
+      }[]
     }
   | {
       readonly kind: 'number'
@@ -27,7 +33,7 @@ type Setting = { readonly scope: Scope; readonly description?: string } & (
   | { readonly kind: 'text'; readonly default: string }
 )
 
-type Options<V> = readonly (readonly [value: V, label: string])[]
+type Options<V> = readonly (readonly [value: V, label: string, description?: string])[]
 
 // Each helper takes the default, then the range or options, then the description.
 const bool = (value: boolean, description?: string) =>
@@ -72,7 +78,11 @@ const choice = <const V extends string | number>(
     kind: 'choice',
     scope: 'resource',
     default: value,
-    options: options.map((option) => ({ value: option[0], label: option[1] })),
+    options: options.map(([value, label, detail]) => ({
+      value,
+      label,
+      ...(detail && { description: detail }),
+    })),
     description,
   }) as const
 
@@ -128,7 +138,8 @@ export const TILTED = 45
  *  so a thinner line hides nothing behind it, and where many cross the most common color wins
  *  regardless of depth. */
 export const EDGE_WIDTH = 2
-/** The settings by id in display order: GridKit's first, then each view's, prefixed by its name. */
+/** The settings by id in display order: GridKit's first, then the Network's, the map's under it,
+ *  the Monitor's and the Export view's, each prefixed by its name. */
 export const SETTINGS = {
   gridkitPath: machine(
     text(
@@ -178,22 +189,24 @@ export const SETTINGS = {
   'network.wheelBehavior': choice('wheel', NETWORK_WHEEL),
   'network.motion': choice('system', MOTION),
   'network.pickingDistance': int(8, [0], 'How near the pointer finds an element, in CSS pixels.'),
-  'network.map.source': choice('borders', [
-    ['borders', 'Included borders'],
-    ['streets', 'Street map'],
-    ['none', 'None'],
-  ]),
-  'network.map.tilesUrl': text(
-    'https://tiles.openfreemap.org/planet',
-    "The Street map's vector tiles: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
+
+  'map.basemap': choice(
+    'naturalEarth',
+    [
+      ...BASEMAP_IDS.map((id) => [id, BASEMAPS[id].label, BASEMAPS[id].description] as const),
+      ['none', 'None', 'No map.'],
+    ],
+    'The map under a geographic case.',
   ),
-  'network.map.attribution': text(
-    '© OpenStreetMap contributors · OpenFreeMap',
-    'The credit shown on the Street map.',
+  'map.waterColor': color(null, 'Leave empty for a blue that suits the color theme.'),
+  'map.landColor': color(null, 'Leave empty to follow the color theme.'),
+  'map.tilesUrl': text(
+    '',
+    "The Custom map's vector tiles, in OpenMapTiles' layers: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
   ),
-  'network.map.daylight': bool(false, "Shade the map by the sun's position now."),
-  'network.map.groundColor': color(null, 'Leave empty to follow the color theme.'),
-  'network.map.nightBrightness': num(0.3, [0, 1], 'Brightness of the night side, from 0 to 1.'),
+  'map.attribution': text('', 'The credit shown under the Custom map.'),
+  'map.daylight': bool(false, "Shade the map by the sun's position now."),
+  'map.nightBrightness': num(0.3, [0, 1], 'Brightness of the night side, from 0 to 1.'),
 
   'monitor.interpolation': choice('linear', [
     ['linear', 'Linear'],
@@ -249,9 +262,9 @@ export const SETTINGS = {
 
 type Definitions = typeof SETTINGS
 export type Settings = { [K in keyof Definitions]: Definitions[K]['default'] }
-/** The settings the pages read, prefixed by the view they style or `export`. */
-type DisplayKey = Extract<keyof Settings, `${'network' | 'monitor' | 'export'}.${string}`>
-type ViewKey = Extract<DisplayKey, `${'network' | 'monitor'}.${string}`>
+/** The settings the pages read, prefixed by what they style: a view, its map, or `export`. */
+type DisplayKey = Extract<keyof Settings, `${'network' | 'map' | 'monitor' | 'export'}.${string}`>
+type ViewKey = Extract<DisplayKey, `${'network' | 'map' | 'monitor'}.${string}`>
 type ExportKey = Extract<DisplayKey, `export.${string}`>
 export type ViewSettings = Pick<Settings, ViewKey>
 export type ExportSettings = Pick<Settings, ExportKey>
@@ -261,7 +274,9 @@ export interface SettingsReader {
 }
 
 const KEYS = Object.keys(SETTINGS) as (keyof Settings)[]
-const DISPLAY_KEYS = KEYS.filter((id): id is DisplayKey => /^(network|monitor|export)\./.test(id))
+const DISPLAY_KEYS = KEYS.filter((id): id is DisplayKey =>
+  /^(network|map|monitor|export)\./.test(id),
+)
 const defaultsOf = <K extends DisplayKey>(keys: readonly K[]) =>
   Object.freeze(Object.fromEntries(keys.map((id) => [id, SETTINGS[id].default]))) as Readonly<
     Pick<Settings, K>

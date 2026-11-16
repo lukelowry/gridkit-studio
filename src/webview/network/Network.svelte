@@ -19,7 +19,7 @@
   import { type Background, mapKey, mapOf, NO_MAP } from '../latkit/maps.js'
   import { LatkitPage } from '../latkit/page.svelte.js'
   import { caseFit, daylightOf, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
-  import { nativeTheme } from '../latkit/theme.js'
+  import { networkLook } from '../latkit/theme.js'
   import { contextOf, nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
 
@@ -76,8 +76,8 @@
   /** Selection keys: the one shown, and the last one made in this view. */
   let shownSelection = ''
   let selectedHere = ''
+  /** What the map shown was read from; a newer read replaces it only while this matches. */
   let backgroundKey = ''
-  let mapController: AbortController | undefined
   /** The mappings drawn; newer ones apply once the rows have their fields. */
   let drawnMappings: Mappings = {}
 
@@ -93,7 +93,7 @@
         : 'Flat',
   )
   // Read once per toggle: a time that changed on every rebuild would redraw the scene every time.
-  const daylightOn = $derived(settings.get('network.map.daylight'))
+  const daylightOn = $derived(settings.get('map.daylight'))
   const daylight = $derived(daylightOf(daylightOn))
   const mappings = $derived.by(() => {
     if (!loadedCase) return drawnMappings
@@ -108,7 +108,7 @@
     void framesVersion
     if (!loadedCase) return undefined
     const { data, summary } = loadedCase
-    return sceneOf(data, summary.definition, settings, nativeTheme(settings, 'network'), {
+    return sceneOf(data, summary.definition, settings, networkLook(settings), {
       mappings,
       results: viewState.results,
       sampled: feed.source,
@@ -224,17 +224,17 @@
     busy = false
   }
 
+  /** Reads the map the settings choose, unless it is the one shown. Its colors follow the theme
+   *  through the scene, so a theme change reads nothing. */
   async function loadBackground() {
     const key = mapKey(settings, geographic)
     if (backgroundKey === key) return
     backgroundKey = key
-    mapController?.abort()
-    const controller = (mapController = new AbortController())
     try {
-      const next = await mapOf(settings, geographic, controller.signal)
-      if (!controller.signal.aborted && !closed) background = next
+      const next = await mapOf(settings, geographic)
+      if (backgroundKey === key && !closed) background = next
     } catch (error) {
-      if (!controller.signal.aborted) {
+      if (backgroundKey === key && !closed) {
         backgroundKey = ''
         fail(error)
       }
@@ -242,7 +242,6 @@
   }
 
   $effect(() => {
-    void page.themeVersion
     void loadBackground()
   })
   $effect(() => {
@@ -395,7 +394,6 @@
       lifetime.abort()
       off()
       clock.stop()
-      mapController?.abort()
       feed.clear()
       cases.clear()
       page.destroy()

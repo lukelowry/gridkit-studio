@@ -28,6 +28,7 @@ import type { Monitor, Results } from '../../shared/messages.js'
 import type { SettingsReader } from '../../shared/settings.js'
 import { type Background, NO_MAP } from './maps.js'
 import { caseSpan, GAP } from './span.js'
+import type { Look } from './theme.js'
 
 /** Fits the case's own tables, so a background map does not widen the fit. */
 export function caseFit(data: Data, drawing: Drawing): Fit {
@@ -152,8 +153,6 @@ export function stylesOf(
   })
 }
 
-type Ground = Pick<Background, 'marks' | 'attribution'>
-
 /** The current time in epoch seconds when `enabled`, else null. Read once per view, so its
  *  scenes match. */
 export const daylightOf = (enabled: boolean): number | null => (enabled ? Date.now() / 1000 : null)
@@ -162,7 +161,7 @@ interface SceneExtras {
   readonly mappings?: Mappings
   readonly results?: Results
   readonly sampled?: (table: string, field: string) => Source | undefined
-  readonly background?: Ground
+  readonly background?: Background
   /** The sun's time in epoch seconds, or null for even lighting. */
   readonly daylight?: number | null
   /** Whether mapped colors show their legends. */
@@ -173,7 +172,7 @@ export function sceneOf(
   data: Data,
   definition: CaseDefinition,
   settings: SettingsReader,
-  theme: Theme,
+  look: Look,
   {
     mappings = {},
     results,
@@ -192,7 +191,7 @@ export function sceneOf(
     data,
     definition.drawing,
     settings,
-    theme,
+    look,
     stylesOf(definition, mappings, outputs, sampled, legends),
     background,
     daylight,
@@ -226,9 +225,9 @@ export function networkScene(
   data: Data,
   drawing: Drawing,
   settings: SettingsReader,
-  theme: Theme,
+  look: Look,
   styles: readonly Style[],
-  background: Ground = NO_MAP,
+  background: Background = NO_MAP,
   daylight: number | null = null,
 ): Scene {
   const sizes = networkSizes(settings)
@@ -236,14 +235,14 @@ export function networkScene(
   const height = styles.some((style) => style.option === 'elevation')
     ? settings.get('network.height') * caseSpan(data, drawing)
     : 0
-  const map = settings.get('network.colormap')
+  const colormap = settings.get('network.colormap')
   const edges = drawing.edges.map((edge): Mark => ({
     edges: [data.name, edge.table],
     name: edge.table,
     ...(edge.ends ? { ends: edge.ends } : {}),
     ...(edge.bends ? { bends: edge.bends } : {}),
     width: sizes.width,
-    ...options(edge.table, styles, map, 'edge', sizes, height),
+    ...options(edge.table, styles, colormap, 'edge', sizes, height),
   }))
   const vertices = drawing.vertices.map((vertex): Mark => ({
     vertices: [data.name, vertex.table],
@@ -251,19 +250,26 @@ export function networkScene(
     position: [field(vertex.position[0]), field(vertex.position[1])],
     label: settings.get('network.labels') && vertex.label ? field(vertex.label) : null,
     radius: sizes.radius,
-    ...options(vertex.table, styles, map, 'vertex', sizes, height),
+    ...options(vertex.table, styles, colormap, 'vertex', sizes, height),
   }))
   return {
+    // Lines of longitude and latitude show where no map does.
     space: drawing.geographic
-      ? { earth: { projection: settings.get('network.projection'), daylight } }
+      ? {
+          earth: {
+            projection: settings.get('network.projection'),
+            daylight,
+            graticule: !background.sources.length,
+          },
+        }
       : 'plane',
     layout: { stress: { gap: GAP } },
-    theme,
+    theme: look.theme,
     ease: settings.get('network.transitionDuration'),
     controls: { ...controls(settings, 'network'), cycle: true },
     // Map, then branches, then buses. latkit draws elevated rows lowest first, so overlaps
     // resolve correctly from any camera.
-    marks: [...background.marks, ...edges, ...vertices],
+    marks: [...background.marks(look.map), ...edges, ...vertices],
     // The map's attribution, also in exports; a subtitle because title text is large.
     title: background.attribution
       ? { text: '', subtitle: background.attribution, place: 'bottom-right' }

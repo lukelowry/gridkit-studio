@@ -102,7 +102,7 @@ try {
     'webview/latkit-worker.js',
     'licenses/latkit-NOTICES.md',
     'licenses/latkit-THIRD_PARTY.md',
-    'webview/maps/coastline.geojson.gz',
+    'webview/maps/natural-earth.geojson.gz',
   ]) {
     assert.ok(
       (await readFile(join(target, 'dist', asset))).byteLength > 0,

@@ -68,7 +68,7 @@
   )
   const scene = $derived.by(() => {
     void themeVersion
-    return plotScene(tiles, monitor, settings, nativeTheme(settings, 'monitor'))
+    return plotScene(tiles, monitor, settings, nativeTheme('monitor'))
   })
   const camera = $derived(plotCamera(monitor, timeWindow))
   const sampleId = $derived(hoveredId ?? monitor.id ?? ids[Math.min(traceIndex, ids.length - 1)])

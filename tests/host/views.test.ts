@@ -43,6 +43,28 @@ suite('Views', () => {
     assert.deepEqual(host.takeErrors(), [])
   })
 
+  test('let go of a mapping and a sort whose field leaves the case', async () => {
+    // A field Studio does not know is shown and can be mapped; then another tool drops it.
+    const source = JSON.parse(host.text) as { buses: { number: number; extension?: object }[] }
+    for (const bus of source.buses) bus.extension = { ...bus.extension, weight: bus.number / 10 }
+    await host.write(JSON.stringify(source))
+    await host.settled()
+    const field = { table: 'Bus', field: 'extension.weight' }
+    const kept = { table: 'Bus', field: 'init.Vr' }
+    host.session.map(field, ['vertexColor'])
+    host.session.map(kept, ['vertexSize'])
+    host.session.setTable({ type: 'Bus', columns: { Bus: ['name', field.field] } })
+    host.session.setTable({ order: { field: field.field, direction: 'descending' } })
+    assert.deepEqual(host.session.mappings, { vertexColor: field, vertexSize: kept })
+    await host.write(host.text)
+    await host.settled()
+    // Otherwise the Network would ask for the field on every open, and no menu could remove it.
+    assert.deepEqual(host.session.mappings, { vertexSize: kept })
+    assert.equal(host.session.table.order, undefined)
+    assert.deepEqual(host.studio.state(host.key).mappings, { vertexSize: kept })
+    assert.deepEqual(host.takeErrors(), [])
+  })
+
   test('reveal an element the Network does not draw by the bus it reaches', async () => {
     const summary = await host.studio.files.read(host.key)
     // The Network does not draw exciters; this one is on bus 30.

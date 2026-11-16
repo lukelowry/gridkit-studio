@@ -1,4 +1,4 @@
-import { Data, type Expr, field, type Fields, Patch, type Query } from 'latkit'
+import { Data, type Expr, field, type Fields, type Id, Patch, type Query } from 'latkit'
 
 import {
   type CaseRowsCursor,
@@ -146,11 +146,17 @@ export async function caseRowsPage(
   }
 }
 
+/** Orders texts as a reader expects: letters without regard to case, and digits by their value, so
+ *  `Bus 9` comes before `Bus 10`. */
+const TEXTS = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
 /** A revision's query dataset, released with its cache entry. */
 export class CaseQueries {
   readonly data = new Data('case-query')
   /** Per table, the fields already loaded into `data`. */
   readonly #loaded = new Map<string, Set<string>>()
+  /** Each table's ids ordered by a text field, by table, field and direction. */
+  readonly #orders = new Map<string, Id[]>()
   #destroyed = false
 
   constructor(private readonly document: CaseColumns) {
@@ -199,6 +205,31 @@ export class CaseQueries {
     for (const name of missing) loaded.add(name)
   }
 
+  /** The ids of `tableName` ordered by text field `field`. latkit's queries sort by numbers alone,
+   *  so text is ordered here and given to them as the rows to read. As in a query's own sort, rows
+   *  without a text come last in either direction and equal rows keep their order. */
+  #ordered(tableName: string, { field, direction }: NonNullable<TableRequest['order']>): Id[] {
+    const key = JSON.stringify([tableName, field, direction])
+    let ids = this.#orders.get(key)
+    if (!ids) {
+      const table = this.document.tables.get(tableName)!
+      const texts = table.read(field, 0, table.ids.length) as ArrayLike<unknown>
+      const text = (place: number) => {
+        const value = texts[place]
+        return typeof value === 'string' && value !== '' ? value : undefined
+      }
+      const sign = direction === 'ascending' ? 1 : -1
+      const places = Uint32Array.from(table.ids, (_, place) => place).sort((a, b) => {
+        const [first, second] = [text(a), text(b)]
+        if (first === undefined || second === undefined)
+          return first === second ? a - b : first === undefined ? 1 : -1
+        return sign * TEXTS.compare(first, second) || a - b
+      })
+      this.#orders.set(key, (ids = Array.from(places, (place) => table.ids[place]!)))
+    }
+    return ids
+  }
+
   async page(request: TableRequest, signal: AbortSignal): Promise<TablePage> {
     if (
       !Number.isSafeInteger(request.offset) ||
@@ -236,11 +267,21 @@ export class CaseQueries {
           : field(name).eq(typeof value === 'boolean' ? Number(value) : value)
       filter = filter ? filter.and(equal) : equal
     }
+    const { order } = request
+    const byText =
+      order && definition.fields.find((item) => item.name === order.field)?.kind === 'text'
+        ? this.#ordered(request.table, order)
+        : undefined
+    const asked = request.ids && new Set(request.ids)
     const kept: Query = {
       of: request.table,
-      ...(request.ids ? { ids: [...request.ids] } : {}),
+      ...(byText
+        ? { ids: asked ? byText.filter((id) => asked.has(id)) : byText }
+        : request.ids
+          ? { ids: [...request.ids] }
+          : {}),
       ...(filter ? { filter } : {}),
-      ...(request.order ? { sort: [[field(request.order.field), request.order.direction]] } : {}),
+      ...(order && !byText ? { sort: [[field(order.field), order.direction]] } : {}),
     }
     // An anchored page shows its anchor a few rows down. When the anchor is filtered out, the
     // requested offset is used and `anchored` is false.
@@ -262,6 +303,7 @@ export class CaseQueries {
   destroy(): void {
     this.#destroyed = true
     this.#loaded.clear()
+    this.#orders.clear()
     this.data.destroy()
   }
 }

@@ -100,9 +100,12 @@ export class Studio implements vscode.Disposable {
         this.reporter.report(error)
       }),
       this.files.changed.event((uri) => {
-        this.changed.fire(uri)
         const session = this.#sessions.get(uri)
-        if (!session || this.files.get(uri)?.stale) return
+        const file = this.files.get(uri)
+        // Before the views hear of the read, so none asks for a field the case no longer has.
+        if (session && file?.summary && !file.stale) session.reconcile(file.summary)
+        this.changed.fire(uri)
+        if (!session || file?.stale) return
         void session.reselect()
         session.restore('read')
       }),

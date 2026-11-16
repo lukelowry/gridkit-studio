@@ -1,13 +1,7 @@
 /** Context menu targets and the context keys that place menu items. */
 
-import {
-  type Entity,
-  type Field,
-  fieldDefinition,
-  networkRole,
-  tableDefinition,
-} from './document.js'
-import { channelsOf, type Mappings, NUMERIC } from './mappings.js'
+import { type Entity, type Field, fieldDefinition, tableDefinition } from './document.js'
+import { channelsOf, mappable, type Mappings, NUMERIC } from './mappings.js'
 import type { Monitor, Revision, Summary } from './messages.js'
 import { sameField } from './monitors.js'
 
@@ -41,10 +35,7 @@ export function mappingOf(
   field: Field | undefined,
 ) {
   return {
-    mappable:
-      !!field &&
-      !!networkRole(definition, field.table) &&
-      NUMERIC.has(fieldDefinition(definition, field.table, field.field)?.kind),
+    mappable: !!field && mappable(definition, field),
     mapped: !!field && channelsOf(mappings, field).length > 0,
   }
 }

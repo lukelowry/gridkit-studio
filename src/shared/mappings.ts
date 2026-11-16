@@ -1,7 +1,7 @@
 /** Network mappings: display channels and the numeric field each one shows. */
 
 import type { ValueRange } from './data.js'
-import type { Field } from './document.js'
+import { type CaseDefinition, type Field, fieldDefinition, networkRole } from './document.js'
 
 /** Every channel, vertex channels first; `option` is the latkit mark option it sets. */
 export const CHANNELS = {
@@ -30,6 +30,20 @@ export interface Mapping extends Field {
 export type Mappings = Readonly<Partial<Record<Channel, Mapping>>>
 
 export const NUMERIC: ReadonlySet<unknown> = new Set(['number', 'sampled'])
+
+/** Whether a Network channel can show `field`: a number field of a type the Network draws. */
+export const mappable = (definition: CaseDefinition, field: Field): boolean =>
+  !!networkRole(definition, field.table) &&
+  NUMERIC.has(fieldDefinition(definition, field.table, field.field)?.kind)
+
+/** `mappings` without those on a field the case no longer has, or that the Network can no longer
+ *  show. The same record when every mapping stays. */
+export function keptMappings(definition: CaseDefinition, mappings: Mappings): Mappings {
+  const kept = Object.entries(mappings).filter(([, mapping]) => mappable(definition, mapping))
+  return kept.length === Object.keys(mappings).length
+    ? mappings
+    : (Object.fromEntries(kept) as Mappings)
+}
 
 const sameField = (a: Field | undefined, b: Field): boolean =>
   a !== undefined && a.table === b.table && a.field === b.field

@@ -57,9 +57,10 @@ export function shownColumns(
   type: string,
 ): string[] {
   const fields = tableFields(summary, type)
-  return (
-    table?.columns?.[type]?.filter((field) => fields.includes(field)) ?? fields.slice(0, COLUMNS)
-  )
+  const chosen = table?.columns?.[type]
+  const kept = chosen?.filter((field) => fields.includes(field))
+  // Columns chosen for fields the case no longer has leave the first ones on show, not none.
+  return kept && (kept.length || !chosen?.length) ? kept : fields.slice(0, COLUMNS)
 }
 /** `table` with `change` applied. Switching type clears filters and sort, and a sort or value
  *  filter on a column no longer shown is dropped. */
@@ -85,6 +86,41 @@ export function changedTable(
     if (next[key] === undefined || next[key] === '') delete next[key]
   return next as TableState
 }
+/** A cell's text. A whole number is written out, since a count or a number that names something
+ *  must read exactly. Any other number shows six significant digits. */
+export function cellText(value: unknown): string {
+  return typeof value === 'number'
+    ? String(Number.isInteger(value) ? value : Number(value.toPrecision(6)))
+    : display(value, { native: true })
+}
+
+/** What the Case panel says in place of rows, or nothing: while it has rows, is reading them, or
+ *  could not read them, which a notification says. `answered` is whether its last page arrived. */
+export function emptyText(panel: {
+  readonly open: boolean
+  readonly read: boolean
+  readonly unreadable: boolean
+  readonly rows: number
+  readonly loading: boolean
+  readonly answered: boolean
+  readonly filtered: boolean
+}): string {
+  if (!panel.open) return 'Open a GridKit case.'
+  if (!panel.read) return panel.unreadable ? '' : 'Loading case…'
+  if (panel.rows || panel.loading || !panel.answered) return ''
+  return panel.filtered ? 'No elements match the filter.' : 'This case has no elements.'
+}
+
+/** `widths` grown to hold each of `measured`, so a column never narrows as other rows scroll into
+ *  view. The same record when nothing grew. */
+export function grown(
+  widths: Readonly<Record<string, number>>,
+  measured: Readonly<Record<string, number>>,
+): Readonly<Record<string, number>> {
+  const wider = Object.entries(measured).filter(([key, width]) => width > (widths[key] ?? 0))
+  return wider.length ? { ...widths, ...Object.fromEntries(wider) } : widths
+}
+
 export function display(value: unknown, { native: short = false } = {}): string {
   if (value && typeof value === 'object' && 'table' in value && 'id' in value)
     return short ? String(value.id) : entityLabel(value as Entity)

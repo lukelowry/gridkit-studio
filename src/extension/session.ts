@@ -12,7 +12,13 @@ import { type Entity, type Field, networkRole } from '../shared/document.js'
 import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { isCaseFile, savedKey, savedUri } from '../shared/ids.js'
-import { type Channel, channelsFor, mapped, type Mappings } from '../shared/mappings.js'
+import {
+  type Channel,
+  channelsFor,
+  keptMappings,
+  mapped,
+  type Mappings,
+} from '../shared/mappings.js'
 import {
   type Element,
   type Framing,
@@ -154,8 +160,24 @@ export class Session {
       this.#due = 'following'
       this.restore('following')
     }
+    const summary = this.#studio.files.get(this.uri)?.summary
+    if (summary) this.reconcile(summary)
     this.#save()
     this.#changed()
+  }
+
+  /** Makes the saved view state true to the case as it now reads. A mapping, sort or value filter
+   *  on a field the case no longer has is dropped, as the selection of an element that is gone is.
+   *  Otherwise the views would keep asking for that field, and nothing could remove it. The read
+   *  itself tells the views. */
+  reconcile(summary: Summary): void {
+    const mappings = keptMappings(summary.definition, this.#mappings)
+    const table = changedTable(summary, this.#table, {})
+    const sameTable = JSON.stringify(table) === JSON.stringify(this.#table)
+    if (mappings === this.#mappings && sameTable) return
+    this.#mappings = mappings
+    if (!sameTable) this.#table = table
+    this.#save()
   }
 
   get settings(): ViewSettings {

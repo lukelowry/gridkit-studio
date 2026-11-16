@@ -1,34 +1,31 @@
 <script lang="ts">
-  import type { Data, Gpu, Id, View } from 'latkit'
-  import { onMount, untrack } from 'svelte'
+  import type { Gpu, Id, View } from 'latkit'
+  import { untrack } from 'svelte'
 
   import type { ExactSample, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
-  import { type Plot as Plotted, type ViewState } from '../../shared/messages.js'
-  import { holdsPlot, plotName } from '../../shared/plots.js'
+  import { formatNumber } from '../../shared/format.js'
+  import type { Monitor, ViewState } from '../../shared/messages.js'
+  import { isRecorded, monitorName } from '../../shared/monitors.js'
   import { reader } from '../../shared/settings.js'
   import { clamp } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
   import type { Clock } from '../clock.js'
   import type { CanvasView } from '../latkit/canvas.js'
-  import { FrameReads, FrameWindow } from '../latkit/frames.js'
   import { bindInteractions } from '../latkit/interactions.js'
   import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
+  import { refresher, resultTiles } from '../latkit/results.js'
   import { plotScene } from '../latkit/scenes.js'
   import { nativeTheme } from '../latkit/theme.js'
-  import { nativeMenu } from '../menu.js'
-  import Icon from '../ui/Icon.svelte'
-  import { PlotFeed } from './feed.js'
-  import { plotCamera, plotRequest, sameWindow, SETTLE_MS } from './plot.js'
+  import { contextOf, nativeMenu } from '../menu.js'
+  import { plotCamera, sameWindow } from './plot.js'
 
   let {
-    plot,
-    app,
+    monitor,
+    viewState,
     gpu,
-    reads,
     active,
-    shown,
-    settling,
+    timeWindow,
     t,
     clock,
     themeVersion,
@@ -36,125 +33,101 @@
     onwindow,
     onerror,
   }: {
-    plot: Plotted
-    app: ViewState
+    monitor: Monitor
+    viewState: ViewState
     gpu: Gpu
-    reads: FrameReads
     active: boolean
-    shown: TimeRange
-    /** Whether a zoom or pan is under way, whose samples the plot reads once it settles. */
-    settling: boolean
+    timeWindow: TimeRange
     t: number
     clock: Clock
     themeVersion: number
+    /** Makes a view follow the playhead until the returned function is called. */
     register: (view: View) => () => void
     onwindow: (range: TimeRange) => void
     onerror: (error: unknown) => void
   } = $props()
-  const frames = new FrameWindow(untrack(() => reads))
-  let source = $state.raw<Data>()
-  let native = $state.raw<View>()
-  /** The device pixel columns the lane spans, which latkit draws its traces across: none until the
-   *  lane is laid out. */
-  let columns = $state(0)
-  let visible = $state(true)
-  let inspected = $state<Id>()
-  let trace = $state(0)
-  let exact = $state.raw<ExactSample>()
-  let focused = $state(false)
-  let failed = $state(false)
-  const title = $derived(plotName(app.summary?.definition, plot))
-  const settings = $derived(reader(app.settings))
-  const results = $derived(app.results)
-  const recorded = $derived(holdsPlot(results, plot))
-  const ids = $derived(
-    results?.outputs.find((output) => output.table === plot.table && output.field === plot.field)
-      ?.ids ?? [],
+  // The Monitor recreates a plot for new results, so its tiles stay fixed for its lifetime.
+  const tiles = untrack(() =>
+    resultTiles(viewState.results!.id, monitor.table, monitor.field, monitor.id),
   )
-  const enabled = $derived(active && visible)
+  let plotView = $state.raw<View>()
+  let lifetime = new AbortController()
+  let hoveredId = $state<Id>()
+  let traceIndex = $state(0)
+  let sample = $state.raw<ExactSample>()
+  let focused = $state(false)
+  const name = $derived(monitorName(viewState.summary?.definition, monitor))
+  const settings = $derived(reader(viewState.settings))
+  const results = $derived(viewState.results)
+  const recorded = $derived(isRecorded(results, monitor))
+  const frames = $derived(results?.frames ?? 0)
+  const ids = $derived(
+    results?.outputs.find(
+      (output) => output.table === monitor.table && output.field === monitor.field,
+    )?.ids ?? [],
+  )
   const scene = $derived.by(() => {
     void themeVersion
-    return source ? plotScene(source, plot, settings, nativeTheme(settings, 'monitor')) : undefined
+    return plotScene(tiles, monitor, settings, nativeTheme('monitor'))
   })
-  const framed = $derived(plotCamera(plot, shown))
-  const sampleId = $derived(inspected ?? plot.id ?? ids[Math.min(trace, ids.length - 1)])
+  const camera = $derived(plotCamera(monitor, timeWindow))
+  const sampleId = $derived(hoveredId ?? monitor.id ?? ids[Math.min(traceIndex, ids.length - 1)])
   const unit = $derived(
-    app.summary ? fieldDefinition(app.summary.definition, plot.table, plot.field)?.unit : undefined,
+    viewState.summary
+      ? fieldDefinition(viewState.summary.definition, monitor.table, monitor.field)?.unit
+      : undefined,
   )
-  /** The trace read at the playhead while the plot holds focus or the pointer. */
+  /** The hovered or focused trace's value at the playhead. */
   const reading = $derived.by(() => {
-    if (!exact || (!focused && inspected === undefined)) return ''
-    const value = exact.value === null ? 'No value' : String(exact.value)
-    return `${String(sampleId)}: ${value}${unit ? ` ${unit}` : ''} · ${exact.at} s`
+    if (!sample || (!focused && hoveredId === undefined)) return ''
+    const value = sample.value === null ? 'No value' : formatNumber(sample.value)
+    return `${String(sampleId)}: ${value}${unit ? ` ${unit}` : ''} · ${formatNumber(sample.at)} s`
   })
 
-  function observe(element: HTMLElement) {
-    let resized: ReturnType<typeof setTimeout> | undefined
-    const size = new ResizeObserver(([entry]) => {
-      const box = entry?.devicePixelContentBoxSize[0]
-      if (!box) return
-      const next = Math.max(1, box.inlineSize)
-      clearTimeout(resized)
-      // The lane's first width reads at once; a resize, once it settles.
-      if (!columns) columns = next
-      else resized = setTimeout(() => (columns = next), SETTLE_MS)
-    })
-    const intersection = new IntersectionObserver(([entry]) => {
-      if (entry) visible = entry.isIntersecting
-    })
-    size.observe(element, { box: 'device-pixel-content-box' })
-    intersection.observe(element)
+  /** Refetches the tiles as the run records more, each time after the last refresh has drawn. */
+  const grow = refresher(tiles, () => plotView?.done({ signal: lifetime.signal }))
+  let refreshed = untrack(() => frames)
+  $effect(() => {
+    if (frames === refreshed) return
+    refreshed = frames
+    untrack(grow)
+  })
+  $effect(() => {
+    if (plotView) plotView.camera = camera
+  })
+  let unregister: (() => void) | undefined
+  $effect(() => {
+    const view = plotView
+    if (!view) return
+    const off = (unregister = untrack(() => register(view)))
     return () => {
-      clearTimeout(resized)
-      size.disconnect()
-      intersection.disconnect()
+      off()
+      if (unregister === off) unregister = undefined
     }
-  }
-
-  const feed = new PlotFeed({
-    read: (request, version, signal) => frames.receive(request, version, signal),
-    drawn: (signal) => untrack(() => native)?.done({ signal }),
-    version: () => results?.frames,
-    received() {
-      failed = false
-      source = frames.data
-    },
-    failed(error) {
-      failed = true
-      onerror(error)
-    },
   })
   $effect(() => {
-    if (enabled && !settling && columns && results?.frames && recorded)
-      feed.want(plotRequest(results, plot, shown, columns))
-    else feed.stop()
-  })
-  $effect(() => {
-    if (native) native.camera = framed
-  })
-  $effect(() => {
-    if (!native || !source) return
-    const selected = app.selection
-    native.selection =
-      selected?.table === plot.table && ids.includes(selected.id)
-        ? [{ data: source.name, table: plot.table, ids: [selected.id] }]
+    if (!plotView) return
+    const selected = viewState.selection
+    plotView.selection =
+      selected?.table === monitor.table && ids.includes(selected.id)
+        ? [{ data: tiles.name, table: monitor.table, ids: [selected.id] }]
         : []
   })
   $effect(() => {
-    if (!enabled || !results || sampleId === undefined || (!focused && inspected === undefined))
+    if (!active || !results || sampleId === undefined || (!focused && hoveredId === undefined))
       return
     const controller = new AbortController()
     const request = {
       results: results.id,
-      table: plot.table,
-      field: plot.field,
+      table: monitor.table,
+      field: monitor.field,
       id: sampleId,
       at: t,
     }
     const timer = setTimeout(() => {
       void bridge.request('sample', request, controller.signal).then(
-        (sample) => {
-          if (!controller.signal.aborted) exact = sample
+        (next) => {
+          if (!controller.signal.aborted) sample = next
         },
         (error: unknown) => {
           if (!controller.signal.aborted) onerror(error)
@@ -167,22 +140,36 @@
     }
   })
 
+  function fetched(view: View): [number, number] | null | undefined {
+    const snapshot = view.snapshot(tiles.name)
+    try {
+      return snapshot?.describe().span
+    } finally {
+      snapshot?.destroy()
+    }
+  }
+
   function ready({ view, canvas }: CanvasView) {
-    native = view
-    const unregister = register(view)
-    const disconnect = bindInteractions(view, {
+    plotView = view
+    lifetime = new AbortController()
+    const disconnect = bindInteractions(view, canvas, {
       select(element) {
-        bridge.send({ kind: 'select', element: element ? { ...element, field: plot.field } : null })
+        bridge.send({
+          kind: 'select',
+          element: element ? { ...element, field: monitor.field } : null,
+        })
       },
-      open: (element) => bridge.send({ kind: 'open', element: { ...element, field: plot.field } }),
-      menu: (point, elements) => nativeMenu(canvas, point, elements, app, 'monitor', plot),
+      open: (element) =>
+        bridge.send({ kind: 'open', element: { ...element, field: monitor.field } }),
+      menu: (point, element) =>
+        nativeMenu(canvas, point, contextOf(viewState, 'monitor', element, monitor)),
       camera(next) {
-        if ('x' in next && !sameWindow(next.x, shown)) onwindow(next.x)
+        if ('x' in next && !sameWindow(next.x, timeWindow)) onwindow(next.x)
       },
       error: onerror,
     })
     const hover = view.on('hovered', ({ hit }) => {
-      inspected = hit?.row.id
+      hoveredId = hit?.row.id
     })
     const seek = (event: PointerEvent) => {
       if (
@@ -195,9 +182,7 @@
       const point = view.position([event.offsetX, event.offsetY])
       if (point) clock.seek(clamp(point[0], clock.state.span))
     }
-    const stop = (event: Event) => event.stopPropagation()
     canvas.addEventListener('pointermove', seek)
-    canvas.addEventListener('contextmenu', stop)
     const hooks = canvas as HTMLCanvasElement & {
       gridkitPlot?: () => unknown
       gridkitPoint?: (at: number, value: number) => unknown
@@ -207,9 +192,10 @@
       ...view.stats,
       motion: typeof view.scene.controls === 'object' ? view.scene.controls.motion : undefined,
       complete: view.complete,
+      waiting: view.waiting,
       selection: view.selection,
       hovered: view.hovered,
-      span: source?.describe().span,
+      span: fetched(view),
       camera: view.camera,
       at: view.at,
       work: gpu.work,
@@ -219,116 +205,95 @@
     hooks.gridkitPoint = (at, value) => view.screen([at, value, 0])
     hooks.gridkitRead = (point) => view.pick(point)
     return () => {
-      unregister()
+      lifetime.abort()
+      unregister?.()
       disconnect()
       hover()
       canvas.removeEventListener('pointermove', seek)
-      canvas.removeEventListener('contextmenu', stop)
       delete hooks.gridkitPlot
       delete hooks.gridkitPoint
       delete hooks.gridkitRead
-      if (native === view) native = undefined
+      if (plotView === view) plotView = undefined
     }
   }
-  function key(event: KeyboardEvent) {
+  /** Plot keys. Keys with Control, Command or Alt are left to VS Code, which switches monitors with
+   *  Control+Page Up and Page Down as the Terminal switches terminals. */
+  function keydown(event: KeyboardEvent) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return
     if (event.key === 'PageUp' || event.key === 'PageDown') {
-      trace = Math.max(0, Math.min(ids.length - 1, trace + (event.key === 'PageUp' ? -1 : 1)))
-      inspected = undefined
+      traceIndex = Math.max(
+        0,
+        Math.min(ids.length - 1, traceIndex + (event.key === 'PageUp' ? -1 : 1)),
+      )
+      hoveredId = undefined
     } else if (event.key === ' ') clock.act({ action: 'playPause' })
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
       clock.act({ action: 'step', value: event.key === 'ArrowLeft' ? -1 : 1 })
     else if (event.key === 'Home' && results?.domain) {
-      if (plot.range) bridge.send({ kind: 'fitValues', plot })
+      if (monitor.range) bridge.send({ kind: 'fitValues', monitor })
       onwindow(results.domain)
     } else return
     event.preventDefault()
     event.stopPropagation()
   }
-  onMount(() => () => {
-    feed.stop()
-    frames.clear()
-  })
 </script>
 
-<section class="lane" aria-label={title} {@attach observe}>
-  <header class="lane__head">
-    <h2 class="lane__name">{title}</h2>
-    <output class="lane__reading" aria-live={clock.state.status === 'playing' ? 'off' : 'polite'}>
-      {reading}
-    </output>
-    <button
-      class="c-icon-btn lane__close"
-      title="Remove plot"
-      aria-label={`Remove ${title}`}
-      onclick={() => bridge.send({ kind: 'removePlot', plot })}
-    >
-      <Icon name="close" />
-    </button>
-  </header>
-  <!-- svelte-ignore a11y_no_static_element_interactions (The native canvas supplies keyboard focus.) -->
-  <div
-    class="lane__surface"
-    onkeydowncapture={key}
-    onfocusin={() => (focused = true)}
-    onfocusout={() => (focused = false)}
-  >
-    {#if scene && source}
-      <LatkitCanvas
-        {gpu}
-        {scene}
-        sources={[source]}
-        at={t}
-        active={enabled}
-        camera={framed}
-        onready={ready}
-        {onerror}
-        label={`${title}. Page Up and Page Down read traces. Space plays or pauses. Left and Right step samples.`}
-      />
-    {:else if !failed && recorded}
-      <div class="c-empty"><p class="c-empty__text">Waiting for samples…</p></div>
+<!-- svelte-ignore a11y_no_static_element_interactions (The native canvas supplies keyboard focus.) -->
+<section
+  class="plot"
+  aria-label={name}
+  data-monitor={`${monitor.table}.${monitor.field}`}
+  onkeydowncapture={keydown}
+  onfocusin={() => (focused = true)}
+  onfocusout={() => (focused = false)}
+>
+  {#if recorded && frames}
+    <LatkitCanvas
+      {gpu}
+      {scene}
+      sources={[tiles]}
+      at={t}
+      {active}
+      {camera}
+      onready={ready}
+      {onerror}
+      label={`${name}. Page Up and Page Down read traces. Space plays or pauses. Left and Right step samples.`}
+    />
+    {#if reading}
+      <output class="plot__reading" aria-live={clock.state.status === 'playing' ? 'off' : 'polite'}>
+        {reading}
+      </output>
     {/if}
-  </div>
+  {:else}
+    <div class="c-empty"><p class="c-empty__text">Waiting for samples…</p></div>
+  {/if}
 </section>
 
 <style>
-  .lane {
+  .plot {
+    position: relative;
     display: flex;
     flex: 1 1 0;
     flex-direction: column;
     min-inline-size: 0;
-    min-block-size: 9rem;
+    min-block-size: 0;
     background: var(--color-surface-1);
   }
-  .lane__head {
-    display: flex;
-    gap: var(--spacing-xs);
-    align-items: baseline;
-    padding: var(--spacing-2xs) var(--spacing-sm) 0;
+
+  .plot__reading {
+    position: absolute;
+    inset-block-start: var(--spacing-xs);
+    inset-inline-end: var(--spacing-sm);
+    max-inline-size: calc(100% - 2 * var(--spacing-sm));
+    overflow: hidden;
+    padding: 0 var(--spacing-xs);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-bg) 85%, transparent);
     color: var(--color-text-2);
-    font-size: var(--text-sm);
-  }
-  .lane__name {
-    overflow: hidden;
-    margin: 0;
-    color: var(--color-text-1);
-    font-size: inherit;
-    font-weight: 600;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-  .lane__reading {
-    overflow: hidden;
-    margin-inline-start: auto;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    font-size: var(--text-xs);
     font-variant-numeric: tabular-nums;
-  }
-  .lane__close {
-    align-self: center;
-  }
-  .lane__surface {
-    position: relative;
-    flex: 1;
-    min-block-size: 0;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    pointer-events: none;
   }
 </style>

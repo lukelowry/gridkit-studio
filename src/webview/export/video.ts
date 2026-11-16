@@ -1,43 +1,40 @@
-import { type Camera, type Placed, Shot, type Video, View } from 'latkit'
+import { type Camera, type Placed, Shot, type Video } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
-import type { Framing, VideoView, ViewState } from '../../shared/messages.js'
-import { holdsPlot } from '../../shared/plots.js'
+import type { ExportStatus, Framing, VideoView, ViewState } from '../../shared/messages.js'
+import { isRecorded } from '../../shared/monitors.js'
+import type { ExportSettings } from '../../shared/settings.js'
 import { monitorWindow } from '../monitor/plot.js'
 
-export interface VideoSettings {
+/** What the Export view renders, as chosen in it. Unset times follow the Monitor's window and an
+ *  unset rate the playback speed. */
+export interface ExportChoices {
+  readonly format: 'video' | 'image'
   readonly views: readonly VideoView[]
   readonly layout: 'column' | 'row'
-  readonly width: number
-  readonly height: number
-  readonly frameRate: number
-  readonly quality: 'medium' | 'high' | 'very-high'
+  readonly from?: number
+  readonly to?: number
+  readonly rate?: number
 }
-/** The camera that frames in a picture `size` pixels wide and high what `framing`'s canvas showed:
- *  its own place, tilt and turn, zoomed by as much as the picture is larger than the canvas, so
- *  all the canvas showed fits. A zoom is log₂ of pixels per unit, so it scales by adding. */
+
+export const CHOICES: ExportChoices = { format: 'video', views: ['network'], layout: 'column' }
+
+/** An export, resolved: a video plays `timeRange` at `rate`, and an image shows its start. */
+export interface ExportJob {
+  readonly format: 'video' | 'image'
+  readonly views: readonly VideoView[]
+  readonly layout: 'column' | 'row'
+  readonly timeRange: TimeRange
+  readonly rate: number
+  readonly settings: ExportSettings
+}
+
+/** The camera that fits what `framing`'s canvas showed into a `width` by `height` picture. Zoom is
+ *  log₂ of pixels per unit, so scaling adds to it. */
 export function framed({ camera, size }: Framing, [width, height]: readonly [number, number]) {
   if (!('zoom' in camera)) return camera
   const scale = Math.min(width / size[0], height / size[1])
   return { ...camera, zoom: camera.zoom + Math.log2(scale) } satisfies Camera
-}
-
-export interface VideoJob extends VideoSettings {
-  readonly timeRange: TimeRange
-  readonly rate: number
-}
-export interface VideoProgress {
-  readonly frames: number
-  readonly total: number
-  readonly time: number
-}
-export const DEFAULTS: VideoSettings = {
-  views: ['network'],
-  layout: 'column',
-  width: 1920,
-  height: 1080,
-  frameRate: 30,
-  quality: 'high',
 }
 
 export function viewsOf({ summary }: ViewState): Array<{ value: VideoView; label: string }> {
@@ -50,73 +47,71 @@ export function viewsOf({ summary }: ViewState): Array<{ value: VideoView; label
     { value: 'monitor', label: 'Monitor' },
   ]
 }
+
+/** The span a video plays by default: the Monitor's window within the run. */
 export function videoTimes(state: ViewState): TimeRange | undefined {
-  const held = state.results?.domain
-  if (!held || held[1] <= held[0]) return undefined
-  const shown = monitorWindow(state.results, state.window)
-  const range: TimeRange = [Math.max(held[0], shown[0]), Math.min(held[1], shown[1])]
+  const domain = state.results?.domain
+  if (!domain || domain[1] <= domain[0]) return undefined
+  const timeWindow = monitorWindow(state.results, state.window)
+  const range: TimeRange = [Math.max(domain[0], timeWindow[0]), Math.min(domain[1], timeWindow[1])]
   return range[0] < range[1] ? range : undefined
 }
-/** Whether `job` makes a video: a size at least one encoder block, which latkit rounds to whole
- *  blocks, and a positive rate over a span. */
-function valid(job: VideoJob): boolean {
-  return (
-    Number.isFinite(job.width) &&
-    job.width >= 4 &&
-    Number.isFinite(job.height) &&
-    job.height >= 2 &&
-    Number.isFinite(job.frameRate) &&
-    job.frameRate > 0 &&
-    ['medium', 'high', 'very-high'].includes(job.quality) &&
-    Number.isFinite(job.rate) &&
-    job.rate > 0 &&
-    job.timeRange.every(Number.isFinite) &&
-    job.timeRange[1] > job.timeRange[0]
+
+/** Frames in a video of `job`: one per frame interval, plus one so it ends on its last time. */
+export const framesOf = ({ timeRange: [from, to], rate, settings }: ExportJob) =>
+  Math.ceil(((to - from) / rate) * settings['export.frameRate']) + 1
+
+/** Why `job` cannot be exported, or nothing when it can. */
+export function problemOf(job: ExportJob, state: ViewState): string | undefined {
+  if (!job.views.length) return 'Choose a view to export.'
+  if (
+    job.views.includes('monitor') &&
+    !state.shown?.some((each) => isRecorded(state.results, each))
   )
+    return 'The Monitor shows no recorded signal.'
+  if (job.format === 'image') return undefined
+  const [from, to] = job.timeRange
+  if (!(Number.isFinite(from) && Number.isFinite(to) && to > from))
+    return 'Choose a time span that ends after it starts.'
+  if (!(job.rate > 0 && Number.isFinite(job.rate))) return 'Choose a positive speed.'
+  if (!Number.isSafeInteger(framesOf(job))) return 'The video would have too many frames.'
+  return undefined
 }
 
-export function exportable(job: VideoJob | undefined, state: ViewState): job is VideoJob {
-  return (
-    !!job &&
-    !!state.summary &&
-    !!job.views.length &&
-    (!job.views.includes('monitor') ||
-      !!state.plots?.some((plot) => holdsPlot(state.results, plot))) &&
-    valid(job)
-  )
-}
-
-/** Records `job`, which `exportable` takes, of the views `placed` to `output`. */
+/** Encodes a video of `job` from the `placed` views to `output`. `prepare` loads each time's frames
+ *  and moves every view there. */
 export async function exportVideo(
-  job: VideoJob,
+  job: ExportJob,
   placed: readonly Placed[],
   output: WritableStream<Uint8Array>,
   prepare: (at: number, signal: AbortSignal) => Promise<void>,
   signal: AbortSignal,
-  progress: (value: VideoProgress) => void,
+  progress: (status: Omit<ExportStatus, 'name'>) => void,
 ): Promise<void> {
+  const { settings } = job
   const [from, to] = job.timeRange
-  const total = Math.max(1, Math.ceil(((to - from) / job.rate) * job.frameRate))
-  if (!Number.isSafeInteger(total)) throw new Error('The video contains too many frames.')
-  const bitrate =
-    job.width *
-    job.height *
-    job.frameRate *
-    { medium: 0.08, high: 0.15, 'very-high': 0.25 }[job.quality]
-  const views = placed.map((each) => (each instanceof View ? each : each.view))
-  const shot = new Shot([job.width, job.height], { views: placed, capture: 'now' })
+  const [width, height, fps] = [
+    settings['export.width'],
+    settings['export.height'],
+    settings['export.frameRate'],
+  ]
+  const total = framesOf(job)
+  const bitrate = width * height * fps * settings['export.bitsPerPixel']
+  const shot = new Shot([width, height], {
+    views: placed,
+    scale: settings['export.scale'],
+    capture: 'now',
+  })
   let video: Video | undefined
   try {
     signal.throwIfAborted()
-    video = shot.video({ fps: job.frameRate, bitrate, output, signal })
+    video = shot.video({ fps, bitrate, output, signal })
     for (let frame = 0; frame < total; frame++) {
       signal.throwIfAborted()
-      const at = Math.min(to, from + (frame / job.frameRate) * job.rate)
-      await prepare(at, signal)
+      await prepare(Math.min(to, from + (frame / fps) * job.rate), signal)
       signal.throwIfAborted()
-      for (const view of views) view.at = at
       await video.frame()
-      progress({ frames: frame + 1, total, time: at })
+      progress({ done: frame + 1, total })
     }
     await video.finish()
   } catch (error) {
@@ -124,12 +119,4 @@ export async function exportVideo(
     else await output.abort(error).catch(() => {})
     throw error
   }
-}
-
-export function videoOutput(
-  write: (bytes: Uint8Array) => Promise<void>,
-  finish: () => Promise<void>,
-  abort: (reason: unknown) => Promise<void>,
-): WritableStream<Uint8Array> {
-  return new WritableStream<Uint8Array>({ write, close: finish, abort })
 }

@@ -1,17 +1,17 @@
-/** The most buffers a webview message keeps. VS Code sends one as its handle, its text and one
- *  argument per buffer, and counts the arguments in a byte: buffers past these arrive empty. */
+/** The most buffers a webview message can carry. VS Code counts a message's arguments (handle,
+ *  text, one per buffer) in a byte, and buffers past this arrive empty. */
 const MESSAGE_BUFFERS = 253
 
-/** Whether `value` is an array or a plain object: what a message is built of, which is walked and
- *  copied part by part. Anything else, as a Map, crosses as it is. */
+/** Whether `value` is an array or a plain object, which are walked and copied. Anything else, such
+ *  as a Map, is passed through unchanged. */
 const plain = (value: unknown): value is object =>
   Array.isArray(value) ||
   (!!value &&
     typeof value === 'object' &&
     [Object.prototype, null].includes(Object.getPrototypeOf(value) as object | null))
 
-/** `message` as a webview can receive it whole. One that holds more buffers than VS Code sends has
- *  its arrays copied into one buffer, each a view of its own there. */
+/** `message`, with its typed arrays copied into one shared buffer when it has more buffers than a
+ *  webview message can carry. */
 export function packed<T>(message: T): T {
   const buffers = new Set<ArrayBufferLike>()
   const offsets = new Map<ArrayBufferView, number>()
@@ -21,7 +21,7 @@ export function packed<T>(message: T): T {
       buffers.add(value.buffer)
       if (offsets.has(value)) return
       offsets.set(value, bytes)
-      // Every view starts eight-aligned, as a Float64Array or BigInt64Array must.
+      // Align every view to 8 bytes, as Float64Array and BigInt64Array require.
       bytes += Math.ceil(value.byteLength / 8) * 8
     } else if (plain(value)) for (const item of Object.values(value)) find(item)
   }

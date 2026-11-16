@@ -1,5 +1,4 @@
-/** GridKit results files: their CSV, decoded once into a store of Studio's own, read in pages of
- *  frames. */
+/** GridKit results files: the CSV decoded once into Studio's store, then read in pages. */
 
 export { ResultCache } from './cache.js'
 export { closed, ResultsFile } from './file.js'

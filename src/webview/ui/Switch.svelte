@@ -1,6 +1,4 @@
-<!-- @component
-  Bindable switch row with an On/Off readout. Extra attributes go to the button.
--->
+<!-- @component A switch row with an On/Off readout. Extra attributes go to the button. -->
 <script lang="ts">
   import type { HTMLButtonAttributes } from 'svelte/elements'
 
@@ -9,7 +7,7 @@
     checked = $bindable(false),
     ...rest
   }: Omit<HTMLButtonAttributes, 'children' | 'class'> & {
-    /** The setting's name, shown left and used as the accessible name. */
+    /** The setting's name, also the accessible name. */
     readonly label: string
     checked?: boolean
   } = $props()
@@ -41,7 +39,6 @@
     min-inline-size: 3ch;
   }
 
-  /* Off reads in the caption color. */
   .switch[aria-checked='false'] .c-row__value {
     color: var(--color-text-2);
   }
@@ -74,13 +71,8 @@
     background: var(--color-on-primary);
   }
 
-  @media (forced-colors: active) {
-    .switch[aria-checked='true'] .switch__track {
-      background: Highlight;
-    }
-
-    .switch[aria-checked='true'] .switch__knob {
-      background: HighlightText;
-    }
+  /* High contrast button backgrounds can match the page, so the on track keeps an outline. */
+  :global(body.vscode-high-contrast) .switch[aria-checked='true'] .switch__track {
+    border-color: var(--vscode-contrastActiveBorder, var(--color-text-1));
   }
 </style>

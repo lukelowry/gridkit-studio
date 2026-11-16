@@ -6,17 +6,14 @@ import { dirname, join } from '../platform/path.js'
 
 let loading: Promise<void> | undefined
 
-/** latkit's module, compiled once per worker from `wasmPath` and shared by every request; a load
- *  that fails is tried again by the next. */
+/** Compiles latkit's module from `wasmPath` once per worker. A failed load is retried on the next
+ *  call. */
 export function loadNative(wasmPath: string): Promise<void> {
   return (loading ??= (async () => {
     const bytes = await readFile(wasmPath)
     const wasm = await WebAssembly.compile(bytes)
     const assets = browser
       ? {
-          shaders: URL.createObjectURL(
-            new Blob([await readFile(join(dirname(wasmPath), 'latkit-shaders.bin'))]),
-          ),
           worker: await readFile(join(dirname(wasmPath), 'latkit-worker.js')).then((source) => {
             const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
             return () => new globalThis.Worker(url)

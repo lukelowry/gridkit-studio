@@ -6,7 +6,7 @@
 !dist/worker.mjs
 !dist/solver.mjs
 !dist/solver/**
-!dist/webview/*.{js,css,wasm,bin}
+!dist/webview/*.{js,css,wasm}
 !dist/webview/maps/*.geojson.gz
 !dist/licenses/*.md
 !LICENSE

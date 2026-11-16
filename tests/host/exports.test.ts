@@ -1,4 +1,4 @@
-/** Export files: an export replaces its destination only once it completes. */
+/** An export replaces its destination only once it completes. */
 
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'

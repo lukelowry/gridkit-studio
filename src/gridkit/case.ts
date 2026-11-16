@@ -1,11 +1,11 @@
-/** A loaded case: its tables as column chunks, what views project of them, and the file as read. */
-import { printParseErrorCode, visit } from 'jsonc-parser'
+/** A loaded case: its tables as column chunks, the columns views read, and the source bytes. */
 import { type Id, reference } from 'latkit'
 
-import { createHash } from '../platform/crypto.js'
+import { text } from '../platform/bytes.js'
+import { sha256 } from '../platform/crypto.js'
 import type { CaseDefinition, Entity } from '../shared/document.js'
 import { LABEL, NETWORK_POSITION } from '../shared/document.js'
-import type { SourceError, SourceProblem } from '../shared/errors.js'
+import type { SourceProblem } from '../shared/errors.js'
 import { problem } from '../shared/errors.js'
 import type { Value } from '../shared/messages.js'
 import {
@@ -15,12 +15,10 @@ import {
   type Column,
   type DecodeKind,
   deferred,
-  isUint32,
+  isId,
   isValid,
-  radixOrder,
   readColumn,
   rowCount,
-  utf8,
   valueAt,
 } from './columns.js'
 import {
@@ -32,7 +30,7 @@ import {
   type Shape,
   withFound,
 } from './definition.js'
-import type { ProjectedDocument, ProjectedTable } from './document.js'
+import type { CaseColumns, CaseTable } from './document.js'
 import { charsAt } from './offsets.js'
 import {
   ARRAYS,
@@ -47,6 +45,7 @@ import {
   parseNumber,
   Parser,
   type Records,
+  type Repeat,
   scan,
   TEXT,
 } from './parse.js'
@@ -58,39 +57,36 @@ export interface Table {
   readonly starts: Uint32Array
   readonly ids: Column
   readonly fields: ReadonlyMap<string, Column>
-  /** Each row's record in its array. */
   readonly records: Uint32Array
-  /** By each member GridKit refuses a record without that a record here does not write, the rows
-   *  of those that do not. */
+  /** Per required member that some record lacks, the rows that lack it. */
   readonly lacks: ReadonlyMap<string, Uint32Array>
 }
 
-/** A field the catalog does not know, and the first row that has it. */
 interface FoundField {
   readonly type: string
   readonly field: string
   readonly row: number
 }
 
-/** An array's records, and each one's `mon` value as a start and end; 0, 0 where it has none. */
+/** An array's records and each record's `mon` value as a start and end; 0, 0 when absent. */
 interface RecordArray extends Records {
   readonly mons: Uint32Array
 }
 
-/** What a case keeps alive per byte of its source, and per field and per record of its tables. */
+/** Estimated memory per source byte, per field of a record, and per record. */
 const SOURCE_BYTES = 4
 const FIELD_BYTES = 24
 const RECORD_BYTES = 80
 
-/** The fingerprint of the case `file` holds, as `catalog` reads it. */
-export const versionOf = (catalog: Catalog, file: Uint8Array): string =>
-  createHash('sha256').update(catalog.text).update(file).digest('hex').slice(0, 32)
+/** Hashes the catalog text with the file's hash, so the file is hashed in place, never copied. */
+export const versionOf = async (catalog: Catalog, file: Uint8Array): Promise<string> =>
+  (await sha256(catalog.text, await sha256(file))).slice(0, 32)
 
 export class Case {
-  #projection?: ProjectedDocument
+  #columns?: CaseColumns
 
-  /** The case `file` holds, its UTF-8 bytes, read once from its first record to its last. `name`
-   *  names it when its header gives none, and `version` is its fingerprint, when already taken. */
+  /** Parses a case in one pass. Throws for anything GridKit would reject, listing every rejected
+   *  record and duplicate id with its position, in file order. */
   static async parse(
     file: Uint8Array,
     catalog: Catalog,
@@ -101,82 +97,63 @@ export class Case {
     }: { readonly name?: string; readonly signal?: AbortSignal; readonly version?: string } = {},
   ): Promise<Case> {
     signal?.throwIfAborted()
-    // One view of the bytes, which whatever reads their text reads it from.
     const bytes = file
     let layout: Layout
     try {
       layout = await scan(bytes, signal)
     } catch (error) {
+      // Report invalid JSON at the character where it fails.
       const byte = (error as { byte?: number }).byte
       if (byte === undefined) throw error
-      // A file that is not JSON is read again the slower way, which says why as an editor does,
-      // unless it nests deeper than that way reads.
-      try {
-        syntax(utf8(bytes, 0, bytes.length))
-      } catch (reason) {
-        if (!(reason instanceof RangeError)) throw reason
-      }
       throw Object.assign(error as Error, { offset: charsAt(bytes, byte) })
     }
-    try {
-      const parser = new Parser(catalog, bytes, layout)
-      const work = new Turns(signal)
-      for (const array of ARRAYS) {
-        const records = layout.arrays[array]?.starts.length ?? 0
-        for (let record = 0; record < records; record++) {
-          if ((record & STEP_RECORDS) === 0) await work.step()
-          parser.record(array, record)
-        }
+    const parser = new Parser(catalog, bytes, layout)
+    const work = new Turns(signal)
+    for (const array of ARRAYS) {
+      const records = layout.arrays[array]?.starts.length ?? 0
+      for (let record = 0; record < records; record++) {
+        if ((record & STEP_RECORDS) === 0) await work.step()
+        parser.record(array, record)
       }
-      const parsed = parser.finish()
-      // What it refuses fails the read, saying where the first refusal is, and the rest.
-      const [first] = parsed.problems
-      if (first)
-        throw problem('invalid-input', first.message, {
-          problems: parsed.problems,
-          target: first.target,
-        })
-      return built(bytes, layout, parsed, catalog, name, version ?? versionOf(catalog, bytes))
-    } catch (error) {
-      // A record the parse refused, or the second of an id, says so where it is, as each other
-      // record it refused does.
-      const { target, problems } = error as SourceError & { problems?: readonly SourceProblem[] }
-      if (target?.kind !== 'path') throw error
-      const at = ({ path: [array, record] }: SourceProblem['target']) =>
-        recordSpan(bytes, layout.arrays[array as ArrayName], record)
-      throw Object.assign(error as Error, at(target), {
-        problems: problems?.flatMap(({ message, target }) => {
-          const place = at(target)
-          return place ? [{ message, ...place }] : []
-        }),
-      })
     }
+    const parsed = parser.finish()
+    version ??= await versionOf(catalog, bytes)
+    const { kase, repeated } = built(bytes, layout, parsed, catalog, name, version)
+    const problems = [...parsed.problems, ...repeated]
+    if (!problems.length) return kase
+    const placed = problems
+      .flatMap(({ message, target: { path } }) => {
+        const place = recordSpan(bytes, layout.arrays[path[0] as ArrayName], path[1])
+        return place ? [{ message, ...place }] : []
+      })
+      .sort((a, b) => a.offset - b.offset)
+    const [first] = placed
+    throw problem('invalid-input', (first ?? problems[0]!).message, {
+      ...(first && { offset: first.offset, length: first.length }),
+      problems: placed,
+    })
   }
 
   constructor(
     readonly name: string,
     readonly version: string,
     readonly catalog: Catalog,
-    /** The catalog's types, with the classes and fields this case has that it does not know. */
+    /** The catalog's types plus the classes and fields this case adds. */
     readonly definition: CaseDefinition,
     readonly tables: ReadonlyMap<string, Table>,
-    /** The file as read. */
     readonly file: Uint8Array,
     readonly arrays: Readonly<Partial<Record<ArrayName, RecordArray>>>,
-    /** The case's own members, in file order: its header, params, arrays and monitors. */
     readonly members: readonly Member[],
-    /** Every field GridKit reads that the catalog does not know, where it is first. An extension's
-     *  members, whose keys GridKit's format leaves to each tool, are columns all the same. */
+    /** Unknown fields outside `extension`, each with its first row. */
     readonly found: readonly FoundField[],
+    readonly repeats: readonly Repeat[],
   ) {}
 
-  /** The case's own member `name`, as `monitors`, where GridKit writes what the case records. */
   member(name: string): Member | undefined {
     return this.members.find((member) => member.name === name)
   }
 
-  /** About how many bytes the case keeps alive, conservatively: its source and the spans into it,
-   *  then per record its columns, and the indexes and graph built over its records. */
+  /** A conservative estimate of the memory the case keeps alive. */
   get bytes(): number {
     let bytes = this.file.byteLength * SOURCE_BYTES
     for (const table of this.tables.values())
@@ -198,17 +175,15 @@ export class Case {
     return valueAt(column.chunks[chunk]!, row - column.starts[chunk]!)
   }
 
-  /** A row's native identity, as the file writes it. */
   native(table: Table, row: number): string | number {
-    const chunk = chunkAt(table.starts, row)
-    return table.ids.chunks[chunk]![row - table.starts[chunk]!] as Id
+    return nativeOf(table, row)
   }
 
-  /** The row with this native identity, or -1. */
+  /** The first row with this id, or -1. */
   rowOf(table: Table, native: string | number): number {
     if (table.shape.identity.type === 'text')
       return typeof native === 'string' ? textIds(table).row(native) : -1
-    return typeof native === 'number' && isUint32(native) ? numberIds(table).row(native) : -1
+    return typeof native === 'number' && isId(native) ? numberIds(table).row(native) : -1
   }
 
   entity(table: Table, row: number): Entity {
@@ -221,16 +196,16 @@ export class Case {
     return row < 0 ? null : { table: table!, row }
   }
 
-  projected(): ProjectedDocument {
-    if (this.#projection) return this.#projection
-    const tables = new Map<string, ProjectedTable>()
+  columns(): CaseColumns {
+    if (this.#columns) return this.#columns
+    const tables = new Map<string, CaseTable>()
     for (const [name, table] of this.tables) {
       const ids = identities(table)
       tables.set(name, {
         ids,
         read: (field, offset, count) => {
           if (field === LABEL) return ids.slice(offset, offset + count).map(String)
-          // Where no field places a vertex, the layout does.
+          // No field positions vertices, so the layout does.
           if (NETWORK_POSITION.includes(field)) return new Float64Array(count).fill(NaN)
           const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
           if (!column) throw problem('invalid-input', 'Unknown source field: ' + name + '.' + field)
@@ -244,14 +219,11 @@ export class Case {
         },
       })
     }
-    return (this.#projection = { key: this.version, definition: this.definition, tables })
+    return (this.#columns = { key: this.version, definition: this.definition, tables })
   }
 }
 
-/** The case `parsed` read of `file`, which `layout` lays out, of the fingerprint `version`;
- *  `fallback` names it when its header gives none. Each table's columns are put in place: its
- *  fields', then its ports', as references, then those of the members the catalog does not know.
- *  Its identities are indexed, so an id two rows share fails it. */
+/** Builds the case, with a problem for each record that repeats an earlier id. */
 function built(
   file: Uint8Array,
   layout: Layout,
@@ -259,7 +231,7 @@ function built(
   catalog: Catalog,
   fallback: string,
   version: string,
-): Case {
+): { kase: Case; repeated: SourceProblem[] } {
   const tables = new Map<string, Table>()
   const found: FoundField[] = []
   const filling = parsed.tables.map((read) => {
@@ -271,8 +243,7 @@ function built(
       ]),
     )
     const unknown = read.found.map((column) => foundField(file, column, starts))
-    // GridKit's format leaves an extension's keys to each tool, so one Studio does not know is
-    // another tool's, not a mistake.
+    // GridKit leaves `extension` keys to each tool, so an unknown one is not an error.
     for (const { plan, row } of unknown)
       if (plan.path[0] !== 'extension') found.push({ type: read.shape.type, field: plan.name, row })
     const table: Table = {
@@ -295,7 +266,7 @@ function built(
     tables.set(table.shape.type, table)
     return { read, table, fields, unknown }
   })
-  // Ports become references once every table they can name is in place.
+  // Ports resolve to references once every table exists.
   for (const { read, table, fields } of filling)
     read.shape.ports.forEach((port, i) =>
       fields.set(
@@ -305,9 +276,18 @@ function built(
     )
   for (const { fields, unknown } of filling)
     for (const { plan, column } of unknown) fields.set(plan.name, column)
-  for (const table of tables.values())
-    if (table.shape.identity.type === 'text') textIds(table)
-    else numberIds(table)
+  const repeated: SourceProblem[] = []
+  for (const table of tables.values()) {
+    const { array, identity } = table.shape
+    if (array === null) continue
+    const named = identity.type === 'text'
+    for (const row of (named ? textIds(table) : numberIds(table)).repeated)
+      repeated.push({
+        code: 'invalid-input',
+        message: `Two rows share the ${named ? 'id' : 'number'} ${nativeOf(table, row)}.`,
+        target: { kind: 'path', path: [array, table.records[row]!] },
+      })
+  }
   const arrays: Partial<Record<ArrayName, RecordArray>> = {}
   for (const array of ARRAYS) {
     const records = layout.arrays[array]
@@ -315,7 +295,7 @@ function built(
   }
   const named = tables.get(CASE)!.fields.get('header.case_name')
   const name = named && valueAt(named.chunks[0]!, 0)
-  return new Case(
+  const kase = new Case(
     typeof name === 'string' && name !== '' ? name : fallback,
     version,
     catalog,
@@ -328,10 +308,11 @@ function built(
     arrays,
     layout.members,
     found,
+    parsed.repeats,
   )
+  return { kase, repeated }
 }
 
-/** Where record `record` of `records` lies in `file`. */
 function recordSpan(
   file: Uint8Array,
   records: Records | undefined,
@@ -343,45 +324,6 @@ function recordSpan(
   return { offset, length: charsAt(file, records.ends[record]!) - offset }
 }
 
-/** Throws why `text` is not JSON, as an editor says it: the first problem, at its place in the
- *  text, or a key an object repeats. */
-function syntax(text: string): void {
-  const objects: Set<string>[] = []
-  visit(
-    text,
-    {
-      onObjectBegin: () => {
-        objects.push(new Set())
-      },
-      onObjectEnd: () => {
-        objects.pop()
-      },
-      onObjectProperty: (name, offset, length) => {
-        const keys = objects.at(-1)!
-        if (keys.has(name))
-          throw Object.assign(problem('invalid-input', 'Duplicate JSON property: ' + name), {
-            offset,
-            length,
-          })
-        keys.add(name)
-      },
-      onError: (error, offset, length) => {
-        // `PropertyNameExpected` reads as `Invalid JSON: property name expected`.
-        const description = printParseErrorCode(error).replace(/(?<=[a-z])(?=[A-Z])/g, ' ')
-        throw Object.assign(
-          problem('invalid-input', 'Invalid JSON: ' + description.toLowerCase()),
-          {
-            offset,
-            length,
-          },
-        )
-      },
-    },
-    { disallowComments: true, allowTrailingComma: false },
-  )
-}
-
-/** A field's column, of the chunks its values were read in, decoded on its first read. */
 function columnOf(kind: DecodeKind, parts: readonly IndexedChunk[], starts: Uint32Array): Column {
   const decoded = deferred(() => parts.map((part) => part.read()))
   return {
@@ -391,16 +333,14 @@ function columnOf(kind: DecodeKind, parts: readonly IndexedChunk[], starts: Uint
     get chunks() {
       return decoded()
     },
-    // Each chunk's own, found as it decoded, as rows of the table.
+    // As table rows.
     wrong: deferred(() =>
       parts.flatMap((part, c) => Array.from(part.wrong(), (at) => starts[c]! + at)),
     ),
   }
 }
 
-/** A member the catalog does not know as a field of its table, typed by what its rows write:
- *  numbers, booleans or strings as they are, anything else, or a mix of them, as its JSON text. A
- *  null is a missing value, which a column of any type holds. Decoded on its first read. */
+/** An unknown member as a field: number, boolean or text when uniform, otherwise raw JSON text. */
 function foundField(
   file: Uint8Array,
   { path, rows, spans, kinds }: FoundColumn,
@@ -414,14 +354,14 @@ function foundField(
         : kinds === TEXT || kinds === 0
           ? 'text'
           : 'json'
-  // A key with a point in it is quoted, so it never reads as a path through a known record key.
+  // Quote keys that contain a dot, so they are never read as a path.
   const name = path.map((key) => (key.includes('.') ? JSON.stringify(key) : key)).join('.')
   const cell = (value: number, end: number): Value => {
     if (file[value] === 0x6e) return null
     if (type === 'number') return parseNumber(file, value, end)
     if (type === 'boolean') return file[value] === 0x74
     if (type === 'text') return jsonText(file, value + 1, end - 1)
-    return JSON.stringify(JSON.parse(utf8(file, value, end)))
+    return text(file, value, end)
   }
   const decode = deferred(() => {
     let at = 0
@@ -460,9 +400,7 @@ function startsOf(chunks: readonly Chunk[]): Uint32Array {
   return starts
 }
 
-/** A port's column, of the chunks its values were read in: each row's reference to the row of
- *  `target` it names. One that names no row `target` has holds none, and is wrong, as one that
- *  does not read is. */
+/** A port column. A value that names no row of `target` becomes empty and counts as wrong. */
 function references(parts: readonly IndexedChunk[], starts: Uint32Array, target: Table): Column {
   const decode = deferred(() => {
     const ids = numberIds(target)
@@ -491,6 +429,11 @@ function references(parts: readonly IndexedChunk[], starts: Uint32Array, target:
   }
 }
 
+function nativeOf(table: Table, row: number): string | number {
+  const chunk = chunkAt(table.starts, row)
+  return table.ids.chunks[chunk]![row - table.starts[chunk]!] as Id
+}
+
 const nativeIds = new WeakMap<Column, readonly Id[]>()
 function identities(table: Table): readonly Id[] {
   let ids = nativeIds.get(table.ids)
@@ -502,13 +445,6 @@ function identities(table: Table): readonly Id[] {
   }
   return ids
 }
-
-/** What a failure to index `table` says of its row `row`, which repeats an id: the record it is,
- *  as a parse problem names one. */
-const repeated = (table: Table, row: number) =>
-  table.shape.array === null
-    ? {}
-    : ({ target: { kind: 'path', path: [table.shape.array, table.records[row]!] } } as const)
 
 const TEXT_IDS = new WeakMap<Column, TextIds>()
 const NUMBER_IDS = new WeakMap<Column, NumberIds>()
@@ -525,44 +461,46 @@ function numberIds(table: Table): NumberIds {
   return ids
 }
 
+/** Maps text ids to the first row with each id. */
 class TextIds {
   readonly #rows = new Map<string, number>()
+  /** Ascending rows whose id an earlier row already has. */
+  readonly repeated: number[] = []
+
   constructor(table: Table) {
     table.ids.chunks.forEach((chunk, index) => {
       for (let at = 0; at < chunk.length; at++) {
         const value = chunk[at]
         if (typeof value !== 'string') continue
         const row = table.starts[index]! + at
-        if (this.#rows.has(value))
-          throw problem(
-            'invalid-input',
-            'Two rows share the id ' + value + '.',
-            repeated(table, row),
-          )
-        this.#rows.set(value, row)
+        if (this.#rows.has(value)) this.repeated.push(row)
+        else this.#rows.set(value, row)
       }
     })
   }
+
   row(id: string): number {
     return this.#rows.get(id) ?? -1
   }
 }
 
+/** Maps numeric ids to the first row with each id: a dense array of row + 1 at key - min, or sorted
+ *  keys with their rows. */
 class NumberIds {
-  /** Dense: row + 1 at key - min. Sparse: sorted keys and their rows. */
   readonly #min: number
   readonly #dense: Uint32Array | null
-  readonly #keys: Uint32Array
+  readonly #keys: Float64Array
   readonly #rows: Uint32Array
+  readonly repeated: number[] = []
 
   constructor(table: Table) {
     const column = table.ids
     const count = rowCount(column.starts)
-    const keys = new Uint32Array(count)
+    const keys = new Float64Array(count)
     const rows = new Uint32Array(count)
     let size = 0
-    let min = 0xffffffff
-    let max = 0
+    let min = Infinity
+    let max = -Infinity
     column.chunks.forEach((value, index) => {
       const chunk = value as Float64Array
       for (let at = 0; at < chunk.length; at++) {
@@ -575,32 +513,37 @@ class NumberIds {
       }
     })
     this.#min = min
-    const duplicate = (key: number, row: number): never => {
-      throw problem('invalid-input', `Two rows share the number ${key}.`, repeated(table, row))
-    }
     if (size > 0 && max - min < 4 * size + 64) {
       const dense = new Uint32Array(max - min + 1)
-      for (let i = 0; i < size; i++) {
-        if (dense[keys[i]! - min] !== 0) duplicate(keys[i]!, rows[i]!)
-        dense[keys[i]! - min] = rows[i]! + 1
-      }
+      for (let i = 0; i < size; i++)
+        if (dense[keys[i]! - min] === 0) dense[keys[i]! - min] = rows[i]! + 1
+        else this.repeated.push(rows[i]!)
       this.#dense = dense
-      this.#keys = this.#rows = new Uint32Array(0)
+      this.#keys = new Float64Array(0)
+      this.#rows = new Uint32Array(0)
       return
     }
-    const order = radixOrder(keys.subarray(0, size))
+    // Sort by key, then by row, so the first row of each key is kept.
+    const order = Uint32Array.from({ length: size }, (_, i) => i).sort(
+      (a, b) => keys[a]! - keys[b]! || a - b,
+    )
     this.#dense = null
-    this.#keys = new Uint32Array(size)
+    this.#keys = new Float64Array(size)
     this.#rows = new Uint32Array(size)
-    for (let i = 0; i < size; i++) {
-      this.#keys[i] = keys[order[i]!]!
-      this.#rows[i] = rows[order[i]!]!
-      if (i > 0 && this.#keys[i] === this.#keys[i - 1])
-        duplicate(this.#keys[i]!, Math.max(this.#rows[i]!, this.#rows[i - 1]!))
+    let kept = 0
+    for (const i of order) {
+      if (kept > 0 && this.#keys[kept - 1] === keys[i]) {
+        this.repeated.push(rows[i]!)
+        continue
+      }
+      this.#keys[kept] = keys[i]!
+      this.#rows[kept++] = rows[i]!
     }
+    this.#keys = this.#keys.subarray(0, kept)
+    this.#rows = this.#rows.subarray(0, kept)
+    this.repeated.sort((a, b) => a - b)
   }
 
-  /** The row holding `key`, or -1. */
   row(key: number): number {
     if (this.#dense !== null) {
       const at = key - this.#min

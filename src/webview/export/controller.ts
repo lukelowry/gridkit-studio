@@ -1,156 +1,242 @@
-import { type Gpu, type Placed, type Rect, View } from 'latkit'
+import { type Gpu, type Placed, type Rect, Shot, View } from 'latkit'
 
-import { type Results, type ViewState } from '../../shared/messages.js'
+import { caseStem, formatTime } from '../../shared/format.js'
+import type { ExportStatus, Results, ViewState } from '../../shared/messages.js'
 import { reader } from '../../shared/settings.js'
 import { bridge } from '../bridge.js'
-import { CaseProjection } from '../latkit/data.js'
-import { FrameReads, PlayheadFeed } from '../latkit/frames.js'
-import { asset, openGpu } from '../latkit/load.js'
-import { type Background, backgroundOf } from '../latkit/maps.js'
-import { caseFit, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
-import { nativeTheme, theme } from '../latkit/theme.js'
-import { caseStem } from './image.js'
+import { CaseRows } from '../latkit/data.js'
+import { PlayheadFeed } from '../latkit/frames.js'
+import { openGpu } from '../latkit/load.js'
+import { type Background, mapOf, NO_MAP } from '../latkit/maps.js'
+import {
+  captionScene,
+  caseFit,
+  daylightOf,
+  sampledFields,
+  sceneFields,
+  sceneOf,
+} from '../latkit/scenes.js'
+import { nativeTheme, networkLook } from '../latkit/theme.js'
+import { imageOptions, saveImage } from './image.js'
 import { plotViews } from './plots.js'
-import { exportVideo, framed, type VideoJob, videoOutput, type VideoProgress } from './video.js'
+import { type ExportJob, exportVideo, framed, videoTimes } from './video.js'
 
-/** Owns every export resource, including its immutable results lease and sequential file sink. */
-export async function renderVideo(
-  job: VideoJob,
-  shown: ViewState,
+/** The caption band's height in CSS pixels: a title and a subtitle line. */
+const CAPTION_HEIGHT = 64
+
+interface Composition {
+  readonly placed: Placed[]
+  /** Loads the frames at `at` and those after it, and moves every view there. */
+  prepare(at: number, signal: AbortSignal): Promise<void>
+  release(): void
+}
+
+/** The views of `job`, each in its region of the frame, under a caption band if it has one. */
+async function compose(
+  job: ExportJob,
+  state: ViewState,
+  results: Results,
+  gpu: Gpu,
   signal: AbortSignal,
-  progress: (value: VideoProgress) => void,
-): Promise<string | null> {
-  if (!shown.summary || !shown.uri || !shown.results) throw new Error('No results to export.')
-  const projection = new CaseProjection()
-  const reads = new FrameReads()
-  /** The frames each mapped field of the results holds about the frame the video draws. */
-  const feed = new PlayheadFeed(reads)
+): Promise<Composition> {
+  const summary = state.summary!
+  const definition = summary.definition
+  const settings = reader(state.settings)
+  const style = job.settings
+  const themeOf = (kind: 'network' | 'monitor') => nativeTheme(kind, style['export.theme'])
+  const caseRows = new CaseRows()
+  /** Whether the feed's frames changed since the Network view's sources were last set. */
+  let changed = false
+  // A failed read fails the export through the frame that waits on it.
+  const feed = new PlayheadFeed({ changed: () => (changed = true), failed() {} })
+  /** Every view made, each destroyed once with the composition. */
   const views: View[] = []
   const placed: Placed[] = []
-  /** Lets go of the Monitor's plots, whose views and frames are their own. */
-  const released: Array<() => void> = []
-  let background: Background = { sources: [], marks: [] }
+  const release = () => {
+    for (const view of views) view.destroy()
+    feed.clear()
+    caseRows.clear()
+  }
+  try {
+    const height = style['export.height'] / style['export.scale']
+    const band = style['export.caption'] ? Math.min(0.5, CAPTION_HEIGHT / height) : 0
+    const title = caseStem(summary.name)
+    const time = (at: number) => `t = ${formatTime(at, results.domain)} s`
+    // The caption takes the background of the first view, which it sits above.
+    const captionTheme = themeOf(job.views[0] ?? 'network')
+    let caption: View | undefined
+    if (band) {
+      caption = await View.create(null, captionScene(captionTheme, title, time(job.timeRange[0])), {
+        gpu,
+        signal,
+      })
+      views.push(caption)
+      placed.push({ view: caption, region: [0, 0, 1, band] })
+    }
+    const network = job.views.includes('network')
+    const selection = network ? sceneFields(definition, state.mappings) : []
+    await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
+    const data = caseRows.slot.current!.data
+    const background: Background = network
+      ? await mapOf(settings, definition.drawing.geographic)
+      : NO_MAP
+    signal.throwIfAborted()
+    const fields = network ? sampledFields(definition, state.mappings, results) : []
+    const sources = () => [data, ...background.sources, ...feed.sources]
+    const framing = network ? await bridge.request('framing', { uri: summary.uri }, signal) : null
+    let networkView: View | undefined
+    const pace = {
+      results: { ...results, domain: job.timeRange },
+      playing: job.format === 'video',
+      rate: job.rate,
+      frameRate: style['export.frameRate'],
+    }
+    // The Network's scene maps a sampled field only once its frames are loaded.
+    await feed.ahead(fields, job.timeRange[0], pace, signal)
+    changed = false
+    // A video's plots span the video, and an image's the Monitor's window.
+    const window = job.format === 'video' ? job.timeRange : (videoTimes(state) ?? results.domain)
+    const fill: Rect = [0, band, 1, 1 - band]
+    for (const [index, kind] of job.views.entries()) {
+      const share = 1 / job.views.length
+      const region: Rect =
+        job.layout === 'row'
+          ? [index * share, fill[1], share, fill[3]]
+          : [0, fill[1] + index * share * fill[3], 1, share * fill[3]]
+      if (kind === 'monitor') {
+        const lanes = await plotViews(state, results, gpu, window, region, signal, {
+          theme: themeOf('monitor'),
+          direction:
+            region[2] * style['export.width'] >= 2 * region[3] * style['export.height']
+              ? 'row'
+              : 'column',
+        })
+        placed.push(...lanes.placed)
+        views.push(...lanes.placed.map(({ view }) => view))
+        continue
+      }
+      const scene = sceneOf(
+        data,
+        definition,
+        settings,
+        networkLook(settings, style['export.theme']),
+        {
+          mappings: state.mappings,
+          results,
+          sampled: feed.source,
+          background,
+          daylight: daylightOf(settings.get('map.daylight')),
+          legends: style['export.legend'],
+        },
+      )
+      const size = [
+        (region[2] * style['export.width']) / style['export.scale'],
+        (region[3] * style['export.height']) / style['export.scale'],
+      ] as const
+      // The user's framing in the Network if there is one, else the whole case.
+      const view = await View.create(null, scene, {
+        gpu,
+        sources: sources(),
+        ...(framing && { camera: framed(framing, size) }),
+      })
+      views.push(view)
+      networkView = view
+      view.orbit = settings.get('network.orbit')
+      if (!framing) {
+        view.camera = { pitch: settings.get('network.tilt') }
+        void view.fit(caseFit(data, definition.drawing), { signal }).catch(bridge.report)
+      }
+      placed.push({ view, region })
+      signal.throwIfAborted()
+    }
+    const captionView = caption
+    return {
+      placed,
+      release,
+      async prepare(at, abort) {
+        await feed.ahead(fields, at, pace, abort)
+        if (changed && networkView) networkView.sources = sources()
+        changed = false
+        for (const view of views) view.at = at
+        // The subtitle follows the time each frame shows.
+        if (captionView) captionView.scene = captionScene(captionTheme, title, time(at))
+      },
+    }
+  } catch (error) {
+    release()
+    throw error
+  }
+}
+
+/** Renders `job` to a file, owning every resource: the results lease, the GPU and the file. Reports
+ *  progress from when the file is chosen. Resolves with the saved path, or null if cancelled. */
+export async function renderExport(
+  job: ExportJob,
+  state: ViewState,
+  signal: AbortSignal,
+  progress: (status: ExportStatus) => void,
+): Promise<string | null> {
+  if (!state.summary || !state.uri || !state.results) throw new Error('No results to export.')
   let gpu: Gpu | undefined
   let results: Results | undefined
+  let composition: Composition | undefined
   let file: number | null = null
   let saved: string | null = null
   let output: WritableStream<Uint8Array> | undefined
   try {
-    results = await bridge.request('share', { results: shown.results.id }, signal)
-    const app = { ...shown, results }
-    const summary = shown.summary
-    const settings = reader(app.settings)
-    const definition = summary.definition
-    const name = `${caseStem(summary.name)}.mp4`
-    file = await bridge.request('exportOpen', { uri: shown.uri, name }, signal)
+    results = await bridge.request('share', { results: state.results.id }, signal)
+    const leased = { ...state, results }
+    if (job.format === 'image') {
+      gpu = await openGpu()
+      composition = await compose(job, leased, results, gpu, signal)
+      await composition.prepare(job.timeRange[0], signal)
+      const options = imageOptions(job.settings)
+      // An image waits until transitions and camera flights end; a video freezes each frame.
+      const shot = new Shot([job.settings['export.width'], job.settings['export.height']], {
+        scale: options.scale,
+        transparent: options.transparent,
+        capture: 'still',
+        views: composition.placed,
+      })
+      return await saveImage(
+        shot,
+        state.uri,
+        state.summary.name,
+        job.views.join('-'),
+        options,
+        signal,
+      )
+    }
+    const name = `${caseStem(state.summary.name)}.mp4`
+    file = await bridge.request('exportOpen', { uri: state.uri, name }, signal)
     if (file === null) return null
     const handle = file
-    output = videoOutput(
-      (bytes) => bridge.request('exportWrite', { file: handle, bytes }),
-      async () => {
+    // Encoded bytes go to the file as they are produced, one write at a time.
+    output = new WritableStream<Uint8Array>({
+      write: (bytes) => bridge.request('exportWrite', { file: handle, bytes }),
+      async close() {
         saved = await bridge.request('exportClose', { file: handle })
         file = null
       },
-      async () => {
+      async abort() {
         await bridge.request('exportClose', { file: handle, abort: true })
         file = null
       },
-    )
-    const framing = await bridge.request('framing', { uri: shown.uri }, signal)
+    })
+    progress({ name, done: 0, total: 1 })
     gpu = await openGpu()
     signal.throwIfAborted()
-    const selection = job.views.includes('network') ? sceneFields(definition, app.mappings) : []
-    await projection.receive({ results: results.id, fields: selection }, selection, signal)
-    const data = projection.slot.current!.data
-    if (job.views.includes('network') && definition.drawing.geographic)
-      background = await backgroundOf(
-        settings.get('network.map.source'),
-        settings,
-        new URL(asset('latkit-assets')),
-        theme().palette,
-        signal,
-      )
-    const fields = job.views.includes('network')
-      ? sampledFields(definition, app.mappings, results)
-      : []
-    const sources = () => [data, ...background.sources, ...feed.sources]
-    let network: View | undefined
-    // The video plays the times it shows at its rate, its frames a second, to its last time.
-    const pace = {
-      results: { ...results, domain: job.timeRange },
-      playing: true,
-      rate: job.rate,
-      shown: job.frameRate,
-      bytes: Math.floor((32 * 1024 * 1024) / Math.max(1, fields.length)),
-    }
-    /** Holds each mapped field's frames at `at`, and those the video shows next. */
-    const prepare = async (at: number, abort: AbortSignal) => {
-      if ((await feed.ahead(fields, at, pace, abort)) && network) network.sources = sources()
-    }
-    await prepare(job.timeRange[0], signal)
-
-    for (let index = 0; index < job.views.length; index++) {
-      const kind = job.views[index]!
-      const share = 1 / job.views.length
-      const region: Rect =
-        job.layout === 'row' ? [index * share, 0, share, 1] : [0, index * share, 1, share]
-      if (kind === 'monitor') {
-        const lanes = await plotViews(
-          app,
-          results,
-          gpu,
-          reads,
-          job.timeRange,
-          region,
-          job.width,
-          signal,
-        )
-        released.push(lanes.release)
-        views.push(...lanes.placed.map(({ view }) => view))
-        placed.push(...lanes.placed)
-      } else {
-        const scene = sceneOf(data, definition, settings, nativeTheme(settings, 'network'), {
-          mappings: app.mappings,
-          results,
-          sampled: feed.source,
-          background: background.marks,
-        })
-        if (background.attribution)
-          scene.title = { text: background.attribution, place: 'bottom-right' }
-        // What the user framed in the Network, as they framed it; else the whole case, as the
-        // Network first frames it.
-        const view = await View.create(null, scene, {
-          gpu,
-          sources: sources(),
-          ...(framing && {
-            camera: framed(framing, [region[2] * job.width, region[3] * job.height]),
-          }),
-        })
-        views.push(view)
-        network = view
-        view.orbit = settings.get('network.orbit')
-        view.at = job.timeRange[0]
-        if (!framing) {
-          view.camera = { pitch: settings.get('network.tilt') }
-          void view.fit(caseFit(data, definition.drawing), { signal }).catch(bridge.report)
-        }
-        placed.push({ view, region })
-        signal.throwIfAborted()
-      }
-    }
-    await exportVideo(job, placed, output, prepare, signal, progress)
+    composition = await compose(job, leased, results, gpu, signal)
+    await exportVideo(job, composition.placed, output, composition.prepare, signal, (status) =>
+      progress({ name, ...status }),
+    )
     return saved
   } catch (error) {
     if (output && !output.locked) await output.abort(error).catch(() => {})
     throw error
   } finally {
-    for (const release of released) release()
-    for (const view of views) view.destroy()
+    composition?.release()
     gpu?.destroy()
-    feed.clear()
-    projection.clear()
-    reads.clear()
-    background.destroy?.()
     if (file !== null) await bridge.request('exportClose', { file, abort: true }).catch(() => {})
     if (results) await bridge.request('unshare', { results: results.id }).catch(() => {})
   }

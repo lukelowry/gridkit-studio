@@ -6,13 +6,13 @@ export interface Entity {
   readonly id: Id
 }
 
-/** A field of a type, by the type's name and the field's path in its records. */
+/** A field of a type: the type name and the field's path in its records. */
 export interface Field {
   readonly table: string
   readonly field: string
 }
 
-/** An element, and, where one of its values is meant, the field that holds it. */
+/** An element, optionally narrowed to one of its fields. */
 export interface Element extends Entity {
   readonly field?: string
 }
@@ -87,7 +87,7 @@ export function fieldDefinition(
   return tableDefinition(document, table)?.fields.find((item) => item.name === field)
 }
 
-/** A field's name past the object it is in: `kv` of `params.kv`. */
+/** A field's last path segment: `kv` of `params.kv`. */
 export const leaf = (field: string): string => field.slice(field.indexOf('.') + 1)
 
 export function fieldLabel(field: FieldDefinition): string {
@@ -103,13 +103,6 @@ export function networkRole(document: CaseDefinition, name: string): 'vertex' | 
   if (document.drawing.vertices.some((item) => item.table === name)) return 'vertex'
   if (document.drawing.edges.some((item) => item.table === name)) return 'edge'
   return null
-}
-
-export function referenceFields(
-  document: CaseDefinition,
-  name: string,
-): readonly FieldDefinition[] {
-  return tableDefinition(document, name)?.fields.filter((field) => field.kind === 'reference') ?? []
 }
 
 export function isEntity(value: unknown): value is Entity {

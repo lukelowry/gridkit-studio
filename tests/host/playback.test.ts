@@ -1,5 +1,4 @@
-/** Playing results from the commands the status bar and the keys run: a results file of the case's,
- *  stepped through, played, paused and sought. */
+/** Playback commands, as the status bar and keybindings run them. */
 
 import assert from 'node:assert/strict'
 
@@ -16,7 +15,7 @@ suite('Playback', () => {
   })
 
   test('steps, plays, pauses, and goes to a time and to the end from its commands', async () => {
-    // A second of every bus's voltage, 101 samples.
+    // One second of every bus's voltage, 101 samples.
     const csv = vscode.Uri.joinPath(folder(), 'playback.csv')
     const buses = host.source.buses
     const rows = Array.from(
@@ -33,7 +32,7 @@ suite('Playback', () => {
     await session.load(csv.fsPath)
     await until(() => session.results?.growing === false, 'the file read')
     const { transport } = session
-    /** Where the playhead is once `command` ran, to a sample's precision. */
+    /** Runs `command` and returns the playhead time rounded to the sample interval. */
     const go = async (command: string, ...args: unknown[]) => {
       await vscode.commands.executeCommand('gridkitStudio.' + command, ...args)
       return Math.round(transport.currentT() * 100) / 100

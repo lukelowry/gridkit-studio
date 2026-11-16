@@ -1,13 +1,10 @@
-/** One request protocol for each channel Studio has: a webview and the extension, and the extension
- *  and its worker. A request is answered once, with its value or the problem it met,
- *  unless whoever asked lets go of it first, which tells the other side to stop. */
+/** The request protocol used between a webview and the extension, and between the extension and
+ *  its worker. Each request gets one reply, unless the caller cancels it first. */
 
 import { errorOf, type Problem, problemOf } from './errors.js'
 
-/** Methods by name: what each takes, and what it answers. */
 export type Api<A> = { [K in keyof A]: { input: unknown; output: unknown } }
 
-/** An answer to every method of `A`, each to its own input with its own output. */
 export type Handlers<A extends Api<A>> = {
   readonly [K in keyof A]: (input: A[K]['input'], signal: AbortSignal) => Promise<A[K]['output']>
 }
@@ -29,14 +26,14 @@ export interface Reply {
   problem?: Problem
 }
 
-/** Asks `A`'s methods of whoever `post` reaches, and settles each call as its reply comes. */
+/** Calls `A`'s methods over `post` and settles each call when its reply arrives. */
 export class Caller<A extends Api<A>> {
   #next = 0
   readonly #pending = new Map<number, { settle(reply: Reply): void; fail(error: Error): void }>()
 
   constructor(private readonly post: (message: Request | Cancel) => void) {}
 
-  /** Calls `method`, as long as it takes unless `signal` lets go of it. */
+  /** Calls `method`; aborting `signal` cancels the request on the other side. */
   call<K extends keyof A & string>(
     method: K,
     input: A[K]['input'],
@@ -65,21 +62,21 @@ export class Caller<A extends Api<A>> {
       try {
         this.post({ kind: 'request', id, method, input })
       } catch (error) {
-        // An input that cannot cross is never answered: the call fails now.
+        // An input that cannot be posted would never get a reply, so fail now.
         this.#pending.get(id)?.fail(error as Error)
         this.#pending.delete(id)
       }
     })
   }
 
-  /** Settles the call `reply` answers, unless it was let go of. */
+  /** Settles the call `reply` answers, unless it was cancelled. */
   settle(reply: Reply): void {
     const pending = this.#pending.get(reply.id)
     this.#pending.delete(reply.id)
     pending?.settle(reply)
   }
 
-  /** Fails every call under way with `error`, as when the other side is gone. */
+  /** Fails every pending call with `error`, as when the other side is gone. */
   fail(error: Error): void {
     const pending = [...this.#pending.values()]
     this.#pending.clear()
@@ -87,15 +84,14 @@ export class Caller<A extends Api<A>> {
   }
 }
 
-/** The side that answers: it takes each request and cancellation as it comes. */
 export interface Answerer {
   receive(message: Request | Cancel): void
-  /** Lets go of every request under way, as when the other side is gone. */
+  /** Aborts every request in progress, as when the other side is gone. */
   cancel(): void
 }
 
-/** Answers requests with `handlers`, posting each reply unless whoever asked let go of it first.
- *  `moved` names the buffers a reply hands over rather than copies. */
+/** Answers requests with `handlers`, posting each reply unless the request was cancelled. `moved`
+ *  returns the buffers a reply transfers instead of copying. */
 export function answerer<A extends Api<A>>(
   handlers: Handlers<A>,
   post: (reply: Reply, moved: readonly ArrayBufferLike[]) => void,
@@ -122,7 +118,7 @@ export function answerer<A extends Api<A>>(
             try {
               post({ kind: 'reply', id, value }, moved(method, value))
             } catch (error) {
-              // A value that cannot cross is a defect, answered as one.
+              // A value that cannot be posted is a defect.
               post({ kind: 'reply', id, problem: { ...problemOf(error), defect: true } }, [])
             }
           },

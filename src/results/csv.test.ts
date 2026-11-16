@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import { csvMessages, type LongReading } from './csv.js'
 
-/** Every number of the rows in `text`, read under a header of `width` columns. */
+/** Every number in the rows of `text`, under a header of `width` columns. */
 async function numbers(text: string, width: number): Promise<number[]> {
   const known = Array.from({ length: width }, (_, i) => (i ? `c${i}` : 't'))
   const values: number[] = []
@@ -21,7 +21,7 @@ describe('CSV results', () => {
       ...tokens.map((token) => Number(token.trim().replaceAll('"', ''))),
     ])
     expect(await numbers('0,nan,-inf,Infinity,\n', 5)).toEqual([0, NaN, -Infinity, Infinity, NaN])
-    // As MSVC prints them, which a GridKit built on Windows writes.
+    // As MSVC prints them, which a Windows build of GridKit writes.
     const windows = ['-nan(ind)', 'nan(snan)', '1.#QNAN', '-1.#IND', '1.#INF', '-1.#INF']
     expect(await numbers(`0,${windows.join(',')}\n`, 1 + windows.length)).toEqual([
       0,
@@ -42,23 +42,23 @@ describe('CSV results', () => {
         1000,
       ));
     }
-    await expect(read()).rejects.toThrow('CSV frame 1002 does not match its header.')
+    await expect(read()).rejects.toThrow('CSV row 1002 does not match its header.')
   })
 
   it('leaves out a last row its writer never finished, and keeps one only its newline misses', async () => {
     expect(await numbers('0,1,2\n1,3,4\n2,5', 3)).toEqual([0, 1, 2, 1, 3, 4])
     expect(await numbers('0,1,2\n1,3,4\n2,5,', 3)).toEqual([0, 1, 2, 1, 3, 4])
     expect(await numbers('0,1,2\n1,3,4', 3)).toEqual([0, 1, 2, 1, 3, 4])
-    // A row cut short anywhere but at the end is not the writer stopping.
+    // A short row anywhere but at the end is an error, not a stopped writer.
     await expect(numbers('0,1,2\n1,3\n2,5,6\n', 3)).rejects.toThrow(
-      'CSV frame 2 does not match its header.',
+      'CSV row 2 does not match its header.',
     )
   })
 
   it('rejects the hexadecimal, octal and binary numbers GridKit never writes', async () => {
     for (const token of ['0x10', ' 0o7', '"0b1"'])
       await expect(numbers(`0,${token}\n`, 2)).rejects.toThrow(
-        'CSV frame 1, column 2 is not a number.',
+        'CSV row 1, column 2 is not a number.',
       )
   })
 
@@ -84,7 +84,7 @@ describe('CSV results', () => {
 })
 
 describe("GridKit's long layout", () => {
-  /** What reads of `pieces` in turn give, as a run's file is read: the columns, and each frame. */
+  /** The columns and frames from reading `pieces` in turn, as a run's file is read. */
   async function long(pieces: readonly string[], ends = false) {
     const held: { long?: LongReading } = {}
     let names: readonly string[] | undefined
@@ -106,7 +106,7 @@ describe("GridKit's long layout", () => {
     return { names, frames }
   }
   const header = 'sample,t,class,id,variable,value\n'
-  // As GridKit writes it: an event's time twice, the samples before and after it.
+  // As GridKit writes it: an event's time appears twice, for the samples before and after it.
   const samples = [
     '0,0.0,Bus,Bus 1,Vm,1.0\n0,0.0,Genrou,g1,speed,0.0\n',
     '1,0.5,Bus,Bus 1,Vm,0.9\n1,0.5,Genrou,g1,speed,0.1\n',
@@ -147,7 +147,7 @@ describe("GridKit's long layout", () => {
   })
 
   it('reads a sample as wide as a large case records', async () => {
-    // More variables than one call takes arguments.
+    // More variables than fit in one call's arguments.
     const wide = 150_000
     const sample = Array.from(
       { length: wide },

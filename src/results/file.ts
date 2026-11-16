@@ -1,19 +1,18 @@
+/** Results stay on disk. Requests read bounded windows by recorded time. */
 import { type Id, Patch } from 'latkit'
 
 import type { Case } from '../gridkit/case.js'
-import { chunks, equal } from '../platform/bytes.js'
-/** Scientific results stay on disk; requests read bounded windows by actual timestamps. */
-import { createHash, randomUUID } from '../platform/crypto.js'
-import { mkdir, open, rename, rm } from '../platform/files.js'
+import { chunks } from '../platform/bytes.js'
+import { randomUUID } from '../platform/crypto.js'
+import { type FileHandle, mkdir, open, rename, rm } from '../platform/files.js'
 import { basename, dirname, join } from '../platform/path.js'
 import {
-  ENTRY_BYTES,
   type ExactSample,
   type ExactSampleRequest,
   type FramePage,
   type FrameRequest,
   PAGE_BYTES,
-  PAYLOAD_BYTES,
+  type TileRequest,
   type TimeRange,
 } from '../shared/data.js'
 import { message, problem } from '../shared/errors.js'
@@ -34,45 +33,29 @@ import {
 } from './decode.js'
 import { follow, type Writer } from './follow.js'
 import { rawRun, type VisualizationRun } from './frames.js'
-import { detail, Pyramid, type ReducedRun } from './pyramid.js'
+import { SEGMENT_BYTES } from './limits.js'
+import { Pyramid } from './pyramid.js'
 import { same, type Stamp, stampAt } from './stamp.js'
-import { fileKey, type LevelIndex, type RawIndex, type Store } from './store.js'
+import { fileKey, type LevelIndex, lost, type RawIndex, type Store } from './store.js'
 
 export const closed = () => problem('results-closed', 'These results are closed.')
-const lost = (name: string, cause: unknown) =>
-  problem('results-lost', `What Studio kept of ${name} could not be read.`, { cause })
 export interface Reading {
   readonly revision: Revision
   readonly path: string
   readonly solver?: string
   readonly span?: TimeRange
 }
-interface Interval {
-  level: number
-  first: number
-  count: number
-}
-interface FramePlan {
-  key: string
-  source: string
-  field: number
-  ids: readonly Id[]
-  places: readonly number[]
-  /** The level the window is held at, and its first frame. */
-  level: number
-  first: number
-  intervals: readonly Interval[]
-  frames: number
-  /** The stored frames a playhead's window sends, in order, where it steps past others. */
-  picks?: Uint32Array
-}
-interface Cursor {
-  key: string
-  frames: number
-  part: number
-  offset: number
-  /** The plan the page holds, when it is sent only what that lacks. */
-  base?: string
+/** Target bytes of a time-tile span (latkit's advice), and of a level's buffered buckets. */
+const SPAN_BYTES = 1 << 20
+/** Entries per time-tile span, sized for bucket entries: a multiple of 8, so a bucket one level up
+ *  never straddles two spans. */
+const spanEntries = (rows: number) =>
+  Math.min(1 << 20, Math.max(8, Math.floor(SPAN_BYTES / (16 + 8 * rows) / 8) * 8))
+/** The highest level with at least one complete bucket among `frames` frames. */
+function levelsOf(frames: number): number {
+  let level = 0
+  while (level < 21 && frames >= 8 ** (level + 1)) level++
+  return level
 }
 function lowerBound(count: number, predicate: (index: number) => boolean): number {
   let lo = 0
@@ -85,11 +68,14 @@ function lowerBound(count: number, predicate: (index: number) => boolean): numbe
   return lo
 }
 
-/** The frames of `run`, read whole from the store, that `picks` names: renumbered by their place
- *  among the picks, so a window's frames run on without gaps. */
-function picked(run: VisualizationRun, picks: Uint32Array, rows: number): VisualizationRun {
-  const from = lowerBound(picks.length, (i) => picks[i]! >= run.first)
-  const to = lowerBound(picks.length, (i) => picks[i]! >= run.first + run.at.length)
+/** The frames of `run` in `picks[from..to)`, renumbered by pick so a page has no gaps. */
+function picked(
+  run: VisualizationRun,
+  picks: readonly number[],
+  from: number,
+  to: number,
+  rows: number,
+): VisualizationRun {
   const at = new Float64Array(to - from)
   const values = new Float32Array((to - from) * rows)
   for (let pick = from; pick < to; pick++) {
@@ -100,24 +86,67 @@ function picked(run: VisualizationRun, picks: Uint32Array, rows: number): Visual
   return { level: 0, first: from, at, values }
 }
 
+/** Merges consecutive bucket runs into one run of only the rows at `places`. */
+function selected(
+  runs: readonly VisualizationRun[],
+  places: readonly number[],
+  rows: number,
+): VisualizationRun {
+  const count = runs.length
+  const at = new Float64Array(2 * count)
+  const values = new Float32Array(2 * count * places.length)
+  runs.forEach((run, i) => {
+    at.set(run.at, 2 * i)
+    places.forEach((place, p) => {
+      values[i * places.length + p] = run.values[place]!
+      values[(count + i) * places.length + p] = run.values[rows + place]!
+    })
+  })
+  return { level: runs[0]!.level, first: runs[0]!.first, at, values }
+}
+
+async function fill(
+  file: FileHandle,
+  bytes: Uint8Array,
+  length: number,
+  position: number,
+): Promise<number> {
+  let read = 0
+  while (read < length) {
+    const { bytesRead } = await file.read(bytes, read, length - read, position + read)
+    if (!bytesRead) break
+    read += bytesRead
+  }
+  return read
+}
+
+/** Compares four bytes at a time, so both arrays must start at offset 0 of their buffers. */
+function sameBytes(a: Uint8Array, b: Uint8Array, length: number): boolean {
+  const words = length >> 2
+  const x = new Int32Array(a.buffer, a.byteOffset, words)
+  const y = new Int32Array(b.buffer, b.byteOffset, words)
+  for (let i = 0; i < words; i++) if (x[i] !== y[i]) return false
+  for (let i = words << 2; i < length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
 export class ResultsFile {
   #layout: ResultsLayout
-  /** How far it is read: the ranges of its values always there, none while it holds no frame. */
+  /** `domains` is always present, and empty until the first frame. */
   readonly #progress: { -readonly [K in keyof ResultsProgress]: ResultsProgress[K] } & {
     domains: NonNullable<ResultsProgress['domains']>
   }
   readonly #decode: Layout = {}
   readonly #readers = new Map<AbortController, Promise<void>>()
-  readonly #plans = new Map<string, FramePlan>()
-  /** What a page holding one plan lacks of another, by both their keys. */
-  readonly #deltas = new Map<string, readonly Interval[]>()
   #reducers: Pyramid[] = []
-  #pending: Map<number, ReducedRun[]>[] = []
+  /** Per field and level, reduced buckets not yet written. */
+  #pending: Map<number, VisualizationRun[]>[] = []
+  #places: ReadonlyMap<Id, number>[] = []
+  #allPlaces: (readonly number[])[] = []
   #opened?: Stamp
   #stamp?: Stamp
   #read = 0
-  /** Whether a later read can take the file up where the store stands: it holds the frames of
-   *  exactly the bytes kept of the file, which end, in a long layout, between two samples. */
+  /** Whether the store's frames match exactly the bytes kept, between samples in a long layout. */
   #resumable = true
   #retired = false
   constructor(
@@ -136,14 +165,20 @@ export class ResultsFile {
     }
     this.#progress = { frames: 0, domain: [0, 0], domains: {}, growing: false }
   }
+  /** Throws `lost` when the store is empty or damaged. */
   static async stored(kase: Case, store: Store, reading: Reading): Promise<ResultsFile> {
-    await store.restore()
-    const manifest = store.manifest!
+    const resume = await store.restore()
+    const manifest = store.manifest
     const file = new ResultsFile(kase, store, reading)
-    Object.assign(file.#decode, layoutFrom(manifest.header, kase))
-    if (manifest.long) file.#decode.long = longReading(manifest.long, manifest.header.slice(1))
-    file.#learned()
-    file.#reducers.forEach((reducer, i) => reducer.restore(manifest.reducers[i]!))
+    if (!resume || !manifest) throw lost(`Studio kept nothing of ${file.#layout.name}.`)
+    try {
+      Object.assign(file.#decode, layoutFrom(resume.header, kase))
+      if (manifest.long) file.#decode.long = longReading(manifest.long, resume.header.slice(1))
+      file.#learned()
+      file.#reducers.forEach((reducer, i) => reducer.restore(resume.reducers[i]!))
+    } catch (error) {
+      throw lost(`GridKit Studio's copy of ${file.#layout.name} is damaged.`, error)
+    }
     Object.assign(file.#progress, {
       frames: manifest.frames,
       domain: manifest.domain,
@@ -163,12 +198,8 @@ export class ResultsFile {
   get fields(): readonly Field[] {
     return this.#decode.read?.fields ?? []
   }
-  idle(): void {
-    this.#plans.clear()
-    this.#deltas.clear()
-  }
   get bytes(): number {
-    return this.kase.bytes + this.store.bytes
+    return this.store.bytes
   }
   of(path: string): boolean {
     return fileKey(path) === this.store.key
@@ -192,9 +223,10 @@ export class ResultsFile {
       done()
     }
   }
+  /** After a read that stopped early, accepts the file's current stamp as read. */
   async settle(): Promise<void> {
     if (this.#stamp || this.#progress.growing || !this.#opened) return
-    const now = await stampAt(this.#layout.path)
+    const now = await stampAt(this.#layout.path).catch(() => undefined)
     if (now?.file === this.#opened.file) this.#stamp = now
   }
   async retire(): Promise<void> {
@@ -202,38 +234,34 @@ export class ResultsFile {
     const readers = [...this.#readers]
     for (const [controller] of readers) controller.abort(closed())
     await Promise.all(readers.map(([, done]) => done))
-    this.idle()
     this.#pending = []
   }
+  /** Throws `lost` unless the file still starts with the bytes the store kept. */
   async #verifyPrefix(signal: AbortSignal): Promise<void> {
+    const changed = () =>
+      lost(`${this.#layout.name} changed in what Studio kept of it, so it is read again.`)
     const original = await open(this.#layout.path, 'r')
-    const cached = await open(join(this.store.folder, 'source.csv'), 'r')
+    let cached: FileHandle | undefined
     try {
-      const a = new Uint8Array(64 << 10)
-      const b = new Uint8Array(64 << 10)
+      cached = await open(join(this.store.folder, 'source.csv'), 'r')
+      const a = new Uint8Array(SEGMENT_BYTES)
+      const b = new Uint8Array(SEGMENT_BYTES)
       for (let at = 0; at < this.#read;) {
         signal.throwIfAborted()
         const length = Math.min(a.length, this.#read - at)
         const [x, y] = await Promise.all([
-          original.read(a, 0, length, at),
-          cached.read(b, 0, length, at),
+          fill(original, a, length, at),
+          fill(cached, b, length, at),
         ])
-        if (
-          x.bytesRead !== length ||
-          y.bytesRead !== length ||
-          !equal(a.subarray(0, length), b.subarray(0, length))
-        )
-          throw lost(this.#layout.name, new Error('The file changed before what was kept of it.'))
+        if (x !== length || y !== length || !sameBytes(a, b, length)) throw changed()
         at += length
       }
     } finally {
-      await Promise.allSettled([original.close(), cached.close()])
+      await Promise.allSettled([original.close(), cached?.close()])
     }
   }
-  /** Reads the file on from what the store keeps of it, until `writer` is done and it holds no
-   *  more, telling `progress` of each segment kept. What the store then holds is written down
-   *  once, as the read ends, through or short, for a later read to take up: a window that goes
-   *  before then leaves a store that says nothing, and the file is read again. */
+  /** Reads the file from where the store left off until `writer` is done, and checkpoints once when
+   *  the read ends. If the window closes first, the store has no manifest and is read again. */
   async ingest(
     signal: AbortSignal,
     writer: () => Writer,
@@ -258,7 +286,7 @@ export class ResultsFile {
             { signal, publish: () => {} },
             this.#decode,
           )
-          // A long layout learns what it holds from its first sample, as its frames arrive.
+          // A long layout learns its fields from its first sample instead.
           if (this.#decode.read) this.#learned()
           await this.store.writeCsv(piece.bytes, this.#read)
           this.#read += piece.bytes.length
@@ -266,7 +294,7 @@ export class ResultsFile {
           await this.#take(signal, piece.bytes)
           await progress()
         } else {
-          // A long layout's only sample ends with the file its writer finished.
+          // A long layout's pending sample is complete once the writer is done.
           if (this.#decode.long && writer() === 'done') await this.#take(signal)
           this.#stamp = piece.stamp
         }
@@ -274,17 +302,15 @@ export class ResultsFile {
       await this.#checkpoint()
     } catch (error) {
       if (!signal.aborted) this.#progress.error = message(error)
-      // What it kept before it stopped is written down all the same; a store that cannot say
-      // what it holds is let go of, and its file read again.
+      // Checkpoint what was kept anyway.
       await this.#checkpoint().catch(() => {})
       throw error
     } finally {
       this.#progress.growing = false
     }
   }
-  /** Takes a segment of the file, `bytes` of whole rows past those kept, or, with none, the sample
-   *  a long layout ends with. Its frames are decoded, then kept, then its bytes: a segment that
-   *  does not read leaves the store as it was, holding the frames of exactly the bytes kept. */
+  /** Stores a segment of whole rows, or with no `bytes`, a long layout's final sample. Frames are
+   *  decoded before anything is stored, so a bad segment leaves the store unchanged. */
   async #take(signal: AbortSignal, bytes?: Uint8Array): Promise<void> {
     const decoded: Decoded[] = []
     await readResults(
@@ -310,13 +336,15 @@ export class ResultsFile {
   #learned(): void {
     this.#layout = { ...this.#layout, outputs: recordedFields(this.fields) }
     this.store.shape(this.fields.map((field) => field.ids.length))
+    this.#places = this.fields.map((field) => new Map(field.ids.map((id, place) => [id, place])))
+    this.#allPlaces = this.fields.map((field) => Array.from(field.ids, (_, place) => place))
     this.#pending = this.fields.map(() => new Map())
     this.#reducers = this.fields.map(
       (field, f) =>
         new Pyramid(field.ids.length, (run) => {
-          const held = this.#pending[f]!.get(run.level) ?? []
-          held.push(run)
-          this.#pending[f]!.set(run.level, held)
+          const queued = this.#pending[f]!.get(run.level) ?? []
+          queued.push(run)
+          this.#pending[f]!.set(run.level, queued)
         }),
     )
   }
@@ -346,26 +374,29 @@ export class ResultsFile {
       frames.coordinates.at(-1)!,
     ]
     progress.frames += frames.count
-    // Emitted buckets are written in blocks once per decode batch, never once per bucket.
-    await this.#flushLevels()
+    await this.#flushLevels(false)
   }
-  async #flushLevels(): Promise<void> {
-    for (let f = 0; f < this.#pending.length; f++)
-      for (const [level, runs] of this.#pending[f]!) {
-        await this.store.writeLevel(f, level, runs)
-      }
-    for (const levels of this.#pending) levels.clear()
+  /** Writes a level's pending buckets once they fill a span, or all with `whole`, so level blocks
+   *  stay span-sized however the file arrived. */
+  async #flushLevels(whole: boolean): Promise<void> {
+    for (let f = 0; f < this.#pending.length; f++) {
+      const weight = 16 + 8 * this.fields[f]!.ids.length
+      for (const [level, runs] of this.#pending[f]!)
+        if (whole || runs.length * weight >= SPAN_BYTES) {
+          await this.store.writeLevel(f, level, runs)
+          this.#pending[f]!.delete(level)
+        }
+    }
   }
-  /** Writes down what the store holds of the file, unless it says so already: all of it, once the
-   *  file is read through, or as far as a read that stopped short kept it, where a later one can
-   *  read on from. */
+  /** Writes the manifest unless current: complete, or partial when a later read can resume. */
   async #checkpoint(): Promise<void> {
+    if (!this.#decode.header || !this.#opened) return
+    await this.#flushLevels(true)
     const complete = !!this.#stamp
-    if (!this.#decode.header || !this.#opened || !(complete || this.#resumable)) return
-    const said = this.store.manifest
-    if (said?.read === this.#read && said.complete === complete) return
+    if (!(complete || this.#resumable)) return
+    const manifest = this.store.manifest
+    if (manifest?.read === this.#read && manifest.complete === complete) return
     const long = this.#decode.long
-    await this.#flushLevels()
     await this.store.checkpoint({
       path: this.#layout.path,
       stamp: this.#stamp ?? this.#opened,
@@ -387,55 +418,55 @@ export class ResultsFile {
     )
     const block = blocks[index]
     if (!block || block.first >= frames) return frames
-    const times = await this.#stored(
-      this.store.times(block, 0, Math.min(block.count, frames - block.first)),
-    )
+    const times = await this.store.times(block, 0, Math.min(block.count, frames - block.first))
     return (
       block.first + lowerBound(times.length, (i) => (strict ? times[i]! > at : times[i]! >= at))
     )
   }
-  /** The stored frames from `first` to before `stop` a view shows, stepping `step` seconds through
-   *  `range`: of each time from `range[0]`, the last frame at or before it, each frame once. */
-  async #picks(first: number, stop: number, range: TimeRange, step: number): Promise<Uint32Array> {
-    const times = new Float64Array(stop - first)
-    for (let frame = first; frame < stop;) {
-      const block = this.#rawAt(frame)
-      const count = Math.min(stop, block.first + block.count) - frame
-      times.set(
-        await this.#stored(this.store.times(block, frame - block.first, count)),
-        frame - first,
-      )
-      frame += count
+  /** The frames a view sampling `range` every `step` seconds shows: the last frame at or before
+   *  each sample time. Cost scales with frames shown, not frames stored. */
+  async #picks(range: TimeRange, step: number, frames: number): Promise<number[]> {
+    const blocks = this.store.raw
+    let cached: { block: RawIndex; times: Float64Array } | undefined
+    const timesOf = async (block: RawIndex) => {
+      if (cached?.block !== block)
+        cached = {
+          block,
+          times: await this.store.times(block, 0, Math.min(block.count, frames - block.first)),
+        }
+      return cached.times
+    }
+    /** The last frame at or before `at`, or -1. */
+    const before = async (at: number) => {
+      const block = blocks[lowerBound(blocks.length, (i) => blocks[i]!.end > at)]
+      if (!block || block.first >= frames) return frames - 1
+      const times = await timesOf(block)
+      return block.first + lowerBound(times.length, (i) => times[i]! > at) - 1
     }
     const picks: number[] = []
     const last = Math.floor((range[1] - range[0]) / step)
-    for (let at = 0; at < times.length; at++) {
-      // The first time shown at or after this frame, which shows it unless a later frame comes first.
-      const shown = Math.max(0, Math.ceil((times[at]! - range[0]) / step - 1e-9))
-      if (shown > last) break
-      const next = times[at + 1]
-      if (next === undefined || range[0] + shown * step < next) picks.push(first + at)
+    for (let shown = 0; shown <= last;) {
+      const frame = await before(range[0] + shown * step)
+      if (frame >= 0 && frame !== picks.at(-1)) picks.push(frame)
+      if (frame + 1 >= frames) break
+      // Skip to the first sample time at or after the next frame's time.
+      const block = this.#rawAt(frame + 1)
+      const next = (await timesOf(block))[frame + 1 - block.first]!
+      shown = Math.max(shown + 1, Math.floor((next - range[0]) / step))
     }
-    return Uint32Array.from(picks)
+    return picks
   }
   #rawAt(frame: number): RawIndex {
     const blocks = this.store.raw
     const index = lowerBound(blocks.length, (i) => blocks[i]!.first + blocks[i]!.count > frame)
     const block = blocks[index]
     if (!block || block.first > frame)
-      throw lost(this.#layout.name, new Error('Missing raw frame block.'))
+      throw lost(`What Studio kept of ${this.#layout.name} lacks a block of its frames.`)
     return block
-  }
-  async #stored<T>(task: Promise<T>): Promise<T> {
-    try {
-      return await task
-    } catch (error) {
-      throw lost(this.#layout.name, error)
-    }
   }
   async #time(frame: number): Promise<number> {
     const block = this.#rawAt(frame)
-    return (await this.#stored(this.store.times(block, frame - block.first, 1)))[0]!
+    return (await this.store.times(block, frame - block.first, 1))[0]!
   }
   async step(at: number, direction: -1 | 1): Promise<number> {
     if (!Number.isFinite(at)) throw new Error('Invalid sample time.')
@@ -451,13 +482,13 @@ export class ResultsFile {
     const field = this.fields.findIndex(
       (item) => item.table === request.table && item.field === request.field,
     )
-    const row = this.fields[field]?.ids.indexOf(request.id) ?? -1
-    if (row < 0 || !this.#progress.frames) return { at: request.at, value: null }
+    const place = this.#places[field]?.get(request.id)
+    if (place === undefined || !this.#progress.frames) return { at: request.at, value: null }
     const frame = (await this.#bound(request.at, true)) - 1
     signal.throwIfAborted()
     if (frame < 0) return { at: request.at, value: null }
     const block = this.#rawAt(frame)
-    const raw = await this.#stored(this.store.readRaw(block, field, [row], frame - block.first, 1))
+    const raw = await this.store.readRaw(block, field, [place], frame - block.first, 1)
     signal.throwIfAborted()
     return { at: raw.at[0]!, value: Number.isFinite(raw.values[0]) ? raw.values[0]! : null }
   }
@@ -467,300 +498,162 @@ export class ResultsFile {
     const block = blocks[index]
     return block && block.first <= bucket ? block : undefined
   }
-  #intervals(field: number, level: number, first: number, stop: number): Interval[] {
-    const result: Interval[] = []
-    const add = (level: number, first: number, count: number) => {
-      if (!count) return
-      const previous = result.at(-1)
-      if (previous?.level === level && previous.first + previous.count === first)
-        previous.count += count
-      else result.push({ level, first, count })
-    }
-    const cover = (level: number, first: number, stop: number) => {
-      if (stop <= first) return
-      if (level === 0) {
-        add(0, first, stop - first)
-        return
-      }
-      const stride = 8 ** level
-      const start = Math.ceil(first / stride)
-      const end = Math.floor(stop / stride)
-      if (start >= end) {
-        cover(level - 1, first, stop)
-        return
-      }
-      cover(level - 1, first, start * stride)
-      let bucket = start
-      while (bucket < end) {
-        const block = this.#levelAt(field, level, bucket)
-        if (!block) {
-          cover(level - 1, bucket * stride, end * stride)
-          break
-        }
-        const until = Math.min(end, block.first + block.count)
-        // Refine only buckets containing gaps. One missing sample must not expand an
-        // entire disk block into raw frames and exhaust the visualization budget.
-        let gap = lowerBound(block.gapped.length, (i) => block.gapped[i]! >= bucket)
-        while (gap < block.gapped.length && block.gapped[gap]! < until) {
-          const missing = block.gapped[gap++]!
-          add(level, bucket, missing - bucket)
-          cover(level - 1, missing * stride, (missing + 1) * stride)
-          bucket = missing + 1
-        }
-        add(level, bucket, until - bucket)
-        bucket = until
-      }
-      cover(level - 1, end * stride, stop)
-    }
-    cover(level, first, stop)
-    return result
+  #rows(
+    table: string,
+    field: string,
+    id?: Id,
+  ): { field: number; ids: readonly Id[]; places: readonly number[] } {
+    const index = this.fields.findIndex((item) => item.table === table && item.field === field)
+    if (index < 0) throw new Error('The requested field was not recorded.')
+    if (id === undefined)
+      return { field: index, ids: this.fields[index]!.ids, places: this.#allPlaces[index]! }
+    const place = this.#places[index]!.get(id)
+    if (place === undefined) throw new Error('The requested identity was not recorded.')
+    return { field: index, ids: [id], places: [place] }
   }
-  async #plan(request: FrameRequest, frames: number, signal: AbortSignal): Promise<FramePlan> {
+  /** A page of `request.field` from the frame at or before `range[0]` to the first after
+   *  `range[1]`, or with a `step`, only the frames a view shows. Always has at least one frame. */
+  async frames(request: FrameRequest, signal: AbortSignal): Promise<FramePage> {
+    const { table, field, range, step } = request
     if (
-      !Number.isFinite(request.range[0]) ||
-      !Number.isFinite(request.range[1]) ||
-      request.range[1] < request.range[0] ||
-      (request.purpose === 'plot'
-        ? !Number.isSafeInteger(request.columns) || request.columns < 1
-        : !Number.isSafeInteger(request.bytes) ||
-          request.bytes < 1024 ||
-          request.bytes > PAYLOAD_BYTES ||
-          !Number.isFinite(request.step) ||
-          request.step < 0) ||
-      frames > this.#progress.frames ||
-      frames < 0
+      !Number.isFinite(range[0]) ||
+      !Number.isFinite(range[1]) ||
+      range[1] < range[0] ||
+      !Number.isFinite(step) ||
+      step < 0
     )
       throw new Error('Invalid result window.')
-    const field = this.fields.findIndex(
-      (item) => item.table === request.table && item.field === request.field,
-    )
-    if (field < 0) throw new Error('The requested field was not recorded.')
-    const held = this.fields[field]!.ids
-    const ids = request.ids ? [...new Set(request.ids)] : [...held]
-    const positions = new Map(held.map((id, index) => [id, index]))
-    const places = ids.map((id) => {
-      const row = positions.get(id)
-      if (row === undefined) throw new Error('The requested identity was not recorded.')
-      return row
-    })
-    if (!places.length) throw new Error('Choose at least one recorded row.')
-    const base = JSON.stringify([this.store.folder, request.table, request.field, ids])
-    const source = 'sample:' + createHash('sha256').update(base).digest('hex').slice(0, 20)
-    const key = createHash('sha256')
-      .update(
-        JSON.stringify([
-          base,
-          frames,
-          request.range,
-          request.purpose,
-          request.purpose === 'plot' ? request.columns : [request.bytes, request.step],
-        ]),
-      )
-      .digest('hex')
-    const kept = this.#plans.get(key)
-    if (kept) return kept
-    const first = frames
-      ? Math.max(
-          0,
-          (await this.#bound(request.range[0], request.purpose === 'playhead', frames)) - 1,
-        )
-      : 0
-    const stop = frames
-      ? Math.min(frames, (await this.#bound(request.range[1], true, frames)) + 1)
-      : 0
+    const rows = this.#rows(table, field)
+    const source = `frames:${basename(this.store.folder)}:${table}:${field}`
+    const patch = new Patch(source).axis('time', 's').replace(table, rows.ids)
+    const frames = this.#progress.frames
     signal.throwIfAborted()
-    // A plot holds buckets no wider than its columns; the playhead reads frames, those it shows.
-    const level = request.purpose === 'plot' ? detail(stop - first, request.columns) : 0
-    const intervals = this.#intervals(field, level, first, stop)
-    const picks =
-      request.purpose === 'playhead' && request.step > 0
-        ? await this.#picks(first, stop, request.range, request.step)
-        : undefined
-    signal.throwIfAborted()
-    if (request.purpose === 'playhead') {
-      const entries = picks?.length ?? intervals.reduce((sum, item) => sum + item.count, 0)
-      const bytes = entries * (8 + places.length * 4) + intervals.length * 128 + ids.length * 16
-      if (bytes > request.bytes)
-        throw problem(
-          'limit',
-          'This window exceeds the visualization budget. Choose fewer rows or a narrower time range.',
+    const first = frames ? Math.max(0, (await this.#bound(range[0], true, frames)) - 1) : 0
+    const stop = frames ? Math.min(frames, (await this.#bound(range[1], true, frames)) + 1) : 0
+    const picks = frames && step > 0 ? await this.#picks(range, step, frames) : undefined
+    // Encoded size: a time and one value per row for each entry, plus a fixed cost per run.
+    const entry = 8 + 4 * rows.places.length
+    const empty = new Patch(source).byteLength
+    const lone = { level: 0, first: 0, at: new Float64Array(1), values: new Float32Array(1) }
+    const run = new Patch(source).frames(table, field, lone).byteLength - empty - 12
+    let at = first
+    let next = 0
+    for (let sent = false; ; sent = true) {
+      signal.throwIfAborted()
+      const from = picks ? picks[next] : at
+      if (from === undefined || from >= stop) break
+      // Fill the remaining room, but always send at least one frame.
+      const room = Math.floor((PAGE_BYTES - patch.byteLength - run) / entry)
+      if (sent && room < 1) break
+      const most = Math.max(1, room)
+      const block = this.#rawAt(from)
+      const end = Math.min(stop, block.first + block.count)
+      if (picks) {
+        let to = next + 1
+        while (to < picks.length && picks[to]! < end && to - next < most) to++
+        const read = await this.store.readRaw(
+          block,
+          rows.field,
+          rows.places,
+          from - block.first,
+          picks[to - 1]! - from + 1,
         )
-    }
-    const plan: FramePlan = {
-      key,
-      source,
-      field,
-      ids,
-      places,
-      level,
-      first,
-      intervals,
-      frames,
-      ...(picks && { picks }),
-    }
-    this.#plans.set(key, plan)
-    while (this.#plans.size > 16) this.#plans.delete(this.#plans.keys().next().value!)
-    return plan
-  }
-  /** The entries of `plan` a page holding the plan `held` lacks, every stored entry being final once
-   *  written: none when `held` covers the window at least as finely, as a zoom into it does; else,
-   *  for the same window grown, as a run's grows, those of each level past the last `held` has of
-   *  that level. Undefined when `held` is another field's, window's or level's, or no plan this
-   *  file keeps, which the page reads whole instead. */
-  #lacking(plan: FramePlan, held: string): readonly Interval[] | undefined {
-    const key = `${plan.key}:${held}`
-    const kept = this.#deltas.get(key)
-    if (kept) return kept
-    const was = this.#plans.get(held)
-    if (!was || was.source !== plan.source || was.frames > plan.frames) return undefined
-    /** The frame past the last entry of `of`, of `level` alone when given. */
-    const end = (of: FramePlan, level?: number) =>
-      of.intervals.reduce(
-        (stop, item) =>
-          level === undefined || item.level === level
-            ? Math.max(stop, (item.first + item.count) * 8 ** item.level)
-            : stop,
-        of.first,
-      )
-    let lacking: readonly Interval[]
-    if (
-      was.frames === plan.frames &&
-      was.level <= plan.level &&
-      was.first <= plan.first &&
-      end(was) >= end(plan)
-    )
-      lacking = []
-    else if (was.level === plan.level && was.first === plan.first) {
-      // A run's growth only coarsens what came before, so what `held` has of each level is still
-      // drawn or covered by coarser buckets. latkit takes an entry again only at a level's end, and
-      // a page splits its runs where stored blocks do, so none is sent twice.
-      lacking = plan.intervals.flatMap((item) => {
-        const first = Math.max(item.first, Math.ceil(end(was, item.level) / 8 ** item.level))
-        const count = item.first + item.count - first
-        return count > 0 ? [{ level: item.level, first, count }] : []
-      })
-    } else return undefined
-    this.#deltas.set(key, lacking)
-    while (this.#deltas.size > 16) this.#deltas.delete(this.#deltas.keys().next().value!)
-    return lacking
-  }
-  async frames(request: FrameRequest & { next?: string }, signal: AbortSignal): Promise<FramePage> {
-    let cursor: Cursor | undefined
-    if (request.next) {
-      if (request.next.length > 1024) throw new Error('Invalid frame cursor.')
-      cursor = JSON.parse(request.next) as Cursor
-      if (
-        ![cursor.frames, cursor.part, cursor.offset].every((n) => Number.isSafeInteger(n) && n >= 0)
-      )
-        throw new Error('Invalid frame cursor.')
-    }
-    const plan = await this.#plan(request, cursor?.frames ?? this.#progress.frames, signal)
-    // A plot whose page holds an earlier plan of its window is sent what that lacks, on top of it.
-    const since = request.purpose === 'plot' ? request.since : undefined
-    const lacking = since === undefined ? undefined : this.#lacking(plan, since)
-    const intervals = lacking ?? plan.intervals
-    if (cursor && (cursor.key !== plan.key || cursor.base !== (lacking && since)))
-      throw new Error('The result window changed.')
-    let part = cursor?.part ?? 0
-    let offset = cursor?.offset ?? 0
-    const initial = intervals[part]
-    if (cursor && (!initial || offset >= initial.count))
-      throw new Error('Frame cursor exceeds its window.')
-    // A plot colors each trace by its place among them.
-    const fields =
-      request.purpose === 'plot'
-        ? { series: Float32Array.from(plan.ids, (_, place) => place) }
-        : undefined
-    const make = () =>
-      cursor || lacking
-        ? new Patch(plan.source)
-        : new Patch(plan.source).axis('time', 's').replace(request.table, plan.ids, fields)
-    // The page is written once: each run it takes is measured alone, then added.
-    const patch = make()
-    if (patch.byteLength > ENTRY_BYTES)
-      throw problem('limit', 'Visualization identities exceed 16 MiB.')
-    const empty = new Patch(plan.source).byteLength
-    let runs = 0
-    // The share of the frames read that a playhead's window sends, which sizes each read.
-    const stored = plan.intervals.reduce((sum, item) => sum + item.count, 0)
-    const share = plan.picks ? Math.max(plan.picks.length, 1) / Math.max(stored, 1) : 1
-    // Disk blocks follow ingestion boundaries; a wire page combines them up to its byte
-    // budget. This avoids one RPC per small live-ingestion block during later playback.
-    page: while (part < intervals.length && runs < 64) {
-      const interval = intervals[part]!
-      const first = interval.first + offset
-      const block =
-        interval.level === 0
-          ? this.#rawAt(first)
-          : this.#levelAt(plan.field, interval.level, first)!
-      const entryBytes = (interval.level ? 2 : 1) * (8 + plan.ids.length * 4)
-      if (runs && patch.byteLength + entryBytes + 256 > PAGE_BYTES) break
-      let count = Math.min(
-        interval.count - offset,
-        block.first + block.count - first,
-        Math.max(1, Math.floor((PAGE_BYTES - patch.byteLength - 1024) / (entryBytes * share))),
-      )
-      for (;;) {
-        signal.throwIfAborted()
-        const read =
-          interval.level === 0
-            ? rawRun(
-                await this.#stored(
-                  this.store.readRaw(
-                    block as RawIndex,
-                    plan.field,
-                    plan.places,
-                    first - block.first,
-                    count,
-                  ),
-                ),
-              )
-            : await this.#stored(
-                this.store.readLevel(block as LevelIndex, plan.places, first - block.first, count),
-              )
-        // A playhead's window sends the frames it shows of those read.
-        const run = plan.picks ? picked(read, plan.picks, plan.ids.length) : read
-        signal.throwIfAborted()
-        const adds = run.at.length
-          ? new Patch(plan.source).frames(request.table, request.field, run).byteLength - empty
-          : 0
-        if (patch.byteLength + adds <= PAGE_BYTES || (!runs && count === 1)) {
-          if (patch.byteLength + adds > ENTRY_BYTES)
-            throw problem('limit', 'A visualization frame exceeds 16 MiB.')
-          if (run.at.length) {
-            patch.frames(request.table, request.field, run)
-            runs++
-          }
-          offset += count
-          if (offset === interval.count) {
-            part++
-            offset = 0
-          }
-          break
-        }
-        if (count === 1) break page
-        count = Math.max(1, Math.floor(count / 2))
+        patch.frames(table, field, picked(rawRun(read), picks, next, to, rows.places.length))
+        next = to
+      } else {
+        const count = Math.min(end - from, most)
+        const read = await this.store.readRaw(
+          block,
+          rows.field,
+          rows.places,
+          from - block.first,
+          count,
+        )
+        patch.frames(table, field, rawRun(read))
+        at += count
       }
     }
-    const bytes = patch.toBytes()
-    const complete = part === intervals.length
-    const next: Cursor = {
-      key: plan.key,
-      frames: plan.frames,
-      part,
-      offset,
-      ...(lacking && { base: since }),
+    return { source, table, field, bytes: patch.toBytes() }
+  }
+  /** One file of `request.field`'s time tiles for latkit's Tiles. A level's last span ends with the
+   *  bucket still filling, which the next refresh fetches again. */
+  async tile(request: TileRequest, signal: AbortSignal): Promise<Uint8Array> {
+    const { table, file } = request
+    const rows = this.#rows(table, request.field, request.id)
+    const chunk = spanEntries(rows.ids.length)
+    const frames = this.#progress.frames
+    if (file === 'frames.json')
+      return new TextEncoder().encode(
+        JSON.stringify({
+          data: 'base.latk',
+          chunk,
+          url: '{level}/{index}.latk',
+          frames: [{ table, field: request.field, levels: levelsOf(frames), frames: [0, frames] }],
+        }),
+      )
+    if (file === 'base.latk')
+      return new Patch()
+        .axis('time', 's')
+        .replace(table, rows.ids, { series: Float32Array.from(rows.ids, (_, place) => place) })
+        .toBytes()
+    const { level, index } = file
+    if (
+      !Number.isSafeInteger(level) ||
+      level < 0 ||
+      level > 21 ||
+      !Number.isSafeInteger(index) ||
+      index < 0
+    )
+      throw new Error('Invalid time tile.')
+    const patch = new Patch()
+    for (const run of await this.#entries(rows, level, index * chunk, chunk, frames, signal))
+      patch.frames(table, request.field, run)
+    return patch.toBytes()
+  }
+  /** Raw frames at level 0, otherwise stored, then pending, then partial buckets. */
+  async #entries(
+    { field, places }: { field: number; places: readonly number[] },
+    level: number,
+    first: number,
+    count: number,
+    frames: number,
+    signal: AbortSignal,
+  ): Promise<VisualizationRun[]> {
+    const runs: VisualizationRun[] = []
+    if (level === 0) {
+      for (let at = first, stop = Math.min(frames, first + count); at < stop;) {
+        signal.throwIfAborted()
+        const block = this.#rawAt(at)
+        const taken = Math.min(stop, block.first + block.count) - at
+        runs.push(rawRun(await this.store.readRaw(block, field, places, at - block.first, taken)))
+        at += taken
+      }
+      return runs
     }
-    return {
-      key: plan.key,
-      source: plan.source,
-      table: request.table,
-      field: request.field,
-      bytes,
-      complete,
-      ...(lacking && { base: since }),
-      ...(!complete && { next: JSON.stringify(next) }),
+    const rows = this.fields[field]!.ids.length
+    const whole = Math.floor(frames / 8 ** level)
+    const stop = Math.min(whole, first + count)
+    const waiting = this.#pending[field]?.get(level) ?? []
+    for (let at = first; at < stop;) {
+      signal.throwIfAborted()
+      const block = this.#levelAt(field, level, at)
+      if (block) {
+        const taken = Math.min(stop, block.first + block.count) - at
+        runs.push(await this.store.readLevel(block, places, at - block.first, taken))
+        at += taken
+        continue
+      }
+      const from = waiting.length ? at - waiting[0]!.first : -1
+      if (from < 0 || from >= waiting.length)
+        throw lost(`What Studio kept of ${this.#layout.name} lacks a block of its buckets.`)
+      const taken = Math.min(stop - at, waiting.length - from)
+      runs.push(selected(waiting.slice(from, from + taken), places, rows))
+      at += taken
     }
+    const tail = this.#reducers[field]?.tail(level)
+    if (tail && tail.first >= first && tail.first < first + count && tail.first === whole)
+      runs.push(selected([tail], places, rows))
+    return runs
   }
   async exportCsv(path: string): Promise<void> {
     if (this.of(path)) throw new Error('Choose a different file from the open results.')

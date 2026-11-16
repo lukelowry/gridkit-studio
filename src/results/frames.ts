@@ -1,16 +1,15 @@
-/** The two forms a store keeps a field's frames in: as the file gave them, and as latkit draws
- *  them. */
+/** The two forms of a field's frames: raw, as the file has them, and reduced for latkit to draw. */
 
-/** Frames as the file gave them, each the values of the rows read of it, frame by frame. */
+/** Raw frames: the values of the selected rows, frame by frame. */
 export interface FrameBlock {
   readonly first: number
   readonly at: Float64Array
   readonly values: Float64Array
 }
 
-/** A run of a field's entries at one level of detail, as latkit's `Patch.frames` takes it: at level
- *  0 each a frame, above it each a bucket of frames, its first and last times, then every bucket's
- *  least values, then every one's greatest. */
+/** A run of a field's entries at one level of detail, as latkit's `Patch.frames` takes it. At level
+ *  0 each entry is a frame. Above it each is a bucket: its first and last times, then every
+ *  bucket's minimums, then every bucket's maximums. */
 export interface VisualizationRun {
   readonly level: number
   readonly first: number
@@ -18,8 +17,8 @@ export interface VisualizationRun {
   readonly values: Float32Array
 }
 
-/** Conversion happens only at the visualization boundary, never in scientific storage. A value
- *  float32 cannot hold is a gap, as one that is not finite is. */
+/** Converts to float32 for drawing only, never for storage. Values that are not finite, including
+ *  those too large for float32, become NaN gaps. */
 export function visualValues(values: Float64Array): Float32Array {
   const result = new Float32Array(values)
   for (let index = 0; index < result.length; index++)

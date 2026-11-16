@@ -7,18 +7,18 @@ const kv = { table: 'Bus', field: 'params.kv' }
 const vertex = channelsFor('vertex')
 
 describe('mappings', () => {
-  it('maps a field to exactly the channels named, taking them from whichever fields held them', () => {
+  it('maps a field to exactly the channels named, taking them from any other field', () => {
     const first = mapped({}, vertex, kv, ['vertexColor', 'vertexSize'])
     expect(channelsOf(first, kv)).toEqual(['vertexColor', 'vertexSize'])
     const second = mapped(first, vertex, vm, ['vertexColor', 'vertexHeight'], [0.9, 1.1])
     expect(channelsOf(second, kv)).toEqual(['vertexSize'])
     expect(second.vertexColor).toEqual({ ...vm, range: [0.9, 1.1] })
     expect(second.vertexHeight).toEqual({ ...vm, range: [0.9, 1.1] })
-    // Each change returns a new record and leaves its input untouched.
+    // Returns a new record and leaves the input untouched.
     expect(first.vertexColor).toEqual(kv)
   })
 
-  it('lets go of the channels a field held and is no longer given', () => {
+  it('clears the channels a field is no longer mapped to', () => {
     const all = mapped({}, vertex, vm, ['vertexColor', 'vertexSize'])
     expect(mapped(all, vertex, vm, ['vertexSize'])).toEqual({ vertexSize: vm })
     expect(mapped(all, vertex, vm, [])).toEqual({})

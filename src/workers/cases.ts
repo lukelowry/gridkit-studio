@@ -1,38 +1,31 @@
-/** The worker's case files: each case file Studio shows, read whole from disk, and what the views
- *  and the extension read of it. A file changed on disk is read again whole; one written again as
- *  it was keeps its case. */
+/** The worker's case files, read whole from disk. A file rewritten unchanged keeps its case. */
 
 import { versionOf } from '../gridkit/case.js'
 import type { Catalog } from '../gridkit/definition.js'
 import { type Case, diagnose, rangeIn, sourceRange } from '../gridkit/index.js'
 import { networkSelectionOf } from '../gridkit/inspection.js'
-import { CaseQueries } from '../gridkit/projection.js'
-import { fileURLToPath } from '../platform/path.js'
+import { CaseQueries } from '../gridkit/rows.js'
+import { fileURLToPath, nameOf } from '../platform/path.js'
 import { same, settled, type Stamp, stampAt } from '../results/stamp.js'
 import { problem, superseded } from '../shared/errors.js'
 import type { Revision, Summary, WorkerApi } from '../shared/messages.js'
 import type { Handlers } from '../shared/rpc.js'
-import { caseBytes, nameOf, parseCase, Recent, summarize } from './parsed.js'
+import { caseBytes, parseCase, summarize } from './parsed.js'
 
-/** A file as last read: its case, what the extension was told of it, the stamp of the file it was
- *  read from, once the file had rested before it, and the queries of its tables, once asked. */
-export interface Read {
+/** A file as last read. `stamp` is set only when the file had settled. */
+export interface CaseRead {
   readonly kase: Case
   readonly summary: Summary
   stamp?: Stamp
   queries?: CaseQueries
 }
 
-/** The case files the extension follows, each read with `catalog`. */
 export function caseFiles(catalog: Catalog) {
-  /** Each file followed: as last read, and the read of it under way, which a newer read takes the
-   *  place of. */
-  const files = new Map<string, { read?: Read; reading?: object }>()
-  /** Files let go of, kept a while, so one opened again as it was reads nothing. */
-  const recent = new Recent<Read>()
+  /** Each followed file's last read, and a token for the read in progress. */
+  const files = new Map<string, { read?: CaseRead; reading?: object }>()
 
-  /** The case read at `revision`; superseded once the file reads otherwise. */
-  function latest({ uri, version }: Revision): Read {
+  /** The read at `revision`. Throws `superseded` once the file has changed. */
+  function latest({ uri, version }: Revision): CaseRead {
     const read = files.get(uri)?.read
     if (read?.summary.version !== version) throw superseded()
     return read
@@ -44,26 +37,26 @@ export function caseFiles(catalog: Catalog) {
   > = {
     async read({ uri, version }, signal) {
       let file = files.get(uri)
-      if (!file) files.set(uri, (file = { read: recent.take(uri) }))
+      if (!file) files.set(uri, (file = {}))
       const reading = (file.reading = {})
       const current = () => {
         signal.throwIfAborted()
         if (files.get(uri) !== file || file.reading !== reading) throw superseded()
       }
-      // Stamped before it is read, so a file that changes meanwhile reads again next time.
+      // Stamp before reading, so a change during the read causes another read next time.
       const at = BigInt(Date.now()) * 1_000_000n
       const stamp = await stampAt(fileURLToPath(uri))
       if (!stamp) throw problem('invalid-input', `${nameOf(uri)} is not there.`)
       const before = file.read
       if (before && same(before.stamp, stamp)) return before.summary
-      // A file that changed just before may change again and keep its stamp: it reads again
-      // each time until it rests.
+      // A file changed very recently could change again without a new stamp, so it is read again
+      // each time until it settles.
       const kept = settled(stamp, at) ? stamp : undefined
       const bytes = await caseBytes(uri, signal)
       current()
-      // Written again as it was, as by a save that changed nothing: the case read stands, known
-      // by its fingerprint before any of the file is read into another.
-      const fingerprint = versionOf(catalog, bytes)
+      // A file rewritten unchanged keeps its case, found by fingerprint before parsing.
+      const fingerprint = await versionOf(catalog, bytes)
+      current()
       if (before?.kase.version === fingerprint) {
         before.stamp = kept
         return before.summary
@@ -93,20 +86,14 @@ export function caseFiles(catalog: Catalog) {
     },
     async page({ revision, request }, signal) {
       const read = latest(revision)
-      const queries = (read.queries ??= new CaseQueries(read.kase.projected()))
+      const queries = (read.queries ??= new CaseQueries(read.kase.columns()))
       const page = await queries.page(request, signal)
       if (latest(revision) !== read) throw superseded()
       return page
     },
     async release({ uri }) {
-      const read = files.get(uri)?.read
+      files.get(uri)?.read?.queries?.destroy()
       files.delete(uri)
-      // A file let go of stays read a while, so opening it again as it was reads nothing.
-      if (read) {
-        read.queries?.destroy()
-        read.queries = undefined
-        recent.keep(uri, read)
-      }
       return null
     },
   }
@@ -114,13 +101,10 @@ export function caseFiles(catalog: Catalog) {
   return {
     latest,
     handlers,
-    /** The file at `uri` as last read, while it is followed. */
-    read: (uri: string): Read | undefined => files.get(uri)?.read,
-    /** How many files it follows. */
+    read: (uri: string): CaseRead | undefined => files.get(uri)?.read,
     get count() {
       return files.size
     },
-    /** Lets go of every table's queries, as the worker ends. */
     dispose() {
       for (const file of files.values()) file.read?.queries?.destroy()
     },

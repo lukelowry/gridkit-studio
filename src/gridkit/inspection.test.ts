@@ -26,13 +26,13 @@ describe('case inspection', () => {
     )
     const selected = (table: string, id: string | number) =>
       networkSelectionOf(kase, { table, id }, signal)
-    // An element the Network draws is selected itself.
+    // An element the Network draws selects itself.
     expect(await selected('Bus', 1)).toEqual([{ table: 'Bus', id: 1 }])
     expect(await selected('Branch', 'line')).toEqual([{ table: 'Branch', id: 'line' }])
     // A machine by its bus, and a source by the bus of the machine its signal drives.
     expect(await selected('GenClassical', 'fault')).toEqual([{ table: 'Bus', id: 2 }])
     expect(await selected('ConstantSignalSource', 'source')).toEqual([{ table: 'Bus', id: 2 }])
-    // A source whose signal drives nothing selects nothing there.
+    // A source whose signal drives nothing selects nothing.
     expect(await selected('ConstantSignalSource', 'alone')).toEqual([])
     await expect(selected('Bus', 3)).rejects.toThrow(/Unknown element/)
   })

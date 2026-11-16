@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lukelowry/gridkit-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/lukelowry/gridkit-studio/actions/workflows/ci.yml)
 [![GridKit develop](https://img.shields.io/badge/GridKit-develop-brightgreen)](https://github.com/ORNL/GridKit/tree/develop)
-[![VS Code ≥ 1.140](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.140-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
+[![VS Code ≥ 1.141](https://img.shields.io/badge/VS%20Code-%E2%89%A5%201.141-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Release](https://img.shields.io/github/v/release/lukelowry/gridkit-studio?include_prereleases)](https://github.com/lukelowry/gridkit-studio/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -12,7 +12,7 @@ View and simulate [GridKit](https://github.com/ORNL/GridKit) power-system cases 
 
 ## Install
 
-Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.140 or later.
+Install **GridKit Studio** from the [Marketplace](https://marketplace.visualstudio.com/items?itemName=lukelowery.gridkit-studio), then open any `*.case.json` file. Requires VS Code 1.141 or later, and a GPU with WebGL 2.
 
 ## GridKit
 
@@ -26,11 +26,10 @@ Clear the setting to use the included solver again. In remote workspaces, the pa
 
 ## How to use
 
-Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. The Monitor plots results as GridKit runs. On the web, results stay in your browser; use **Export CSV** to download them.
+Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. The Monitor plots results as GridKit runs. On the web, results stay in your browser. Use **Export CSV** to download them.
 
-- **Monitored Signals** shows what the case records. Right-click a signal there to plot it, or to map it onto the network.
-- **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
 - **Open Results…** in the Monitor shows any other CSV GridKit wrote.
+- The Monitor panel lists enabled monitors. Right-click one to map it onto the network.
 
 ## Features
 
@@ -48,7 +47,7 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
 
-- Image export to PNG and video export to MP4/H.264
+- Image export to PNG, JPEG and WebP, and video export to MP4/H.264
 
 ## Author
 

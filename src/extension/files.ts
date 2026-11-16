@@ -1,24 +1,22 @@
-/** The case files Studio shows. The worker reads each one whole from disk, and again whenever
- *  it changes there, and Problems says what is wrong with it. Studio never writes a case. */
+/** The open case files. The worker reads each one whole, again whenever it changes on disk, and
+ *  Problems lists its issues. Studio never writes a case. */
 
 import * as vscode from 'vscode'
 
+import { nameOf } from '../platform/path.js'
 import { failedWith, type Problem, quiet, superseded } from '../shared/errors.js'
 import { type Element, revisionOf, type SourceRange, type Summary } from '../shared/messages.js'
 import type { Client } from './client.js'
-import { diagnosed, notice, saidInProblems, SHOW_PROBLEMS } from './report.js'
-import { nameOf } from './solvers.js'
+import { diagnosed, isDiagnosed, notice, SHOW_PROBLEMS } from './report.js'
 
-/** How long a file rests after it changes before it is read again, so a save written in parts, or
- *  a checkout of many files, reads once. */
+/** How long a changed file must stay unchanged before it is read again, so a save written in parts
+ *  or a checkout of many files reads once. */
 const SETTLE_MS = 100
 
-/** `range` as VS Code takes one. */
-const rangeOf = ({ start, end }: SourceRange) =>
+const editorRange = ({ start, end }: SourceRange) =>
   new vscode.Range(start[0], start[1], end[0], end[1])
 
-/** A case file as Studio reads it: its last summary, whether the file has moved past it, and why
- *  the file does not read. */
+/** A case file's last summary, whether the file changed since, and why it failed to read. */
 interface CaseFile {
   readonly summary?: Summary
   readonly stale: boolean
@@ -29,28 +27,30 @@ interface Entry extends CaseFile {
   summary?: Summary
   stale: boolean
   error?: string
-  /** The read under way, which a change of the file lets go of. */
+  /** The read in progress, dropped when the file changes. */
   pending?: Promise<Summary>
   reading?: AbortController
-  /** The version whose issues Problems lists, and the check of it under way. */
+  /** The version whose issues Problems lists, and the validation in progress. */
   checked?: number
   checking?: AbortController
-  /** Why the file is not read until it changes: reading it may be what stopped the last worker. */
+  /** Set when the worker crashed while reading this file: the file is not read again until it
+   *  changes or Reload View runs. */
   failed?: Error
+  /** Waiting for a changed file to settle; reads requested meanwhile wait for it. */
+  settling?: { readonly settled: Promise<void>; settle(): void }
   timer?: ReturnType<typeof setTimeout>
   readonly watcher: vscode.Disposable
 }
 
 export class CaseFiles implements vscode.Disposable {
   readonly #entries = new Map<string, Entry>()
-  /** Each read asks at a version of its own. The worker answers at the version the file's content
-   *  was first read at, so a file written again as it was changes nothing. */
+  /** Each read gets a new version. The worker answers with the version at which it first saw the
+   *  current content, so rewriting a file unchanged changes nothing. */
   #version = 0
-  /** Fires when a file's summary changes, or whether the file has moved past it. */
   readonly changed = new vscode.EventEmitter<string>()
   readonly diagnostics = vscode.languages.createDiagnosticCollection('gridkit')
 
-  /** `report` says why a file could not be read where Problems does not. */
+  /** `report` shows read failures that Problems cannot place. */
   constructor(
     readonly client: Client,
     private readonly report: (error: unknown) => void,
@@ -60,27 +60,30 @@ export class CaseFiles implements vscode.Disposable {
     return this.#entries.get(uri)
   }
 
-  /** Follows the file at `uri`: reads it now, and again whenever it changes on disk. */
   open(uri: string): void {
     if (this.#entries.has(uri)) return
     const file = vscode.Uri.parse(uri)
+    // Watch the folder: the file name as a glob may match other files, or miss itself (`[`, `{`).
     const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(vscode.Uri.joinPath(file, '..'), file.path.split('/').at(-1)!),
+      new vscode.RelativePattern(vscode.Uri.joinPath(file, '..'), '*'),
     )
-    const changed = () => this.#changed(uri)
+    const onlyThisFile =
+      (then: () => void) =>
+      ({ path }: vscode.Uri) => {
+        if (path === file.path) then()
+      }
     this.#entries.set(uri, {
       stale: true,
       watcher: vscode.Disposable.from(
         watcher,
-        watcher.onDidChange(changed),
-        watcher.onDidCreate(changed),
-        watcher.onDidDelete(() => this.#gone(uri)),
+        watcher.onDidChange(onlyThisFile(() => this.#changed(uri))),
+        watcher.onDidCreate(onlyThisFile(() => this.#changed(uri))),
+        watcher.onDidDelete(onlyThisFile(() => this.#gone(uri))),
       ),
     })
     void this.read(uri).catch(() => {})
   }
 
-  /** Stops following the file at `uri`, and lets the worker go of its case. */
   close(uri: string): void {
     const entry = this.#entries.get(uri)
     if (!entry) return
@@ -92,14 +95,18 @@ export class CaseFiles implements vscode.Disposable {
     this.changed.fire(uri)
   }
 
-  /** The case at `uri` as its file reads now, read again only if the file changed. Why it does not
-   *  read, thrown: Problems says where, when it can. A read that a newer one takes the place of
-   *  answers with the newer one. */
+  /** The current summary of the case at `uri`, read again only if the file changed. Throws why it
+   *  does not read, with diagnostics in Problems when it can place them. A superseded read resolves
+   *  with the newer one. */
   async read(uri: string): Promise<Summary> {
     for (;;) {
       const entry = this.#entries.get(uri)
-      if (!entry) throw new Error('GridKit Studio does not follow this case.')
+      if (!entry) throw new Error('This case is not open in GridKit Studio.')
       if (entry.failed) throw entry.failed
+      if (entry.settling) {
+        await entry.settling.settled
+        continue
+      }
       try {
         return await (entry.pending ?? this.#read(uri, entry))
       } catch (error) {
@@ -108,26 +115,24 @@ export class CaseFiles implements vscode.Disposable {
     }
   }
 
-  /** The case at `uri` as its file reads now, for something the user asked that needs it: where
-   *  the file does not read, a notice says it has problems to fix `before` that, which Problems
-   *  lists. */
+  /** Like `read`, for a user action. A case with diagnostics throws a notice to fix them `before`
+   *  the action. */
   async readable(uri: string, before?: string): Promise<Summary> {
     try {
       return await this.read(uri)
     } catch (error) {
-      if (!saidInProblems(error)) throw error
+      if (!isDiagnosed(error)) throw error
       throw notice(
-        `${nameOf(vscode.Uri.parse(uri))} has problems to fix ${before ? 'before ' + before : 'first'}.`,
+        `${nameOf(uri)} has problems to fix ${before ? 'before ' + before : 'first'}.`,
         SHOW_PROBLEMS,
       )
     }
   }
 
-  /** Opens the file as text beside, with `element` selected there when one is given. */
   async reveal(uri: string, element?: Element): Promise<void> {
     const selection =
       element &&
-      rangeOf(
+      editorRange(
         await this.client.worker.call('locate', {
           ...revisionOf(await this.read(uri)),
           ...element,
@@ -146,10 +151,13 @@ export class CaseFiles implements vscode.Disposable {
     )
   }
 
-  /** The worker stopped with `error`: a new one reads every file again, unless reading one may be
-   *  what stopped it, when `failed` says so, and each waits until its file changes. */
-  restart(error: Error, failed?: Error): void {
+  /** The worker stopped with `error`. The new worker reads every file again, except those being
+   *  read during the crash, which wait for a change or Reload View. */
+  restart(error: Error): void {
     for (const [uri, entry] of this.#entries) {
+      const failed = entry.pending
+        ? new Error(`${error.message} Save ${nameOf(uri)} or run Reload View to read it again.`)
+        : undefined
       this.#stop(entry)
       Object.assign(entry, { checked: undefined, stale: true, error: error.message, failed })
       this.changed.fire(uri)
@@ -157,15 +165,29 @@ export class CaseFiles implements vscode.Disposable {
     }
   }
 
-  /** Lets go of what `entry` does now: its read, its check, and its wait to read again. */
+  /** Reload View: reads a file that was being read when the worker crashed. */
+  retry(uri: string): void {
+    const entry = this.#entries.get(uri)
+    if (!entry?.failed) return
+    entry.failed = undefined
+    void this.read(uri).catch(() => {})
+  }
+
   #stop(entry: Entry): void {
     entry.reading?.abort()
     entry.checking?.abort()
     entry.pending = undefined
-    clearTimeout(entry.timer)
+    this.#endSettling(entry)
   }
 
-  /** The file changed on disk: what was read of it is behind it until it rests and reads again. */
+  /** Ends `entry`'s settle wait and releases reads waiting on it. */
+  #endSettling(entry: Entry): void {
+    clearTimeout(entry.timer)
+    entry.settling?.settle()
+    entry.settling = undefined
+  }
+
+  /** The file changed on disk: mark it stale and read it once it settles. */
   #changed(uri: string): void {
     const entry = this.#entries.get(uri)
     if (!entry) return
@@ -173,13 +195,21 @@ export class CaseFiles implements vscode.Disposable {
     entry.pending = undefined
     entry.failed = undefined
     clearTimeout(entry.timer)
-    entry.timer = setTimeout(() => void this.read(uri).catch(() => {}), SETTLE_MS)
+    if (!entry.settling) {
+      let settle!: () => void
+      const settled = new Promise<void>((resolve) => (settle = resolve))
+      entry.settling = { settled, settle }
+    }
+    entry.timer = setTimeout(() => {
+      this.#endSettling(entry)
+      void this.read(uri).catch(() => {})
+    }, SETTLE_MS)
     if (entry.stale) return
     entry.stale = true
     this.changed.fire(uri)
   }
 
-  /** The file is gone: what was read of it stands, behind, until a file is there again. */
+  /** The file was deleted: keep the last summary, marked stale, until it reappears. */
   #gone(uri: string): void {
     const entry = this.#entries.get(uri)
     if (!entry) return
@@ -189,7 +219,7 @@ export class CaseFiles implements vscode.Disposable {
   }
 
   #read(uri: string, entry: Entry): Promise<Summary> {
-    clearTimeout(entry.timer)
+    this.#endSettling(entry)
     const reading = (entry.reading = new AbortController())
     const current = () => this.#entries.get(uri) === entry && !reading.signal.aborted
     const pending: Promise<Summary> = this.client.worker
@@ -197,23 +227,23 @@ export class CaseFiles implements vscode.Disposable {
       .then(
         (read) => {
           if (!current()) throw superseded()
-          // The file as it was keeps its summary, so the views read nothing again.
+          // Unchanged content keeps its summary object, so the views fetch nothing again.
           const summary = read.version === entry.summary?.version ? entry.summary : read
-          const news = summary !== entry.summary || entry.stale || entry.error !== undefined
+          const updated = summary !== entry.summary || entry.stale || entry.error !== undefined
           Object.assign(entry, { summary, stale: false, error: undefined })
-          // What Problems said of another version, or of a file that did not read, goes at once.
+          // Clear diagnostics from another version or a failed read right away.
           if (entry.checked !== summary.version) {
             this.diagnostics.delete(vscode.Uri.parse(uri))
             this.#check(uri, entry, summary)
           }
-          if (news) this.changed.fire(uri)
+          if (updated) this.changed.fire(uri)
           return summary
         },
         (error: Error & Pick<Problem, 'range' | 'problems'>) => {
           if (!current()) throw superseded()
           entry.checking?.abort()
           Object.assign(entry, { stale: true, error: error.message, checked: undefined })
-          // Problems says what is wrong in the file, where it says where; anything else is said.
+          // Problems shows errors that have a location; anything else is reported.
           const places = error.problems?.length
             ? error.problems
             : error.range
@@ -222,7 +252,9 @@ export class CaseFiles implements vscode.Disposable {
           if (places.length) {
             this.diagnostics.set(
               vscode.Uri.parse(uri),
-              places.map(({ message, range }) => new vscode.Diagnostic(rangeOf(range), message)),
+              places.map(
+                ({ message, range }) => new vscode.Diagnostic(editorRange(range), message),
+              ),
             )
             diagnosed(error)
           } else this.report(error)
@@ -237,7 +269,7 @@ export class CaseFiles implements vscode.Disposable {
     return pending
   }
 
-  /** Lists in Problems what is wrong with the case `summary` describes, once per version. */
+  /** Lists the case's validation issues in Problems, once per version. */
   #check(uri: string, entry: Entry, summary: Summary): void {
     entry.checking?.abort()
     const checking = (entry.checking = new AbortController())
@@ -250,7 +282,7 @@ export class CaseFiles implements vscode.Disposable {
           issues.map((issue) =>
             Object.assign(
               new vscode.Diagnostic(
-                rangeOf(issue),
+                editorRange(issue),
                 issue.message,
                 issue.severity === 'error'
                   ? vscode.DiagnosticSeverity.Error

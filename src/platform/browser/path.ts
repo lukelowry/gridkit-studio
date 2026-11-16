@@ -25,3 +25,5 @@ export function resolve(first = '/', ...parts: string[]) {
   return rendered(Utils.resolvePath(uri(current), '.'), current)
 }
 export const fileURLToPath = (path: string) => path
+/** The file name at `uri` as the Explorer shows it: the last segment, decoded. */
+export const nameOf = (uri: string) => decodeURIComponent(uri.slice(uri.lastIndexOf('/') + 1))

@@ -1,7 +1,5 @@
-/** The Case panel's commands: the type it shows, its columns, its order and what filters its rows.
- *  What the panel shows is the session's, which every command here changes, the panel shown or
- *  not. Its title bar's type and name filter are VS Code's own pickers, in place of controls inside
- *  the panel. */
+/** Case panel commands: type, columns, sort order and filters. They change the session's table
+ *  state whether or not the panel is shown, using VS Code pickers instead of in-panel controls. */
 
 import * as vscode from 'vscode'
 
@@ -11,9 +9,7 @@ import type { Summary } from '../shared/messages.js'
 import type { Commands, Context } from './commands.js'
 
 export function registerTable({ command, valuesOf }: Commands) {
-  /** The type the Case panel shows of the case `summary` describes, which its column commands
-   *  change. */
-  const shownOf = ({ session }: Context, summary: Summary) => {
+  const shownTypeOf = ({ session }: Context, summary: Summary) => {
     const type = shownType(summary, session.table)
     if (!type || !tableDefinition(summary.definition, type))
       throw new Error('This case has no elements to show.')
@@ -32,11 +28,11 @@ export function registerTable({ command, valuesOf }: Commands) {
         type,
       }))
     const picker = vscode.window.createQuickPick<Item>()
-    picker.title = 'Show in Case'
+    picker.title = 'Choose Type'
     picker.placeholder = 'Element type'
     picker.items = items
-    const shown = shownType(summary, session.table)
-    picker.activeItems = items.filter((item) => item.type === shown)
+    const current = shownType(summary, session.table)
+    picker.activeItems = items.filter((item) => item.type === current)
     picker.onDidAccept(() => {
       const type = picker.selectedItems[0]?.type
       if (type) session.setTable({ type })
@@ -45,23 +41,23 @@ export function registerTable({ command, valuesOf }: Commands) {
     picker.onDidHide(() => picker.dispose())
     picker.show()
   })
-  // Live, as a filter box is: each keystroke filters, and Escape puts the old text back.
+  // Filters on each keystroke without saving; Escape restores the old filter, Enter saves.
   command('filterRows', async (context) => {
     const { session } = context
     const summary = await context.summary()
     const before = session.table.filter
     let kept = false
     const input = vscode.window.createInputBox()
-    input.title = 'Filter ' + tableLabel(summary.definition, shownOf(context, summary))
+    input.title = 'Filter ' + tableLabel(summary.definition, shownTypeOf(context, summary))
     input.prompt = 'Rows whose name contains'
     input.value = before ?? ''
-    input.onDidChangeValue((filter) => session.setTable({ filter }))
+    input.onDidChangeValue((filter) => session.setTable({ filter }, false))
     input.onDidAccept(() => {
       kept = true
       input.hide()
     })
     input.onDidHide(() => {
-      if (!kept) session.setTable({ filter: before })
+      session.setTable({ filter: kept ? input.value : before })
       input.dispose()
     })
     input.show()
@@ -71,8 +67,8 @@ export function registerTable({ command, valuesOf }: Commands) {
     const summary = await context.summary()
     const { definition } = summary
     const { table } = session
-    const type = shownOf(context, summary)
-    const shown = shownColumns(summary, table, type)
+    const type = shownTypeOf(context, summary)
+    const visible = shownColumns(summary, table, type)
     const selected = await vscode.window.showQuickPick(
       tableFields(summary, type).map((field) => ({
         label: leaf(field),
@@ -83,7 +79,7 @@ export function registerTable({ command, valuesOf }: Commands) {
           .filter(Boolean)
           .join(' · '),
         field,
-        picked: shown.includes(field),
+        picked: visible.includes(field),
       })),
       { title: tableLabel(definition, type) + ' columns', canPickMany: true },
     )
@@ -95,7 +91,7 @@ export function registerTable({ command, valuesOf }: Commands) {
   command('resetColumns', async (context) => {
     const { session } = context
     const { table } = session
-    const type = shownOf(context, await context.summary())
+    const type = shownTypeOf(context, await context.summary())
     if (table.columns?.[type])
       session.setTable({
         columns: Object.fromEntries(
@@ -106,7 +102,7 @@ export function registerTable({ command, valuesOf }: Commands) {
   command('hideColumn', async (context) => {
     const { session, field } = context
     const summary = await context.summary()
-    const type = shownOf(context, summary)
+    const type = shownTypeOf(context, summary)
     const { table } = session
     session.setTable({
       columns: {

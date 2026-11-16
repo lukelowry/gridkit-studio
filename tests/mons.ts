@@ -1,12 +1,9 @@
-/** A case's `mon` lists written as a user writes them in its file: a record's list changed where it
- *  is, or added before the record's closing brace, and every other byte as it was. GridKit reads a
- *  number as it is written, a real written as an integer otherwise, so a case is never written
- *  again whole. */
+/** Edits a case's `mon` lists in place, leaving every other byte unchanged: GridKit reads numbers
+ *  as written, so reserializing the case could turn a real into an integer. */
 
 import { type Node, parseTree } from 'jsonc-parser'
 
-/** A record and what it lists: its array, its place in it, its type (Bus for any bus, a device's
- *  class), and its `mon` list as written. */
+/** A bus or device record: its array, index, type (Bus, or the device class) and `mon` list. */
 export interface Listed {
   readonly array: 'buses' | 'devices'
   readonly index: number
@@ -14,12 +11,10 @@ export interface Listed {
   readonly mon: readonly string[]
 }
 
-/** The value of member `name` of the object `record`. */
 const member = (record: Node, name: string) =>
   record.children?.find((property) => property.children?.[0]?.value === name)?.children?.[1]
 
-/** `text`, a case, with each record's `mon` list as `list` gives it, or as it was where `list` gives
- *  none. */
+/** Replaces each record's `mon` list with what `list` returns; `undefined` leaves it unchanged. */
 export function withMons(text: string, list: (record: Listed) => readonly string[] | undefined) {
   const edits: { offset: number; length: number; text: string }[] = []
   for (const property of parseTree(text)?.children ?? []) {
@@ -29,14 +24,14 @@ export function withMons(text: string, list: (record: Listed) => readonly string
     for (const [index, record] of (value.children ?? []).entries()) {
       if (record.type !== 'object') continue
       const mon = member(record, 'mon')
-      const now = list({
+      const replacement = list({
         array,
         index,
         type: array === 'buses' ? 'Bus' : String(member(record, 'class')?.value),
         mon: mon?.type === 'array' ? (mon.children ?? []).map((name) => String(name.value)) : [],
       })
-      if (!now) continue
-      const written = JSON.stringify(now)
+      if (!replacement) continue
+      const written = JSON.stringify(replacement)
       edits.push(
         mon
           ? { offset: mon.offset, length: mon.length, text: written }
@@ -44,7 +39,7 @@ export function withMons(text: string, list: (record: Listed) => readonly string
       )
     }
   }
-  // The records are in file order, so the edits are too.
+  // Records are visited in file order, so the edits are sorted.
   let made = ''
   let at = 0
   for (const edit of edits) {

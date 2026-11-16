@@ -1,5 +1,5 @@
-/** GridKit Studio in the VS Code it runs in, driven through its commands and its exports: what a
- *  test checks is what Studio holds and says, never what a window draws. */
+/** Drives Studio through its commands and exports; tests check Studio's state and messages, never
+ *  what a window draws. */
 
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -8,34 +8,31 @@ import { basename, join } from 'node:path'
 import * as vscode from 'vscode'
 
 import type { Session } from '../../src/extension/session.js'
-import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
+import type { Studio } from '../../src/extension/studio.js'
 import { available } from '../../src/gridkit/index.js'
 import { contextKey } from '../../src/shared/ids.js'
 import type { Run } from '../../src/shared/messages.js'
 import { type Keys, type Manifest, Menus } from '../menus.js'
 import { withMons } from '../mons.js'
 
-/** How long a wait lasts before it fails: Studio answers a change in far less. */
 const WAIT = 10_000
 
-/** A solver file's members, besides the case it names. */
+/** Solver file members other than the case file. */
 export type Solver = Record<string, unknown>
 
-/** The test workspace folder, which holds the case. */
 export const folder = () => vscode.workspace.workspaceFolders![0]!.uri
 
-/** GridKit Studio as installed in this VS Code. */
-export function extension(): vscode.Extension<{ studio: Sessions }> {
-  const found = vscode.extensions.getExtension<{ studio: Sessions }>('lukelowery.gridkit-studio')
+export function extension(): vscode.Extension<{ studio: Studio }> {
+  const found = vscode.extensions.getExtension<{ studio: Studio }>('lukelowery.gridkit-studio')
   assert.ok(found, 'GridKit Studio must be installed and enabled')
   return found
 }
 
-/** Resolves to what `holds` answers once it is truthy: asked now, and again at each change Studio
- *  or VS Code says it made. Fails after `timeout`, saying `label`. */
+/** Resolves with `check`'s first truthy result, evaluated now and on each Studio or VS Code change
+ *  event. Rejects with `label` after `timeout`. */
 export function until<T>(
-  holds: () => T | Promise<T>,
+  check: () => T | Promise<T>,
   label: string | (() => string),
   timeout = WAIT,
 ): Promise<NonNullable<T>> {
@@ -62,7 +59,7 @@ export function until<T>(
       try {
         do {
           again = false
-          const value = await holds()
+          const value = await check()
           if (value) return end(() => resolve(value as NonNullable<T>))
         } while (again && !done)
       } catch (error) {
@@ -78,7 +75,7 @@ export function until<T>(
       vscode.languages.onDidChangeDiagnostics,
       vscode.window.tabGroups.onDidChangeTabs,
     ].map((event) => event(() => void ask()))
-    // What no event announces, such as a file another process writes, is asked of now and then.
+    // Poll for changes no event reports, such as a file another process writes.
     const fallback = setInterval(() => void ask(), 250)
     const timer = setTimeout(
       () =>
@@ -89,8 +86,7 @@ export function until<T>(
   })
 }
 
-/** The solver file `name.solver.json` for the case `name.case.json` beside it: its own members,
- *  writing its samples to `output/name.csv`. */
+/** A solver file for `name.case.json` that writes to `output/name.csv`. */
 const solverText = (name: string, solver: Solver) =>
   JSON.stringify(
     { system_model_file: name + '.case.json', output_file: 'output/' + name + '.csv', ...solver },
@@ -98,22 +94,18 @@ const solverText = (name: string, solver: Solver) =>
     4,
   ) + '\n'
 
-/** The text of the file at `uri` as it is on disk. */
 const textOf = (uri: vscode.Uri) => readFile(uri.fsPath, 'utf8')
 
-/** IEEE39, the case every suite starts from, followed alone with its file as found. The local
- *  end-to-end suites drive the same bench from outside the window too. */
+/** IEEE39, the case every suite starts from, with its original files. The e2e suites extend it. */
 export class Bench {
-  /** The case's file as found. */
+  /** The original case file. */
   readonly text: string
-  /** Its solver file as found. */
+  /** The original solver file. */
   readonly solverText: string
-  /** That case, parsed. */
   readonly source: {
     buses: { number: number; name: string; params: { kv: number } }[]
     devices: { class: string; id: string; ports?: Record<string, number | string | null> }[]
   }
-  /** Where the installed manifest places Studio's commands. */
   readonly menus: Menus
 
   protected constructor(text: string, solver: string) {
@@ -130,7 +122,7 @@ export class Bench {
     return new Bench(text, solver)
   }
 
-  get studio(): Sessions {
+  get studio(): Studio {
     return extension().exports.studio
   }
   get uri(): vscode.Uri {
@@ -148,17 +140,17 @@ export class Bench {
     return vscode.Uri.joinPath(folder(), 'IEEE39.solver.json')
   }
 
-  /** What Studio said the user would see, taken so the test may expect it. */
-  said(): string[] {
+  /** Removes and returns the errors Studio reported, so a test can expect them. */
+  takeErrors(): string[] {
     return this.studio.reporter.errors.splice(0)
   }
 
-  /** Follow the case, as opening it does. */
+  /** Makes the case active, as opening it does. */
   follow(uri = this.uri): Promise<Session> {
     return this.studio.open(uri.toString())
   }
 
-  /** Wait until Studio reads the case at `uri` as its file holds it now. */
+  /** Waits until Studio has read the current contents of the case at `uri`. */
   async settled(uri = this.uri): Promise<void> {
     const key = uri.toString()
     const { fingerprint } = await this.studio.files.read(key)
@@ -168,14 +160,12 @@ export class Bench {
     }, 'the case reads as its file')
   }
 
-  /** Write `text` into the case file at `uri`, as another program saves it. */
   async write(text: string, uri = this.uri): Promise<void> {
     await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(text))
   }
 
-  /** Make every element of `type` record `fields` and no other sampled field, and with `only`,
-   *  every other element nothing: their `mon` lists written into the file at `uri` as a user
-   *  writes them. Waits for Studio to read the case so. */
+  /** Rewrites the `mon` lists in the case file so every `type` element records exactly `fields`
+   *  (and with `only`, nothing else records), then waits for Studio to read it. */
   async record(
     type: string,
     fields: readonly string[],
@@ -214,12 +204,10 @@ export class Bench {
     )
   }
 
-  /** Make the case record `fields` of `type` and nothing else. */
   recordOnly(type: string, fields: readonly string[]): Promise<void> {
     return this.record(type, fields, this.uri, true)
   }
 
-  /** Write the solver file beside the case `uri`, its members `solver`. */
   async writeSolver(solver: Solver, uri = this.uri): Promise<vscode.Uri> {
     const name = basename(uri.path).replace(/\.case\.json$/i, '')
     const file = vscode.Uri.joinPath(uri, '..', name + '.solver.json')
@@ -227,7 +215,7 @@ export class Bench {
     return file
   }
 
-  /** Run the solver file as its Explorer menu does, and wait for the run to end. */
+  /** Runs the solver file as its Explorer menu does and waits for the run to end. */
   async run(command = 'gridkitStudio.runSimulation', ...args: unknown[]): Promise<Run> {
     const before = this.studio.get(this.key)?.run?.id
     await vscode.commands.executeCommand(command, ...(args.length ? args : [this.solver]))
@@ -239,8 +227,8 @@ export class Bench {
     return run
   }
 
-  /** The run after the one `before` names, once it ends. */
-  ran(before: string | undefined, timeout = 120_000): Promise<Run> {
+  /** The first run after `before`, once it ends. */
+  nextRun(before: string | undefined, timeout = 120_000): Promise<Run> {
     return until(
       () => {
         const run = this.studio.get(this.key)?.run
@@ -251,15 +239,13 @@ export class Bench {
     )
   }
 
-  /** Run `command` as VS Code does from a menu, without waiting on it: one that asks something
-   *  waits for its answer. Its failure is said as Studio says any. */
+  /** Runs `command` as a menu does, without waiting for it; failures go to Studio's reporter. */
   command(command: string, ...args: unknown[]): void {
     void vscode.commands
       .executeCommand(command, ...args)
       .then(undefined, (error: unknown) => this.studio.reporter.error(error))
   }
 
-  /** The context keys VS Code holds for title bars and the Command Palette. */
   keys(): Keys {
     return {
       ...Object.fromEntries(
@@ -269,8 +255,8 @@ export class Bench {
     }
   }
 
-  /** Whether GridKit runs here: bundled WASM, or an explicit native install. A required run fails
-   *  without it. */
+  /** Whether GridKit is available (bundled WASM or a native install); throws when
+   *  GRIDKIT_TEST_REQUIRED is set and it is not. */
   async gridkit(): Promise<boolean> {
     const runtime = available(gridkitOf(this.uri))
     if (process.env.GRIDKIT_TEST_REQUIRED === '1') await runtime
@@ -280,7 +266,6 @@ export class Bench {
     )
   }
 
-  /** Copy a case of the repository's into the workspace, named `name`, and follow it. */
   async copy(path: string, name = basename(path)): Promise<vscode.Uri> {
     const uri = vscode.Uri.joinPath(folder(), name)
     await vscode.workspace.fs.writeFile(
@@ -290,21 +275,20 @@ export class Bench {
     return uri
   }
 
-  /** Back to IEEE39 alone and followed: its file and solver file as found, no editor open, nothing
-   *  run, selected, mapped or plotted. */
+  /** Restores IEEE39 as the only, active case, with nothing run, selected, mapped or plotted. */
   async reset(): Promise<void> {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors')
     await this.restore()
     const session = await this.follow()
     await this.settled()
     this.clean(session)
-    // No Network is open to frame it, so how one last did is gone with it.
+    // No Network is open, so the last framing no longer applies.
     session.setFraming(undefined)
     session.clear()
-    this.said()
+    this.takeErrors()
   }
 
-  /** Stops a run under way, and writes the case's file and solver file back as found. */
+  /** Stops any run and restores the original case and solver files. */
   protected async restore(): Promise<void> {
     const running = this.studio.get(this.key)
     if (running?.running) {
@@ -316,11 +300,13 @@ export class Bench {
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
   }
 
-  /** Lets go of what `session` shows: nothing selected, mapped, plotted or filtered, and its clock
-   *  at its own pace. How the Network frames it stays the Network's, which says it as it changes. */
+  /** Clears selection, mappings, monitor choices and table filters, and resets the playback rate.
+   *  Framing is left to the Network, which reports it as it changes. */
   protected clean(session: Session): void {
     session.select()
-    session.setPlots([])
+    for (const { table, field } of session.monitors) session.setMonitor({ table, field })
+    const [first] = session.monitors
+    if (first) session.showMonitor(first)
     for (const { table, field } of Object.values(session.mappings))
       session.map({ table, field }, [])
     session.setTable({
@@ -336,15 +322,14 @@ export class Bench {
 
 let started: Promise<Bench> | undefined
 
-/** The one bench, reset: every suite starts from IEEE39 alone, so each runs alone as it does
- *  among the others. */
+/** The shared bench, reset so each suite starts from the same state. */
 export async function bench(): Promise<Bench> {
   const host = await (started ??= Bench.start())
   await host.reset()
   return host
 }
 
-/** What the bench holds when a test fails, and a run it left going stopped. */
+/** Logs the bench state after a test fails and stops any run it left going. */
 export async function failed(): Promise<void> {
   const host = await started?.catch(() => undefined)
   if (!host) return

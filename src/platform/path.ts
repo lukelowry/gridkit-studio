@@ -17,3 +17,4 @@ export const resolve = (first = '.', ...parts: string[]) =>
     ? portable.resolve(first, ...parts)
     : native.resolve(first, ...parts)
 export const fileURLToPath = (path: string) => (path.startsWith('file:') ? filePath(path) : path)
+export const { nameOf } = portable

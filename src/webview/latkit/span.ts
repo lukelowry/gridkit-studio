@@ -1,36 +1,33 @@
-/** How far across a case lies, which scales the heights its Network maps. */
+/** A case's span, which scales the elevations the Network maps. */
 
 import { type Data, field, type Id } from 'latkit'
 
 import type { Drawing } from '../../shared/document.js'
 
-/** The distance the stress layout keeps between linked vertices, in plane units: latkit's own
- *  default, named so a case's span on a plane is known. */
+/** latkit's default stress layout gap between linked vertices, in plane units. */
 export const GAP = 40
 
-/** Each revision of a case's data is a Data of its own, so a span is measured once per revision. */
 const spans = new WeakMap<Data, number>()
 
-/** How far across a case's vertices lie, in the units its space places them in. On the earth: the
- *  diagonal of the box their positions fill, in degrees of arc, as elevations are. On a plane: the
- *  most links between two of them times the gap the stress layout keeps between linked vertices,
- *  since it draws graph distances as distances. */
+/** How far across a case's vertices lie, in the units of their space. On the earth: the diagonal
+ *  of their bounding box in degrees of arc. On a plane: the most links between two vertices times
+ *  GAP, since the stress layout draws graph distance as distance. */
 export function caseSpan(data: Data, drawing: Drawing): number {
   let span = spans.get(data)
   if (span === undefined) {
-    const held = new Set(data.describe().tables.map((table) => table.name))
+    const tables = new Set(data.describe().tables.map((table) => table.name))
     span = drawing.geographic
-      ? diagonal(data, drawing, held)
-      : GAP * linksAcross(data, drawing, held)
+      ? diagonal(data, drawing, tables)
+      : GAP * linksAcross(data, drawing, tables)
     spans.set(data, span)
   }
   return span
 }
 
-function diagonal(data: Data, drawing: Drawing, held: ReadonlySet<string>): number {
+function diagonal(data: Data, drawing: Drawing, tables: ReadonlySet<string>): number {
   let [west, east, south, north] = [Infinity, -Infinity, Infinity, -Infinity]
   for (const { table, position } of drawing.vertices) {
-    if (!held.has(table)) continue
+    if (!tables.has(table)) continue
     const { fields } = data.query({
       of: table,
       select: { x: field(position[0]), y: field(position[1]) },
@@ -51,21 +48,19 @@ function diagonal(data: Data, drawing: Drawing, held: ReadonlySet<string>): numb
   return Math.hypot(across, north - south)
 }
 
-function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): number {
-  // Every vertex by its place, table by table.
+function linksAcross(data: Data, drawing: Drawing, tables: ReadonlySet<string>): number {
   const places = new Map<string, Map<Id, number>>()
   let count = 0
   for (const { table } of drawing.vertices) {
-    if (!held.has(table) || places.has(table)) continue
+    if (!tables.has(table) || places.has(table)) continue
     const place = new Map<Id, number>()
     for (const id of data.query({ of: table, select: {} }).ids) place.set(id, count++)
     places.set(table, place)
   }
-  // Every link between two places, both ways.
   const from: number[] = []
   const to: number[] = []
   for (const { table, ends } of drawing.edges) {
-    if (!ends || !held.has(table)) continue
+    if (!ends || !tables.has(table)) continue
     const { fields } = data.query({ of: table, select: { a: field(ends[0]), b: field(ends[1]) } })
     const [a, b] = [fields.a, fields.b] as { reference: string; ids: (Id | null)[] }[]
     const [first, second] = [places.get(a!.reference), places.get(b!.reference)]
@@ -79,7 +74,7 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
       to.push(q, p)
     }
   }
-  // Each place's links in one array, as offsets into it.
+  // Adjacency lists in compressed sparse row form.
   const offsets = new Int32Array(count + 1)
   for (const p of from) offsets[p + 1]!++
   for (let p = 0; p < count; p++) offsets[p + 1]! += offsets[p]!
@@ -88,7 +83,7 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
   for (let i = 0; i < from.length; i++) linked[filled[from[i]!]!++] = to[i]!
   const links = new Int32Array(count).fill(-1)
   const queue = new Int32Array(count)
-  /** Breadth first from `start`: how many places it reaches, the farthest last in `queue`. */
+  /** Breadth-first search from `start`; returns the count reached, the farthest last in `queue`. */
   const sweep = (start: number): number => {
     let reached = 1
     queue[0] = start
@@ -107,8 +102,7 @@ function linksAcross(data: Data, drawing: Drawing, held: ReadonlySet<string>): n
   const forget = (reached: number) => {
     for (let at = 0; at < reached; at++) links[queue[at]!] = -1
   }
-  // In each island, the place farthest from any, then the farthest from that: the most links
-  // between two of its places, or close to it.
+  // A double sweep per connected component approximates its diameter.
   const seen = new Uint8Array(count)
   let most = 0
   for (let start = 0; start < count; start++) {

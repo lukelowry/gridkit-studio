@@ -1,4 +1,4 @@
-/** Fetch once at build time. The VSIX contains everything needed to run offline. */
+/** Fetches the pinned WASM solver at build time, so the VSIX runs offline. */
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'

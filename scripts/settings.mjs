@@ -1,5 +1,5 @@
-/** Writes the settings of src/shared/settings.ts into package.json, as VS Code's Settings lists
- *  them; `--check` fails where package.json differs instead. */
+/** Writes the settings from src/shared/settings.ts into package.json; `--check` fails on a
+ *  difference instead. */
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { build } from 'esbuild'
@@ -19,8 +19,7 @@ const path = new URL('../package.json', import.meta.url)
 const source = await readFile(path, 'utf8')
 const manifest = JSON.parse(source)
 
-/** A setting as package.json declares it, `order`th of its category. `--check` compares key order
- *  too. */
+/** A package.json setting declaration. Key order matters, since `--check` compares it too. */
 function property(setting, order) {
   const base = {
     default: setting.default,
@@ -34,14 +33,18 @@ function property(setting, order) {
         ...base,
         type: typeof setting.default,
         enum: setting.options.map((option) => option.value),
-        enumDescriptions: setting.options.map((option) => option.label),
+        enumItemLabels: setting.options.map((option) => option.label),
+        ...(setting.options.some((option) => option.description) && {
+          markdownEnumDescriptions: setting.options.map((option) => option.description ?? ''),
+        }),
       }
     case 'number':
       return {
         ...base,
         type: setting.integer ? 'integer' : 'number',
-        minimum: setting.min,
+        ...(setting.min !== undefined && { minimum: setting.min }),
         ...(setting.max !== undefined && { maximum: setting.max }),
+        ...(setting.positive && { exclusiveMinimum: 0 }),
       }
     case 'color':
       return {
@@ -55,8 +58,7 @@ function property(setting, order) {
   }
 }
 
-/** The settings of each category, in the order they are defined: a view's, which its id starts
- *  with, or GridKit's own. */
+/** Settings grouped by the view their id starts with (none for GridKit's), in definition order. */
 const categories = new Map()
 for (const [id, setting] of Object.entries(SETTINGS)) {
   const category = id.includes('.') ? id.slice(0, id.indexOf('.')) : ''

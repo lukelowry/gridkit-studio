@@ -1,7 +1,5 @@
-/** What a user does with a case, end to end in a real window on a real GPU: every view draws it, a
- *  run is plotted, and pictures and videos are written. Everything
- *  under these journeys is the unit, contract and extension-host suites' to check; these check that
- *  the pieces meet where a user sees them. */
+/** User journeys in a real window on a real GPU. Details belong to the unit, contract and host
+ *  suites; these check that the pieces work together. */
 
 import assert from 'node:assert/strict'
 import { readFile, rm } from 'node:fs/promises'
@@ -10,9 +8,18 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
-import { idle, simpleDialog, type TestHost, testHost, until, visible, VM } from './harness.js'
+import {
+  idle,
+  simpleDialog,
+  stats,
+  type TestHost,
+  testHost,
+  until,
+  visible,
+  VM,
+} from './harness.js'
 
-/** A PNG at `path` once written, which draws more than its background. */
+/** Waits for the PNG at `path` and asserts it is not a single color. */
 async function png(path: string): Promise<PNG> {
   const image = await until(async () => {
     try {
@@ -41,8 +48,8 @@ suite('Journeys', function () {
     const network = await bench.open()
     const table = await bench.show('case')
     await visible(table, 'tbody .cell')
-    // The bus nearest the middle of the whole case, framed, clear of the toolbar at the edge.
-    await vscode.commands.executeCommand('gridkitStudio.fit', bench.uri)
+    // Click the bus nearest the center, away from the toolbar.
+    await vscode.commands.executeCommand('gridkitStudio.fitAll', bench.uri)
     await idle(network)
     const box = (await network.locator('canvas').boundingBox())!
     const ids = bench.source.buses.map(({ number }) => number)
@@ -61,6 +68,19 @@ suite('Journeys', function () {
     await until(() => bench.session.selection?.id === bus, 'the bus picked')
     await visible(table, 'tbody tr.selected')
     await bench.capture('journey-views')
+    // After a device loss latkit recreates the device and keeps drawing, without reloading the
+    // page or losing the selection.
+    const before = await idle(network)
+    await network.evaluate('gridkitLose()')
+    await until(async () => {
+      const now = await stats<{ frames: number; complete: boolean; lost: boolean }>(network)
+      return !now.lost && now.complete && now.frames > before.frames
+    }, 'the Network drawn again on a new device')
+    assert.deepEqual(
+      await network.evaluate('gridkitSelection().entities'),
+      [{ table: 'Bus', id: bus }],
+      'the pick kept',
+    )
   })
 
   test('a run of the solver file is followed live, then played', async function () {
@@ -81,14 +101,14 @@ suite('Journeys', function () {
         )?.[1] === end,
       'the plot holds the whole run',
     )
-    await bench.playback('Previous sample').click()
+    await bench.playback('Previous Sample').click()
     await until(() => bench.session.transport.currentT() < end, 'the status bar steps back')
     await bench.capture('journey-run')
   })
 
   test('the Network is saved as a picture, and the Monitor as a video', async () => {
     const network = await bench.open()
-    // What the Network shows at rest is what a video of it frames: its camera, over its canvas.
+    // A video keeps the Network's idle framing: its camera and canvas size.
     await idle(network)
     const framing = await network.evaluate<unknown>(
       `({ camera: gridkitSelection().camera, size: [document.querySelector('canvas').clientWidth, document.querySelector('canvas').clientHeight] })`,
@@ -111,7 +131,7 @@ suite('Journeys', function () {
     const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 run.mp4')
     await rm(video.fsPath, { force: true })
     const exporter = await bench.show('export')
-    await visible(exporter, '[data-testid="video-export"]')
+    await visible(exporter, '[data-testid="export"]')
     for (const [name, on] of [
       ['Network', false],
       ['Monitor', true],
@@ -119,15 +139,18 @@ suite('Journeys', function () {
       const toggle = exporter.getByRole('switch', { name, exact: true })
       if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
     }
-    await exporter.locator('[data-testid="video-resolution"]').click()
-    await exporter.locator('[role="option"][data-value="720"]').click()
-    const start = exporter.locator('[data-testid="video-start"]')
+    await exporter.getByLabel('Size', { exact: true }).selectOption({ label: '720p' })
+    const start = exporter.locator('[data-testid="export-start"]')
     await until(() => start.isEnabled(), 'the export can start')
     await start.press('Enter')
     await bench.dialog(video.fsPath)
     await until(
       async () =>
-        (await exporter.evaluate<{ status: string }>('gridkitExport()')).status === 'done',
+        !(await exporter.evaluate<boolean>('gridkitExport().running')) &&
+        (await readFile(video.fsPath).then(
+          () => true,
+          () => false,
+        )),
       'the video written',
     )
     const bytes = await readFile(video.fsPath)

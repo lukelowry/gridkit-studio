@@ -2,32 +2,31 @@ import { readFile } from 'node:fs/promises'
 
 import { describe, expect, it } from 'vitest'
 
-import { holds, type Manifest, Menus, named } from '../../tests/menus.js'
-import { catalog } from '../gridkit/index.js'
+import { contextKeysIn, evaluateWhen, type Manifest, Menus } from '../../tests/menus.js'
+import { catalog, definitionsOf } from '../gridkit/definition.js'
 import {
   commandId,
   COMMANDS,
   CONTEXT_KEYS,
   contextKey,
+  EXTENSION,
   PREFIX,
   viewId,
   VIEWS,
 } from '../shared/ids.js'
-import { menuContext, signalContext } from '../shared/menus.js'
+import { menuContext, targetOf } from '../shared/menus.js'
 import { validateSettings } from '../shared/settings.js'
 
-/** The context keys VS Code itself sets that Studio's clauses read. */
-const VSCODE_KEYS = [
-  'view',
-  'viewItem',
-  'activeCustomEditorId',
-  'resourceFilename',
-  'isWorkspaceTrusted',
-]
+/** A definition covering every class in the bundled catalog. */
+const definition = definitionsOf([...catalog.shapes.values()])
 
-describe('the manifest, as the code names it', () => {
+/** Context keys set by VS Code that Studio's when clauses read. */
+const VSCODE_KEYS = ['view', 'activeCustomEditorId', 'resourceFilename', 'isWorkspaceTrusted']
+
+describe('the manifest', () => {
   it('names in code exactly the commands, views and context keys the manifest contributes', async () => {
     const manifest = JSON.parse(await readFile('package.json', 'utf8'))
+    expect(EXTENSION).toBe(`${manifest.publisher}.${manifest.name}`)
     const commands = new Set(
       manifest.contributes.commands.map(({ command }: { command: string }) => command),
     )
@@ -39,41 +38,80 @@ describe('the manifest, as the code names it', () => {
         .map((view) => (view as { id: string }).id),
     ]
     expect(new Set(views)).toEqual(new Set(VIEWS.map(viewId)))
-    // Every command a menu names is contributed.
     for (const items of Object.values(manifest.contributes.menus) as { command?: string }[][])
       for (const { command } of items) if (command) expect(commands).toContain(command)
   })
-  it('places each command by a clause VS Code reads, of keys something sets', async () => {
+  it('places each command by a when clause VS Code can read, of keys the extension sets', async () => {
     const menus = new Menus(JSON.parse(await readFile('package.json', 'utf8')) as Manifest)
-    // Every menu any view opens carries the same keys, whatever it was opened on.
+    // Webview menus carry the same keys whatever they were opened on.
     const given = new Set(
-      Object.keys(
-        menuContext({ definition: catalog.definition }, { uri: '', version: 0, origin: 'case' }),
-      ),
+      Object.keys(menuContext({ definition }, { uri: '', version: 0, origin: 'case' })),
     )
-    // Elsewhere a clause reads the keys Studio sets, and VS Code's own.
+    // Other clauses read the keys Studio sets and VS Code's own.
     const set = new Set([...CONTEXT_KEYS.map(contextKey), ...VSCODE_KEYS])
     for (const { place, when } of menus.clauses()) {
-      expect(() => holds(when, {}), place + ': ' + when).not.toThrow()
+      expect(() => evaluateWhen(when, {}), place + ': ' + when).not.toThrow()
       const known = place === 'webview/context' ? given : set
-      for (const key of named(when)) expect(known, `${key} in "${when}"`).toContain(key)
+      for (const key of contextKeysIn(when)) expect(known, `${key} in "${when}"`).toContain(key)
     }
   })
-  it('matches a Monitored Signals row by the words its context can hold', async () => {
-    const manifest = JSON.parse(await readFile('package.json', 'utf8'))
-    const words = signalContext({ recorded: true, mappable: true, mapped: true }).split(' ')
-    for (const { when } of manifest.contributes.menus['view/item/context'] as { when: string }[])
-      for (const [, word] of when.matchAll(/viewItem =~ \/\\b(\w+)\\b\//g))
-        expect(words, when).toContain(word)
+  it('offers Split on a monitor not shown, and Unsplit on one shown beside others', () => {
+    const [vm, va] = [
+      { table: 'Bus', field: 'Vm' },
+      { table: 'Bus', field: 'Va' },
+    ]
+    const target = { uri: '', version: 0, origin: 'monitor' as const, field: vm, monitor: vm }
+    const keys = (monitors: { table: string; field: string }[]) => {
+      const context = menuContext({ definition }, target, { monitors })
+      return [
+        context['gridkitStudio.scope'],
+        context['gridkitStudio.shown'],
+        context['gridkitStudio.split'],
+      ]
+    }
+    expect(keys([va])).toEqual(['monitor', false, false])
+    expect(keys([vm])).toEqual(['monitor', true, false])
+    expect(keys([vm, va])).toEqual(['monitor', true, true])
+  })
+  it("offers in the Monitor list's empty area only what the Monitor's title bar offers", async () => {
+    const menus = new Menus(JSON.parse(await readFile('package.json', 'utf8')) as Manifest)
+    const [vm, va] = [
+      { table: 'Bus', field: 'Vm' },
+      { table: 'Bus', field: 'Va' },
+    ]
+    const list = (shown: (typeof vm)[]) =>
+      menus
+        .offered(
+          'webview/context',
+          menuContext(
+            { definition },
+            { uri: '', version: 0, origin: 'monitor' },
+            { monitors: shown, listed: [vm, va] },
+          ),
+        )
+        .map((each) => each.command)
+    const title = menus
+      .offered('view/title', {
+        view: viewId('monitor'),
+        [contextKey('canSplit')]: true,
+        [contextKey('hasSamples')]: true,
+      })
+      .map((each) => each.command)
+    expect(list([vm])).toContain(commandId('newMonitor'))
+    for (const command of list([vm])) expect(title).toContain(command)
+    // Split, as in the title bar, only while the Monitor lists a monitor it does not show.
+    expect(list([vm])).toContain(commandId('splitMonitor'))
+    expect(list([vm, va])).not.toContain(commandId('splitMonitor'))
   })
   it('takes only the values of a view setting’s kind and range', () => {
     expect(validateSettings({ 'network.vertexRadius': 4 })).toEqual({ 'network.vertexRadius': 4 })
     expect(() => validateSettings({ 'network.vertexRadius': NaN })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.tilt': 2.5 })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.colormap': 'red' })).toThrow('Invalid value')
-    expect(() => validateSettings({ 'network.map.groundColor': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'map.waterColor': 'red' })).toThrow('Invalid value')
+    expect(() => validateSettings({ 'map.basemap': 'streets' })).toThrow('Invalid value')
     expect(() => validateSettings({ 'network.unknown': 1 })).toThrow('Unknown setting')
-    // How GridKit runs is the machine's to set, never a view's.
+    // GridKit's location is a machine setting, never a view setting.
     expect(() => validateSettings({ gridkitPath: '/opt/gridkit' })).toThrow('Unknown setting')
   })
   it('keeps scalar settings separate from nested settings', async () => {
@@ -99,7 +137,7 @@ describe('the manifest, as the code names it', () => {
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' })
   })
   it('targets the clicked field, case and revision for contextual capabilities', () => {
-    const summary = { definition: catalog.definition }
+    const summary = { definition }
     const target = {
       uri: 'file:///a.case.json',
       version: 42,
@@ -108,29 +146,26 @@ describe('the manifest, as the code names it', () => {
       field: { table: 'GenClassical', field: 'ports.pmech' },
     }
     const context = menuContext(summary, target)
-    expect(context.gridkitTarget).toEqual(target)
-    expect(context.gridkitScope).toBe('value')
-    expect(context.gridkitReference).toBe(true)
-    // A whole element goes where it refers when its type refers to anything: a branch to its buses,
-    // a bus to the signals a signal-voltage bus connects, and a signal nowhere.
-    const element = (table: string) =>
-      menuContext(summary, {
-        ...target,
-        origin: 'network',
-        field: undefined,
-        element: { table, id: 1 },
-      }).gridkitReference
-    expect(element('Branch')).toBe(true)
-    expect(element('Bus')).toBe(true)
-    expect(element('Signal')).toBe(false)
-    // A numeric field of a type the Network draws can be mapped, and says once it is.
+    expect(targetOf(context)).toEqual(target)
+    expect(context['gridkitStudio.scope']).toBe('value')
+    // An element right-clicked in the Network targets the element alone.
+    expect(menuContext(summary, { ...target, origin: 'network', field: undefined })).toMatchObject({
+      'gridkitStudio.scope': 'element',
+      'gridkitStudio.element': true,
+    })
+    // A numeric field of a type the Network draws is mappable, and reports whether it is mapped.
     const kv = { table: 'Bus', field: 'params.kv' }
     const column = { uri: target.uri, version: 42, origin: 'case' as const, field: kv }
     expect(menuContext(summary, column)).toMatchObject({
-      gridkitScope: 'column',
-      gridkitMappable: true,
-      gridkitMapped: false,
+      'gridkitStudio.scope': 'column',
+      'gridkitStudio.mappable': true,
+      'gridkitStudio.mapped': false,
     })
-    expect(menuContext(summary, column, { vertexColor: kv }).gridkitMapped).toBe(true)
+    expect(
+      menuContext(summary, column, { mappings: { vertexColor: kv } })['gridkitStudio.mapped'],
+    ).toBe(true)
+    // Every key a menu carries is prefixed with Studio's namespace.
+    for (const key of Object.keys(context))
+      if (key !== 'preventDefaultContextMenuItems') expect(key.startsWith(PREFIX + '.')).toBe(true)
   })
 })

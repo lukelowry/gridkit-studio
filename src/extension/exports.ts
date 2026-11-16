@@ -3,17 +3,23 @@ import * as vscode from 'vscode'
 import { randomUUID } from '../platform/crypto.js'
 import { type FileHandle, mkdir, open, readFile, rename, rm } from '../platform/files.js'
 import { browser, tmpdir } from '../platform/host.js'
-import { dirname, extname, join } from '../platform/path.js'
+import { basename, dirname, extname, join } from '../platform/path.js'
 import { download } from './download.js'
 import { reference } from './uris.js'
 
-/** What each export is saved as, by its file's extension. */
 const KINDS: Record<string, { title: string; filters: Record<string, string[]> }> = {
-  '.mp4': { title: 'Export video', filters: { 'MP4 video': ['mp4'] } },
-  '.png': { title: 'Export image', filters: { 'PNG image': ['png'] } },
+  '.mp4': { title: 'Export Video', filters: { 'MP4 video': ['mp4'] } },
+  '.png': { title: 'Export Image', filters: { 'PNG image': ['png'] } },
+  '.jpg': { title: 'Export Image', filters: { 'JPEG image': ['jpg', 'jpeg'] } },
+  '.webp': { title: 'Export Image', filters: { 'WebP image': ['webp'] } },
 }
 
-/** Publish through the provider only when the staged file is complete. */
+/** Confirms a finished export in the status bar, where it fades. */
+export function exported(path: string): void {
+  vscode.window.setStatusBarMessage('$(check) Exported ' + basename(path), 5000)
+}
+
+/** Moves a complete staged file to `uri`, or downloads it in a browser. */
 export async function publish(path: string, uri: vscode.Uri): Promise<void> {
   if (browser) await download(path, uri.path.split('/').at(-1))
   else if (uri.scheme === 'file') {
@@ -51,7 +57,7 @@ export class ExportFile {
           : vscode.Uri.file(join(tmpdir(), `gridkit-export-${randomUUID()}.tmp`))
   }
 
-  /** Stage a file beside its destination; the destination changes only after writing succeeds. */
+  /** Stages a file beside its destination, which changes only once writing succeeds. */
   static async create(uri: vscode.Uri): Promise<ExportFile> {
     const file = new ExportFile(uri)
     await mkdir(dirname(reference(file.#temporary)), { recursive: true })
@@ -59,10 +65,9 @@ export class ExportFile {
     return file
   }
 
-  /** Ask the user where to save `name`, next to `beside`; undefined if cancelled. */
   static async choose(beside: vscode.Uri, name: string): Promise<ExportFile | undefined> {
     const kind = KINDS[extname(name).toLowerCase()]
-    if (!kind) throw new Error(`Studio does not export ${extname(name)} files.`)
+    if (!kind) throw new Error(`GridKit Studio does not export ${extname(name)} files.`)
     if (browser) return ExportFile.create(vscode.Uri.from({ scheme: 'opfs', path: '/' + name }))
     const uri = await vscode.window.showSaveDialog({
       title: kind.title,
@@ -80,22 +85,19 @@ export class ExportFile {
 
   async #write(bytes: Uint8Array) {
     if (this.#aborted) throw new Error('The export was cancelled.')
-    // Every write goes after the last: the file is written from its start to its end.
+    // Writes are chained and sequential; `close` waits for the last before closing the handle.
     const position = this.#length
-    if (this.#handle) {
-      for (let written = 0; written < bytes.length;) {
-        const { bytesWritten } = await this.#handle.write(
-          bytes,
-          written,
-          bytes.length - written,
-          position + written,
-        )
-        if (!bytesWritten) throw new Error('The export file could not be written.')
-        written += bytesWritten
-      }
-      this.#length += bytes.length
-      return
+    for (let written = 0; written < bytes.length;) {
+      const { bytesWritten } = await this.#handle!.write(
+        bytes,
+        written,
+        bytes.length - written,
+        position + written,
+      )
+      if (!bytesWritten) throw new Error('The export file could not be written.')
+      written += bytesWritten
     }
+    this.#length += bytes.length
   }
 
   async close() {
@@ -109,7 +111,7 @@ export class ExportFile {
     await publish(reference(this.#temporary), this.uri)
   }
 
-  /** Discard the export's temporary file; the destination is untouched. Safe after close or failure. */
+  /** Deletes the staged file and leaves the destination untouched. Safe after close or failure. */
   async abort() {
     this.#closed = true
     this.#aborted = true
@@ -119,13 +121,11 @@ export class ExportFile {
   }
 }
 
-/** The files one view's exports write, each by the handle the view was given for it. */
+/** A view's open export files, by numeric handle. */
 export class ExportFiles {
   readonly #open = new Map<number, ExportFile>()
   #next = 0
 
-  /** Asks the user where to save `name`, next to `beside`: a handle to write it through, or null
-   *  when they cancel. */
   async open(beside: vscode.Uri, name: string, signal: AbortSignal): Promise<number | null> {
     const file = await ExportFile.choose(beside, String(name))
     if (!file) return null
@@ -145,7 +145,7 @@ export class ExportFiles {
     return file.write(chunk)
   }
 
-  /** Finishes the file, or with `abort` discards it: the finished file's path. */
+  /** Finishes or discards the file; returns the saved path, or the download name in a browser. */
   async close(handle: number, abort = false): Promise<string | null> {
     const file = this.#open.get(handle)
     this.#open.delete(handle)
@@ -156,11 +156,13 @@ export class ExportFiles {
       await file.abort()
       throw error
     }
-    return abort ? null : reference(file.uri)
+    if (abort) return null
+    const saved = browser ? file.uri.path.split('/').at(-1)! : reference(file.uri)
+    exported(saved)
+    return saved
   }
 
-  /** Asks the user where to save `name`, next to `beside`, and writes `bytes` there whole: the
-   *  saved file's path, or null when they cancel. */
+  /** Prompts for where to save `name` and writes `bytes`; null if cancelled. */
   async save(
     beside: vscode.Uri,
     name: string,
@@ -178,7 +180,6 @@ export class ExportFiles {
     return this.close(handle)
   }
 
-  /** Discards every file still open. */
   dispose(): void {
     for (const file of this.#open.values()) void file.abort().catch(() => {})
     this.#open.clear()

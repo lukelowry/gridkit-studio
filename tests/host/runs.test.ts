@@ -1,13 +1,18 @@
-/** Runs of a solver file against real GridKit, as Studio holds them: what the case records, the
- *  results read through, a live run followed and stopped, and a run that fails said once. What
- *  GridKit writes and reads back is the contract suite's. */
+/** Solver-file runs against real GridKit, from Studio's side. GridKit's own output format is the
+ *  contract suite's concern. */
 
 import assert from 'node:assert/strict'
 
 import { setup, suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
+import type { Field } from '../../src/shared/document.js'
 import { type Bench, bench, folder, until } from './studio.js'
+
+const VM = { table: 'Bus', field: 'Vm' }
+/** Each monitor's type and field, without its element or range. */
+const fields = (monitors: readonly Field[]) =>
+  monitors.map(({ table, field }) => ({ table, field }))
 
 suite('Runs', function () {
   // Include solver initialization and result ingestion on slower hosts.
@@ -24,11 +29,11 @@ suite('Runs', function () {
     await host.writeSolver({ tmax: 0.5, dt_monitor: 0.01, events: [] })
   })
 
-  test('says why a case that records nothing runs nothing', async () => {
+  test('explains why a case that records nothing does not run', async () => {
     await host.recordOnly('Bus', [])
     await vscode.commands.executeCommand('gridkitStudio.runSimulation', host.solver)
-    const [said] = host.said()
-    assert.match(said!, /records nothing/)
+    const [error] = host.takeErrors()
+    assert.match(error!, /records nothing/)
     assert.equal(host.session.run, undefined)
   })
 
@@ -48,8 +53,7 @@ suite('Runs', function () {
       [['Bus', 'Vm', host.source.buses.length]],
     )
     assert.ok(Math.abs(results.domain[1] - 0.5) < 1e-9, 'the run reaches its end')
-    assert.deepEqual(session.plots, [{ table: 'Bus', field: 'Vm' }])
-    // The playhead rests at the end of the run, which the views read from the samples it wrote.
+    assert.deepEqual(fields(session.shown), [VM])
     assert.equal(session.transport.state.follow, false)
     assert.equal(session.transport.currentT(), results.domain[1])
     const { value } = await host.studio.client.worker.call('sample', {
@@ -62,21 +66,30 @@ suite('Runs', function () {
     assert.equal(typeof value, 'number')
   })
 
-  test('shows what its solver file wrote last, and runs it again, plotting what that records', async () => {
+  test('shows what its solver file wrote last when it opens, and a new run plots what that records', async () => {
     await host.run()
     const written = host.session.results!
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
+    assert.deepEqual(fields(host.session.shown), [VM])
     await vscode.commands.executeCommand('gridkitStudio.clearResults')
     assert.equal(host.studio.get(host.key)?.results, undefined)
-    await vscode.commands.executeCommand('gridkitStudio.showLastResults', host.solver)
-    assert.equal(host.session.results?.frames, written.frames)
-    assert.equal(host.session.results!.path, written.path)
-    // The plots stay until the next run, which plots what it recorded.
+    await vscode.window.showTextDocument(host.solver)
+    const shown = await until(
+      () => (host.session.results?.growing === false ? host.session.results : undefined),
+      'the solver file shows its last results',
+    )
+    assert.equal(shown.frames, written.frames)
+    assert.equal(shown.path, written.path)
+    assert.equal(shown.solver, written.solver)
+    // The monitors are what the shown results hold, until the next run, which lists and shows
+    // what it recorded.
     await host.record('Bus', ['Va'])
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
-    const again = await host.run('gridkitStudio.runSimulationAgain')
+    assert.deepEqual(fields(host.session.monitors), [VM])
+    // A run starts only from its solver file's menu.
+    const again = await host.run()
     assert.equal(again.state, 'complete', again.message)
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Va' }])
+    const va = { table: 'Bus', field: 'Va' }
+    assert.deepEqual(fields(host.session.monitors), [va])
+    assert.deepEqual(fields(host.session.shown), [va])
   })
 
   test('follows a live run, and a stop keeps what it wrote', async () => {
@@ -91,14 +104,14 @@ suite('Runs', function () {
     )
     assert.equal(session.run?.state, 'running')
     assert.equal(session.transport.state.follow, true)
-    // The views show the solver file's whole run, whatever has arrived of it.
+    // The span covers the solver file's whole run, however much has arrived.
     assert.equal(session.results?.span?.[1], 1000)
     session.transport.seek(0)
     assert.equal(session.transport.state.follow, false)
     await vscode.commands.executeCommand('gridkitStudio.goToEnd')
     assert.equal(session.transport.state.follow, true, 'Go to End follows the run again')
     await vscode.commands.executeCommand('gridkitStudio.stopSimulation')
-    const run = await host.ran(before)
+    const run = await host.nextRun(before)
     assert.equal(run.state, 'cancelled')
     const results = await until(
       () => (session.results?.growing === false ? session.results : undefined),
@@ -110,14 +123,14 @@ suite('Runs', function () {
     assert.ok(session.transport.currentT() < results.domain[1], 'what it wrote plays')
   })
 
-  test('says once why GridKit could not finish, and runs again', async () => {
+  test('explains once why GridKit could not finish, and runs again', async () => {
     await host.writeSolver({ tmax: 0.1, dt_monitor: 0.01, max_steps: 1, events: [] })
     const failed = await host.run()
     assert.equal(failed.state, 'failed')
     assert.ok(failed.message)
-    const said = host.said()
-    assert.equal(said.length, 1, said.join('\n'))
-    assert.ok(said[0]!.includes(failed.message), said[0])
+    const errors = host.takeErrors()
+    assert.equal(errors.length, 1, errors.join('\n'))
+    assert.ok(errors[0]!.includes(failed.message), errors[0])
     await host.writeSolver({ tmax: 0.1, dt_monitor: 0.01, events: [] })
     assert.equal((await host.run()).state, 'complete')
   })
@@ -132,7 +145,7 @@ suite('Runs', function () {
       const run = await host.run()
       assert.equal(run.state, 'failed')
       assert.equal(run.command, 'NoSuchSimulation IEEE39.solver.json')
-      assert.ok(host.said().some((said) => said.includes(run.message!)))
+      assert.ok(host.takeErrors().some((error) => error.includes(run.message!)))
       await settings.update('gridkitPath', '', global)
       const bundled = await host.run()
       assert.equal(bundled.state, 'complete', bundled.message)

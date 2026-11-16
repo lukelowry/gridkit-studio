@@ -1,9 +1,7 @@
-/** The extension's worker: the case files Studio shows, each read once, GridKit's runs, and the
- *  results files Studio reads, each against a case it read. Results keep the case they were read
- *  against, so the views of results read that case as it was, whatever its file reads since. */
+/** The extension's worker. Results keep the case they were read against, even after it changes. */
 
-import { type Case, catalog as bundled, catalogOf } from '../gridkit/index.js'
-import { projectionPage } from '../gridkit/projection.js'
+import { type Case, catalog } from '../gridkit/index.js'
+import { caseRowsPage } from '../gridkit/rows.js'
 import { onExit } from '../platform/host.js'
 import { workerData } from '../platform/worker.js'
 import { superseded } from '../shared/errors.js'
@@ -16,10 +14,9 @@ import { memory, serve } from './serve.js'
 
 const options = workerData as WorkerOptions
 await loadNative(options.wasmPath)
-const cases = caseFiles(options.catalog === undefined ? bundled : catalogOf(options.catalog))
+const cases = caseFiles(catalog)
 const results = resultsFiles(options, cases.latest)
 
-/** The case `source` names: a file as it reads now, or the one results were read against. */
 const caseFor = (source: Source): Case =>
   'results' in source ? results.fileOf(source.results).kase : cases.latest(source.revision).kase
 
@@ -27,14 +24,13 @@ serve<WorkerApi>(
   {
     ...cases.handlers,
     ...results.handlers,
-    async project(input, signal) {
+    async caseRows(input, signal) {
       const kase = caseFor(input)
-      const page = await projectionPage(kase.projected(), input.fields, input.cursor, signal)
+      const page = await caseRowsPage(kase.columns(), input.fields, input.cursor, signal)
       if (caseFor(input) !== kase) throw superseded()
       return page
     },
-    // The case results were read against, as the file it was read from said then: as it reads now
-    // when it reads the same.
+    // The current summary is reused when the file still has the results' case.
     async describe({ results: id }, signal) {
       const { kase, layout } = results.fileOf(id)
       const read = cases.read(layout.revision.uri)
@@ -42,13 +38,10 @@ serve<WorkerApi>(
     },
     stats: async () => ({ memory: memory(), cases: cases.count, ...results.stats() }),
   },
-  ['project', 'page', 'frames'],
-  // Nobody waits on a run, which the extension holds until it ends, nor on Problems, which fills
-  // in once the views have what they wait on.
+  ['caseRows', 'page', 'frames', 'tile'],
+  // Runs last until they end, and Problems fills in after the views, so neither is foreground
+  // work.
   ['validate', 'run'],
 )
 
-onExit(() => {
-  cases.dispose()
-  results.dispose()
-})
+onExit(() => cases.dispose())

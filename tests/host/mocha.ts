@@ -1,14 +1,11 @@
-/** Mocha inside the VS Code that holds the extension: what the extension-host suites and the
- *  end-to-end journeys run through. */
+/** Mocha runner inside VS Code for the extension-host suites and the e2e journeys. */
 
 import Mocha from 'mocha'
 
 interface Suites {
-  /** How long a test may take: each waits on what Studio says it did, so a slow one is a fault. */
   readonly timeout: number
-  /** Loads the suites, which register as their modules load. */
   load(): Promise<unknown>
-  /** What fails a test besides its own asserts, looked at after each. */
+  /** Extra failure checks run after each test. */
   afterEach(test: Mocha.Test | undefined): Promise<void>
   afterAll?(): Promise<void>
 }
@@ -18,8 +15,8 @@ export async function suites({ timeout, load, afterEach, afterAll }: Suites): Pr
     ui: 'tdd',
     color: true,
     timeout,
-    // One suite or test by name, such as GRIDKIT_TEST_GREP=Runs; never `.only`, which would let a
-    // run pass on the tests it left out.
+    // Select tests with GRIDKIT_TEST_GREP=Runs; `.only` is forbidden so a run cannot pass by
+    // skipping tests.
     grep: process.env.GRIDKIT_TEST_GREP,
     forbidOnly: true,
   })

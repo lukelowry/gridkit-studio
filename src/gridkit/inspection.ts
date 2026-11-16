@@ -3,21 +3,20 @@ import type { Case, Table } from './case.js'
 import { isValid } from './columns.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
-/** Every port connection of a case, by row: the rows each row's ports name, and the rows that name
- *  it, each as its table's number and its row there. */
+/** Every port connection of a case in compressed sparse rows: each row's neighbors in both
+ *  directions, as a table number and a row. */
 interface Adjacency {
-  /** The case's tables, by number. */
   readonly tables: readonly Table[]
-  /** Per table, where each row's neighbors start in `table` and `row`; the last is how many. */
+  /** Per table, where each row's neighbors start in `table` and `row`. The last is the total. */
   readonly starts: readonly Uint32Array[]
-  readonly table: Uint16Array
+  readonly table: Uint32Array
   readonly row: Uint32Array
 }
 
 const adjacencies = new WeakMap<Case, Promise<Adjacency>>()
 
-/** Each valid reference of every port of `kase`: the table and row that names, and the table and
- *  row named. */
+/** Every valid port reference in `kase`, as the source table and row, then the target table and
+ *  row. */
 function* references(kase: Case, numbers: ReadonlyMap<string, number>) {
   for (const [from, table] of [...kase.tables.values()].entries())
     for (const port of table.shape.ports) {
@@ -39,7 +38,7 @@ function* references(kase: Case, numbers: ReadonlyMap<string, number>) {
     }
 }
 
-/** The connections of `kase`, built once a slice at a time, and shared by whoever asks meanwhile. */
+/** The connections of `kase`, built once in slices and shared by every caller. */
 function adjacencyOf(kase: Case): Promise<Adjacency> {
   let built = adjacencies.get(kase)
   if (!built) adjacencies.set(kase, (built = build(kase)))
@@ -47,11 +46,11 @@ function adjacencyOf(kase: Case): Promise<Adjacency> {
 }
 
 async function build(kase: Case): Promise<Adjacency> {
-  // Shared by every asker, so none lets go of it alone: each stops waiting instead.
+  // Shared by every caller, so it never aborts. A caller that cancels stops waiting instead.
   const work = new Turns()
   const tables = [...kase.tables.values()]
   const numbers = new Map(tables.map((table, n) => [table.shape.type, n]))
-  // Each row's neighbors counted, then placed, both ends of each connection alike.
+  // Count each row's neighbors, then place them, for both ends of each connection.
   const counts = tables.map((table) => new Uint32Array(table.records.length + 1))
   let step = 0
   for (const [from, row, to, target] of references(kase, numbers)) {
@@ -66,7 +65,7 @@ async function build(kase: Case): Promise<Adjacency> {
     return count
   })
   const placed = starts.map((start) => start.slice(0, -1))
-  const table = new Uint16Array(total)
+  const table = new Uint32Array(total)
   const row = new Uint32Array(total)
   const link = (from: number, at: number, to: number, target: number) => {
     const slot = placed[from]![at]!++
@@ -81,9 +80,8 @@ async function build(kase: Case): Promise<Adjacency> {
   return { tables, starts, table, row }
 }
 
-/** `entity` selected as the Network shows it: the element itself where the Network draws its type,
- *  else the nearest elements it draws, which the element's ports reach through the devices they
- *  drive. A device that reaches nothing the Network draws selects nothing there. */
+/** `entity` as the Network selects it: the element itself when the Network draws its type, else the
+ *  nearest drawn elements reachable through port connections. Empty when there are none. */
 export async function networkSelectionOf(
   kase: Case,
   entity: Entity,
@@ -97,7 +95,7 @@ export async function networkSelectionOf(
   const adjacency = await new Turns(signal).wait(adjacencyOf(kase))
   const { tables, starts } = adjacency
   const drawn = new Set(tables.flatMap((table, n) => (types.has(table.shape.type) ? [n] : [])))
-  /** A row, as one number: its table's number, then its row there. */
+  /** A table number and row packed into one number. */
   const key = (t: number, r: number) => t * 0x1_0000_0000 + r
   const start = key(tables.indexOf(located.table), located.row)
   const seen = new Set([start])

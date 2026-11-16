@@ -6,7 +6,7 @@ import { beforeAll, expect, it, vi } from 'vitest'
 import { loadNative } from '../../workers/native.js'
 import { DatasetSlot } from './data.js'
 
-// The page's channel to the extension, which only a webview has.
+// The bridge needs a webview.
 vi.mock('../bridge.js', () => ({ bridge: {} }))
 
 const signal = AbortSignal.any([])
@@ -36,9 +36,8 @@ it('keeps the complete displayed revision on failure, cancellation, and late com
     await slot.receive(
       'case',
       'c',
-      patches(new Patch('case').set('Bus', [1], { v: [3] }).toBytes()),
+      patches(new Patch('case').replace('Bus', [1], { v: [3] }).toBytes()),
       signal,
-      'a',
     )
     resolve()
     expect(await old).toBe(false)

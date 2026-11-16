@@ -1,6 +1,4 @@
-<!-- The Case panel: one type's elements as rows, its fields as columns. Its type and filters are
-  chosen from the view's title bar, which also says what shows; a column's menu maps it onto the
-  network. -->
+<!-- The Case panel: one element type's rows and field columns, virtually scrolled. -->
 <script lang="ts">
   import type { Id } from 'latkit'
   import { onMount, tick } from 'svelte'
@@ -13,6 +11,7 @@
     type FieldDefinition,
     leaf,
     tableDefinition,
+    tableLabel,
   } from '../../shared/document.js'
   import { channelsOf, shortNames } from '../../shared/mappings.js'
   import { menuContext } from '../../shared/menus.js'
@@ -21,10 +20,9 @@
 
   type Row = ReturnType<typeof rowsOf>[number]
 
-  /** Row height in px for virtual scrolling: the --spacing-row-h token. */
-  const height = 28
-  /** The keys that move between cells. */
-  const MOVES = [
+  /** Row height in CSS pixels; matches the --spacing-row-h token. */
+  const ROW_HEIGHT = 28
+  const MOVE_KEYS = [
     'ArrowUp',
     'ArrowDown',
     'ArrowLeft',
@@ -35,40 +33,35 @@
     'PageDown',
   ]
 
-  let view = $state.raw<ViewState>({})
-  // What the rows are read from, each apart: a message that leaves it as it was, as a selection
-  // does, reads nothing again.
-  const summary = $derived(view.summary)
-  const version = $derived(view.summary?.version)
-  const stale = $derived(view.stale)
-  /** What the panel shows of its rows: the session's, as it last said, with the changes made here
-   *  since applied at once, which the session takes as they are. */
+  let viewState = $state.raw<ViewState>({})
+  // Separate deriveds, so a message that leaves these unchanged (a selection) reloads nothing.
+  const summary = $derived(viewState.summary)
+  const version = $derived(viewState.summary?.version)
+  const stale = $derived(viewState.stale)
+  /** The session's table with local changes applied immediately; the session accepts them as is. */
   let table = $state.raw<TableState>({})
-  /** The session's table as it last said it, which a state that leaves it as it was keeps. */
-  let told: TableState | undefined
+  let sessionTable: TableState | undefined
   const type = $derived(summary ? (shownType(summary, table) ?? '') : '')
   const fields = $derived(summary && type ? shownColumns(summary, table, type) : [])
   const filter = $derived(table.filter ?? '')
   const equal = $derived(table.equal)
   const order = $derived(table.order)
-  /** The first row the panel reads, as it scrolls. */
   let offset = $state(0)
   let total = $state(0)
+  let reportedTotal: number | undefined
+  let viewport = $state(0)
+  /** Rows per page: those visible plus a scroll margin, at least 100. */
+  const limit = $derived(Math.max(100, Math.ceil(viewport / ROW_HEIGHT) + 40))
   let loading = $state(false)
-  /** The rows read, and the row they start at: until the next page comes, the last stays where it
-   *  was read. */
   let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
   let scroll: HTMLDivElement
   let generation = 0
   let controller: AbortController | undefined
-  /** A cell the keys moved to on a page not yet read, which takes focus once it is. */
-  let pending: { row: number; column: number } | undefined
-  /** The selected row the panel scrolls to once it is drawn. */
+  let pendingFocus: { row: number; column: number } | undefined
   let revealing: Id | undefined
-  /** The last element selected here, which is in sight already. */
-  let own: string | undefined
-  /** What the rows read are of: another type, filter or order starts them over, at the top. */
-  let viewed: { type: string; key: string } | undefined
+  /** The element last selected in this panel, which is already in view. */
+  let selectedHere: string | undefined
+  let lastQuery: { type: string; key: string } | undefined
   const definitions = $derived<Readonly<Record<string, FieldDefinition>>>(
     Object.fromEntries(
       (summary ? (tableDefinition(summary.definition, type)?.fields ?? []) : []).map((field) => [
@@ -77,8 +70,8 @@
       ]),
     ),
   )
-  /** What heads each column: its field's last name, or its whole path where another column shown
-   *  ends in the same name, as a bus's `ports_in.vr` and `ports_out.vr` do. */
+  /** Column headers: the field's last segment, or its full path where two shown fields share one,
+   *  as a bus's `ports_in.vr` and `ports_out.vr` do. */
   const headers = $derived.by(() => {
     const shared = new Map<string, number>()
     for (const field of fields) shared.set(leaf(field), (shared.get(leaf(field)) ?? 0) + 1)
@@ -86,28 +79,32 @@
       fields.map((field) => [field, shared.get(leaf(field))! > 1 ? field : leaf(field)]),
     )
   })
-  /** The field each row is known by, shown as the row's own header. */
   const identity = $derived(summary?.identities[type])
-  /** A cell as text: a number to six significant digits, which hover shows whole. */
+  const typeLabel = $derived(summary && type ? tableLabel(summary.definition, type) : '')
+  const corner = $derived.by(() => {
+    if (!summary || !type) return ''
+    const count = (summary.counts[type] ?? 0).toLocaleString()
+    return `${typeLabel} · ${filter || equal ? `${total.toLocaleString()} of ${count}` : count}`
+  })
+  /** Numbers to six significant digits; the tooltip shows the full value. */
   const text = (value: unknown) =>
     typeof value === 'number'
       ? String(Number(value.toPrecision(6)))
       : display(value, { native: true })
-  /** The channels each mapped column drives. */
   const mapped = $derived(
     new Map(
       fields.flatMap((field) => {
-        const channels = channelsOf(view.mappings ?? {}, { table: type, field })
+        const channels = channelsOf(viewState.mappings ?? {}, { table: type, field })
         return channels.length ? [[field, shortNames(channels)] as const] : []
       }),
     ),
   )
-  /** The cell Tab enters the grid at: the selection's, or its row's first, else the first. */
+  /** The cell Tab enters the grid at: the selected cell, its row's first, or the first. */
   const anchor = $derived.by(() => {
-    const at = page.rows.findIndex((row) => row.id === view.selection?.id)
+    const at = page.rows.findIndex((row) => row.id === viewState.selection?.id)
     return {
       row: page.offset + Math.max(at, 0),
-      column: at < 0 ? 0 : Math.max(fields.indexOf(view.selection?.field ?? ''), 0),
+      column: at < 0 ? 0 : Math.max(fields.indexOf(viewState.selection?.field ?? ''), 0),
     }
   })
   const context = (id: Id | null, field?: string) =>
@@ -122,14 +119,12 @@
               ...(field && { field: { table: type, field } }),
               ...(id !== null && { element: { table: type, id } }),
             },
-            view.mappings,
-            // The panel's own view of its rows, for the items that change it.
-            { sort: order, filtered: !!(filter || equal) },
+            { mappings: viewState.mappings, sort: order, filtered: !!(filter || equal) },
           ),
         )
       : '{}'
-  /** Gives the header, row or cell right-clicked its menu's context as the menu opens, before VS
-   *  Code reads it, so the rows need not carry one each. */
+  /** Sets the menu context on the right-clicked header, row or cell just before VS Code reads it,
+   *  so the rows need not each carry one. */
   function contextmenu(event: MouseEvent) {
     const target = (event.target as Element | null)?.closest<HTMLElement>('[data-field], [data-id]')
     if (!target || !scroll?.contains(target)) return
@@ -138,27 +133,23 @@
     target.dataset.vscodeContext = context(id, target.dataset.field)
     setTimeout(() => delete target.dataset.vscodeContext)
   }
-  /** Changes what the panel shows, here at once, and in the session, which holds it. */
   function change(next: Partial<TableState>) {
     table = changedTable(summary, table, next)
     bridge.send({ kind: 'table', change: next })
   }
   const cellAt = (row: number, column: number) =>
     scroll?.querySelector<HTMLButtonElement>(`[data-row="${row}"][data-column="${column}"]`)
-  /** Focus the cell at `row`, `column`, which selects its element as a click does, so the Network
-   *  follows. */
   function focusCell(row: number, column: number) {
     cellAt(row, column)?.focus()
     select(page.rows[row - page.offset]?.id ?? null, fields[column])
   }
-  /** Moves from the cell at `row`, `column` as `event`'s key says: a cell, a screen of rows, or, with
-   *  Ctrl, to the first or last cell. A cell on a page not yet read is focused once it is. */
+  /** A cell on a page not yet loaded is focused once the page loads. */
   function move(event: KeyboardEvent, row: number, column: number) {
     const { key } = event
-    if (!MOVES.includes(key)) return
+    if (!MOVE_KEYS.includes(key)) return
     event.preventDefault()
     const ends = (event.ctrlKey || event.metaKey) && (key === 'Home' || key === 'End')
-    const screen = Math.max(1, Math.floor(scroll.clientHeight / height) - 1)
+    const screen = Math.max(1, Math.floor(scroll.clientHeight / ROW_HEIGHT) - 1)
     const step = { ArrowDown: 1, ArrowUp: -1, PageDown: screen, PageUp: -screen }[key] ?? 0
     const within = (n: number, last: number) => Math.max(0, Math.min(last, n))
     const nextRow = within(ends ? (key === 'Home' ? 0 : total - 1) : row + step, total - 1)
@@ -171,9 +162,9 @@
       fields.length - 1,
     )
     if (nextRow < page.offset || nextRow >= page.offset + page.rows.length) {
-      pending = { row: nextRow, column: nextColumn }
+      pendingFocus = { row: nextRow, column: nextColumn }
       offset = Math.max(0, nextRow - 10)
-      scroll.scrollTop = nextRow * height
+      scroll.scrollTop = nextRow * ROW_HEIGHT
       return
     }
     focusCell(nextRow, nextColumn)
@@ -184,7 +175,7 @@
     const request = (controller = new AbortController())
     const current = ++generation
     const at = offset
-    // The rows are of the revision on show now, whatever the panel shows by the time they come.
+    // Request rows of the revision shown now, whatever is shown by the time they arrive.
     const revision = revisionOf(summary)
     loading = true
     try {
@@ -192,27 +183,23 @@
         table: type,
         fields,
         offset: at,
-        limit: 100,
+        limit,
         ...(filter ? { search: filter } : {}),
         ...(equal ? { equal } : {}),
         ...(order ? { order } : {}),
       }
-      const result = await bridge.request(
-        'page',
-        { revision, request: $state.snapshot(query) },
-        request.signal,
-      )
+      const result = await bridge.request('page', { revision, request: query }, request.signal)
       if (generation !== current) return
       page = { offset: result.offset, rows: rowsOf(result) }
       total = result.total
-      // The view's title says how many rows the filters leave.
-      bridge.send({ kind: 'rows', shown: total })
+      // The view's title shows the filtered row count.
+      if (total !== reportedTotal) bridge.send({ kind: 'rows', total: (reportedTotal = total) })
       await tick()
-      if (pending && pending.row >= at && pending.row < at + page.rows.length) {
-        focusCell(pending.row, pending.column)
-        pending = undefined
+      if (pendingFocus && pendingFocus.row >= at && pendingFocus.row < at + page.rows.length) {
+        focusCell(pendingFocus.row, pendingFocus.column)
+        pendingFocus = undefined
       }
-      scrolled()
+      scrollToSelected()
     } catch (reason) {
       if (generation === current && !request.signal.aborted) bridge.report(reason)
     } finally {
@@ -225,6 +212,7 @@
     void stale
     void type
     void offset
+    void limit
     void fields
     void filter
     void equal
@@ -237,19 +225,17 @@
       controller?.abort()
     }
   })
-  // Another type, filter or order reads its rows from the top; another type's rows go at once, and
-  // its own load in a moment.
+  // A new type, filter or order reloads from the top; a new type also clears the old rows at once.
   $effect.pre(() => {
     const key = JSON.stringify([type, filter, equal, order])
-    if (viewed?.key === key) return
-    if (viewed) {
-      if (viewed.type !== type) page = { offset: 0, rows: [] }
+    if (lastQuery?.key === key) return
+    if (lastQuery) {
+      if (lastQuery.type !== type) page = { offset: 0, rows: [] }
       offset = 0
       if (scroll) scroll.scrollTop = 0
     }
-    viewed = { type, key }
+    lastQuery = { type, key }
   })
-  /** Order the rows by `field`, the other way from now. */
   function sort(field: string) {
     change({
       order: {
@@ -261,35 +247,52 @@
   }
   function select(id: Id | null, field?: string) {
     if (id === null) return
-    own = entityKey({ table: type, id })
+    selectedHere = entityKey({ table: type, id })
     bridge.send({ kind: 'select', element: { table: type, id, ...(field ? { field } : {}) } })
   }
-  /** Scroll the selected row into view once it is drawn; whether it was. */
-  function scrolled(): boolean {
-    const shown = revealing !== undefined && scroll?.querySelector('tr.selected')
-    if (!shown) return false
-    shown.scrollIntoView({ block: 'nearest' })
+  function scrollToSelected(): boolean {
+    const row = revealing !== undefined && scroll?.querySelector('tr.selected')
+    if (!row) return false
+    row.scrollIntoView({ block: 'nearest' })
     revealing = undefined
     return true
   }
-  /** Show the selected element's row: switch to its type, and scroll the row into view, now or
-   *  once the page holding it loads. */
+  /** Shows the selected element's row: switches to its type and scrolls to the row once its page
+   *  loads. Clears the filters only when they hide the row. */
   async function reveal(entity: Entity) {
-    const { id, table: next } = entity
-    const of = view.uri
+    const { id, table: nextType } = entity
+    const uri = viewState.uri
     revealing = id
-    if (next !== type) change({ type: next })
+    if (nextType !== type) change({ type: nextType })
     await tick()
-    if (scrolled()) return
-    // A row the filters leave out shows once they go.
-    if (filter || equal || order) change({ filter: undefined, equal: undefined, order: undefined })
+    if (scrollToSelected()) return
     try {
       if (!summary) return
-      const result = await bridge.request('page', {
-        revision: revisionOf(summary),
-        request: { table: next, fields: [], offset: 0, limit: 1, anchor: id },
-      })
-      if (view.uri === of && view.selection?.table === next && view.selection.id === id)
+      const revision = revisionOf(summary)
+      const locate = (filtered: boolean) =>
+        bridge.request('page', {
+          revision,
+          request: {
+            table: nextType,
+            fields: [],
+            offset: 0,
+            limit: 1,
+            anchor: id,
+            ...(filtered && filter ? { search: filter } : {}),
+            ...(filtered && equal ? { equal } : {}),
+            ...(order ? { order } : {}),
+          },
+        })
+      let result = await locate(true)
+      if (!result.anchored && (filter || equal)) {
+        change({ filter: undefined, equal: undefined })
+        result = await locate(false)
+      }
+      if (
+        viewState.uri === uri &&
+        viewState.selection?.table === nextType &&
+        viewState.selection.id === id
+      )
         offset = result.offset
     } catch (reason) {
       bridge.report(reason)
@@ -298,32 +301,37 @@
   onMount(() => {
     const stop = bridge.on((message) => {
       if (message.kind === 'state') {
-        const other = message.state.uri !== view.uri
-        // The selection the panel had in sight: none of a case it has yet to read.
+        const otherCase = message.state.uri !== viewState.uri
+        // The selection already in view; none for a case not yet loaded.
         const before =
-          other || !view.summary || !view.selection ? undefined : entityKey(view.selection)
-        view = message.state
-        // Another case's rows go with it; its own load once it reads.
-        if (other) {
+          otherCase || !viewState.summary || !viewState.selection
+            ? undefined
+            : entityKey(viewState.selection)
+        viewState = message.state
+        if (otherCase) {
           controller?.abort()
           page = { offset: 0, rows: [] }
           total = 0
         }
-        // What the session says the panel shows, as it changes there: by a command, or as the
-        // session took a change made here.
-        if (other || view.table !== told) {
-          told = view.table
-          table = view.table ?? {}
+        // Adopt the session's table when it changes there, by a command or a change made here.
+        if (otherCase || viewState.table !== sessionTable) {
+          sessionTable = viewState.table
+          table = viewState.table ?? {}
         }
-        // A selection made in another view is brought into sight, its type shown; one made here
-        // already is.
-        const selected = view.selection ? entityKey(view.selection) : undefined
-        if (selected && selected !== before && selected !== own && view.summary && !view.stale)
-          void reveal(view.selection!)
-        if (selected !== own) own = undefined
+        // Reveal a selection made in another view; one made here is already in view.
+        const selected = viewState.selection ? entityKey(viewState.selection) : undefined
+        if (
+          selected &&
+          selected !== before &&
+          selected !== selectedHere &&
+          viewState.summary &&
+          !viewState.stale
+        )
+          void reveal(viewState.selection!)
+        if (selected !== selectedHere) selectedHere = undefined
       }
     })
-    // Before VS Code, and anything else, reads what a right-click carries.
+    // Capture phase, so the context is set before VS Code reads it.
     window.addEventListener('contextmenu', contextmenu, true)
     bridge.ready()
     return () => {
@@ -338,15 +346,18 @@
   <div
     class="case__scroll"
     bind:this={scroll}
+    bind:clientHeight={viewport}
     onscroll={() => {
-      const next = Math.max(0, Math.floor(scroll.scrollTop / height) - 10)
+      const next = Math.max(0, Math.floor(scroll.scrollTop / ROW_HEIGHT) - 10)
       if (Math.abs(next - offset) >= 10) offset = next
     }}
   >
     <table aria-label={type + ' fields'} aria-rowcount={total + 1}>
       <thead>
         <tr>
-          <th scope="col">{identity ?? ''}</th>
+          <th scope="col" class="case__corner" title={identity && `${typeLabel} ${identity}`}>
+            {corner}
+          </th>
           {#each fields as field (field)}
             {@const unit = definitions[field]?.unit}
             <th
@@ -360,7 +371,7 @@
                 )}{#if unit && leaf(field).toLowerCase() !== unit.toLowerCase()}<span
                     class="case__unit"
                   >
-                    {unit}
+                    [{unit}]
                   </span>{/if}{#if mapped.has(field)}<span class="case__mapped">
                     {mapped.get(field)}
                   </span>{/if}{#if order?.field === field}<span
@@ -379,13 +390,14 @@
         {#if page.offset > 0}<tr aria-hidden="true">
             <td
               colspan={fields.length + 2}
-              style:height={page.offset * height + 'px'}
+              style:height={page.offset * ROW_HEIGHT + 'px'}
               class="spacer"
             ></td>
           </tr>{/if}
         {#each page.rows as row, rowIndex (row.id)}
           <tr
-            class:selected={view.selection?.table === type && view.selection.id === row.id}
+            class:selected={viewState.selection?.table === type &&
+              viewState.selection.id === row.id}
             aria-rowindex={page.offset + rowIndex + 2}
             data-id={JSON.stringify(row.id)}
           >
@@ -419,15 +431,23 @@
         {#if total > page.offset + page.rows.length}<tr aria-hidden="true">
             <td
               colspan={fields.length + 2}
-              style:height={(total - page.offset - page.rows.length) * height + 'px'}
+              style:height={(total - page.offset - page.rows.length) * ROW_HEIGHT + 'px'}
               class="spacer"
             ></td>
           </tr>{/if}
       </tbody>
     </table>
-    {#if view.uri && ((!summary && !view.error) || (summary && !total && !loading))}
+    {#if !viewState.uri || (!summary && !viewState.error) || (summary && !total && !loading)}
       <div class="c-empty">
-        <p class="c-empty__text">{summary ? 'No matching elements.' : 'Loading case…'}</p>
+        <p class="c-empty__text">
+          {!viewState.uri
+            ? 'Open a GridKit case.'
+            : !summary
+              ? 'Loading case…'
+              : filter || equal
+                ? 'No elements match the filter.'
+                : 'This case has no elements.'}
+        </p>
       </div>
     {/if}
   </div>
@@ -439,15 +459,15 @@
     flex-direction: column;
     block-size: 100%;
   }
-  /* The spacers above and below the page of rows change size as pages load; anchoring the scroll
-     to the rows would move it, and the move would load another page. */
+  /* The spacers resize as pages load; scroll anchoring would shift the position and load another
+     page. */
   .case__scroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
     overflow-anchor: none;
   }
-  /* Columns as wide as what they hold; the last, empty one takes what is left of the panel. */
+  /* Columns size to their content; the empty last column fills the rest. */
   table {
     border-collapse: separate;
     border-spacing: 0;
@@ -505,8 +525,6 @@
   .cell:hover {
     background: var(--color-row-hover);
   }
-  /* The selected row takes VS Code's list selection, and on its header the accent the Network
-     glows the selection in. */
   tbody tr.selected > * {
     background: var(--color-selected);
   }
@@ -514,6 +532,7 @@
     background: var(--vscode-list-activeSelectionBackground, var(--color-selected));
     color: var(--vscode-list-activeSelectionForeground, inherit);
   }
+  /* The accent the Network highlights the selection in. */
   tbody tr.selected > th {
     box-shadow: inset 2px 0 0 var(--color-focus-ring);
   }
@@ -525,11 +544,15 @@
     width: 100%;
     padding: 0;
   }
-  tbody th {
+  tbody th,
+  .case__corner {
     position: sticky;
     left: 0;
     border-right: 1px solid var(--color-border);
     background: var(--color-surface-1);
+  }
+  .case__corner {
+    z-index: 2;
   }
   .numeric .cell {
     font-family: var(--font-mono);

@@ -1,13 +1,10 @@
-/** GridKit's cases, copied into cases/ byte for byte as GridKit has them at the ref Studio's default
- *  image is built from, so the samples match the GridKit that runs them. That ref is the image's
- *  `org.opencontainers.image.revision` label. The short solver file beside each is kept in cases/ as
- *  it is, apart from this.
+/** Copies GridKit's cases into cases/ byte for byte at the ref the default image is built from (its
+ *  `org.opencontainers.image.revision` label). Solver files in cases/ are maintained by hand.
  *
  *    node scripts/cases.mjs ../GridKit 0ff72a120d6b0a895ccefd3db5e2b259e2d25d0f
  *
- *  The cases in cases/ list more in their `mon` lists than GridKit's do, which a copy would undo:
- *  to follow a newer GridKit, apply its own diff of each case instead, as `git diff` of the two refs
- *  gives it, and keep this for a case cases/ does not have yet.
+ *  The cases here have longer `mon` lists than GridKit's, which a copy would undo. To follow a
+ *  newer GridKit, apply its `git diff` of each case instead, and use this only for new cases.
  */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'

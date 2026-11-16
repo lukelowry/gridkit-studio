@@ -5,22 +5,23 @@ import type { Camera, Id } from 'latkit'
 import type { CaseDefinition, Element, Entity, Field } from './document.js'
 export type { Element, Entity } from './document.js'
 import type {
+  CaseRowsCursor,
+  CaseRowsPage,
   ExactSample,
   ExactSampleRequest,
+  FieldSelection,
   FramePage,
   FrameRequest,
-  ProjectionCursor,
-  ProjectionPage,
-  ProjectionSelection,
   TablePage,
   TableRequest,
+  TileRequest,
   TimeRange,
   ValueRange,
 } from './data.js'
 import type { Problem } from './errors.js'
 import type { Mappings } from './mappings.js'
 import type { Cancel, Reply, Request } from './rpc.js'
-import type { ViewSettings } from './settings.js'
+import type { DisplaySettings, ExportSettings, ViewSettings } from './settings.js'
 import type {
   Results,
   ResultsLayout,
@@ -41,18 +42,15 @@ export type {
   RuntimeProcess,
 } from './simulation.js'
 
-/** A JSON value of a case record, as a cell shows it. */
 export type Value = number | string | boolean | null | readonly Value[]
 
-/** A case file as read at one version. The extension counts a version for each read, and the
- *  worker keeps the one the file's content was first read at. */
+/** A case file at one version; the worker keeps the version at which it first saw the content. */
 export interface Revision {
   uri: string
   version: number
 }
 
-/** A place in a case file as VS Code counts it: from a line and character, in UTF-16 units, to
- *  another. */
+/** A range in a case file, as line and character positions in UTF-16 units like VS Code's. */
 export interface SourceRange {
   readonly start: readonly [line: number, character: number]
   readonly end: readonly [line: number, character: number]
@@ -70,98 +68,80 @@ export interface Summary extends Revision {
   /** Identifies the case content; a run carries the one it ran on. */
   fingerprint: string
   definition: CaseDefinition
-  /** The field each type's elements are known by: a bus's `number`, a device's `id`. */
+  /** The field that identifies each type's elements: a bus's `number`, a device's `id`. */
   identities: Record<string, string>
   counts: Record<string, number>
-  /** What the case records: how many of each type's elements list each output, and the monitor
-   *  GridKit writes to, if the case has one. */
+  /** Per type and output, how many elements list it, plus GridKit's CSV monitor if any. */
   recording: {
     listed: Record<string, Record<string, number>>
-    /** Whether any element lists an output, its class one Studio knows or not. */
+    /** Whether any element lists an output, including classes Studio does not know. */
     anything: boolean
     monitor?: Sink
   }
 }
 
-/** How much memory a worker holds. */
 export interface Memory {
   heapUsed: number
   arrayBuffers: number
 }
 
-/** Results the extension holds open, by the id it chose for them. */
 interface OfResults {
   results: string
 }
 
-/** What a request reads the case of: a revision of a case file, or the case results were read
- *  against, by the results' id. */
+/** The case a request reads: a case file revision, or the case some results were read against. */
 export type Source = { readonly revision: Revision } | OfResults
 
-/** What the extension starts its worker with. */
 export interface WorkerOptions {
   readonly wasmPath: string
   readonly solver?: { readonly worker: string; readonly module: string; readonly wasm: string }
-  /** The catalog of GridKit's classes the user's file holds, read in place of the bundled one. */
-  readonly catalog?: unknown
-  /** How many bytes of results files nothing holds stay open, so they open again at once. */
+  /** Bytes of unreferenced results files kept open so they reopen instantly. */
   readonly cacheBytes: number
-  /** The folder the results files read are kept in, decoded, so a window opened again reads them
-   *  from there. */
+  /** The folder of decoded results files, which a reopened window reads from. */
   readonly store: string
-  /** The results files saved sessions name, whose stores are kept; the rest go. */
+  /** Results files named by saved sessions, whose stores are kept; the rest are deleted. */
   readonly saved: readonly string[]
-  /** The folder this machine's windows write their GridKit runs in while they run, so one whose
-   *  window died mid-run is ended by the next; none where processes end with their window. */
+  /** A machine-wide record of running GridKit processes, so the next window ends those of a window
+   *  that died. Absent where processes end with their window. */
   readonly runs?: string
 }
 
-/** What the worker answers: each case file Studio shows, read whole from disk, and what the views
- *  and the extension read of it; GridKit's runs; and the results files Studio reads, each against
- *  the case it was read for. It holds exactly the results the extension holds open, each by the id
- *  the extension chose, until the extension closes them. */
+/** The worker's API. It reads case files, runs GridKit and reads results files against a case.
+ *  It keeps exactly the results the extension has open, by the extension's ids, until closed. */
 export interface WorkerApi {
-  /** Reads the file at `uri` whole, unless it is as last read: then its summary stands, at the
-   *  version it was first read at. */
+  /** Reads the file at `uri`. Unchanged content returns the summary at its first version. */
   read: { input: Revision; output: Summary }
   validate: { input: Revision; output: Issue[] }
-  /** `entity` selected as the Network shows it: the element itself where the Network draws its
-   *  type, else the nearest elements it draws, which may be none. */
+  /** The element itself if the Network draws its type, else the nearest drawn elements. */
   networkSelection: { input: Revision & { entity: Entity }; output: Entity[] }
-  /** Where an element, or its field, is in the file. */
   locate: { input: Revision & Element; output: SourceRange }
-  project: {
-    input: Source & { fields: readonly ProjectionSelection[]; cursor?: ProjectionCursor }
-    output: ProjectionPage
+  caseRows: {
+    input: Source & { fields: readonly FieldSelection[]; cursor?: CaseRowsCursor }
+    output: CaseRowsPage
   }
   page: { input: { revision: Revision; request: TableRequest }; output: TablePage }
-  /** Lets go of the file's case. */
   release: { input: { uri: string }; output: null }
-  /** Runs GridKit and reads what it writes into `results`. The request is the run: it settles when
-   *  the run ends, and cancelling it stops the run. */
+  /** Runs GridKit into `results`; settles when the run ends, and cancelling stops the run. */
   run: { input: RunRequest; output: Run }
-  /** Reads the GridKit results file at `path` into `results`, against the case at the revision,
-   *  which `solver`'s run wrote when it names one. It answers once the first frames are read, and
-   *  the rest are read on. */
+  /** Opens the results file at `path` into `results`, read against the case revision. Resolves
+   *  once the first frames are read, and keeps reading. */
   open: {
     input: Revision & OfResults & { path: string; solver?: string }
     output: Results
   }
-  /** Holds the results `results` hold by `as` too, as an export does while it reads them. */
+  /** Opens `results` under a second id `as`, as an export does while reading them. */
   share: { input: OfResults & { as: string }; output: Results }
-  /** Lets go of `results`; asked of again, they answer `results-closed`. Their file stays. */
+  /** Closes `results`; later requests fail with `results-closed`. The file stays. */
   close: { input: OfResults; output: null }
-  /** How many bytes of results files nothing holds stay open. */
   configure: { input: { cacheBytes: number }; output: null }
-  /** The case the results were read against, as it was then. */
   describe: { input: OfResults; output: Summary }
-  frames: { input: FrameRequest & { next?: string }; output: FramePage }
+  frames: { input: FrameRequest; output: FramePage }
+  tile: { input: TileRequest; output: Uint8Array }
   sample: { input: ExactSampleRequest; output: ExactSample }
-  /** The next sample time from `at` in `direction`; the first or last time when none. */
+  /** The next sample time from `at` in `direction`; the first or last time when there is none. */
   step: { input: OfResults & { at: number; direction: -1 | 1 }; output: number }
   export: { input: OfResults & { path: string }; output: null }
-  /** What it holds: the case files followed, the results the extension holds, their files, the
-   *  files resting that nothing holds, the runs under way, and the bytes kept. */
+  /** Counts of what the worker has open, plus the bytes cached. */
   stats: {
     input: Record<string, never>
     output: {
@@ -169,24 +149,20 @@ export interface WorkerApi {
       cases: number
       results: number
       files: number
-      resting: number
+      idle: number
       runs: number
       cacheBytes: number
     }
   }
 }
 
-/** What a worker tells the extension besides its replies. */
 export type WorkerEvent =
-  /** The GridKit process the run `run` started, or none once it ends. */
+  /** The GridKit process started by run `run`, or none once it ends. */
   | { kind: 'process'; run: string; process?: RuntimeProcess }
-  /** A run started, or ended. */
   | { kind: 'run'; run: Run }
-  /** The results `results` of the case at `uri` are lost: what was kept of their file does not
-   *  read, and the worker holds them no more. */
+  /** The worker dropped the results because their cached file no longer reads. */
   | { kind: 'lost'; uri: string; results: string }
-  /** How far the results `results` have been read: a run's as it writes them, or ones opened;
-   *  and their layout, the first time, and again once their header is read. */
+  /** Read progress, with the layout the first time and again once the header is read. */
   | {
       kind: 'results'
       uri: string
@@ -194,8 +170,7 @@ export type WorkerEvent =
       progress: ResultsProgress
       layout?: ResultsLayout
     }
-  /** With `uri`, what a line of that case's run says, and `raw`, the line as GridKit printed it
-   *  where they differ. Without, a line of Studio's own. */
+  /** A log line; with `uri`, from that case's run (`raw` is GridKit's text when it differs). */
   | {
       kind: 'log'
       uri?: string
@@ -208,26 +183,22 @@ export type FromWorker = Reply | WorkerEvent
 
 export type ViewKind = 'network' | 'case' | 'monitor' | 'export'
 
-/** A view a video export can draw. */
 export type VideoView = 'network' | 'monitor'
 
-/** What the Monitor plots: a recorded field of a type, of every element or of the one `id`
- *  names, over the values `range` gives, or, without one, fitting those it shows. */
-export interface Plot extends Field {
+/** A monitor: a recorded field the Monitor plots, for every element or only `id`, over `range` or
+ *  fitted to its values. */
+export interface Monitor extends Field {
   readonly id?: Id
   readonly range?: ValueRange
 }
 
-/** What the Case panel shows: a type, the columns chosen for each type, the order of its rows, and
- *  its filters. The session alone holds it: commands and the panel change it there. */
+/** The Case panel's state, owned by the session. */
 export interface TableState {
   type?: string
   columns?: Record<string, string[]>
-  /** The field the rows are in the order of, and which way; absent, they are in file order. */
+  /** Absent: file order. */
   order?: { field: string; direction: 'ascending' | 'descending' }
-  /** Text the shown rows' names contain. */
   filter?: string
-  /** A value of one field every shown row holds. */
   equal?: { field: string; value: string | number | boolean }
 }
 
@@ -237,27 +208,30 @@ export interface ViewState {
   table?: TableState
   mappings?: Mappings
   summary?: Summary
-  /** Whether the file has moved past `summary`: it changed, and is read again, or does not read. */
+  /** Whether `summary` is out of date: the file changed, or no longer reads. */
   stale?: boolean
-  /** Why the file does not read; `summary` may hold the last revision that did. */
+  /** Why the file does not read; `summary` may be the last revision that did. */
   error?: string
   selection?: Element
-  /** The selection as the Network shows it: the element itself, or the nearest elements it draws;
-   *  absent until they are found. */
+  /** The selection as the Network draws it; absent until resolved. */
   networkSelection?: readonly Entity[]
   results?: Results
-  plots?: readonly Plot[]
-  /** The times the user chose to show in the Monitor; absent, the plots show the whole run. */
+  /** One monitor per recorded signal, in the order the Monitor lists them. */
+  monitors?: readonly Monitor[]
+  /** The monitors the Monitor shows: one, or several split, in list order. */
+  shown?: readonly Monitor[]
+  /** The Monitor's time window; absent, plots show the whole run. */
   window?: TimeRange
+  exportSettings?: ExportSettings
 }
 
-/** What the Network showed: its camera, over a canvas `size` CSS pixels wide and high. */
+/** The Network's camera, and its canvas size in CSS pixels. */
 export interface Framing {
   readonly camera: Camera
   readonly size: readonly [number, number]
 }
 
-/** `value` as a framing a page sent: a camera with a zoom, over a canvas with an area. */
+/** Validates a framing sent by a page: a camera with a zoom, and a canvas with a positive size. */
 export function framingOf(value: unknown): Framing | undefined {
   if (!value || typeof value !== 'object') return undefined
   const { camera, size } = value as { camera?: unknown; size?: unknown }
@@ -272,12 +246,17 @@ export function framingOf(value: unknown): Framing | undefined {
     : undefined
 }
 
-/** What a command asks of a view. */
-export type ViewAction = 'fit' | 'reloadView' | 'neighborhood' | 'exportImage'
+export type ViewAction = 'fitAll' | 'reloadView' | 'exportImage' | 'exportVideo' | 'cancelExport'
 
-/** The parts of a view's state that changed since it was last sent: each as it is now, or null once
- *  it is gone. Results leave their outputs out while the page holds them: they weigh most, and are
- *  fixed once the file's header is read. */
+/** An export in progress: the file it writes and how far along it is. */
+export interface ExportStatus {
+  readonly name: string
+  readonly done: number
+  readonly total: number
+}
+
+/** The parts of a view's state that changed since last sent, or null once removed. Results omit
+ *  their outputs once the page has them: they are the largest part and fixed after the header. */
 export type StateChange = {
   [K in keyof ViewState]?:
     | (K extends 'results'
@@ -286,25 +265,24 @@ export type StateChange = {
     | null
 }
 
-/** Which showing of which case a message between a view and the extension is of. The extension
- *  counts a showing each time the view follows another case or its page loads, and says which in
- *  every state it sends. Each side drops what the other says of another showing: what a page asked
- *  of a case, or did to it, never reaches the case it shows next, nor the other way. Each showing
- *  counts its changes to the clock from naught. */
+/** Tags messages between a view and the extension with the case and generation they belong to.
+ *  The generation increments whenever the view switches case or its page reloads, and each side
+ *  drops messages from other generations, so nothing reaches the wrong case. Clock changes are
+ *  counted from zero in each generation. */
 export interface Of {
   readonly uri: string | undefined
-  readonly showing: number
+  readonly generation: number
 }
 
-/** What the extension sends a view, each but whether VS Code shows it of a showing. */
+/** Messages from the extension to a view. All but `visible` are tagged with a generation. */
 export type ToView =
-  /** Whether VS Code shows the view: the page's own, of any case. */
-  | { kind: 'shown'; shown: boolean }
+  /** Whether VS Code shows the view, regardless of case. */
+  | { kind: 'visible'; visible: boolean }
   | ({ of: Of } & (
       | { kind: 'state'; changed: StateChange }
-      /** The clock settled at send time; `seq` is the last of this showing's changes it reflects. */
+      /** The clock at send time; `seq` is the latest change of this generation it reflects. */
       | { kind: 'clock'; clock: ClockState; seq: number }
-      | { kind: 'action'; command: ViewAction; value?: unknown }
+      | { kind: 'action'; command: ViewAction }
       | Reply
     ))
 
@@ -312,61 +290,57 @@ export type ToView =
 export type TransportAction =
   { action: 'seek'; value: number } | { action: 'step'; value: 1 | -1 } | { action: 'playPause' }
 
-/** The revision `summary` describes, as a request names it. */
 export const revisionOf = ({ uri, version }: Revision): Revision => ({ uri, version })
 
-/** What a view asks of the extension. Each request names what it is of: a revision of a case, or
- *  results by their id. What it reads, the worker answers as it is asked. */
-export interface ViewApi extends Pick<WorkerApi, 'project' | 'page' | 'frames' | 'sample'> {
-  /** Asks the user where to save a video of the case at `uri`: a file handle, or null when they
-   *  cancel. */
+/** Requests a view makes to the extension; reads are forwarded to the worker. */
+export interface ViewApi extends Pick<
+  WorkerApi,
+  'caseRows' | 'page' | 'frames' | 'tile' | 'sample'
+> {
+  /** Prompts for where to save a video of `uri`; returns a file handle, or null if cancelled. */
   exportOpen: { input: { uri: string; name: string }; output: number | null }
-  /** How the Network of the case at `uri` was last framed, for an export to keep; null before it
-   *  was. */
+  /** The Network's last framing, for an export to keep. */
   framing: { input: { uri: string }; output: Framing | null }
   exportWrite: { input: { file: number; bytes: Uint8Array }; output: void }
-  /** Finishes the file, or aborts it; resolves to the finished file's path. */
   exportClose: { input: { file: number; abort?: boolean }; output: string | null }
-  /** Asks the user where to save an image of the case at `uri`, and saves it there: its path, or
-   *  null when they cancel. */
+  /** Prompts for where to save an image of `uri` and saves it; null if cancelled. */
   exportSave: { input: { uri: string; name: string; bytes: Uint8Array }; output: string | null }
-  /** Holds results under an id of the view's own, while it reads them for an export: whatever
-   *  shows meanwhile, they stay until it lets go of them, or the view goes. */
+  /** Keeps results open under the view's own id while an export reads them. */
   share: { input: OfResults; output: Results }
   unshare: { input: OfResults; output: null }
 }
 
-/** What a view says of the case it shows. Its bridge names the showing on each, and the extension
- *  drops one of a showing past. */
+/** Notifications a view sends about its case. */
 export type ViewMessage =
   | { kind: 'select'; element: Element | null }
-  /** The element the user opened: selected, and shown in the case's file. */
+  /** The user opened an element: select it and reveal it in the case file. */
   | { kind: 'open'; element: Element }
-  /** The times the user chose to show in the Monitor. */
   | { kind: 'window'; bounds: TimeRange }
-  /** The plot fits the values it shows again, in place of a range it was given. */
-  | { kind: 'fitValues'; plot: Plot }
-  | { kind: 'removePlot'; plot: Plot }
-  /** What the user framed in the Network: its camera, and the canvas's size. */
+  /** Clears the monitor's value range so it fits its values again. */
+  | { kind: 'fitValues'; monitor: Field }
+  /** Shows only this monitor, as clicking a terminal shows only that terminal. */
+  | { kind: 'showMonitor'; monitor: Field }
+  /** Shows the monitor `step` places after the one shown, as Control+Page Down does. */
+  | { kind: 'cycleMonitor'; step: 1 | -1 }
+  /** Splits `monitor` beside those shown, or one the user picks. */
+  | { kind: 'splitMonitor'; monitor?: Field }
+  | { kind: 'unsplitMonitor'; monitor: Field }
   | { kind: 'framing'; framing: unknown }
-  | { kind: 'display'; values: Partial<ViewSettings> }
+  | { kind: 'display'; values: Partial<DisplaySettings> }
   | ({ kind: 'transport'; seq: number } & TransportAction)
-  /** A change the user made in the Case panel to what it shows, which the session takes. */
   | { kind: 'table'; change: Partial<TableState> }
-  /** How many rows the Case panel's filters leave, as it last read them. */
-  | { kind: 'rows'; shown: number }
-  /** Whether the view is mid-task, as an export is, and keeps the case it works on. */
-  | { kind: 'busy'; busy: boolean }
+  /** The row count left by the Case panel's filters. */
+  | { kind: 'rows'; total: number }
+  /** The export in progress, which keeps the view on its case, or null once it ends. */
+  | { kind: 'export'; status: ExportStatus | null }
 
-/** What a view sends the extension, each but its loading of a showing. */
+/** Messages from a view to the extension. All but `ready` are tagged with a generation. */
 export type FromView =
-  /** The page loaded, and listens. */
   | { kind: 'ready' }
   | ({ of: Of } & (
       | ViewMessage
       | Request
       | Cancel
-      /** Why something in the view failed, which the extension tells the user whatever showing
-       *  it is of, and what the view was doing, for the log. */
+      /** A failure in the view, reported from any generation. */
       | { kind: 'error'; problem: Problem; context?: unknown }
     ))

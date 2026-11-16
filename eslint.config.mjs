@@ -12,7 +12,7 @@ const NOTIFIES = {
 }
 const REGISTERS = {
   selector: "CallExpression[callee.property.name='registerCommand']",
-  message: 'Register a command through Sessions.command, which says why one fails.',
+  message: 'Register commands through Studio.command, which reports their errors.',
 }
 
 export default [
@@ -35,7 +35,7 @@ export default [
       'no-restricted-syntax': ['error', ONLY],
     },
   },
-  // Studio says why something failed in one place, and makes its commands in one.
+  // Notifications are shown only from report.ts, and commands registered only in studio.ts.
   {
     files: ['src/**/*.ts', 'src/**/*.svelte'],
     ignores: ['**/*.test.ts'],
@@ -46,7 +46,7 @@ export default [
     rules: { 'no-restricted-syntax': ['error', ONLY, REGISTERS] },
   },
   {
-    files: ['src/extension/sessions.ts'],
+    files: ['src/extension/studio.ts'],
     rules: { 'no-restricted-syntax': ['error', ONLY, NOTIFIES] },
   },
   {

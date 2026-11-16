@@ -1,6 +1,4 @@
-<!-- @component
-  A glyph from glyphs.ts in the current text color.
--->
+<!-- @component A glyph from glyphs.ts in the current text color. -->
 <script lang="ts">
   import { icon, type IconName } from './glyphs.js'
 

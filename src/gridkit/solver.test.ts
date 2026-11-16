@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { readSolverLine, solverLine } from './solver.js'
 
 describe("GridKit's own lines", () => {
-  it('reads the level and keeps what the line says', () => {
+  it('reads the log level and keeps the message', () => {
     for (const [printed, level] of [
       ['ERROR', 'error'],
       ['WARNING', 'warn'],

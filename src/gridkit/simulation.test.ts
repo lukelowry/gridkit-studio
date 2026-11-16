@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { turn } from './simulation.js'
 
-/** Lets every promise settled so far run on. */
-const settled = () => new Promise((resolve) => setTimeout(resolve))
+/** Lets every pending callback run. */
+const flush = () => new Promise((resolve) => setTimeout(resolve))
 
-/** Whether this file system names a file alike in any case. */
+/** Whether this platform's file system is case-insensitive. */
 const caseless = process.platform === 'win32' || process.platform === 'darwin'
 
 describe('runs that write one file', () => {
@@ -18,10 +18,10 @@ describe('runs that write one file', () => {
       order.push('third began')
       return end
     })
-    // The second gives up its turn while the first still writes: the third still waits.
+    // The second cancels while the first is still writing, and the third keeps waiting.
     stopped.abort(new Error('Stopped'))
     await expect(second).rejects.toThrow('Stopped')
-    await settled()
+    await flush()
     expect(order).toEqual([])
     order.push('first ended')
     first()
@@ -36,7 +36,7 @@ describe('runs that write one file', () => {
       began = true
       return end
     })
-    await settled()
+    await flush()
     expect(began).toBe(false)
     first()
     ;(await second)()
@@ -48,8 +48,8 @@ describe('runs that write one file', () => {
       turn('b.csv', new AbortController().signal),
     ])
     for (const end of ends) end()
-    await settled()
-    // Ended, a file's turn is anyone's.
+    await flush()
+    // Once ended, the file is free again.
     ;(await turn('a.csv', new AbortController().signal))()
   })
 })

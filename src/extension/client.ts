@@ -11,8 +11,8 @@ import type {
 } from '../shared/messages.js'
 import { type Api, Caller } from '../shared/rpc.js'
 
-/** Tells its listeners of each `T`, as VS Code's events do: subscribing returns what unsubscribes.
- *  One listener's failure leaves the others theirs, and is said as every failure is, by `failed`. */
+/** An event emitter shaped like VS Code's. A throwing listener does not stop the others; its
+ *  error goes to `failed`. */
 class Emitter<T> {
   readonly #listeners = new Set<(value: T) => void>()
   constructor(private readonly failed: (error: unknown) => void) {}
@@ -33,57 +33,36 @@ class Emitter<T> {
   }
 }
 
-/** What a worker's owner hears of it: its events. `release` ends what it started, before another
- *  worker takes its place. */
+/** Receives a worker's events. `release` cleans up after a worker stops, before the next starts. */
 interface Owner {
-  hear(event: WorkerEvent): void
+  handleEvent(event: WorkerEvent): void
   release(): Promise<void>
 }
 
-/** A worker that stops this many times within `CRASH_MS` is unsteady: what it held is read again
- *  only once the user asks, so what may stop it does not stop it over and over. */
-const CRASHES = 3
-const CRASH_MS = 60_000
-
-/** `error`, of a worker that stopped CRASHES times in a minute, saying what Studio does `instead`. */
-export const unsteady = (error: Error, instead: string) =>
-  new Error(`${error.message} It stopped ${CRASHES} times in a minute, so Studio ${instead}`)
-
-/** A worker of the extension's, started when first asked and again after it stops. */
+/** A worker thread, started on first call and restarted after it stops. */
 class Thread<A extends Api<A>> {
-  /** Hears why the worker stopped, each time it does. */
+  /** Fires with the reason each time the worker stops. */
   readonly failure: Emitter<Error>
   #worker?: Worker
   #caller?: Caller<A>
-  /** The teardown of one that stopped: calls wait for it before another starts. */
+  /** The teardown of a stopped worker; calls wait for it before a new one starts. */
   #teardown?: Promise<void>
   #closed = false
-  /** When the worker last stopped. */
-  #crashes: number[] = []
 
   constructor(
     private readonly script: string,
     private readonly owner: Owner,
-    /** Says a failure of what hears of the worker. */
     failed: (error: unknown) => void,
-    /** What each worker started is started with. */
+    /** The `workerData` for each started worker. */
     private readonly data?: () => unknown,
   ) {
     this.failure = new Emitter(failed)
   }
 
-  /** Whether the worker runs now. */
   get running(): boolean {
     return this.#worker !== undefined
   }
 
-  /** Whether it stopped fewer than CRASHES times in the last CRASH_MS, so what it held may be read
-   *  again at once. */
-  get steady(): boolean {
-    return this.#crashes.length < CRASHES
-  }
-
-  /** Calls `method` of the worker, starting it if it is not running. */
   async call<K extends keyof A & string>(
     method: K,
     input: A[K]['input'],
@@ -91,7 +70,7 @@ class Thread<A extends Api<A>> {
   ): Promise<A[K]['output']> {
     signal?.throwIfAborted()
     if (this.#teardown) await this.#teardown
-    if (this.#closed) throw new Error('Studio is closed.')
+    if (this.#closed) throw new Error('GridKit Studio is closed.')
     return this.#start().call(method, input, signal)
   }
 
@@ -104,9 +83,7 @@ class Thread<A extends Api<A>> {
     const stopped = (error: Error) => {
       if (this.#worker !== worker) return
       this.#worker = this.#caller = undefined
-      const now = Date.now()
-      this.#crashes = [...this.#crashes.filter((time) => now - time < CRASH_MS), now]
-      // Set before anyone hears, so a call the failure prompts waits for the teardown.
+      // Set before firing, so a call made by a failure listener waits for the teardown.
       this.#teardown = this.owner
         .release()
         .then(() => worker.terminate())
@@ -120,25 +97,26 @@ class Thread<A extends Api<A>> {
     }
     worker.on('error', (error) =>
       stopped(
-        Object.assign(new Error(`Studio's worker stopped: ${error.message}`), {
+        Object.assign(new Error(`GridKit Studio's worker stopped: ${error.message}`), {
           detail: error.stack,
         }),
       ),
     )
-    worker.on('exit', (code) => stopped(new Error(`Studio's worker stopped (exit code ${code}).`)))
+    worker.on('exit', (code) =>
+      stopped(new Error(`GridKit Studio's worker stopped (exit code ${code}).`)),
+    )
     worker.on('message', (message: FromWorker) => {
       if (message.kind === 'reply') caller.settle(message)
-      else this.owner.hear(message)
+      else this.owner.handleEvent(message)
     })
     return caller
   }
 
-  /** Stops the worker, failing what was asked of it. */
   async dispose(): Promise<void> {
     this.#closed = true
     const worker = this.#worker
     this.#worker = undefined
-    this.#caller?.fail(new Error('Studio disposed.'))
+    this.#caller?.fail(new Error('GridKit Studio is closed.'))
     this.#caller = undefined
     await this.#teardown
     await worker?.terminate()
@@ -146,14 +124,12 @@ class Thread<A extends Api<A>> {
   }
 }
 
-/** The extension's worker, which reads case files as they change, runs GridKit and reads results
- *  files, started with `options` from its bundle in `folder`. What fails as it hears of it is said
- *  by `failed`. */
+/** The extension's worker, which reads case files, runs GridKit and reads results files. It loads
+ *  its bundle from `folder` and starts with `options`; listener errors go to `failed`. */
 export class Client {
   readonly event: Emitter<Exclude<WorkerEvent, { kind: 'process' }>>
-  /** The GridKit process of each run the worker has under way, by the run's id, ended here should
-   *  the worker stop before it ends them. */
-  readonly #owned = new Map<string, RuntimeProcess>()
+  /** GridKit processes by run id, ended here if the worker stops first. */
+  readonly #processes = new Map<string, RuntimeProcess>()
   readonly worker: Thread<WorkerApi>
 
   constructor(
@@ -166,10 +142,10 @@ export class Client {
     this.worker = new Thread(
       join(folder, ...(browser ? ['browser'] : []), 'worker.mjs'),
       {
-        hear: (event) => {
+        handleEvent: (event) => {
           if (event.kind !== 'process') return this.event.fire(event)
-          if (event.process) this.#owned.set(event.run, event.process)
-          else this.#owned.delete(event.run)
+          if (event.process) this.#processes.set(event.run, event.process)
+          else this.#processes.delete(event.run)
         },
         release: () => this.#terminate(),
       },
@@ -186,19 +162,17 @@ export class Client {
     )
   }
 
-  /** What the worker holds, while it runs. */
+  /** Counts of the worker's open cases, results, files and runs, while it runs. */
   async stats() {
     return this.worker.running ? this.worker.call('stats', {}) : undefined
   }
 
-  /** Ends every GridKit process the worker started. */
   async #terminate() {
-    const owned = [...this.#owned.values()]
-    this.#owned.clear()
-    await Promise.all(owned.map(terminateRuntime))
+    const processes = [...this.#processes.values()]
+    this.#processes.clear()
+    await Promise.all(processes.map(terminateRuntime))
   }
 
-  /** Stops the worker, and every GridKit process it started. */
   async dispose() {
     await this.worker.dispose()
     await this.#terminate()

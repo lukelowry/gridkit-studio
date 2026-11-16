@@ -2,17 +2,17 @@ import { afterEach, expect, it, vi } from 'vitest'
 
 import type { Of } from '../shared/messages.js'
 import { IDLE } from '../shared/transport.js'
-import type { Heard } from './bridge.js'
+import type { Received } from './bridge.js'
 
 const transport = vi.hoisted(() => ({
-  listener: (_message: Heard) => {},
+  listener: (_message: Received) => {},
   report: vi.fn(),
   send: vi.fn(),
-  of: { uri: 'file:///case.case.json', showing: 1 } as Of,
+  of: { uri: 'file:///case.case.json', generation: 1 } as Of,
 }))
 vi.mock('./bridge.js', () => ({
   bridge: {
-    on: (listener: (message: Heard) => void) => {
+    on: (listener: (message: Received) => void) => {
       transport.listener = listener
       return () => {}
     },
@@ -27,8 +27,8 @@ import { createClock } from './clock.js'
 
 afterEach(() => vi.unstubAllGlobals())
 
-const A: Of = { uri: 'file:///a.case.json', showing: 1 }
-const B: Of = { uri: 'file:///b.case.json', showing: 2 }
+const A: Of = { uri: 'file:///a.case.json', generation: 1 }
+const B: Of = { uri: 'file:///b.case.json', generation: 2 }
 
 it('computes playback time without owning a rendering RAF and survives a paint error', () => {
   vi.useFakeTimers({ toFake: ['performance'] })
@@ -71,16 +71,16 @@ it('follows the clock of the case it shows next, whatever it changed of the one 
   const clock = createClock(paint)
   const paused = { ...IDLE, status: 'paused' as const, span: [0, 10] as const }
   transport.listener({ kind: 'clock', of: A, seq: 0, clock: paused })
-  // The view changes the clock of the case it shows, and moves on to another before the extension
-  // hears it: the extension drops what it said of the case before.
+  // The view changes the clock of its case, then moves to another case before the extension
+  // receives the change: the extension drops it, as it belongs to the previous generation.
   clock.act({ action: 'playPause' })
   clock.act({ action: 'playPause' })
   transport.of = B
   transport.listener({ kind: 'state', of: B, state: { uri: B.uri } })
-  // Each showing counts its changes from naught, so the new case's clock is taken.
+  // Each generation counts its changes from zero, so the new case's clock applies.
   transport.listener({ kind: 'clock', of: B, seq: 0, clock: { ...paused, t: 7 } })
   expect(clock.now()).toBe(7)
-  // A clock of the case before is not the view's.
+  // A clock of the previous case is ignored.
   transport.listener({ kind: 'clock', of: A, seq: 5, clock: { ...paused, t: 3 } })
   expect(clock.now()).toBe(7)
   clock.stop()

@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { GridKit } from '../shared/simulation.js'
-import { launch, PROGRAM, runtimeOf, sweepOrphans, writeDown } from './runtime.js'
+import { launch, PROGRAM, recordRun, runtimeOf, sweepOrphans } from './runtime.js'
 
 const exe = (name: string) => (process.platform === 'win32' ? name + '.exe' : name)
 /** Empty installation selects the bundled solver. */
@@ -20,7 +20,7 @@ const settings = (named: Partial<GridKit>): GridKit => ({
 describe('where GridKit runs', () => {
   let root: string
   let path: string | undefined
-  /** A program named `name` in `folder`, which only has to exist and be executable. */
+  /** Creates an empty executable named `name` in `folder`. */
   async function program(folder: string, name: string): Promise<string> {
     await mkdir(folder, { recursive: true })
     const file = join(folder, exe(name))
@@ -100,13 +100,13 @@ describe('runs a window that died left running', () => {
   })
   afterEach(() => rm(folder, { recursive: true, force: true }))
 
-  /** A process that runs until it is ended, in a group of its own, as GridKit runs. */
+  /** A long-running process in its own group, like a GridKit run. */
   const runner = () =>
     spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
     })
-  /** The id of a window that has exited. */
+  /** The pid of a process that has exited, standing in for a closed window. */
   async function exited(): Promise<number> {
     const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' })
     await once(child, 'exit')
@@ -121,7 +121,7 @@ describe('runs a window that died left running', () => {
     }
   }
 
-  it('crosses out a run it cannot tell is the process written down, ending nothing', async () => {
+  it('removes a record whose process identity no longer matches, without killing anything', async () => {
     const other = runner()
     try {
       const host = await exited()
@@ -143,19 +143,19 @@ describe('runs a window that died left running', () => {
       const orphan = runner()
       const gone = once(orphan, 'exit')
       try {
-        const crossOut = await writeDown(folder, orphan.pid!)
-        // This window is open, and ends its own runs.
+        const removeRecord = await recordRun(folder, orphan.pid!)
+        // This window is still open, so its runs are left alone.
         await sweepOrphans(folder)
         expect(running(orphan.pid!)).toBe(true)
         const [name] = await readdir(folder)
         expect(name).toBeDefined()
-        const written = JSON.parse(await readFile(join(folder, name!), 'utf8')) as object
-        // The same run, written down by a window since exited.
-        await writeFile(join(folder, name!), JSON.stringify({ ...written, host: await exited() }))
+        const record = JSON.parse(await readFile(join(folder, name!), 'utf8')) as object
+        // The same run, recorded by a window that has exited.
+        await writeFile(join(folder, name!), JSON.stringify({ ...record, host: await exited() }))
         await sweepOrphans(folder)
         await gone
         expect(await readdir(folder)).toEqual([])
-        await crossOut()
+        await removeRecord()
       } finally {
         orphan.kill()
       }
@@ -170,8 +170,7 @@ describe('how a run ends', () => {
   })
   afterEach(() => rm(root, { recursive: true, force: true }))
 
-  /** How a GridKit that does what `script` does ends: Node runs in its place, the script as its
-   *  solver file. */
+  /** Runs `script` as the solver file, with Node standing in for GridKit. */
   async function ends(script: string): Promise<void> {
     const solver = join(root, 'run.cjs')
     await writeFile(solver, script)
@@ -180,8 +179,8 @@ describe('how a run ends', () => {
     return launch(runtime, solver, { signal: AbortSignal.any([]), log }).done
   }
 
-  it('fails only as GridKit exits, saying the error it printed, on its line or the next', async () => {
-    // GridKit prints errors it goes on from.
+  it('fails only on a nonzero exit, with the error GridKit printed on its line or the next', async () => {
+    // GridKit prints errors it recovers from.
     await expect(ends(`console.log('[ERROR] Bus parameter "x" has no value.')`)).resolves.toBe(
       undefined,
     )

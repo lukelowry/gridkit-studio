@@ -1,12 +1,11 @@
-/** Which case the views follow, an editor that closes as its case changes, and how the Network
- *  shows an element it does not draw. Drawing is the end-to-end journeys' to check. */
+/** The active case, editors closing during a change, and revealing undrawn elements. Rendering is
+ *  covered by the e2e journeys. */
 
 import assert from 'node:assert/strict'
 
 import { setup, suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import type { Action } from '../../src/extension/sessions.js'
 import { menuContext } from '../../src/shared/menus.js'
 import { type Bench, bench, until } from './studio.js'
 
@@ -29,10 +28,9 @@ suite('Views', () => {
     assert.equal(host.studio.state(other.toString()).summary?.name, 'TwoArea')
   })
 
-  test('say nothing when an editor closes as its case changes', async () => {
-    // VS Code closes an editor before the extension host hears so: a change made meanwhile still
-    // updates its view, which must not ask the panel gone by then whether it shows. The close and
-    // the change race, so they are tried at a few offsets, many times.
+  test('report no error when an editor closes as its case changes', async () => {
+    // VS Code disposes an editor before the extension host is told, so a change in between must not
+    // query the disposed panel. The two race, so try several offsets many times.
     for (let cycle = 0; cycle < 30; cycle++) {
       await vscode.commands.executeCommand('vscode.openWith', host.uri, 'gridkitStudio.network')
       const closing = vscode.commands.executeCommand('workbench.action.closeAllEditors')
@@ -42,12 +40,12 @@ suite('Views', () => {
         ?.map({ table: 'Bus', field: 'init.Vr' }, cycle % 2 ? ['vertexColor'] : [])
       await closing
     }
-    assert.deepEqual(host.said(), [])
+    assert.deepEqual(host.takeErrors(), [])
   })
 
   test('reveal an element the Network does not draw by the bus it reaches', async () => {
     const summary = await host.studio.files.read(host.key)
-    // An exciter, which the Network draws none of, on bus 30.
+    // The Network does not draw exciters; this one is on bus 30.
     const exciter = { table: 'Esdc1a', id: '30_1_esdc1a' }
     const menu = menuContext(summary, {
       uri: host.key,
@@ -56,23 +54,50 @@ suite('Views', () => {
       element: exciter,
     })
     const keys = { ...host.keys(), ...menu }
-    const heard: Action[] = []
-    const listening = host.studio.action.event((action) => heard.push(action))
-    try {
-      const zoom = host.menus.find('webview/context', 'Zoom to Neighborhood', keys)
-      await vscode.commands.executeCommand(zoom.command, menu)
-      assert.deepEqual(
-        heard.map(({ command, value, view }) => ({ command, value, view })),
-        [{ command: 'neighborhood', value: [{ table: 'Bus', id: 30 }], view: 'network' }],
+    host.session.select()
+    const reveal = host.menus.find('webview/context', 'Reveal in Network', keys)
+    await vscode.commands.executeCommand(reveal.command, menu)
+    assert.deepEqual(host.session.selection, exciter)
+    await until(() => host.session.networkSelection, 'the bus it reaches')
+    assert.deepEqual(host.session.networkSelection, [{ table: 'Bus', id: 30 }])
+  })
+
+  test('list a monitor per recorded signal, shown, split and stepped through as terminals are', async () => {
+    await host.recordOnly('Bus', ['Vm', 'Va'])
+    const { session } = host
+    const fields = (monitors: readonly { field: string }[]) => monitors.map(({ field }) => field)
+    await until(() => session.monitors.length === 2, 'a monitor per recorded signal')
+    const [first, second] = session.monitors
+    assert.deepEqual(new Set(fields(session.monitors)), new Set(['Vm', 'Va']))
+    assert.deepEqual(fields(session.shown), [first!.field])
+    // Next Monitor wraps around the list, as Focus Next Terminal does.
+    await vscode.commands.executeCommand('gridkitStudio.nextMonitor')
+    assert.deepEqual(fields(session.shown), [second!.field])
+    await vscode.commands.executeCommand('gridkitStudio.nextMonitor')
+    assert.deepEqual(fields(session.shown), [first!.field])
+    // A row's menu splits a monitor beside the one shown, and unsplits it again.
+    const summary = await host.studio.files.read(host.key)
+    const rowMenu = (monitor: typeof first) =>
+      menuContext(
+        summary,
+        { uri: host.key, version: summary.version, origin: 'monitor', field: monitor, monitor },
+        { mappings: session.mappings, monitors: session.shown },
       )
-      host.session.select()
-      const reveal = host.menus.find('webview/context', 'Reveal in Network', keys)
-      await vscode.commands.executeCommand(reveal.command, menu)
-      assert.deepEqual(host.session.selection, exciter)
-      await until(() => host.session.networkSelection, 'the bus it reaches')
-      assert.deepEqual(host.session.networkSelection, [{ table: 'Bus', id: 30 }])
-    } finally {
-      listening.dispose()
-    }
+    const split = rowMenu(second)
+    const splitItem = host.menus.find('webview/context', 'Split Monitor', {
+      ...host.keys(),
+      ...split,
+    })
+    await vscode.commands.executeCommand(splitItem.command, split)
+    assert.deepEqual(fields(session.shown), fields(session.monitors))
+    assert.equal(host.studio.contexts.get('canSplit'), false)
+    const unsplit = rowMenu(second)
+    const unsplitItem = host.menus.find('webview/context', 'Unsplit Monitor', {
+      ...host.keys(),
+      ...unsplit,
+    })
+    await vscode.commands.executeCommand(unsplitItem.command, unsplit)
+    assert.deepEqual(fields(session.shown), [first!.field])
+    assert.equal(host.studio.contexts.get('canSplit'), true)
   })
 })

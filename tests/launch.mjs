@@ -1,7 +1,5 @@
-/** Run an entry inside VS Code with the extension and a case, in a throwaway profile: the
- *  extension-host suites, or the entry named on the command line, such as the end-to-end journeys.
- *  `--untrusted` leaves Workspace Trust on. VS Code's own routine log lines are left out;
- *  GRIDKIT_TEST_VERBOSE=1 keeps them. */
+/** Runs a test entry (default: the host suites) in VS Code with a throwaway profile. `--untrusted`
+ *  keeps Workspace Trust on; GRIDKIT_TEST_VERBOSE=1 keeps VS Code's routine log lines. */
 
 import { spawn } from 'node:child_process'
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -17,7 +15,6 @@ const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf
 const untrusted = process.argv.includes('--untrusted')
 const entry =
   process.argv.slice(2).find((value) => !value.startsWith('--')) ?? 'tests/host/index.ts'
-/** VS Code's lines that say nothing about the run. */
 const NOISE = [
   /^\[main [^\]]+\] (StorageMainService|\[shared storage\]|update#|Extension host with pid \d+ exited with code: 0|CodeWindow: failed to load \(reason: [^)]*, code: -3\))/,
   /^DevTools listening on ws:/,
@@ -26,7 +23,7 @@ const NOISE = [
   /^Loading development extension at/,
   /^\[AccountPolicyGate\] /,
   /^Settings Sync: Account status changed/,
-  // VS Code's own proxy code, on the first web request any built-in extension makes.
+  // VS Code's proxy code, on the first web request a built-in extension makes.
   /^\(node:\d+\) \[DEP0169\]/,
   /^\(Use `Code --trace-deprecation/,
 ]
@@ -72,30 +69,27 @@ try {
   await writeFile(
     path.join(profile, 'User', 'settings.json'),
     JSON.stringify({
-      // DOM menus on every OS, so Playwright can read native menus.
+      // DOM menus on every OS, so Playwright can read them.
       'window.titleBarStyle': 'custom',
       'window.menuStyle': 'custom',
-      // Native pickers stay open across headless focus changes.
+      // Keep quick picks open across headless focus changes.
       'workbench.quickOpen.closeOnFocusLost': false,
       'workbench.startupEditor': 'none',
       'workbench.secondarySideBar.defaultVisibility': 'hidden',
       'security.workspace.trust.startupPrompt': 'never',
-      // The workspace sits inside this repository; Git asks nothing about it.
+      // The workspace is inside this repository; keep Git from prompting about it.
       'git.openRepositoryInParentFolders': 'never',
-      // No AI agent host, experiments, telemetry or update checks: none is part of the run.
       'chat.disableAIFeatures': true,
       'chat.agentHost.claudeAgent.enabled': false,
       'telemetry.telemetryLevel': 'off',
       'workbench.enableExperiments': false,
       'extensions.autoCheckUpdates': false,
       'extensions.autoUpdate': false,
-      // An explicit native installation; otherwise exercise bundled WebAssembly.
       ...(process.env.GRIDKIT_PATH && { 'gridkitStudio.gridkitPath': process.env.GRIDKIT_PATH }),
     }),
   )
   const workspace = path.join(run, 'workspace')
   await mkdir(workspace)
-  // The case, and the solver file that runs it, as GridKit runs a pair.
   for (const file of ['IEEE39.case.json', 'IEEE39.solver.json'])
     await copyFile(path.join(root, 'cases', file), path.join(workspace, file))
 
@@ -110,22 +104,22 @@ try {
     [
       workspace,
       '--remote-debugging-port=0',
-      // Playwright's own input and scheduling defaults, for a browser it did not launch.
+      // Playwright's input and scheduling defaults, for a browser it did not launch.
       '--allow-pre-commit-input',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       ...(process.env.GRIDKIT_TEST_SOFTWARE_GPU === '1'
         ? [
-            // WebGL2 drawn on the CPU, which Chromium offers only when asked.
+            // Software WebGL2, which Chromium enables only on request.
             '--use-angle=swiftshader',
             '--enable-unsafe-swiftshader',
-            // A large plot drawn on the CPU outlasts the watchdog, which would end the GPU process
-            // and, after twice, WebGL for the rest of the run.
+            // Large CPU-drawn plots outlast the watchdog, which kills the GPU process and, after
+            // two kills, disables WebGL for the rest of the run.
             '--disable-gpu-watchdog',
           ]
         : []),
-      // Chromium's sandbox needs what neither root nor a container gives it.
+      // Chromium's sandbox does not work as root or in a container.
       '--no-sandbox',
       '--disable-gpu-sandbox',
       '--disable-extensions',
@@ -147,7 +141,7 @@ try {
         ...process.env,
         // Embedded terminals may inherit Electron's Node-only mode.
         ELECTRON_RUN_AS_NODE: undefined,
-        // As the `code` command sets it: Chromium flags pass without a warning each.
+        // Set as the `code` command does, so Chromium flags pass without warnings.
         VSCODE_CLI: '1',
         GRIDKIT_TEST_PROFILE: profile,
         GRIDKIT_TEST_ROOT: root,
@@ -177,7 +171,6 @@ try {
     )
   passed = true
 } finally {
-  // A failed run keeps VS Code's logs, which say what its windows and extension hosts did.
   if (!passed) {
     const logs = path.join(output, 'logs', path.basename(run))
     await cp(path.join(run, 'user-data', 'logs'), logs, { recursive: true }).then(
@@ -185,7 +178,7 @@ try {
       () => {},
     )
   }
-  // Remove only this run's own profile, whether or not the run passed.
+  // Remove only this run's profile, whether or not it passed.
   const relative = path.relative(testRoot, run)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative))
     throw new Error('Test profile escaped its root.')

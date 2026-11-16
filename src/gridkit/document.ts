@@ -2,14 +2,14 @@ import type { Id, Reference, Values } from 'latkit'
 
 import type { CaseDefinition } from '../shared/document.js'
 
-/** A lazy source projection. Native datasets never own source spans. */
-export interface ProjectedTable {
+/** A case table whose columns are read on demand. */
+export interface CaseTable {
   readonly ids: readonly Id[]
   read(field: string, offset: number, count: number): Values | Reference
 }
 
-export interface ProjectedDocument {
+export interface CaseColumns {
   readonly key: string
   readonly definition: CaseDefinition
-  readonly tables: ReadonlyMap<string, ProjectedTable>
+  readonly tables: ReadonlyMap<string, CaseTable>
 }

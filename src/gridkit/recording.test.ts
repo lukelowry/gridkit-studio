@@ -19,7 +19,7 @@ describe("a case's recording", () => {
   it('counts the outputs each type lists, and finds the monitor GridKit writes to', async () => {
     const recording = await recordingOf(await Case.parse(new TextEncoder().encode(source), catalog))
     expect(recording.listed.Bus).toEqual({ Va: 1 })
-    // GridKit takes the case's last CSV monitor.
+    // GridKit uses the case's last CSV monitor.
     expect(recording.monitor).toEqual({ file: 'out.csv' })
     const bare = await Case.parse(
       new TextEncoder().encode(source.replace(/,\s*"monitors":\[.*\]/, '')),
@@ -58,7 +58,7 @@ describe("a case's recording", () => {
     const csv = '{"file_name":"out.csv","format":"csv"}'
     const semi = '{"file_name":"semi.csv","format":"csv","delim":";"}'
     expect(await monitor(`"monitors":[${csv},${semi}]`)).toEqual({ file: 'out.csv' })
-    // One that names no file leaves it to the solver file's output_file.
+    // A monitor without a file name defers to the solver file's output_file.
     expect(await monitor(`"monitors":[${csv},{"format":"csv"}]`)).toBeUndefined()
   })
 
@@ -70,7 +70,7 @@ describe("a case's recording", () => {
   })
 
   it("reads a bus's list in any case, as GridKit does, and a device's as written", async () => {
-    // The branch lists P1, which GridKit, matching a device's outputs as written, takes for no p1.
+    // The branch lists P1, which GridKit does not match to p1 because device outputs match exactly.
     const text = source.replace('"mon":["Va"]', '"mon":["va"]')
     const kase = await Case.parse(new TextEncoder().encode(text), catalog)
     expect((await recordingOf(kase)).listed).toEqual({ Bus: { Va: 1 } })

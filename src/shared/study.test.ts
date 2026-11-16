@@ -20,14 +20,14 @@ describe('a solver file as Studio reads it', () => {
       output: 'IEEE39.csv',
       layout: 'wide',
     })
-    // A state file is one more file the run reads, named as written.
+    // The state file path is kept as written.
     expect(
       readSolver(
         'a.solver.json',
         '{"system_model_file":"a.case.json","tmax":1,"state_file":"../a.state.json"}',
       ).state,
     ).toBe('../a.state.json')
-    // GridKit reads the layout without regard to case.
+    // The layout is case-insensitive, as in GridKit.
     expect(
       readSolver(
         'a.solver.json',
@@ -36,7 +36,7 @@ describe('a solver file as Studio reads it', () => {
     ).toBe('long')
   })
 
-  it('says why a solver file cannot run, naming the line of a syntax error', () => {
+  it('explains why a solver file cannot run, naming the line of a syntax error', () => {
     expect(() => readSolver('a.solver.json', '{\n  "tmax": 1,\n  oops\n}')).toThrow(
       'a.solver.json, line 3:',
     )
@@ -54,8 +54,8 @@ describe('a solver file as Studio reads it', () => {
     const monitor = { file: 'case.csv' }
     expect(outputOf('a.solver.json', solver, monitor)).toEqual(monitor)
     expect(outputOf('a.solver.json', solver, undefined)).toEqual({ file: 'run.csv' })
-    // The case's monitor is wide, so a long output_file is the run's own; without one, GridKit
-    // still writes the case's.
+    // The case's monitor is always wide, so a long layout writes output_file, or the monitor
+    // without one.
     const long = { ...solver, layout: 'long' } as const
     expect(outputOf('a.solver.json', long, monitor)).toEqual({ file: 'run.csv' })
     expect(outputOf('a.solver.json', { ...long, output: undefined }, monitor)).toEqual(monitor)

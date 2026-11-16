@@ -1,4 +1,4 @@
-/** Where a case's records and their fields are in its file, as VS Code counts: in UTF-16 units. */
+/** Locates a case's records and fields in its file, as VS Code UTF-16 offsets. */
 
 import { type Entity, entityLabel } from '../shared/document.js'
 import { problem } from '../shared/errors.js'
@@ -9,15 +9,12 @@ import { Members } from './parse.js'
 const OPEN_OBJECT = 0x7b
 const members = new Members()
 
-/** A stretch of a file's bytes: from its first to just past its last. */
-type Bytes = readonly [start: number, end: number]
+type ByteRange = readonly [start: number, end: number]
 
-/** The UTF-16 offset of `byte` in the case's file, as VS Code counts. */
 export const textOffset = (kase: Case, byte: number): number => charsAt(kase.file, byte)
 
-/** The record of row `row` of `table`. The case's own row is no record, and stands in its header,
- *  or at the file's first character where it writes none, so nothing of it reads the whole file. */
-function recordOf(kase: Case, table: Table, row: number): Bytes {
+/** The case's own row maps to its header, or to the first character, never the whole file. */
+function recordOf(kase: Case, table: Table, row: number): ByteRange {
   if (table.shape.array === null) {
     const header = kase.member('header')
     return header ? [header.value, header.end] : [0, 1]
@@ -27,9 +24,8 @@ function recordOf(kase: Case, table: Table, row: number): Bytes {
   return [records.starts[record]!, records.ends[record]!]
 }
 
-/** The value `path` leads to, key by key, from the value at `from`; undefined where a key names
- *  no member, or leads into what is no object. */
-function within(file: Uint8Array, from: Bytes, path: readonly string[]): Bytes | undefined {
+/** The value at `path` inside the value at `from`, or undefined. */
+function within(file: Uint8Array, from: ByteRange, path: readonly string[]): ByteRange | undefined {
   let [value, end] = from
   for (const key of path) {
     if (file[value] !== OPEN_OBJECT) return undefined
@@ -41,22 +37,19 @@ function within(file: Uint8Array, from: Bytes, path: readonly string[]): Bytes |
   return [value, end]
 }
 
-/** Where the record of `table` at `record` writes the value at `path`, the keys to it from the
- *  record's own; undefined where it writes none. The case's own members are those its file was
- *  laid out by, so nothing of the case's own reads the whole file. */
+/** The case's own row starts from the top-level members, so it never scans the whole file. */
 function memberAt(
   kase: Case,
   table: Table,
-  record: Bytes,
+  record: ByteRange,
   path: readonly string[],
-): Bytes | undefined {
+): ByteRange | undefined {
   if (table.shape.array !== null) return within(kase.file, record, path)
   const own = kase.member(path[0]!)
   return own && within(kase.file, [own.value, own.end], path.slice(1))
 }
 
-/** The record of row `row` of `table`, or its `field`'s value, or the record's first character
- *  where it writes none. */
+/** The span of a record or of its `field`, or the record's first character when absent. */
 export function rowRange(kase: Case, table: Table, row: number, field?: string): Span {
   const record = recordOf(kase, table, row)
   const plan = field === undefined ? undefined : table.shape.plan.get(field)
@@ -68,7 +61,6 @@ export function rowRange(kase: Case, table: Table, row: number, field?: string):
   return { offset, length: charsAt(kase.file, to) - offset }
 }
 
-/** Where the element `id` is, or its `field`, as `rowRange` places its row. */
 export function sourceRange(kase: Case, id: Entity, field?: string): Span {
   const located = kase.locate(id)
   if (!located) throw problem('invalid-input', `${entityLabel(id)} is not in the case.`)

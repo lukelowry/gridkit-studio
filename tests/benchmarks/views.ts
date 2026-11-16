@@ -1,16 +1,15 @@
-/** Studio's benchmarks inside VS Code, case by case: how soon each view draws, and how soon it
- *  answers what the user does. Where GridKit runs, each case also runs a second of simulation,
- *  followed live, then played, scrubbed, stepped, plotted, restyled, picked and exported. Each
- *  scenario's times, and the work it did, are written for compare.mjs to set beside another run's. */
+/** Per-case view benchmarks inside VS Code: first frames and interaction latency, plus a 1 s live
+ *  simulation, playback, plots and export when GridKit is available. Read by compare.mjs. */
 
 import assert from 'node:assert/strict'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import type { ViewKind } from '../../src/shared/messages.js'
+import { monitorWith } from '../../src/shared/monitors.js'
 import {
   idle,
   pause,
@@ -30,9 +29,8 @@ const CASES = [
   ['cases/ACTIVSg10k.case.json', 10000],
 ] as const
 const RUNS = 5
-/** Exports per case, each a second of video. */
 const EXPORTS = 3
-/** Counters that only grow, compared per run. */
+/** Cumulative counters, compared per run. */
 const WORK = [
   'uploaded',
   'uploads',
@@ -47,32 +45,27 @@ const WORK = [
   'pipelines',
   'late',
 ] as const
-/** What the frame holds, compared as is. */
+/** Per-frame gauges, compared as is. */
 const SIZE = ['draws', 'instances', 'rows', 'drawn', 'resident', 'uploading'] as const
 type Stats = Record<(typeof SIZE)[number] | 'frames', number> & {
   work: Record<(typeof WORK)[number], number>
 }
-/** A plot's counters, as its canvas reports them. */
 type Plot = { frames: number; at?: number; instances: number; complete: boolean; visible: boolean }
-/** Work must not depend on timing: no hover search, easing, or motion, which VS Code's own
- *  setting reduces. */
+/** Keeps work independent of timing: no easing or motion (VS Code's reduceMotion is set too). */
 const STILL = {
   'network.transitionDuration': 0,
   'network.labels': true,
   'network.motion': 'reduced',
 }
-/** A second of simulation, its frames a hundredth of a second apart, as a solver file says it. */
 const RUN = { tmax: 1, dt_monitor: 0.01, events: [] }
-/** How long playback is timed. */
 const PLAYBACK_MS = 3000
-/** Where seeks land, as parts of the run. */
+/** Seek targets as fractions of the run. */
 const SEEKS = [0.9, 0.1, 0.6, 0.3, 0.75]
 
 const timings: Record<string, number[]> = {}
 const work: Record<string, Record<string, number>> = {}
 
-/** A fixed piece of work, timed: how fast the machine runs now, whatever Studio does. compare.mjs
- *  leaves out a case whose canary ran slow, as a busy machine slows everything it times. */
+/** Times a fixed workload to gauge machine speed; compare.mjs skips cases whose canary ran slow. */
 function canary(): number {
   const start = performance.now()
   let sink = 0
@@ -80,7 +73,7 @@ function canary(): number {
   return performance.now() - start + (sink < 0 ? 1 : 0)
 }
 
-/** Wait for `check` to hold, looking every few milliseconds so the time it takes is its own. */
+/** Polls `check` every few milliseconds so the polling adds little to the measured time. */
 async function settle(check: () => unknown, label: string, timeout = 60_000): Promise<void> {
   const start = performance.now()
   while (!check()) {
@@ -89,8 +82,7 @@ async function settle(check: () => unknown, label: string, timeout = 60_000): Pr
   }
 }
 
-/** Time `act` until `done` resolves, `runs` times, as `name`. What `ready` finds first, untimed,
- *  is handed to both. */
+/** Times `act` through `done`, `runs` times; `ready` runs untimed and its result goes to both. */
 async function time<T = void>(
   name: string,
   runs: number,
@@ -111,14 +103,13 @@ async function time<T = void>(
   timings[name] = samples
 }
 
-/** Until `frame`'s canvas view draws a frame after its `frames`th. */
+/** Resolves once `frame`'s canvas has drawn more than `frames` frames. */
 const painted = (frame: Frame, frames: number) =>
   frame.waitForFunction('(frames) => gridkitStats().frames > frames', frames, {
     polling: 'raf',
     timeout: 60_000,
   })
 
-/** Each plot's counters, in lane order. */
 const plots = (monitor: Frame) =>
   monitor.evaluate<Plot[]>(`Array.from(document.querySelectorAll('canvas')).map((canvas) => {
     const plot = canvas.gridkitPlot?.()
@@ -127,8 +118,7 @@ const plots = (monitor: Frame) =>
       complete: plot.complete, visible: r.bottom > 0 && r.top < innerHeight }
   }).filter(Boolean)`)
 
-/** The plots once they draw nothing more: no line complete, none drawn again for a while, as
- *  after a lane's new size. */
+/** Waits until every plot is complete and their instance counts stop changing. */
 async function steady(monitor: Frame): Promise<Plot[]> {
   let before = await plots(monitor)
   const deadline = performance.now() + 60_000
@@ -146,7 +136,7 @@ async function steady(monitor: Frame): Promise<Plot[]> {
   }
 }
 
-/** Until every plot on screen draws a frame after the one `before` counted. */
+/** Resolves once every visible plot has drawn past its count in `before`. */
 const plotted = (monitor: Frame, before: readonly Plot[]) =>
   monitor.waitForFunction(
     `(before) => Array.from(document.querySelectorAll('canvas')).every((canvas, i) => {
@@ -157,8 +147,7 @@ const plotted = (monitor: Frame, before: readonly Plot[]) =>
     { polling: 'raf', timeout: 60_000 },
   )
 
-/** Count the messages a webview receives, by kind, from now on. */
-const listen = (frame: Frame) =>
+const countMessages = (frame: Frame) =>
   frame.evaluate(`(() => {
     window.gridkitMessages = {}
     addEventListener('message', (event) => {
@@ -166,13 +155,13 @@ const listen = (frame: Frame) =>
       if (kind) window.gridkitMessages[kind] = (window.gridkitMessages[kind] ?? 0) + 1
     })
   })()`)
-const heard = (frame: Frame) => frame.evaluate<Record<string, number>>('window.gridkitMessages')
+const messageCounts = (frame: Frame) =>
+  frame.evaluate<Record<string, number>>('window.gridkitMessages')
 
 export async function run() {
   const bench = await testHost()
-  /** The page of panel view `kind` once it shows `selector`: the page of the case on show, where
-   *  the one before it may still be loading away. */
-  const shows = (kind: ViewKind, selector: string) =>
+  /** The panel view `kind` once it shows `selector`, so a page still unloading is not taken. */
+  const viewShowing = (kind: ViewKind, selector: string) =>
     until(
       async () => {
         const frame = await bench.view(kind)
@@ -193,7 +182,7 @@ export async function run() {
   const workbench = vscode.workspace.getConfiguration('workbench')
   await workbench.update('reduceMotion', 'on', global)
   const gridkit = await bench.gridkit()
-  /** The GridKit build the runs use, which compare.mjs matches between runs. */
+  /** compare.mjs only compares runs on the same GridKit build. */
   const build = gridkit ? await bench.gridkitBuild() : undefined
   await simpleDialog(true)
   try {
@@ -202,18 +191,17 @@ export async function run() {
       const size = `${buses} buses`
       let network!: Frame
       let uri!: vscode.Uri
-      // How fast the machine runs, timed again as the case goes on.
-      const paced = (timings[`machine ${size} > canary`] = [canary()])
+      const canaries = (timings[`machine ${size} > canary`] = [canary()])
 
       // ── Network ──
-      const firsts: number[] = []
-      const shown: number[] = []
+      const firstFrames: number[] = []
+      const pageFirstFrames: number[] = []
       for (let i = 0; i < RUNS; i++) {
         await vscode.commands.executeCommand('workbench.action.closeAllEditors')
         const start = performance.now()
         ;({ uri, network } = await bench.openCase(path))
-        firsts.push(performance.now() - start)
-        shown.push(
+        firstFrames.push(performance.now() - start)
+        pageFirstFrames.push(
           await network.evaluate<number>(
             "performance.getEntriesByName('canvas:frame')[0].startTime - performance.getEntriesByName('canvas:boot')[0].startTime",
           ),
@@ -222,11 +210,11 @@ export async function run() {
       const key = uri.toString()
       const session = bench.studio.get(key)!
       const summary = () => bench.studio.state(key).summary!
-      // Until the view settles, and until the page's own first frame: what the user sees first.
-      timings[`network ${size} > first frame`] = firsts
-      timings[`network ${size} > first frame (page)`] = shown
+      // From the command until the view settles, and from page boot to the page's own first frame.
+      timings[`network ${size} > first frame`] = firstFrames
+      timings[`network ${size} > first frame (page)`] = pageFirstFrames
 
-      /** Time `act` to the network's next frame, and the work its runs did. */
+      /** Times `act` to the network's next frame and records the average work per run. */
       async function measure(scenario: string, act: (i: number) => unknown) {
         const first = await idle<Stats>(network)
         const samples: number[] = []
@@ -257,28 +245,25 @@ export async function run() {
       })
       await measure('labels', (i) => settings.update('network.labels', i % 2 === 1, global))
       await settings.update('network.labels', true, global)
-      // The map draws only on Earth, after the first frame.
+      // The map draws only under a geographic case, the one kind Globe is enabled for.
       if (await network.getByRole('button', { name: 'Globe', exact: true }).isEnabled()) {
         await measure('map', (i) =>
-          settings.update('network.map.source', i % 2 === 1 ? 'borders' : 'none', global),
+          settings.update('map.basemap', i % 2 === 1 ? 'naturalEarth' : 'none', global),
         )
-        await settings.update('network.map.source', undefined, global)
+        await settings.update('map.basemap', undefined, global)
         await network.waitForFunction('() => gridkitStats().complete', undefined, {
           timeout: 60_000,
         })
       }
       const bus = JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
-      // A selection draws again over the rest, glowing. Clearing it draws as before.
       await measure('select', (i) =>
         bench.studio.get(key)!.select(i % 2 ? undefined : { table: 'Bus', id: bus }),
       )
       bench.studio.get(key)!.select()
 
-      // A change another program saves to the case's file, timed until the Network draws it: the
-      // file read again whole, and the views' case with it.
+      // An external edit to the case file, timed until the Network draws the reread case.
       const file = await readFile(uri.fsPath, 'utf8')
       const voltage = JSON.parse(file).buses[0].init.Vr as number
-      /** The case's file with its first bus's real voltage `value`. */
       const withVoltage = (value: number) =>
         file.replace(/("Vr":\s*)-?\d+(\.\d+)?([eE][-+]?\d+)?/, `$1${value}`)
       let read = summary().version
@@ -311,8 +296,7 @@ export async function run() {
       // ── Case panel ──
       const counts = summary().counts
       const rows = (count: number) => `table[aria-rowcount="${count + 1}"]`
-      // The panel's page goes when it hides, so each open loads it anew. The page is found again
-      // each look, as the panel takes up each case on a page of its own.
+      // The panel's page is disposed when hidden, so each open loads it again.
       let table!: Frame
       await time(`case ${size} > open`, RUNS, {
         ready: async () => {
@@ -320,9 +304,9 @@ export async function run() {
           await pause(300)
         },
         act: () => vscode.commands.executeCommand('gridkitStudio.openCasePanel', uri),
-        done: async () => (table = await shows('case', rows(counts.Bus!))),
+        done: async () => (table = await viewShowing('case', rows(counts.Bus!))),
       })
-      // The type with the most rows besides buses, and back.
+      // Switch between Bus and the next largest type.
       const [other] = Object.entries(counts)
         .filter(([type]) => type !== 'Bus')
         .sort((a, b) => b[1] - a[1])
@@ -347,27 +331,25 @@ export async function run() {
 
       if (!gridkit) continue
 
-      // ── A second of simulation, followed live ──
+      // ── One second of live simulation ──
       await bench.record('Bus', ['Vm'], uri)
       const solver = await bench.writeSolver(RUN, uri)
-      session.setPlots([{ table: 'Bus', field: 'Vm' }])
+      session.showMonitor(VM)
       session.map(VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
-      // This case has no run yet, unlike the one before it.
-      const monitor = await shows('monitor', '.monitor .c-empty')
-      await listen(network)
-      await listen(monitor)
+      // Wait for this case's empty Monitor, not the previous case's.
+      const monitor = await viewShowing('monitor', '.monitor .c-empty')
+      await countMessages(network)
+      await countMessages(monitor)
       const previous = session.run?.id
-      /** The run started here, once it shows. */
-      const ran = () => (session.run?.id !== previous ? session.run : undefined)
-      /** What the run started here wrote, as read so far: the case had no results on show, so any
-       *  shown since the run began are its own. */
-      const wrote = () => (ran() ? session.results : undefined)
+      const thisRun = () => (session.run?.id !== previous ? session.run : undefined)
+      /** The case had no results before, so any shown since the run began are this run's. */
+      const runResults = () => (thisRun() ? session.results : undefined)
       const started = performance.now()
       const since = () => performance.now() - started
       bench.explorer('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
-        settle(() => (wrote()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
+        settle(() => (runResults()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
         network
           .waitForFunction(
             '() => gridkitStats()?.complete && gridkitStats()?.covered && gridkitStats()?.windows.some(window => window.span?.length)',
@@ -384,7 +366,7 @@ export async function run() {
           .waitFor({ timeout: 300_000 })
           .then(since),
       ])
-      await settle(() => ran() && ran()!.state !== 'running', 'the run ends', 600_000)
+      await settle(() => thisRun() && thisRun()!.state !== 'running', 'the run ends', 600_000)
 
       const ended = since()
       assert.equal(session.run?.state, 'complete', session.run?.message)
@@ -392,22 +374,21 @@ export async function run() {
       timings[`simulation ${size} > network shows a sample`] = [mapped]
       timings[`simulation ${size} > monitor shows a sample`] = [plottedLive]
       timings[`simulation ${size} > simulate 1 s`] = [ended]
-      // What each view was sent while the run streamed: the less, the less each did.
       for (const [view, frame] of [
         ['network', network],
         ['monitor', monitor],
       ] as const)
-        work[`simulation ${size} > ${view} messages`] = await heard(frame)
+        work[`simulation ${size} > ${view} messages`] = await messageCounts(frame)
 
-      paced.push(canary())
+      canaries.push(canary())
 
       // ── Playback ──
       const { transport } = session
       const span = session.results!.domain
       await steady(monitor)
-      // The run is shorter than the time measured, so it plays again each time it ends.
+      // The run is shorter than the measured time, so it replays when it ends.
       const replay = replaying(bench.studio, session)
-      /** The time between frames each view presents while playing: one display frame at best. */
+      /** Mean time between frames each view presents while playing. */
       async function playback(scenario: string) {
         transport.seek(span[0])
         const before = {
@@ -427,8 +408,7 @@ export async function run() {
         ]
       }
       await playback('frame')
-      // A selected bus draws again over the rest in the Network, and fades the other traces in
-      // the Monitor.
+      // A selected bus is highlighted in the Network and fades the other traces in the Monitor.
       bench.studio.get(key)!.select({ table: 'Bus', id: bus })
       await steady(monitor)
       await playback('frame, selected')
@@ -461,26 +441,29 @@ export async function run() {
         done: (_, from) => settle(() => transport.currentT() > from, 'a step'),
       })
 
-      // ── Plots ──
+      // ── Monitor ──
       const first = bus
-      const alone = [...session.plots]
-      const lanesBefore = (await plots(monitor)).length
-      /** Until the Monitor draws `count` plots. */
-      const lanes = (count: number) =>
+      const element = (id?: number) => session.setMonitor(monitorWith(VM, id, undefined))
+      // A new element replaces the plot; the old canvas is marked so the new one is recognized.
+      const mark = () => monitor.evaluate(`document.querySelector('canvas').dataset.replaced = ''`)
+      const replaced = () =>
         monitor.waitForFunction(
-          `(count) => document.querySelectorAll('canvas[data-rendered=true]').length === count`,
-          count,
+          `() => { const canvas = document.querySelector('canvas'); return !!canvas && !('replaced' in canvas.dataset) && !!canvas.gridkitPlot?.().complete }`,
+          undefined,
           { polling: 'raf', timeout: 60_000 },
         )
-      // Each sample adds the plot afresh: the one the sample before added goes first, untimed.
-      await time(`monitor ${size} > add plot`, RUNS, {
+      // Each sample narrows the monitor to one bus, after widening it to every bus untimed.
+      await time(`monitor ${size} > choose element`, RUNS, {
         ready: async () => {
-          if (session.plots.length === alone.length) return
-          session.setPlots(alone)
-          await lanes(lanesBefore)
+          if (session.shown[0]?.id !== undefined) {
+            await mark()
+            element(undefined)
+            await replaced()
+          }
+          await mark()
         },
-        act: () => session.setPlots([...alone, { table: 'Bus', field: 'Vm', id: first }]),
-        done: () => lanes(lanesBefore + 1),
+        act: () => element(first),
+        done: () => replaced(),
       })
       await steady(monitor)
       await time(`monitor ${size} > line width`, RUNS, {
@@ -489,7 +472,6 @@ export async function run() {
         done: (_, lanes) => plotted(monitor, lanes),
       })
       await settings.update('monitor.lineWidth', undefined, global)
-      // The traces under the pointer, read where the plot drew them.
       const t = span[0] + 0.5 * (span[1] - span[0])
       const exact = await bench.studio.client.worker.call('sample', {
         results: session.results!.id,
@@ -500,16 +482,13 @@ export async function run() {
       })
       assert.ok(exact && exact.value !== null)
       const value = exact.value
-      await monitor.locator('canvas').nth(1).scrollIntoViewIfNeeded()
       await until(
         () =>
-          monitor.evaluate<boolean>(
-            'document.querySelectorAll("canvas")[1]?.gridkitPlot?.().complete',
-          ),
-        'the target plot completes after scrolling',
+          monitor.evaluate<boolean>('document.querySelector("canvas")?.gridkitPlot?.().complete'),
+        'the plot of one bus completes',
       )
       const point = await monitor.evaluate<[number, number]>(
-        `document.querySelectorAll('canvas')[1].gridkitPoint(${t}, ${value})`,
+        `document.querySelector('canvas').gridkitPoint(${t}, ${value})`,
       )
       timings[`monitor ${size} > pick`] = await monitor.evaluate<number[]>(`(async () => {
         const canvas = document.querySelectorAll('canvas')[0]
@@ -521,7 +500,6 @@ export async function run() {
         }
         return times
       })()`)
-      // Each sample selects the trace afresh, from nothing selected.
       await time(`monitor ${size} > select`, RUNS, {
         ready: async () => {
           bench.studio.get(key)!.select()
@@ -530,17 +508,19 @@ export async function run() {
         act: () =>
           monitor
             .locator('canvas')
-            .nth(1)
+            .first()
             .click({ position: { x: point[0], y: point[1] } }),
         done: () => settle(() => session.selection?.id === first, 'the trace selected'),
       })
 
-      paced.push(canary())
+      canaries.push(canary())
 
       // ── Video export ──
       await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)
-      // This case's page offers to export its run, which none before it had exported.
-      const exporter = await shows('export', '[data-testid="video-start"]:enabled')
+      const exporter = await viewShowing(
+        'export',
+        '[data-testid="export-start"]:not([aria-disabled="true"])',
+      )
       for (const [name, on] of [
         ['Network', true],
         ['Monitor', false],
@@ -552,20 +532,27 @@ export async function run() {
         )
           await toggle.click()
       }
-      await exporter.locator('[data-testid="video-resolution"]').click()
-      await exporter.locator('[role="option"][data-value="720"]').click()
-      // Each export writes a file of its own, and is timed from the file chosen to the video done.
+      await exporter.getByLabel('Size', { exact: true }).selectOption({ label: '720p' })
+      // Each export writes its own file, timed from choosing the file to the finished video.
       const video = (i: number) => vscode.Uri.joinPath(uri, '..', `bench ${buses} ${i}.mp4`)
       await time(`export ${size} > network 1 s at 720p`, EXPORTS, {
         ready: async (i) => {
-          await exporter.locator('[data-testid="video-start"]').click()
+          await rm(video(i).fsPath, { force: true })
+          await exporter.locator('[data-testid="export-start"]').click()
           await bench.dialog(video(i).fsPath)
         },
         act: () => {},
         done: (i) =>
-          exporter
-            .locator('[data-testid="video-done"]', { hasText: basename(video(i).fsPath) })
-            .waitFor({ timeout: 300_000 }),
+          until(
+            async () =>
+              !(await exporter.evaluate<boolean>('gridkitExport().running')) &&
+              (await stat(video(i).fsPath).then(
+                () => true,
+                () => false,
+              )),
+            'the video written',
+            300_000,
+          ),
       })
       work[`export ${size} > network 1 s at 720p`] = {
         bytes: (await stat(video(EXPORTS - 1).fsPath)).size,
@@ -582,7 +569,7 @@ export async function run() {
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
   } finally {
     await simpleDialog(undefined)
-    for (const key of [...Object.keys(STILL), 'network.labels', 'network.map.source'])
+    for (const key of [...Object.keys(STILL), 'network.labels', 'map.basemap'])
       await settings.update(key, undefined, global)
     await workbench.update('reduceMotion', undefined, global)
     await bench.finish()

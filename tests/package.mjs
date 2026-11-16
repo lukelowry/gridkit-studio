@@ -1,5 +1,5 @@
-/** Install the packaged VSIX into a VS Code of its own, check what it holds, and run the
- *  extension-host suites against it. */
+/** Installs the packaged VSIX into a fresh VS Code, checks its contents, and runs the host suites
+ *  against it. */
 
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -24,13 +24,13 @@ const executable =
     version: process.env.VSCODE_VERSION ?? manifest.engines.vscode.replace(/^\^/, ''),
     reporter: { report() {}, error: (error) => console.error(error) },
   }))
-// VS Code's CLI script, run by its own executable. test-electron's CLI path is a .cmd on Windows,
-// which only a shell can run.
+// Run VS Code's cli.js with its own executable; test-electron's CLI path is a .cmd on Windows,
+// which needs a shell.
 const app = join('resources', 'app', 'out', 'cli.js')
 const cli = [
   join(dirname(executable), app),
   join(dirname(executable), '..', 'Resources', 'app', 'out', 'cli.js'),
-  // Windows keeps it in a folder named for the commit.
+  // On Windows it is in a folder named after the commit.
   ...(await readdir(dirname(executable))).map((name) => join(dirname(executable), name, app)),
 ].find((candidate) => existsSync(candidate))
 assert.ok(cli, 'No VS Code CLI beside ' + executable)
@@ -48,8 +48,7 @@ const run = (executable, args, env) =>
       code === 0 ? resolve() : reject(new Error('Process exited ' + code)),
     )
   })
-/** Fail on anything the VSIX should not ship: dependencies, which the bundles hold, or a schema
- *  file. */
+/** Fails if the VSIX ships node_modules (the bundles include dependencies) or a schema file. */
 async function verify(directory) {
   for (const item of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, item.name)
@@ -73,7 +72,7 @@ try {
       '--user-data-dir',
       profile,
     ],
-    // VS Code's own CLI warns of its url.parse() on every install.
+    // VS Code's CLI warns about its own url.parse() on every install.
     { ELECTRON_RUN_AS_NODE: '1', NODE_OPTIONS: '--no-deprecation' },
   )
   const installed = (await readdir(extensions)).find((name) =>
@@ -101,31 +100,28 @@ try {
     'webview/latkit.wasm',
     'webview/download.js',
     'webview/latkit-worker.js',
-    'webview/latkit-shaders.bin',
     'licenses/latkit-NOTICES.md',
     'licenses/latkit-THIRD_PARTY.md',
-    'webview/maps/coastline.geojson.gz',
+    'webview/maps/natural-earth.geojson.gz',
   ]) {
     assert.ok(
       (await readFile(join(target, 'dist', asset))).byteLength > 0,
       'Missing packaged asset: ' + asset,
     )
   }
-  // Flags, such as --untrusted, go to each launch as they do to launch.mjs itself.
+  // Flags such as --untrusted are passed through to launch.mjs.
   const flags = process.argv.slice(2).filter((arg) => arg.startsWith('--'))
   const entries = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
   if (!entries.length) entries.push('tests/host/wasm.ts', 'tests/host/index.ts')
   for (const entry of entries)
     await run(process.execPath, [join(root, 'tests/launch.mjs'), ...flags, entry], {
       ELECTRON_RUN_AS_NODE: undefined,
-      // The VS Code the VSIX was installed into runs it.
       VSCODE_EXECUTABLE_PATH: executable,
       GRIDKIT_TEST_EXTENSION_PATH: target,
       GRIDKIT_TEST_OUTPUT: scratch,
     })
   console.log('Installed VSIX verified:', vsix)
 } finally {
-  // Drop the installed copy and its profile.
   for (const directory of [extensions, profile])
     await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(
       (error) => console.warn('Kept ' + directory + ': ' + error.message),

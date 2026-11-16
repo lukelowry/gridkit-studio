@@ -1,6 +1,3 @@
-<!-- @component
-  A titled group of rows.
--->
 <script lang="ts">
   import type { Snippet } from 'svelte'
 
@@ -8,7 +5,7 @@
     label,
     children,
   }: {
-    /** The heading, and the region's accessible name. */
+    /** The heading, also the region's accessible name. */
     readonly label: string
     readonly children: Snippet
   } = $props()

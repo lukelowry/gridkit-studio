@@ -1,4 +1,4 @@
-/** GridKit catalog semantics and source decoding rules, independent of native dataset storage. */
+/** GridKit catalog semantics and decoding rules, independent of how datasets are stored. */
 import {
   type CaseDefinition,
   type FieldDefinition,
@@ -18,25 +18,22 @@ export const SIGNAL_CODE = 1
 export const DEVICE_CODES = 2
 export const CASE_ROW = 'case'
 type Identity = Shape['identity']
-/** The member each array's records are known by, as GridKit names it. */
 const IDENTITY: Readonly<Record<ArrayName, Identity>> = {
   buses: { name: 'number', type: 'unsigned' },
   signals: { name: 'signal_id', type: 'unsigned' },
   devices: { name: 'id', type: 'text' },
 }
-/** The member a record's class is written under, and the one that lists the outputs it records. */
 export const CLASS = 'class'
 export const MON = 'mon'
-/** The members a bus or a device groups its values under, then those it writes its ports under. */
+/** The groups a bus or device keeps its values under, then its ports under. */
 const VALUES = ['params', 'init', 'extension'] as const
 const PORTS = ['ports', 'ports_in', 'ports_out'] as const
-/** The members a record is known and named by, whose names an output never takes for its own. */
+/** Members that identify or name a record. An output with one of these names is renamed. */
 const NAMES: ReadonlySet<string> = new Set([
   ...Object.values(IDENTITY).map(({ name }) => name),
   'name',
   CLASS,
 ])
-/** What a text field may hold, as GridKit checks it: a pattern, and the rule it keeps in words. */
 interface TextRule {
   readonly pattern: RegExp
   readonly rule: string
@@ -45,13 +42,9 @@ export interface FieldPlan {
   readonly name: string
   readonly definition: FieldDefinition
   readonly decode: DecodeKind
-  /** What the field is of its record: the identity it is known by, a value or a port it writes, or
-   *  an output it may record. */
   readonly role: 'identity' | 'value' | 'port' | 'output'
-  /** Where its record writes it: the keys to it, from the record's own. An output is listed in
-   *  `mon`. */
+  /** Keys from the record object to the value. An output's path is `mon`. */
   readonly path: readonly string[]
-  /** Whether GridKit refuses a record that does not write it. */
   readonly required?: boolean
   readonly choices?: readonly string[]
   readonly allowed?: TextRule
@@ -60,7 +53,7 @@ export interface FieldPlan {
 interface PortPlan extends FieldPlan {
   readonly role: 'port'
   readonly definition: FieldDefinition & { readonly kind: 'reference'; readonly target: string }
-  /** Whether it reads the signal it names, or drives it; neither, of a bus it connects. */
+  /** Undefined for a bus connection. */
   readonly direction?: 'in' | 'out'
 }
 export interface Shape {
@@ -74,19 +67,15 @@ export interface Shape {
   readonly ports: readonly PortPlan[]
   /** The outputs a record may list in its `mon`, in GridKit's order. */
   readonly outputs: readonly string[]
-  /** The members a record groups its fields under, each an object read member by member. */
   readonly groups: readonly string[]
-  /** The members GridKit refuses a record without, which are no field of it: a group, or, of the
-   *  case, an array. A field it refuses a record without says so itself. */
+  /** Required members that are not fields, such as groups. Fields carry their own `required`. */
   readonly required: readonly string[]
 }
 export interface Catalog {
   readonly text: string
   readonly shapes: ReadonlyMap<string, Shape>
   readonly codes: readonly Shape[]
-  readonly definition: CaseDefinition
 }
-/** A value a record writes, as the catalog gives it. */
 interface ValueSpec {
   readonly id: string
   readonly type: 'real' | 'integer' | 'flag' | 'text'
@@ -94,7 +83,6 @@ interface ValueSpec {
   readonly choices?: readonly string[]
   readonly required?: boolean
 }
-/** What GridKit refuses a record of a kind without, by the names of its members. */
 interface RecordSpec {
   readonly required?: readonly string[]
 }
@@ -123,7 +111,6 @@ interface ClassSpec extends RecordSpec {
     readonly geographic?: boolean
   }[]
 }
-/** A value a record writes at `path`, named by it. */
 function value(path: readonly string[], decode: DecodeKind, unit?: string): FieldPlan {
   const name = path.join('.')
   return {
@@ -139,8 +126,7 @@ function value(path: readonly string[], decode: DecodeKind, unit?: string): Fiel
     },
   }
 }
-/** `entries`, each top-level field among them that `required` names refused without, and the names
- *  that are no such field: the members a record itself is refused without. */
+/** Marks the required top-level fields, and returns the other required names as members. */
 function requiring(
   entries: readonly FieldPlan[],
   required: readonly string[] = [],
@@ -170,7 +156,7 @@ export function catalogOf(json: unknown): Catalog {
     typeof raw.bus?.name !== 'string' ||
     !Array.isArray(raw.classes)
   )
-    throw problem('invalid-input', 'A catalog has a case, a bus and a list of classes.')
+    throw problem('invalid-input', 'A catalog needs case, bus and classes entries.')
   const text = JSON.stringify(json)
   const identifier = identifierOf(raw.identifier)
   const { bus, device = {} } = raw
@@ -185,9 +171,8 @@ export function catalogOf(json: unknown): Catalog {
       throw problem('invalid-input', `The catalog declares ${shape.type} twice.`)
     shapes.set(shape.type, shape)
   }
-  return { text, codes, shapes, definition: definitionsOf([...shapes.values()]) }
+  return { text, codes, shapes }
 }
-/** The rule a bus's name and a device's id keep, as the catalog says it. */
 function identifierOf(
   raw: { pattern?: unknown; rule?: unknown } | undefined,
 ): TextRule | undefined {
@@ -197,11 +182,13 @@ function identifierOf(
   try {
     return { pattern: new RegExp(raw.pattern), rule: raw.rule }
   } catch {
-    throw problem('invalid-input', `The catalog's identifier pattern does not read: ${raw.pattern}`)
+    throw problem(
+      'invalid-input',
+      `The catalog's identifier pattern is not a valid regular expression: ${raw.pattern}`,
+    )
   }
 }
 const DECODES = { flag: 'boolean', integer: 'integer', real: 'number', text: 'text' } as const
-/** The values `specs` give under the member `group`, each of a type the catalog has. */
 function valuesOf(type: string, group: string, specs: readonly ValueSpec[] = []): FieldPlan[] {
   return specs.map((spec) => {
     if (!Object.hasOwn(DECODES, spec.type))
@@ -231,7 +218,7 @@ function shapeOf(
   const array = kind === 'bus' ? 'buses' : 'devices'
   const { entries, members } = requiring(
     [
-      // A bus's class is a field of it, as its name is. A device's class is its table.
+      // A bus's class is a field, like its name. A device's class selects its table.
       ...(kind === 'bus'
         ? [
             { ...value(['name'], 'text'), ...(identifier && { allowed: identifier }) },
@@ -255,7 +242,7 @@ function shapeOf(
           decode: 'number',
           role: 'output',
           path: [MON],
-          // GridKit's own name for it, which its field keeps unless a record's member has it.
+          // The label keeps GridKit's name even when the field is renamed to avoid a clash.
           definition: {
             name,
             label: output.id,
@@ -276,7 +263,7 @@ function shapeOf(
           ...(port.direction !== 'both' && { direction: port.direction }),
           definition: {
             name,
-            // A bus's in and out ports share their names, so each says which it is.
+            // A bus's in and out ports share names, so the label includes the group.
             label: port.key ? name : port.name,
             kind: 'reference',
             target: port.kind === 'bus' ? bus : SIGNAL,
@@ -303,8 +290,6 @@ function signalShape(spec: RecordSpec = {}): Shape {
     members,
   )
 }
-/** The case's own row: what its `header` and `params` hold, and the members it is refused
- *  without. */
 function caseShape(spec: CaseSpec): Shape {
   const { entries, members } = requiring(
     [...valuesOf(CASE, 'header', spec.header), ...valuesOf(CASE, 'params', spec.params)],
@@ -323,8 +308,7 @@ function caseShape(spec: CaseSpec): Shape {
     members,
   )
 }
-/** The shape of a device class the catalog does not know: its records' members are found as they
- *  are written. */
+/** The shape of an unknown device class. Its members are discovered while parsing. */
 export function unknownShape(type: string): Shape {
   return compile(
     {
@@ -338,8 +322,7 @@ export function unknownShape(type: string): Shape {
     [],
   )
 }
-/** `shape` with the fields `found` in its records that it does not know. An output whose name one
- *  of them takes is named by where it is listed. */
+/** `shape` plus the unknown fields `found`. An output whose name clashes becomes `mon.<name>`. */
 export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
   const taken = new Set(found.map(({ name }) => name))
   return compile(
@@ -361,7 +344,6 @@ export function withFound(shape: Shape, found: readonly FieldPlan[]): Shape {
     shape.plan.get(shape.identity.name)?.allowed,
   )
 }
-/** A table's shape, its identity keeping `allowed` when given. */
 function compile(
   table: Pick<Shape, 'type' | 'kind' | 'array' | 'identity' | 'groups'>,
   label: string,

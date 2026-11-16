@@ -59,25 +59,21 @@ type Factory = (options: {
   ): object
 }) => Promise<GridKitModule>
 
-const { request, module, wasm } = workerData as WasmInput
+const { request, module, wasm, stop } = workerData as WasmInput
 const send = (event: WasmEvent) => port.postMessage(event)
 const files: Awaited<ReturnType<typeof outputFile>>[] = []
 let errorLine = ''
-let logs = 0
-let logBytes = 0
-let lastLog = performance.now()
+/** Throws once the run is asked to stop. Thrown from a write or print, it unwinds `callMain`, and
+ *  the files close as the worker exits. */
+const checkStop = () => {
+  if (stop && Atomics.load(stop, 0)) throw new Error('GridKit was stopped.')
+}
+/** Forwards each line GridKit prints to the run's log, which rate-limits them. */
 const log = (text: string) => {
+  checkStop()
   text = cleanLog(text)
   if (/\[ERROR\]/i.test(text)) errorLine = text
-  if (performance.now() - lastLog >= 1000) {
-    logs = logBytes = 0
-    lastLog = performance.now()
-  }
-  if (logs++ < 100 && logBytes < 64 << 10) {
-    const bounded = text.slice(0, 4096)
-    logBytes += bounded.length
-    send({ kind: 'log', text: bounded })
-  }
+  send({ kind: 'log', text })
 }
 
 try {
@@ -149,6 +145,7 @@ try {
         }
       },
       write(stream, bytes, offset, length, position) {
+        checkStop()
         let written = 0
         while (written < length) {
           const count = disk.write(
@@ -165,8 +162,10 @@ try {
       },
       read: (stream, bytes, offset, length, position) =>
         disk.read(stream.hostFd!, bytes, offset, length, position),
-      llseek: (stream, offset, whence) =>
-        offset + (whence === 1 ? stream.position : whence === 2 ? disk.size() : 0),
+      llseek: (stream, offset, whence) => {
+        checkStop()
+        return offset + (whence === 1 ? stream.position : whence === 2 ? disk.size() : 0)
+      },
     })
     FS.mkdev(virtual, device)
     return virtual

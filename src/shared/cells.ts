@@ -61,17 +61,25 @@ export function shownColumns(
     table?.columns?.[type]?.filter((field) => fields.includes(field)) ?? fields.slice(0, COLUMNS)
   )
 }
+/** `table` with `change` applied. Switching type clears filters and sort, and a sort or value
+ *  filter on a column no longer shown is dropped. */
 export function changedTable(
-  summary: Pick<Summary, 'counts'> | undefined,
+  summary: Pick<Summary, 'counts' | 'definition' | 'identities'> | undefined,
   table: TableState,
   change: Partial<TableState>,
 ): TableState {
-  const shown = summary ? shownType(summary, table) : table.type
-  const other = change.type !== undefined && change.type !== shown
+  const current = summary ? shownType(summary, table) : table.type
+  const other = change.type !== undefined && change.type !== current
   const next: Record<string, unknown> = {
     ...table,
     ...(other && { filter: undefined, equal: undefined, order: undefined }),
     ...change,
+  }
+  const type = summary && shownType(summary, next)
+  if (summary && type) {
+    const columns = shownColumns(summary, next, type)
+    for (const key of ['order', 'equal'] as const)
+      if (next[key] && !columns.includes((next[key] as { field: string }).field)) delete next[key]
   }
   for (const key of Object.keys(next))
     if (next[key] === undefined || next[key] === '') delete next[key]

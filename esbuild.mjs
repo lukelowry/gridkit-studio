@@ -1,5 +1,4 @@
-/** Bundle the extension and its worker for Node, and the webviews for the browser, into dist/.
- *  `--watch` rebuilds on change, unminified. */
+/** Bundles the extension, workers and webviews into dist/. `--watch` rebuilds unminified. */
 
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -84,7 +83,6 @@ const builds = [
     format: 'esm',
     splitting: true,
     target: 'es2022',
-    // Svelte's production build, without its checks for development.
     conditions: ['browser', watch ? 'development' : 'production'],
     plugins: [svelte({ compilerOptions: { css: 'external' } })],
   },
@@ -101,7 +99,6 @@ await Promise.all([
   ),
   cp(require.resolve('latkit/wasm'), resolve(output, 'webview/latkit.wasm')),
   cp(require.resolve('latkit/worker'), resolve(output, 'webview/latkit-worker.js')),
-  cp(require.resolve('latkit/shaders'), resolve(output, 'webview/latkit-shaders.bin')),
   cp(resolve(root, 'assets/maps'), resolve(output, 'webview/maps'), { recursive: true }),
   cp(resolve(packageRoot, 'NOTICES.md'), resolve(output, 'licenses/latkit-NOTICES.md')),
   cp(resolve(packageRoot, 'THIRD_PARTY.md'), resolve(output, 'licenses/latkit-THIRD_PARTY.md')),
@@ -111,7 +108,7 @@ for (const options of builds) {
   if (watch) await (await context(config)).watch()
   else {
     const result = await build(config)
-    // The VSIX ships no node_modules: every bundle holds all it imports but VS Code and Node.
+    // The VSIX ships no node_modules, so bundles may import only vscode and Node built-ins.
     for (const [file, bundle] of Object.entries(result.metafile.outputs))
       for (const { path, external } of bundle.imports)
         if (external && path !== 'vscode' && !path.startsWith('node:'))

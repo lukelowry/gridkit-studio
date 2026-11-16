@@ -21,7 +21,6 @@ export const COMMANDS = [
   'copyValue',
   'copyFieldPath',
   'runSimulation',
-  'showLastResults',
   'stopSimulation',
   'clearResults',
   'newMonitor',
@@ -88,11 +87,15 @@ export const contextKey = (key: ContextKey) => `${PREFIX}.${key}` as const
 export const settingsOf = (category: string) => `${PREFIX}.${category}` as const
 
 export const CASE_FILE = /\.case\.json$/i
-/** Saved case files, virtual workspaces included. Git previews and untitled copies are not cases. */
-export const isCaseFile = (uri: string) => {
+const SOLVER_FILE = /\.solver\.json$/i
+/** Saved files whose path matches `pattern`, virtual workspaces included. Git previews and untitled
+ *  copies are not. */
+const savedAs = (uri: string, pattern: RegExp) => {
   const file = URI.parse(uri)
-  return !!file.scheme && !['git', 'untitled'].includes(file.scheme) && CASE_FILE.test(file.path)
+  return !!file.scheme && !['git', 'untitled'].includes(file.scheme) && pattern.test(file.path)
 }
+export const isCaseFile = (uri: string) => savedAs(uri, CASE_FILE)
+export const isSolverFile = (uri: string) => savedAs(uri, SOLVER_FILE)
 
 /** The workspace state key prefix for a case's saved state. */
 const SAVED = 'case:'

@@ -5,6 +5,7 @@ import * as vscode from 'vscode'
 
 import { randomUUID } from '../platform/crypto.js'
 import { nameOf } from '../platform/path.js'
+import { fileKey } from '../results/index.js'
 import { changedTable } from '../shared/cells.js'
 import type { ValueRange } from '../shared/data.js'
 import { type Entity, type Field, networkRole } from '../shared/document.js'
@@ -96,7 +97,7 @@ export class Session {
   #pending?: Saved['results']
   /** When to read `#pending`: once the case is active, or once the case file reads. */
   #due?: 'following' | 'read'
-  /** The latest Open, Show or Clear Results. A file read for an older claim is not shown. */
+  /** The latest results loaded or cleared. A file read for an older claim is not shown. */
   #claim: object = {}
   /** The run whose results replace the shown ones once its file has a header. Another claim stops
    *  it, and a run that never writes changes nothing. */
@@ -211,6 +212,11 @@ export class Session {
     const claimant = this.#claimant
     const results = this.#results
     return !!claimant && results?.id === claimant.results && results.growing
+  }
+  /** Whether the results file at `path` is shown, or about to be shown again. */
+  shows(path: string): boolean {
+    const held = this.#results?.path ?? this.#pending?.path
+    return held !== undefined && fileKey(held) === fileKey(path)
   }
 
   /** Adds a hold. A closed session throws, and the caller asks Studio for a new one. */

@@ -9,11 +9,11 @@ import { formatNumber } from '../shared/format.js'
 import type { Results } from '../shared/messages.js'
 import type { Commands } from './commands.js'
 import { gridkitOf } from './settings.js'
-import { exists, solverAt, writtenBy } from './solvers.js'
+import { solverAt, writtenBy } from './solvers.js'
 import { reference } from './uris.js'
 
-function solverOf(target: unknown, doing: string): vscode.Uri {
-  if (!(target instanceof vscode.Uri)) throw new Error(`Right-click a .solver.json to ${doing}.`)
+function solverOf(target: unknown): vscode.Uri {
+  if (!(target instanceof vscode.Uri)) throw new Error('Right-click a .solver.json to run it.')
   return target
 }
 
@@ -45,7 +45,7 @@ function progressOf(results?: Results) {
 export function registerRuns({ studio, registrations, command }: Commands) {
   const run = async (target: unknown) => {
     if (!vscode.workspace.isTrusted) throw new Error('Trust this workspace to run GridKit.')
-    const solver = solverOf(target, 'run it')
+    const solver = solverOf(target)
     // GridKit and Studio read the files from disk, so save unsaved editors first, as tasks do.
     await vscode.workspace.save(solver)
     const { study, model, state } = await solverAt(solver)
@@ -99,23 +99,8 @@ export function registerRuns({ studio, registrations, command }: Commands) {
     )
   }
 
-  /** Shows the output of a solver file's last run without running it. */
-  const show = async (target: unknown) => {
-    const solver = solverOf(target, 'show its results')
-    const { study, model } = await solverAt(solver)
-    const session = studio.activate(model.toString())
-    const summary = await studio.files.readable(model.toString(), 'its results can be read')
-    const output = writtenBy(solver, study, summary)
-    if (!(await exists(output)))
-      throw new Error(
-        `${nameOf(solver.toString())} has written no ${nameOf(output.toString())} yet. Run it first.`,
-      )
-    await studio.showView('monitor')
-    await session.load(reference(output), reference(solver))
-  }
-
-  // A run starts only from a solver file's menu, as do its last results. Stop acts on the active
-  // case.
-  registrations.push(studio.command('runSimulation', run), studio.command('showLastResults', show))
+  // A run starts only from a solver file's menu; opening the solver file shows what it wrote last
+  // (Studio follows the active tab). Stop acts on the active case.
+  registrations.push(studio.command('runSimulation', run))
   command('stopSimulation', ({ session }) => session.stop())
 }

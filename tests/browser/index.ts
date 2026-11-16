@@ -88,8 +88,11 @@ export async function run() {
   check(session.run?.state === 'complete', 'Run command completed in a virtual workspace')
   const frames = session.results!.frames
   session.clear()
-  await vscode.commands.executeCommand('gridkitStudio.showLastResults', solver)
-  check(session.results?.frames === frames, 'Show Last Results reopened browser output')
+  await vscode.window.showTextDocument(solver)
+  for (let attempt = 0; session.results?.frames !== frames || session.results.growing; attempt++) {
+    check(attempt < 500, 'Opening the solver file reopened browser output')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   check(!studio.reporter.errors.length, studio.reporter.errors.join('\n'))
   const png = await vscode.workspace.fs.readFile(
     vscode.Uri.joinPath(extension.extensionUri, 'assets/gridkit.png'),

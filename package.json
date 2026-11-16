@@ -195,12 +195,6 @@
         "enablement": "isWorkspaceTrusted"
       },
       {
-        "command": "gridkitStudio.showLastResults",
-        "title": "Show Last Results",
-        "category": "GridKit Studio",
-        "icon": "$(graph-line)"
-      },
-      {
         "command": "gridkitStudio.stopSimulation",
         "title": "Stop Simulation",
         "category": "GridKit Studio",
@@ -504,11 +498,6 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.showLastResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
@@ -526,11 +515,6 @@
           "group": "gridkit@0"
         },
         {
-          "command": "gridkitStudio.showLastResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
-        },
-        {
           "command": "gridkitStudio.openNetwork",
           "when": "resourceFilename =~ /\\.case\\.json$/i",
           "group": "gridkit@0"
@@ -546,11 +530,6 @@
           "command": "gridkitStudio.runSimulation",
           "when": "resourceFilename =~ /\\.solver\\.json$/i",
           "group": "gridkit@0"
-        },
-        {
-          "command": "gridkitStudio.showLastResults",
-          "when": "resourceFilename =~ /\\.solver\\.json$/i",
-          "group": "gridkit@1"
         }
       ],
       "view/title": [
@@ -815,10 +794,6 @@
         },
         {
           "command": "gridkitStudio.runSimulation",
-          "when": "false"
-        },
-        {
-          "command": "gridkitStudio.showLastResults",
           "when": "false"
         },
         {

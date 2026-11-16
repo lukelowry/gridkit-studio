@@ -66,15 +66,20 @@ suite('Runs', function () {
     assert.equal(typeof value, 'number')
   })
 
-  test('shows what its solver file wrote last, and a new run plots what that records', async () => {
+  test('shows what its solver file wrote last when it opens, and a new run plots what that records', async () => {
     await host.run()
     const written = host.session.results!
     assert.deepEqual(fields(host.session.shown), [VM])
     await vscode.commands.executeCommand('gridkitStudio.clearResults')
     assert.equal(host.studio.get(host.key)?.results, undefined)
-    await vscode.commands.executeCommand('gridkitStudio.showLastResults', host.solver)
-    assert.equal(host.session.results?.frames, written.frames)
-    assert.equal(host.session.results!.path, written.path)
+    await vscode.window.showTextDocument(host.solver)
+    const shown = await until(
+      () => (host.session.results?.growing === false ? host.session.results : undefined),
+      'the solver file shows its last results',
+    )
+    assert.equal(shown.frames, written.frames)
+    assert.equal(shown.path, written.path)
+    assert.equal(shown.solver, written.solver)
     // The monitors are what the shown results hold, until the next run, which lists and shows
     // what it recorded.
     await host.record('Bus', ['Va'])

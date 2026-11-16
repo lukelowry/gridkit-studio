@@ -5,14 +5,15 @@ import * as vscode from 'vscode'
 
 import { createHash } from '../platform/crypto.js'
 import { browser, tmpdir } from '../platform/host.js'
-import { join } from '../platform/path.js'
-import { failedWith } from '../shared/errors.js'
+import { join, nameOf } from '../platform/path.js'
+import { failedWith, message } from '../shared/errors.js'
 import {
   type Command,
   commandId,
   type ContextKey,
   contextKey,
   isCaseFile,
+  isSolverFile,
   savedKey,
   savedUri,
   type View,
@@ -31,7 +32,7 @@ import { CaseFiles } from './files.js'
 import { Reporter } from './report.js'
 import { type Hold, savedResults, Session } from './session.js'
 import { affects, cacheBytes } from './settings.js'
-import { gone } from './solvers.js'
+import { exists, gone, solverAt, writtenBy } from './solvers.js'
 import { reference } from './uris.js'
 
 /** A command sent to a case's views: all of them, or only those of the kind whose menu ran it. */
@@ -139,9 +140,34 @@ export class Studio implements vscode.Disposable {
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const uri =
       input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText
-        ? input.uri.toString()
+        ? input.uri
         : undefined
-    if (uri && isCaseFile(uri)) this.activate(uri)
+    if (uri && isCaseFile(uri.toString())) this.activate(uri.toString())
+    else if (uri && isSolverFile(uri.toString())) void this.#followSolver(uri)
+  }
+
+  /** A solver file stands for its case: the case becomes the active case and shows what the solver
+   *  file's runs wrote last. A case that is running or already shows that file keeps what it has,
+   *  since a load would stop the run. A solver file mid-edit or a case that does not read shows
+   *  nothing; running the solver file explains why. */
+  async #followSolver(solver: vscode.Uri): Promise<void> {
+    let session: Session
+    let output: vscode.Uri
+    try {
+      const { study, model } = await solverAt(solver)
+      session = this.activate(model.toString())
+      output = writtenBy(solver, study, await this.files.read(session.uri))
+      if (!(await exists(output))) return
+    } catch {
+      return
+    }
+    const path = reference(output)
+    if (session.running || session.shows(path)) return
+    const loading = session.load(path, reference(solver))
+    await this.showView('monitor')
+    await loading.catch((error: unknown) =>
+      this.reporter.output.warn(`Could not read ${nameOf(path)}: ${message(error)}`),
+    )
   }
 
   command(id: Command, run: (...args: unknown[]) => unknown): vscode.Disposable {

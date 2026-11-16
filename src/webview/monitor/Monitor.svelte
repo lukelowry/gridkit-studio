@@ -234,7 +234,8 @@
       {#if !results}
         <div class="c-empty monitor__empty">
           <p class="c-empty__text">
-            Right-click a .solver.json and choose Run Dynamic Simulation to see its results here.
+            Right-click a .solver.json and choose Run Dynamic Simulation, or open one that has run,
+            to see its results here.
           </p>
         </div>
       {:else if page.gpu}

@@ -91,6 +91,24 @@ export function nativeTheme(settings: SettingsReader, kind: 'network' | 'monitor
   }
 }
 
+/** The theme an export draws in: VS Code's, or latkit's own light or dark theme. */
+export function exportTheme(
+  settings: SettingsReader,
+  choice: 'auto' | 'light' | 'dark',
+  kind: 'network' | 'monitor',
+): NativeTheme {
+  if (choice === 'auto') return nativeTheme(settings, kind)
+  const { font } = theme()
+  const ground = settings.get('network.map.groundColor')
+  return {
+    base: choice,
+    ...(kind === 'monitor' && { contrast: 3 }),
+    ...(font && { text: { font } }),
+    edge: { color: null },
+    earth: { ...(ground && { ground }), night: settings.get('network.map.nightBrightness') },
+  }
+}
+
 /** Calls `listener` whenever the theme changes; returns the unsubscribe. */
 export function watchTheme(listener: () => void): () => void {
   observe()

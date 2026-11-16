@@ -14,20 +14,14 @@ import {
   viewId,
   VIEWS,
 } from '../shared/ids.js'
-import { menuContext, signalContext, targetOf } from '../shared/menus.js'
+import { menuContext, targetOf } from '../shared/menus.js'
 import { validateSettings } from '../shared/settings.js'
 
 /** A definition covering every class in the bundled catalog. */
 const definition = definitionsOf([...catalog.shapes.values()])
 
 /** Context keys set by VS Code that Studio's when clauses read. */
-const VSCODE_KEYS = [
-  'view',
-  'viewItem',
-  'activeCustomEditorId',
-  'resourceFilename',
-  'isWorkspaceTrusted',
-]
+const VSCODE_KEYS = ['view', 'activeCustomEditorId', 'resourceFilename', 'isWorkspaceTrusted']
 
 describe('the manifest', () => {
   it('names in code exactly the commands, views and context keys the manifest contributes', async () => {
@@ -61,12 +55,23 @@ describe('the manifest', () => {
       for (const key of contextKeysIn(when)) expect(known, `${key} in "${when}"`).toContain(key)
     }
   })
-  it('matches a Monitored Signals row by the words its context value can have', async () => {
-    const manifest = JSON.parse(await readFile('package.json', 'utf8'))
-    const words = signalContext({ recorded: true, mappable: true, mapped: true }).split(' ')
-    for (const { when } of manifest.contributes.menus['view/item/context'] as { when: string }[])
-      for (const [, word] of when.matchAll(/viewItem =~ \/\\b(\w+)\\b\//g))
-        expect(words, when).toContain(word)
+  it('offers Split on a monitor not shown, and Unsplit on one shown beside others', () => {
+    const [vm, va] = [
+      { table: 'Bus', field: 'Vm' },
+      { table: 'Bus', field: 'Va' },
+    ]
+    const target = { uri: '', version: 0, origin: 'monitor' as const, field: vm, monitor: vm }
+    const keys = (monitors: { table: string; field: string }[]) => {
+      const context = menuContext({ definition }, target, { monitors })
+      return [
+        context['gridkitStudio.scope'],
+        context['gridkitStudio.shown'],
+        context['gridkitStudio.split'],
+      ]
+    }
+    expect(keys([va])).toEqual(['monitor', false, false])
+    expect(keys([vm])).toEqual(['monitor', true, false])
+    expect(keys([vm, va])).toEqual(['monitor', true, true])
   })
   it('takes only the values of a view setting’s kind and range', () => {
     expect(validateSettings({ 'network.vertexRadius': 4 })).toEqual({ 'network.vertexRadius': 4 })
@@ -125,7 +130,9 @@ describe('the manifest', () => {
       'gridkitStudio.mappable': true,
       'gridkitStudio.mapped': false,
     })
-    expect(menuContext(summary, column, { vertexColor: kv })['gridkitStudio.mapped']).toBe(true)
+    expect(
+      menuContext(summary, column, { mappings: { vertexColor: kv } })['gridkitStudio.mapped'],
+    ).toBe(true)
     // Every key a menu carries is prefixed with Studio's namespace.
     for (const key of Object.keys(context))
       if (key !== 'preventDefaultContextMenuItems') expect(key.startsWith(PREFIX + '.')).toBe(true)

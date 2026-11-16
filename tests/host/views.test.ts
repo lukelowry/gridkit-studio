@@ -61,4 +61,43 @@ suite('Views', () => {
     await until(() => host.session.networkSelection, 'the bus it reaches')
     assert.deepEqual(host.session.networkSelection, [{ table: 'Bus', id: 30 }])
   })
+
+  test('list a monitor per recorded signal, shown, split and stepped through as terminals are', async () => {
+    await host.recordOnly('Bus', ['Vm', 'Va'])
+    const { session } = host
+    const fields = (monitors: readonly { field: string }[]) => monitors.map(({ field }) => field)
+    await until(() => session.monitors.length === 2, 'a monitor per recorded signal')
+    const [first, second] = session.monitors
+    assert.deepEqual(new Set(fields(session.monitors)), new Set(['Vm', 'Va']))
+    assert.deepEqual(fields(session.shown), [first!.field])
+    // Next Monitor wraps around the list, as Focus Next Terminal does.
+    await vscode.commands.executeCommand('gridkitStudio.nextMonitor')
+    assert.deepEqual(fields(session.shown), [second!.field])
+    await vscode.commands.executeCommand('gridkitStudio.nextMonitor')
+    assert.deepEqual(fields(session.shown), [first!.field])
+    // A row's menu splits a monitor beside the one shown, and unsplits it again.
+    const summary = await host.studio.files.read(host.key)
+    const rowMenu = (monitor: typeof first) =>
+      menuContext(
+        summary,
+        { uri: host.key, version: summary.version, origin: 'monitor', field: monitor, monitor },
+        { mappings: session.mappings, monitors: session.shown },
+      )
+    const split = rowMenu(second)
+    const splitItem = host.menus.find('webview/context', 'Split Monitor', {
+      ...host.keys(),
+      ...split,
+    })
+    await vscode.commands.executeCommand(splitItem.command, split)
+    assert.deepEqual(fields(session.shown), fields(session.monitors))
+    assert.equal(host.studio.contexts.get('canSplit'), false)
+    const unsplit = rowMenu(second)
+    const unsplitItem = host.menus.find('webview/context', 'Unsplit Monitor', {
+      ...host.keys(),
+      ...unsplit,
+    })
+    await vscode.commands.executeCommand(unsplitItem.command, unsplit)
+    assert.deepEqual(fields(session.shown), [first!.field])
+    assert.equal(host.studio.contexts.get('canSplit'), true)
+  })
 })

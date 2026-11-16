@@ -3,13 +3,20 @@ import * as vscode from 'vscode'
 import { randomUUID } from '../platform/crypto.js'
 import { type FileHandle, mkdir, open, readFile, rename, rm } from '../platform/files.js'
 import { browser, tmpdir } from '../platform/host.js'
-import { dirname, extname, join } from '../platform/path.js'
+import { basename, dirname, extname, join } from '../platform/path.js'
 import { download } from './download.js'
 import { reference } from './uris.js'
 
 const KINDS: Record<string, { title: string; filters: Record<string, string[]> }> = {
   '.mp4': { title: 'Export Video', filters: { 'MP4 video': ['mp4'] } },
   '.png': { title: 'Export Image', filters: { 'PNG image': ['png'] } },
+  '.jpg': { title: 'Export Image', filters: { 'JPEG image': ['jpg', 'jpeg'] } },
+  '.webp': { title: 'Export Image', filters: { 'WebP image': ['webp'] } },
+}
+
+/** Confirms a finished export in the status bar, where it fades. */
+export function exported(path: string): void {
+  vscode.window.setStatusBarMessage('$(check) Exported ' + basename(path), 5000)
 }
 
 /** Moves a complete staged file to `uri`, or downloads it in a browser. */
@@ -150,7 +157,9 @@ export class ExportFiles {
       throw error
     }
     if (abort) return null
-    return browser ? file.uri.path.split('/').at(-1)! : reference(file.uri)
+    const saved = browser ? file.uri.path.split('/').at(-1)! : reference(file.uri)
+    exported(saved)
+    return saved
   }
 
   /** Prompts for where to save `name` and writes `bytes`; null if cancelled. */

@@ -21,7 +21,7 @@ import type {
 import type { Problem } from './errors.js'
 import type { Mappings } from './mappings.js'
 import type { Cancel, Reply, Request } from './rpc.js'
-import type { ViewSettings } from './settings.js'
+import type { DisplaySettings, ExportSettings, ViewSettings } from './settings.js'
 import type {
   Results,
   ResultsLayout,
@@ -95,7 +95,6 @@ export type Source = { readonly revision: Revision } | OfResults
 export interface WorkerOptions {
   readonly wasmPath: string
   readonly solver?: { readonly worker: string; readonly module: string; readonly wasm: string }
-  readonly catalog?: unknown
   /** Bytes of unreferenced results files kept open so they reopen instantly. */
   readonly cacheBytes: number
   /** The folder of decoded results files, which a reopened window reads from. */
@@ -186,8 +185,9 @@ export type ViewKind = 'network' | 'case' | 'monitor' | 'export'
 
 export type VideoView = 'network' | 'monitor'
 
-/** A Monitor plot of a recorded field, for every element or only `id`, over `range` or fitted. */
-export interface Plot extends Field {
+/** A monitor: a recorded field the Monitor plots, for every element or only `id`, over `range` or
+ *  fitted to its values. */
+export interface Monitor extends Field {
   readonly id?: Id
   readonly range?: ValueRange
 }
@@ -216,9 +216,13 @@ export interface ViewState {
   /** The selection as the Network draws it; absent until resolved. */
   networkSelection?: readonly Entity[]
   results?: Results
-  plots?: readonly Plot[]
+  /** One monitor per recorded signal, in the order the Monitor lists them. */
+  monitors?: readonly Monitor[]
+  /** The monitors the Monitor shows: one, or several split, in list order. */
+  shown?: readonly Monitor[]
   /** The Monitor's time window; absent, plots show the whole run. */
   window?: TimeRange
+  exportSettings?: ExportSettings
 }
 
 /** The Network's camera, and its canvas size in CSS pixels. */
@@ -242,7 +246,14 @@ export function framingOf(value: unknown): Framing | undefined {
     : undefined
 }
 
-export type ViewAction = 'fitAll' | 'reloadView' | 'exportImage'
+export type ViewAction = 'fitAll' | 'reloadView' | 'exportImage' | 'exportVideo' | 'cancelExport'
+
+/** An export in progress: the file it writes and how far along it is. */
+export interface ExportStatus {
+  readonly name: string
+  readonly done: number
+  readonly total: number
+}
 
 /** The parts of a view's state that changed since last sent, or null once removed. Results omit
  *  their outputs once the page has them: they are the largest part and fixed after the header. */
@@ -305,17 +316,23 @@ export type ViewMessage =
   /** The user opened an element: select it and reveal it in the case file. */
   | { kind: 'open'; element: Element }
   | { kind: 'window'; bounds: TimeRange }
-  /** Clears the plot's value range so it fits its values again. */
-  | { kind: 'fitValues'; plot: Plot }
-  | { kind: 'removePlot'; plot: Plot }
+  /** Clears the monitor's value range so it fits its values again. */
+  | { kind: 'fitValues'; monitor: Field }
+  /** Shows only this monitor, as clicking a terminal shows only that terminal. */
+  | { kind: 'showMonitor'; monitor: Field }
+  /** Shows the monitor `step` places after the one shown, as Control+Page Down does. */
+  | { kind: 'cycleMonitor'; step: 1 | -1 }
+  /** Splits `monitor` beside those shown, or one the user picks. */
+  | { kind: 'splitMonitor'; monitor?: Field }
+  | { kind: 'unsplitMonitor'; monitor: Field }
   | { kind: 'framing'; framing: unknown }
-  | { kind: 'display'; values: Partial<ViewSettings> }
+  | { kind: 'display'; values: Partial<DisplaySettings> }
   | ({ kind: 'transport'; seq: number } & TransportAction)
   | { kind: 'table'; change: Partial<TableState> }
   /** The row count left by the Case panel's filters. */
   | { kind: 'rows'; total: number }
-  /** Whether the view is mid-task (an export) and needs to keep its case. */
-  | { kind: 'busy'; busy: boolean }
+  /** The export in progress, which keeps the view on its case, or null once it ends. */
+  | { kind: 'export'; status: ExportStatus | null }
 
 /** Messages from a view to the extension. All but `ready` are tagged with a generation. */
 export type FromView =

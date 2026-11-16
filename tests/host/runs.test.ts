@@ -6,7 +6,13 @@ import assert from 'node:assert/strict'
 import { setup, suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
+import type { Field } from '../../src/shared/document.js'
 import { type Bench, bench, folder, until } from './studio.js'
+
+const VM = { table: 'Bus', field: 'Vm' }
+/** Each monitor's type and field, without its element or range. */
+const fields = (monitors: readonly Field[]) =>
+  monitors.map(({ table, field }) => ({ table, field }))
 
 suite('Runs', function () {
   // Include solver initialization and result ingestion on slower hosts.
@@ -47,7 +53,7 @@ suite('Runs', function () {
       [['Bus', 'Vm', host.source.buses.length]],
     )
     assert.ok(Math.abs(results.domain[1] - 0.5) < 1e-9, 'the run reaches its end')
-    assert.deepEqual(session.plots, [{ table: 'Bus', field: 'Vm' }])
+    assert.deepEqual(fields(session.shown), [VM])
     assert.equal(session.transport.state.follow, false)
     assert.equal(session.transport.currentT(), results.domain[1])
     const { value } = await host.studio.client.worker.call('sample', {
@@ -63,18 +69,21 @@ suite('Runs', function () {
   test('shows what its solver file wrote last, and runs it again, plotting what that records', async () => {
     await host.run()
     const written = host.session.results!
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
+    assert.deepEqual(fields(host.session.shown), [VM])
     await vscode.commands.executeCommand('gridkitStudio.clearResults')
     assert.equal(host.studio.get(host.key)?.results, undefined)
     await vscode.commands.executeCommand('gridkitStudio.showLastResults', host.solver)
     assert.equal(host.session.results?.frames, written.frames)
     assert.equal(host.session.results!.path, written.path)
-    // Plots stay until the next run, which plots what it recorded.
+    // The monitors are what the shown results hold, until the next run, which lists and shows
+    // what it recorded.
     await host.record('Bus', ['Va'])
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Vm' }])
+    assert.deepEqual(fields(host.session.monitors), [VM])
     const again = await host.run('gridkitStudio.runSimulationAgain')
     assert.equal(again.state, 'complete', again.message)
-    assert.deepEqual(host.session.plots, [{ table: 'Bus', field: 'Va' }])
+    const va = { table: 'Bus', field: 'Va' }
+    assert.deepEqual(fields(host.session.monitors), [va])
+    assert.deepEqual(fields(host.session.shown), [va])
   })
 
   test('follows a live run, and a stop keeps what it wrote', async () => {

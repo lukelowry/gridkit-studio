@@ -41,6 +41,7 @@ function property(setting, order) {
         type: setting.integer ? 'integer' : 'number',
         ...(setting.min !== undefined && { minimum: setting.min }),
         ...(setting.max !== undefined && { maximum: setting.max }),
+        ...(setting.positive && { exclusiveMinimum: 0 }),
       }
     case 'color':
       return {

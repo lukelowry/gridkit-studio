@@ -76,13 +76,18 @@ export function registerDisplay({ studio, registrations, command, action, focus 
   for (const [id, category] of [
     ['networkSettings', 'network'],
     ['monitorSettings', 'monitor'],
+    ['exportSettings', 'export'],
   ] as const)
     registrations.push(
       studio.command(id, () =>
         vscode.commands.executeCommand('workbench.action.openSettings', settingsOf(category)),
       ),
     )
-  command('exportVideo', ({ session }) => focus(session, 'export'))
+  // Shows the Export view, ready to export a video.
+  command('exportVideo', async (context) => {
+    await focus(context.session, 'export')
+    action(context, 'exportVideo', 'export')
+  })
   // The Network's title bar passes its file and a menu its target; the Monitor's title bar passes
   // nothing, which is why the Command Palette hides this command.
   command('exportImage', (context, value) => {

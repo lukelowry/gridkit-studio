@@ -105,7 +105,7 @@ export async function run() {
     const { transport } = session
     transport.pause()
     transport.seek(0)
-    session.setPlots([{ table: 'Bus', field: 'Vm' }])
+    session.showMonitor({ table: 'Bus', field: 'Vm' })
     session.map({ table: 'Bus', field: 'Vm' }, ['vertexColor'])
     session.map({ table: 'Bus', field: 'Va' }, ['vertexHeight'])
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)

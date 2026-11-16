@@ -28,17 +28,13 @@ Clear the setting to use the included solver again. In remote workspaces, the pa
 
 Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. The Monitor plots results as GridKit runs. On the web, results stay in your browser. Use **Export CSV** to download them.
 
-- **Monitored Signals** shows what the case records. Right-click a signal there to plot it, or to map it onto the network.
+- The Monitor lists the signals the case records. Right-click one to map it onto the network.
 - **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
 - **Open Results…** in the Monitor shows any other CSV GridKit wrote.
-- In a plot, Page Up and Page Down step through its traces, Space plays or pauses, Left and Right step one sample, and Home shows the whole run.
-- If a view stays blank, run **Reload View** from its title bar.
-
-Monitored Signals and Video Export are in the GridKit view in the Activity Bar. The Case panel and the Monitor are in the bottom panel.
 
 ## Features
 
-- Network view of the case's buses and branches, over a map when the case has coordinates
+- Network view
 - Case panel for sorting and filtering fields, and mapping them onto the network. What you select in the table shows on the network, and the other way around.
 
 ![ACTIVSg25k during a fault with voltage magnitude shown as color and height](docs/media/activsg25k.png)
@@ -52,7 +48,7 @@ _ACTIVSg25k during a fault, with voltage magnitude shown as color and height_
 
 _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor_
 
-- Image export to PNG and video export to MP4/H.264
+- Image export to PNG, JPEG and WebP, and video export to MP4/H.264
 
 ## Author
 

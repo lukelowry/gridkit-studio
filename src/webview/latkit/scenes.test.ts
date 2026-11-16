@@ -6,7 +6,15 @@ import { beforeAll, expect, it } from 'vitest'
 import { catalog, definitionsOf } from '../../gridkit/definition.js'
 import { defaults, EDGE_WIDTH, reader } from '../../shared/settings.js'
 import { loadNative } from '../../workers/native.js'
-import { caseFit, networkScene, plotScene, sampledFields, sceneFields, stylesOf } from './scenes.js'
+import {
+  captionScene,
+  caseFit,
+  networkScene,
+  plotScene,
+  sampledFields,
+  sceneFields,
+  stylesOf,
+} from './scenes.js'
 import { caseSpan, GAP } from './span.js'
 
 /** Every class of the bundled catalog, as a case of each would define it. */
@@ -43,8 +51,8 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   ).toMatchObject({
     gestures: { wheel: 'none', pinch: 'none', 'shift+primary': 'zoomBox' },
   })
-  // The Monitor's lanes name their plots, whose axes show only ticks; an image's plot has no lane
-  // and labels its value axis. Neither titles the time axis, whose last tick shows the unit.
+  // The Monitor's list names its monitors, so their axes show only ticks, and an exported plot
+  // labels its value axis. Neither titles the time axis, whose last tick shows the unit.
   expect(monitored.space).toEqual({ plot: { x: { unit: ' s' }, y: { label: null } } })
   expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
     plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm' } },
@@ -81,6 +89,32 @@ it('joins sparse sampled mappings by ID with a stable whole-run domain', () => {
   }
   expect(sampledFields(definition, both, results)).toEqual([['Bus', 'Vm']])
   expect(sampledFields(definition, both)).toEqual([])
+})
+it('gives each color mapped over a fixed range a legend when asked, as exports do', () => {
+  const kv = { table: 'Bus', field: 'params.kv' }
+  const ranged = { vertexColor: { ...kv, range: [0, 500] as const } }
+  const legend = (mappings: Parameters<typeof stylesOf>[1], legends: boolean) =>
+    stylesOf(definition, mappings, [], () => undefined, legends)[0]?.legend
+  expect(legend(ranged, true)).toMatchObject({ title: expect.stringMatching(/^Bus /) })
+  expect(legend(ranged, false)).toBeUndefined()
+  // Without a range the colors have no fixed domain, which a legend needs.
+  expect(legend({ vertexColor: kv }, true)).toBeUndefined()
+  // A legend's mark carries it beside its colors.
+  using data = new Data('case')
+  const drawing = {
+    geographic: false,
+    vertices: [{ table: 'Bus', position: ['x', 'y'] as [string, string] }],
+    edges: [],
+  }
+  const styles = stylesOf(definition, ranged, [], () => undefined, true)
+  expect(networkScene(data, drawing, reader(), {}, styles).marks![0]).toHaveProperty('legend')
+})
+it('captions an export with the case name and the time, over no marks or grid', () => {
+  expect(captionScene({}, 'IEEE39', 't = 1.00 s')).toMatchObject({
+    space: { plane: { grid: 'off' } },
+    marks: [],
+    title: { text: 'IEEE39', subtitle: 't = 1.00 s', place: 'top-left' },
+  })
 })
 it("frames whole case tables, and raises the highest mapped value a share of the case's span", () => {
   const vertices = [{ table: 'Bus', position: ['x', 'y'] as [string, string] }]

@@ -3,7 +3,7 @@
 
 import * as vscode from 'vscode'
 
-import { formatNumber } from '../shared/format.js'
+import { formatNumber, formatTime } from '../shared/format.js'
 import { type Command, commandId, PREFIX } from '../shared/ids.js'
 import { RATES } from '../shared/transport.js'
 import type { Commands } from './commands.js'
@@ -127,9 +127,8 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
     const playing = state.status === 'playing'
     const finished = !session.live && !playing && t >= state.span[1]
     // The run's full time span, which its samples fill as they arrive.
-    const [from, to] = results.span ?? results.domain
-    // Enough decimals to distinguish samples, at a width that stays fixed while playing.
-    const digits = Math.min(9, Math.max(2, Math.ceil(-Math.log10(to - from || 1)) + 2))
+    const span = results.span ?? results.domain
+    const [from, to] = span
     setText(back, '$(chevron-left)', 'Previous Sample')
     setText(
       play,
@@ -139,7 +138,7 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
     setText(forward, '$(chevron-right)', 'Next Sample')
     setText(
       time,
-      `${t.toFixed(digits)} / ${to.toFixed(digits)} s`,
+      `${formatTime(t, span)} / ${formatTime(to, span)} s`,
       `Go to Time… (${formatNumber(t)} s of ${formatNumber(from)}–${formatNumber(to)} s)`,
     )
     setText(speed, `${formatNumber(state.rate)}×`, `Playback Speed… (${formatNumber(state.rate)}×)`)

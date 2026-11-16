@@ -20,6 +20,8 @@ type Setting = { readonly scope: Scope; readonly description?: string } & (
       readonly min?: number
       readonly max?: number
       readonly integer: boolean
+      /** Only values above zero are valid, as for a scale or a rate. */
+      readonly positive?: boolean
     }
   | { readonly kind: 'color'; readonly default: string | null }
   | { readonly kind: 'text'; readonly default: string }
@@ -94,6 +96,9 @@ const windowed = <S extends Setting>(setting: S): Omit<S, 'scope'> & { scope: 'w
   scope: 'window',
 })
 
+const positive = (value: number, description: string) =>
+  ({ ...num(value, [], description), positive: true }) as const
+
 const COLORMAPS: Options<ColormapName> = colormaps()
   .filter((map) => map.kind !== 'categorical')
   .map((map) => [map.name, map.label] as const)
@@ -135,12 +140,6 @@ export const SETTINGS = {
     text(
       'DynamicSimulation',
       'Executable name to use when GridKit Path is an installation directory.',
-    ),
-  ),
-  catalog: machine(
-    text(
-      '',
-      'Path to a GridKit class catalog, for a GridKit build whose classes differ from the included one. Relative paths start at the first workspace folder. Read when the window opens.',
     ),
   ),
   resultCacheMiB: windowed(
@@ -205,33 +204,84 @@ export const SETTINGS = {
   'monitor.wheelBehavior': choice('wheel', WHEEL),
   'monitor.motion': choice('system', MOTION),
   'monitor.pickingDistance': int(8, [0], 'How near the pointer finds a trace, in CSS pixels.'),
+
+  // The video encoder needs a width of at least 4 and a height of at least 2.
+  'export.width': int(1920, [4], 'Width of videos and images from the Export view, in pixels.'),
+  'export.height': int(1080, [2], 'Height of videos and images from the Export view, in pixels.'),
+  'export.scale': positive(
+    2,
+    'Pixels per CSS pixel. At 2, views lay out at half the size and draw twice as sharp.',
+  ),
+  'export.frameRate': positive(30, 'Video frames per second.'),
+  'export.bitsPerPixel': positive(
+    0.15,
+    'Video bits per pixel per frame. Higher is sharper and larger.',
+  ),
+  'export.imageFormat': choice(
+    'png',
+    [
+      ['png', 'PNG'],
+      ['jpeg', 'JPEG'],
+      ['webp', 'WebP'],
+    ],
+    'Format of exported images.',
+  ),
+  'export.jpegQuality': int(90, [1, 100], 'JPEG quality, from 1 (smallest) to 100 (sharpest).'),
+  'export.transparent': bool(false, 'Leave the background of PNG and WebP images transparent.'),
+  'export.theme': choice(
+    'auto',
+    [
+      ['auto', 'Match VS Code'],
+      ['light', 'Light'],
+      ['dark', 'Dark'],
+    ],
+    'Colors of videos and images from the Export view.',
+  ),
+  'export.caption': bool(
+    false,
+    'Show the case name and time above videos and images from the Export view.',
+  ),
+  'export.legend': bool(
+    false,
+    'Show a legend for each color mapped onto the Network in videos and images from the Export view.',
+  ),
 } as const satisfies Record<string, Setting>
 
 type Definitions = typeof SETTINGS
 export type Settings = { [K in keyof Definitions]: Definitions[K]['default'] }
-/** The display settings the pages read, prefixed by their view's name. */
-type ViewKey = Extract<keyof Settings, `${'network' | 'monitor'}.${string}`>
+/** The settings the pages read, prefixed by the view they style or `export`. */
+type DisplayKey = Extract<keyof Settings, `${'network' | 'monitor' | 'export'}.${string}`>
+type ViewKey = Extract<DisplayKey, `${'network' | 'monitor'}.${string}`>
+type ExportKey = Extract<DisplayKey, `export.${string}`>
 export type ViewSettings = Pick<Settings, ViewKey>
+export type ExportSettings = Pick<Settings, ExportKey>
+export type DisplaySettings = Pick<Settings, DisplayKey>
 export interface SettingsReader {
   get<K extends ViewKey>(key: K): ViewSettings[K]
 }
 
-const VIEW_KEYS = (Object.keys(SETTINGS) as (keyof Settings)[]).filter(
-  (id): id is ViewKey => id.startsWith('network.') || id.startsWith('monitor.'),
-)
-export const defaults = Object.freeze(
-  Object.fromEntries(VIEW_KEYS.map((id) => [id, SETTINGS[id].default])),
-) as Readonly<ViewSettings>
+const KEYS = Object.keys(SETTINGS) as (keyof Settings)[]
+const DISPLAY_KEYS = KEYS.filter((id): id is DisplayKey => /^(network|monitor|export)\./.test(id))
+const defaultsOf = <K extends DisplayKey>(keys: readonly K[]) =>
+  Object.freeze(Object.fromEntries(keys.map((id) => [id, SETTINGS[id].default]))) as Readonly<
+    Pick<Settings, K>
+  >
+export const defaults = defaultsOf(DISPLAY_KEYS.filter((id): id is ViewKey => !isExportKey(id)))
+export const exportDefaults = defaultsOf(DISPLAY_KEYS.filter(isExportKey))
 
-/** Validates `input` as view settings by kind and range. Throws on the first invalid entry, so a
- *  change is applied whole or not at all. */
-export function validateSettings(input: unknown): Partial<ViewSettings> {
+export function isExportKey(id: string): id is ExportKey {
+  return id.startsWith('export.')
+}
+
+/** Validates `input` as display settings by kind and range. Throws on the first invalid entry, so
+ *  a change is applied whole or not at all. */
+export function validateSettings(input: unknown): Partial<DisplaySettings> {
   if (input === null || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Settings must be a JSON object.')
   const entries = Object.entries(input)
   for (const [key, value] of entries) {
-    const setting: Setting | undefined = (VIEW_KEYS as string[]).includes(key)
-      ? SETTINGS[key as ViewKey]
+    const setting: Setting | undefined = (DISPLAY_KEYS as string[]).includes(key)
+      ? SETTINGS[key as DisplayKey]
       : undefined
     if (!setting) throw new Error('Unknown setting: ' + key + '.')
     let valid = false
@@ -248,6 +298,7 @@ export function validateSettings(input: unknown): Partial<ViewSettings> {
           Number.isFinite(value) &&
           (setting.min === undefined || value >= setting.min) &&
           (setting.max === undefined || value <= setting.max) &&
+          (!setting.positive || value > 0) &&
           (!setting.integer || Number.isInteger(value))
         break
       case 'color':
@@ -261,7 +312,7 @@ export function validateSettings(input: unknown): Partial<ViewSettings> {
     }
     if (!valid) throw new Error('Invalid value for ' + key + '.')
   }
-  return Object.fromEntries(entries) as Partial<ViewSettings>
+  return Object.fromEntries(entries) as Partial<DisplaySettings>
 }
 
 /** Coerces a number for setting `key` to the nearest valid value: rounded for integer settings and

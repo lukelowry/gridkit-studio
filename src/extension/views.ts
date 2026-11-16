@@ -7,8 +7,9 @@ import { shownType } from '../shared/cells.js'
 import { isRange } from '../shared/data.js'
 import { isEntity, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
-import { isCaseFile, viewId } from '../shared/ids.js'
+import { commandId, isCaseFile, viewId } from '../shared/ids.js'
 import {
+  type ExportStatus,
   framingOf,
   type FromView,
   type Of,
@@ -19,9 +20,9 @@ import {
   type ViewMessage,
   type ViewState,
 } from '../shared/messages.js'
-import { isPlot } from '../shared/plots.js'
+import { isField, monitorWith, sameField } from '../shared/monitors.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
-import { validateSettings, type ViewSettings } from '../shared/settings.js'
+import { type DisplaySettings, isExportKey, validateSettings } from '../shared/settings.js'
 import { changes } from '../shared/state.js'
 import { ExportFiles } from './exports.js'
 import { packed } from './packed.js'
@@ -31,6 +32,11 @@ import type { Studio } from './studio.js'
 /** The views driven by a clock, including an export, which plays at its own speed. */
 const CLOCKED: ReadonlySet<ViewKind> = new Set(['network', 'monitor', 'export'])
 const PANELS = ['case', 'monitor', 'export'] as const
+/** The settings each view may change: the Network's title bar buttons and the Export view's form. */
+const CHANGES: Partial<Record<ViewKind, (key: string) => boolean>> = {
+  network: (key) => ['network.projection', 'network.tilt', 'network.orbit'].includes(key),
+  export: isExportKey,
+}
 
 /** A panel's description: the case name, then the panel's own details. */
 function describe(studio: Studio, kind: ViewKind, uri: string): string {
@@ -120,6 +126,8 @@ class View {
   #seq = 0
   /** The case the view keeps while busy (an export), until done. */
   #working?: string
+  /** The export's notification: how far it reported, and how to end it. */
+  #progress?: { reported: number; end: () => void; report: (status: ExportStatus) => void }
   readonly #idle: () => void
   readonly #report: (error: unknown) => void
   readonly disposables: vscode.Disposable[] = []
@@ -243,6 +251,7 @@ class View {
     if (message.kind === 'ready') {
       // A page that reloads replaces the old one, along with its requests, work and exports.
       if (this.#ready) {
+        this.#endExport()
         this.#work(undefined)
         this.#exports.dispose()
       }
@@ -292,12 +301,28 @@ class View {
         session.setWindow(bounds)
         return
       }
+      case 'cycleMonitor':
+        if (this.kind === 'monitor') session?.cycle(message.step === -1 ? -1 : 1)
+        return
       case 'fitValues':
-        if (this.kind === 'monitor' && isPlot(message.plot)) session?.plotRange(message.plot)
+      case 'showMonitor':
+      case 'splitMonitor':
+      case 'unsplitMonitor': {
+        if (this.kind !== 'monitor' || !session || !uri) return
+        // Split from the keyboard asks which monitor, as Split Monitor does from the title bar.
+        if (message.kind === 'splitMonitor' && message.monitor === undefined)
+          return vscode.commands.executeCommand(commandId('splitMonitor'), vscode.Uri.parse(uri))
+        if (!isField(message.monitor)) return
+        const monitor = { table: message.monitor.table, field: message.monitor.field }
+        if (message.kind === 'showMonitor') session.showMonitor(monitor)
+        else if (message.kind === 'splitMonitor') session.split(monitor)
+        else if (message.kind === 'unsplitMonitor') session.unsplit(monitor)
+        else {
+          const current = session.monitors.find((each) => sameField(each, monitor))
+          if (current) session.setMonitor(monitorWith(current, current.id, undefined))
+        }
         return
-      case 'removePlot':
-        if (this.kind === 'monitor' && isPlot(message.plot)) session?.removePlot(message.plot)
-        return
+      }
       case 'open':
         if (!session || !uri || !isEntity(message.element)) return
         session.select(message.element)
@@ -308,11 +333,11 @@ class View {
         return
       }
       case 'display': {
-        if (this.kind !== 'network' || !uri) return
+        const allowed = CHANGES[this.kind]
+        if (!allowed || !uri) return
         const values = validateSettings(message.values)
-        const allowed = new Set(['network.projection', 'network.tilt', 'network.orbit'])
-        if (Object.keys(values).some((key) => !allowed.has(key))) return
-        for (const key of Object.keys(values) as (keyof ViewSettings)[])
+        if (Object.keys(values).some((key) => !allowed(key))) return
+        for (const key of Object.keys(values) as (keyof DisplaySettings)[])
           await setDisplay(vscode.Uri.parse(uri), key, values[key]!)
         return
       }
@@ -333,9 +358,56 @@ class View {
         if (this.kind === 'case' && Number.isSafeInteger(message.total) && message.total >= 0)
           session?.setRows(message.total)
         return
-      case 'busy':
-        return this.#work(message.busy === true ? uri : undefined)
+      case 'export': {
+        if (this.kind !== 'export') return
+        const { status } = message
+        if (status && typeof status.name === 'string' && status.total > 0) {
+          this.#work(uri)
+          this.#reportExport(status)
+          return
+        }
+        this.#endExport()
+        return this.#work(undefined)
+      }
     }
+  }
+
+  /** Shows the export's progress in a notification, whose Cancel stops it, and in the view. */
+  #reportExport(status: ExportStatus) {
+    if (!this.#progress) {
+      let end!: () => void
+      const ended = new Promise<void>((resolve) => (end = resolve))
+      const progress = (this.#progress = { reported: 0, end, report: (_: ExportStatus) => {} })
+      const of = this.#of
+      void vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'Exporting ' + status.name,
+          cancellable: true,
+        },
+        (bar, token) => {
+          token.onCancellationRequested(() => {
+            if (of === this.#of) void this.send({ kind: 'action', of, command: 'cancelExport' })
+          })
+          progress.report = ({ done, total }) => {
+            const percent = Math.min(100, (100 * done) / total)
+            bar.report({
+              increment: percent - progress.reported,
+              message: Math.floor(percent) + '%',
+            })
+            progress.reported = percent
+          }
+          return ended
+        },
+      )
+      void vscode.window.withProgress({ location: { viewId: viewId('export') } }, () => ended)
+    }
+    this.#progress.report(status)
+  }
+
+  #endExport() {
+    this.#progress?.end()
+    this.#progress = undefined
   }
 
   /** Holds the session of `uri` while the view works on it; `undefined` marks the work done. */
@@ -447,6 +519,7 @@ class View {
 
   dispose() {
     this.#disposed = true
+    this.#endExport()
     this.#exports.dispose()
     this.#unshare()
     this.#answering.cancel()

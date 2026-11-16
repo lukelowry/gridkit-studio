@@ -1,6 +1,6 @@
 /** The extension's worker. Results keep the case they were read against, even after it changes. */
 
-import { type Case, catalog as bundled, catalogOf } from '../gridkit/index.js'
+import { type Case, catalog } from '../gridkit/index.js'
 import { caseRowsPage } from '../gridkit/rows.js'
 import { onExit } from '../platform/host.js'
 import { workerData } from '../platform/worker.js'
@@ -14,7 +14,7 @@ import { memory, serve } from './serve.js'
 
 const options = workerData as WorkerOptions
 await loadNative(options.wasmPath)
-const cases = caseFiles(options.catalog === undefined ? bundled : catalogOf(options.catalog))
+const cases = caseFiles(catalog)
 const results = resultsFiles(options, cases.latest)
 
 const caseFor = (source: Source): Case =>

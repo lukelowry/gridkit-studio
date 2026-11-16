@@ -18,11 +18,11 @@ import {
   type View,
   viewId,
 } from '../shared/ids.js'
-import type { Target } from '../shared/menus.js'
 import {
   type Revision,
   revisionOf,
   type ViewAction,
+  type ViewKind,
   type ViewState,
   type WorkerEvent,
 } from '../shared/messages.js'
@@ -38,7 +38,7 @@ import { reference } from './uris.js'
 export interface Action {
   readonly uri: string
   readonly command: ViewAction
-  readonly view?: Target['origin']
+  readonly view?: ViewKind
   /** Only the active editor acts, as for an editor title bar command. */
   readonly active?: boolean
 }
@@ -60,7 +60,6 @@ export class Studio implements vscode.Disposable {
 
   constructor(
     readonly context: vscode.ExtensionContext,
-    catalog?: unknown,
     readonly reporter = new Reporter(),
   ) {
     // Every window on this machine records its runs in one shared folder.
@@ -82,7 +81,6 @@ export class Studio implements vscode.Disposable {
     this.client = new Client(
       reference(vscode.Uri.joinPath(context.extensionUri, 'dist')),
       () => ({
-        catalog,
         cacheBytes: cacheBytes(),
         store,
         saved: savedResults(workspaceState),
@@ -156,17 +154,16 @@ export class Studio implements vscode.Disposable {
     })
   }
 
-  /** Shows the panel `kind` without taking focus. A panel never resolved, and Monitored Signals,
-   *  can only be shown by focusing them. */
-  async showView(kind: Extract<View, 'case' | 'monitor' | 'export' | 'signals'>): Promise<void> {
-    const panel = kind === 'signals' ? undefined : kind
-    const view = panel && this.panels.get(panel)
-    if (panel && view)
+  /** Shows the panel `kind` without taking focus. A panel never resolved can only be shown by
+   *  focusing it. */
+  async showView(kind: Extract<View, 'case' | 'monitor' | 'export'>): Promise<void> {
+    const view = this.panels.get(kind)
+    if (view)
       try {
         return view.show(true)
       } catch {
         // VS Code disposed it before firing onDidDispose; the focus command recreates it.
-        this.panels.delete(panel)
+        this.panels.delete(kind)
       }
     await vscode.commands.executeCommand(viewId(kind) + '.focus')
   }
@@ -251,6 +248,7 @@ export class Studio implements vscode.Disposable {
     return {
       uri,
       settings: session?.settings,
+      exportSettings: session?.exportSettings,
       mappings: session?.mappings,
       summary: file?.summary,
       stale: file?.stale,
@@ -258,7 +256,8 @@ export class Studio implements vscode.Disposable {
       selection: session?.selection,
       networkSelection: session?.networkSelection,
       results: session?.results,
-      plots: session?.plots,
+      monitors: session?.monitors,
+      shown: session?.shown,
       window: session?.window,
       table: session?.table,
     }
@@ -277,6 +276,7 @@ export class Studio implements vscode.Disposable {
       hasSelection: !!session?.selection,
       caseReady: !!file?.summary,
       caseFiltered: !!(session?.table.filter || session?.table.equal),
+      canSplit: !!session && session.monitors.length > session.shown.length,
     }
     for (const [key, value] of Object.entries(values) as [ContextKey, boolean][])
       if (this.contexts.get(key) !== value) {

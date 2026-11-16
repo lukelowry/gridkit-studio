@@ -1,13 +1,11 @@
-/** Case files that fail to parse, oversized cases, and the Catalog setting. Parse errors are
- *  reported only in Problems. */
+/** Case files that fail to parse, and oversized cases. Parse errors are reported only in
+ *  Problems. */
 
 import assert from 'node:assert/strict'
 
 import { suite, suiteSetup, test } from 'mocha'
 import * as vscode from 'vscode'
 
-import { catalogFile } from '../../src/extension/catalog.js'
-import { catalog } from '../../src/gridkit/index.js'
 import { type Bench, bench, folder, until } from './studio.js'
 
 suite('Source', () => {
@@ -69,44 +67,6 @@ suite('Source', () => {
     } finally {
       await vscode.commands.executeCommand('workbench.action.closeAllEditors')
       await vscode.workspace.fs.delete(uri)
-    }
-  })
-
-  test('reads the catalog the Catalog setting names, and explains why one does not read', async () => {
-    const settings = vscode.workspace.getConfiguration('gridkitStudio')
-    const global = vscode.ConfigurationTarget.Global
-    const file = vscode.Uri.joinPath(folder(), 'studio.catalog.json')
-    const write = (text: string) =>
-      vscode.workspace.fs.writeFile(file, new TextEncoder().encode(text))
-    const bundled = JSON.parse(catalog.text) as { bus: { classes: string[] } }
-    const later = {
-      ...bundled,
-      bus: { ...bundled.bus, classes: [...bundled.bus.classes, 'SignalVoltageIn'] },
-    }
-    const reported: unknown[] = []
-    const read = () => catalogFile((error) => reported.push(error))
-    try {
-      assert.equal(await read(), undefined, 'none named, the bundled catalog is read')
-      // A relative path resolves against the first workspace folder.
-      await settings.update('catalog', 'studio.catalog.json', global)
-      await write(JSON.stringify(later))
-      assert.deepEqual(await read(), later)
-      assert.deepEqual(reported, [])
-      // An invalid catalog is reported and the bundled catalog used instead.
-      for (const text of ['{', '{}']) {
-        await write(text)
-        assert.equal(await read(), undefined)
-      }
-      assert.equal(reported.length, 2)
-      for (const error of reported)
-        assert.match(
-          String(error),
-          /studio\.catalog\.json is not a catalog GridKit Studio can read/,
-        )
-      assert.match(String(reported[1]), /needs case, bus and classes entries/)
-    } finally {
-      await settings.update('catalog', undefined, global)
-      await vscode.workspace.fs.delete(file).then(undefined, () => {})
     }
   })
 })

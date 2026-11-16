@@ -7,11 +7,11 @@ import type { Entity, Field } from '../shared/document.js'
 import { formatNumber } from '../shared/format.js'
 import { type Command, isCaseFile } from '../shared/ids.js'
 import { type Target, targetOf } from '../shared/menus.js'
-import { revisionOf, type Summary, type ViewAction } from '../shared/messages.js'
+import { revisionOf, type Summary, type ViewAction, type ViewKind } from '../shared/messages.js'
 import { registerDisplay } from './display.js'
 import { registerElements } from './elements.js'
+import { registerMonitor } from './monitor.js'
 import { registerPlayback } from './playback.js'
-import { registerPlots } from './plots.js'
 import { noCase } from './report.js'
 import { registerRuns } from './runs.js'
 import type { Session } from './session.js'
@@ -100,7 +100,7 @@ function commandsOf(studio: Studio) {
     )
   /** Sends `command` to the case's views of kind `view`, else of the menu's kind, else all of
    *  them; with `active`, only the active editor. */
-  const action = (context: Context, command: ViewAction, view?: Target['origin'], active = false) =>
+  const action = (context: Context, command: ViewAction, view?: ViewKind, active = false) =>
     studio.action.fire({
       uri: context.session.uri,
       command,
@@ -131,7 +131,7 @@ export function registerCommands(studio: Studio) {
   const commands = commandsOf(studio)
   registerElements(commands)
   registerTable(commands)
-  registerPlots(commands)
+  registerMonitor(commands)
   registerPlayback(commands)
   registerDisplay(commands)
   registerRuns(commands)

@@ -8,33 +8,28 @@ import {
   tableDefinition,
 } from './document.js'
 import { channelsOf, type Mappings, NUMERIC } from './mappings.js'
-import type { Plot, Revision, Summary } from './messages.js'
+import type { Monitor, Revision, Summary } from './messages.js'
+import { sameField } from './monitors.js'
 
-/** What a menu acts on: an element, one of its values, a Case panel column, or a plot. */
-type Scope = 'element' | 'value' | 'column' | 'plot'
+/** What a menu acts on: an element, one of its values, a Case panel column, or a monitor. */
+type Scope = 'element' | 'value' | 'column' | 'monitor'
 
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
-  origin: 'network' | 'case' | 'monitor' | 'signals'
+  origin: 'network' | 'case' | 'monitor'
   element?: Entity
-  /** The field of a cell, column, plot or signal. */
+  /** The field of a cell, column or monitor. */
   field?: Field
-  plot?: Plot
+  monitor?: Monitor
 }
 
-/** The Case panel's sort and filter state, which its menus change. */
-interface Rows {
+/** What a menu's view shows besides the target: the Case panel's sort and filter, and the
+ *  monitors the Monitor shows. */
+interface Shown {
+  mappings?: Mappings
   sort?: { field: string; direction: 'ascending' | 'descending' }
   filtered?: boolean
-}
-
-/** The words in a Monitored Signals row's `contextValue` that its menu items match. */
-const SIGNAL_WORDS = ['field', 'recorded', 'mappable', 'mapped'] as const
-
-export function signalContext(
-  has: Record<Exclude<(typeof SIGNAL_WORDS)[number], 'field'>, boolean>,
-) {
-  return SIGNAL_WORDS.filter((word) => word === 'field' || has[word]).join(' ')
+  monitors?: readonly Field[]
 }
 
 /** Whether a Network channel can show `field`, and whether one does. */
@@ -57,20 +52,20 @@ export function mappingOf(
 export function menuContext(
   summary: Pick<Summary, 'definition'>,
   target: Target,
-  mappings: Mappings = {},
-  rows: Rows = {},
+  { mappings = {}, sort, filtered = false, monitors = [] }: Shown = {},
 ) {
   const { field } = target
   const type = field?.table ?? target.element?.table
   const definition = field && fieldDefinition(summary.definition, field.table, field.field)
-  const scope: Scope = target.plot
-    ? 'plot'
+  const scope: Scope = target.monitor
+    ? 'monitor'
     : target.origin === 'case' && field
       ? target.element
         ? 'value'
         : 'column'
       : 'element'
   const { mappable, mapped } = mappingOf(summary, mappings, field)
+  const shown = !!target.monitor && monitors.some((each) => sameField(each, target.monitor!))
   return {
     preventDefaultContextMenuItems: true,
     [TARGET]: target,
@@ -86,8 +81,10 @@ export function menuContext(
       tableDefinition(summary.definition, type)?.fields.some((spec) => spec.kind === 'sampled'),
     'gridkitStudio.mappable': mappable,
     'gridkitStudio.mapped': mapped,
-    'gridkitStudio.sort': field && rows.sort?.field === field.field ? rows.sort.direction : '',
-    'gridkitStudio.caseFiltered': !!rows.filtered,
+    'gridkitStudio.sort': field && sort?.field === field.field ? sort.direction : '',
+    'gridkitStudio.caseFiltered': filtered,
+    'gridkitStudio.shown': shown,
+    'gridkitStudio.split': shown && monitors.length > 1,
   }
 }
 

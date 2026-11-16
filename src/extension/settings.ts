@@ -8,6 +8,9 @@ import { PREFIX } from '../shared/ids.js'
 import type { GridKit } from '../shared/messages.js'
 import {
   defaults,
+  type DisplaySettings,
+  exportDefaults,
+  type ExportSettings,
   nearest,
   SETTINGS,
   type Settings,
@@ -49,10 +52,10 @@ export function cacheBytes(): number {
 }
 
 /** Sets `id` at the most specific level that defines it, else in user settings. */
-export async function setDisplay<K extends keyof ViewSettings>(
+export async function setDisplay<K extends keyof DisplaySettings>(
   uri: vscode.Uri,
   id: K,
-  value: ViewSettings[K],
+  value: DisplaySettings[K],
 ): Promise<void> {
   const configuration = vscode.workspace.getConfiguration(PREFIX, uri)
   const set = configuration.inspect(id)
@@ -65,12 +68,12 @@ export async function setDisplay<K extends keyof ViewSettings>(
   await configuration.update(id, value, target)
 }
 
-/** The display settings for `uri`. Out-of-range numbers are clamped; values of the wrong type keep
- *  the default (the user may be mid-edit, and the Settings editor flags them). */
-export function displayOf(uri: vscode.Uri): ViewSettings {
+/** The settings for `uri` with the keys of `base`. Out-of-range numbers are clamped, and invalid
+ *  values keep the default (the user may be mid-edit, and the Settings editor flags them). */
+function valuesOf<T extends object>(uri: vscode.Uri, base: Readonly<T>): T {
   const configuration = vscode.workspace.getConfiguration(PREFIX, uri)
-  const result = { ...defaults }
-  for (const id of Object.keys(defaults)) {
+  const result = { ...base }
+  for (const id of Object.keys(base)) {
     const value = configuration.get(id)
     if (value === undefined) continue
     try {
@@ -79,3 +82,9 @@ export function displayOf(uri: vscode.Uri): ViewSettings {
   }
   return result
 }
+
+/** How the Network and the Monitor draw the case at `uri`. */
+export const displayOf = (uri: vscode.Uri): ViewSettings => valuesOf(uri, defaults)
+
+/** How videos and pictures of the case at `uri` are made. */
+export const exportOf = (uri: vscode.Uri): ExportSettings => valuesOf(uri, exportDefaults)

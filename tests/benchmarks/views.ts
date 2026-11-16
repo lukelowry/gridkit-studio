@@ -2,13 +2,14 @@
  *  simulation, playback, plots and export when GridKit is available. Read by compare.mjs. */
 
 import assert from 'node:assert/strict'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 import type { Frame } from 'playwright-core'
 import * as vscode from 'vscode'
 
 import type { ViewKind } from '../../src/shared/messages.js'
+import { monitorWith } from '../../src/shared/monitors.js'
 import {
   idle,
   pause,
@@ -333,7 +334,7 @@ export async function run() {
       // ── One second of live simulation ──
       await bench.record('Bus', ['Vm'], uri)
       const solver = await bench.writeSolver(RUN, uri)
-      session.setPlots([{ table: 'Bus', field: 'Vm' }])
+      session.showMonitor(VM)
       session.map(VM, ['vertexColor'])
       await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
       // Wait for this case's empty Monitor, not the previous case's.
@@ -440,25 +441,29 @@ export async function run() {
         done: (_, from) => settle(() => transport.currentT() > from, 'a step'),
       })
 
-      // ── Plots ──
+      // ── Monitor ──
       const first = bus
-      const alone = [...session.plots]
-      const lanesBefore = (await plots(monitor)).length
-      const lanes = (count: number) =>
+      const element = (id?: number) => session.setMonitor(monitorWith(VM, id, undefined))
+      // A new element replaces the plot; the old canvas is marked so the new one is recognized.
+      const mark = () => monitor.evaluate(`document.querySelector('canvas').dataset.replaced = ''`)
+      const replaced = () =>
         monitor.waitForFunction(
-          `(count) => document.querySelectorAll('canvas[data-rendered=true]').length === count`,
-          count,
+          `() => { const canvas = document.querySelector('canvas'); return !!canvas && !('replaced' in canvas.dataset) && !!canvas.gridkitPlot?.().complete }`,
+          undefined,
           { polling: 'raf', timeout: 60_000 },
         )
-      // Each sample adds the plot again, after removing the previous one untimed.
-      await time(`monitor ${size} > add plot`, RUNS, {
+      // Each sample narrows the monitor to one bus, after widening it to every bus untimed.
+      await time(`monitor ${size} > choose element`, RUNS, {
         ready: async () => {
-          if (session.plots.length === alone.length) return
-          session.setPlots(alone)
-          await lanes(lanesBefore)
+          if (session.shown[0]?.id !== undefined) {
+            await mark()
+            element(undefined)
+            await replaced()
+          }
+          await mark()
         },
-        act: () => session.setPlots([...alone, { table: 'Bus', field: 'Vm', id: first }]),
-        done: () => lanes(lanesBefore + 1),
+        act: () => element(first),
+        done: () => replaced(),
       })
       await steady(monitor)
       await time(`monitor ${size} > line width`, RUNS, {
@@ -477,16 +482,13 @@ export async function run() {
       })
       assert.ok(exact && exact.value !== null)
       const value = exact.value
-      await monitor.locator('canvas').nth(1).scrollIntoViewIfNeeded()
       await until(
         () =>
-          monitor.evaluate<boolean>(
-            'document.querySelectorAll("canvas")[1]?.gridkitPlot?.().complete',
-          ),
-        'the target plot completes after scrolling',
+          monitor.evaluate<boolean>('document.querySelector("canvas")?.gridkitPlot?.().complete'),
+        'the plot of one bus completes',
       )
       const point = await monitor.evaluate<[number, number]>(
-        `document.querySelectorAll('canvas')[1].gridkitPoint(${t}, ${value})`,
+        `document.querySelector('canvas').gridkitPoint(${t}, ${value})`,
       )
       timings[`monitor ${size} > pick`] = await monitor.evaluate<number[]>(`(async () => {
         const canvas = document.querySelectorAll('canvas')[0]
@@ -506,7 +508,7 @@ export async function run() {
         act: () =>
           monitor
             .locator('canvas')
-            .nth(1)
+            .first()
             .click({ position: { x: point[0], y: point[1] } }),
         done: () => settle(() => session.selection?.id === first, 'the trace selected'),
       })
@@ -515,7 +517,7 @@ export async function run() {
 
       // ── Video export ──
       await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)
-      const exporter = await viewShowing('export', '[data-testid="video-start"]:enabled')
+      const exporter = await viewShowing('export', '[data-testid="export-start"]:enabled')
       for (const [name, on] of [
         ['Network', true],
         ['Monitor', false],
@@ -527,19 +529,27 @@ export async function run() {
         )
           await toggle.click()
       }
-      await exporter.locator('[data-testid="video-resolution"]').selectOption({ label: '720p' })
+      await exporter.getByLabel('Size', { exact: true }).selectOption({ label: '720p' })
       // Each export writes its own file, timed from choosing the file to the finished video.
       const video = (i: number) => vscode.Uri.joinPath(uri, '..', `bench ${buses} ${i}.mp4`)
       await time(`export ${size} > network 1 s at 720p`, EXPORTS, {
         ready: async (i) => {
-          await exporter.locator('[data-testid="video-start"]').click()
+          await rm(video(i).fsPath, { force: true })
+          await exporter.locator('[data-testid="export-start"]').click()
           await bench.dialog(video(i).fsPath)
         },
         act: () => {},
         done: (i) =>
-          exporter
-            .locator('[data-testid="video-done"]', { hasText: basename(video(i).fsPath) })
-            .waitFor({ timeout: 300_000 }),
+          until(
+            async () =>
+              !(await exporter.evaluate<boolean>('gridkitExport().running')) &&
+              (await stat(video(i).fsPath).then(
+                () => true,
+                () => false,
+              )),
+            'the video written',
+            300_000,
+          ),
       })
       work[`export ${size} > network 1 s at 720p`] = {
         bytes: (await stat(video(EXPORTS - 1).fsPath)).size,

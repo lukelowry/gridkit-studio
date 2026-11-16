@@ -1,7 +1,6 @@
 /** Per-case state: view state, the results the views draw and the run that writes them. A session
  *  lives while it has at least one hold, and its saved state outlives it. */
 
-import type { Id } from 'latkit'
 import * as vscode from 'vscode'
 
 import { randomUUID } from '../platform/crypto.js'
@@ -16,7 +15,7 @@ import { type Channel, channelsFor, mapped, type Mappings } from '../shared/mapp
 import {
   type Element,
   type Framing,
-  type Plot,
+  type Monitor,
   type Results,
   type ResultsLayout,
   type ResultsProgress,
@@ -27,11 +26,11 @@ import {
   type Summary,
   type TableState,
 } from '../shared/messages.js'
-import { plotsFor, plotWith, samePlot } from '../shared/plots.js'
-import type { ViewSettings } from '../shared/settings.js'
+import { sameField, shownOf, signalsOf } from '../shared/monitors.js'
+import type { ExportSettings, ViewSettings } from '../shared/settings.js'
 import { Transport } from '../shared/transport.js'
 import { isDiagnosed, noCase, notice, SHOW_OUTPUT } from './report.js'
-import { displayOf } from './settings.js'
+import { displayOf, exportOf } from './settings.js'
 import { gone, writtenNow } from './solvers.js'
 import type { Studio } from './studio.js'
 import { uriOf } from './uris.js'
@@ -42,7 +41,10 @@ export type Hold = 'document' | 'active' | 'run' | 'export'
 /** Per-case state kept in workspace storage. */
 interface Saved {
   readonly mappings?: Mappings
-  readonly plots?: Plot[]
+  /** The monitors given an element or a value range. */
+  readonly monitors?: Monitor[]
+  /** The monitors the Monitor shows. */
+  readonly shown?: Field[]
   readonly table?: TableState
   /** The results file the Monitor showed, and the solver file whose run wrote it. */
   readonly results?: { readonly path: string; readonly solver?: string }
@@ -60,6 +62,17 @@ type RunPlan = Omit<RunRequest, keyof Revision | 'run' | 'results'>
 
 /** Whether `results` were read to the end of their file and stopped short with an error. */
 const unread = (results?: Results) => !!results?.error && !results.growing
+
+/** The monitors and those shown, with what they derive from. They are rebuilt only when that
+ *  changes, so views are sent them only then. */
+interface MonitorList {
+  readonly outputs?: Results['outputs']
+  readonly listed?: Summary['recording']['listed']
+  readonly options: Monitor[]
+  readonly shown: Field[]
+  readonly monitors: Monitor[]
+  readonly visible: Monitor[]
+}
 
 /** A run in progress. Worker events carry its id, so events from an earlier run are ignored. */
 interface Running {
@@ -89,8 +102,11 @@ export class Session {
    *  it, and a run that never writes changes nothing. */
   #claimant?: Running
   #settings: ViewSettings
+  #exportSettings: ExportSettings
   #mappings: Mappings
-  #plots: Plot[]
+  #options: Monitor[]
+  #shown: Field[]
+  #listed?: MonitorList
   #table: TableState
   #rows?: number
   #selection?: Element
@@ -114,20 +130,23 @@ export class Session {
     this.#studio = studio
     const saved = studio.context.workspaceState.get<Saved>(savedKey(uri), {})
     this.#mappings = saved.mappings ?? {}
-    this.#plots = saved.plots ?? []
+    this.#options = saved.monitors ?? []
+    this.#shown = saved.shown ?? []
     this.#table = saved.table ?? {}
     this.#pending = saved.results
     if (saved.results) this.#due = 'following'
     this.#settings = displayOf(vscode.Uri.parse(uri))
+    this.#exportSettings = exportOf(vscode.Uri.parse(uri))
     this.transport = new Transport(() => studio.clock.fire(uri))
   }
 
   /** Adopts the state saved under the case's old name, for a session created under the new name
    *  before the rename event arrived. */
   resume(saved: unknown): void {
-    const { mappings, plots, table, results } = (saved ?? {}) as Saved
+    const { mappings, monitors, shown, table, results } = (saved ?? {}) as Saved
     this.#mappings = mappings ?? this.#mappings
-    this.#plots = plots ?? this.#plots
+    this.#options = monitors ?? this.#options
+    this.#shown = shown ?? this.#shown
     this.#table = table ?? this.#table
     if (results && !this.#results && !this.#pending) {
       this.#pending = results
@@ -141,11 +160,19 @@ export class Session {
   get settings(): ViewSettings {
     return this.#settings
   }
+  get exportSettings(): ExportSettings {
+    return this.#exportSettings
+  }
   get mappings(): Mappings {
     return this.#mappings
   }
-  get plots(): readonly Plot[] {
-    return this.#plots
+  /** One monitor per signal the shown results hold, or before any, the case records. */
+  get monitors(): readonly Monitor[] {
+    return this.#monitorList().monitors
+  }
+  /** The monitors the Monitor shows, in list order: those chosen, else the first. */
+  get shown(): readonly Monitor[] {
+    return this.#monitorList().visible
   }
   get table(): TableState {
     return this.#table
@@ -223,17 +250,12 @@ export class Session {
     this.#results = results
     if (!results) this.#described = undefined
     else if (this.#described?.results !== results.id) void this.#describe(results.id)
-    let saving = previous?.id !== results?.id
+    const saving = previous?.id !== results?.id
     const { transport, live } = this
     if (!results) {
       this.#window = undefined
       transport.clear()
     } else {
-      // The outputs come from the file's header, which GridKit writes after the run starts.
-      if (results.outputs.length && (previous?.id !== results.id || !previous.outputs.length)) {
-        this.#plots = plotsFor(results, this.#plots)
-        saving = true
-      }
       // The span starts with the first frames. A live run puts the playhead at the head, since a
       // fast run may send nothing more. A finished run puts it at the end.
       if (previous?.id !== results.id || (previous.frames === 0 && results.frames > 0)) {
@@ -496,37 +518,72 @@ export class Session {
     this.#changed()
   }
 
-  setPlots(plots: readonly Plot[]): void {
-    this.#plots = [...plots]
+  /** Shows only `monitor`, as clicking a terminal in the Terminal's list does. */
+  showMonitor(monitor: Field): void {
+    this.#setShown([monitor])
+  }
+
+  /** Shows `monitor` beside those shown. */
+  split(monitor: Field): void {
+    if (!this.shown.some((each) => sameField(each, monitor)))
+      this.#setShown([...this.shown, monitor])
+  }
+
+  /** Stops showing `monitor` beside the others; the last one shown stays. */
+  unsplit(monitor: Field): void {
+    const rest = this.shown.filter((each) => !sameField(each, monitor))
+    if (rest.length) this.#setShown(rest)
+  }
+
+  /** Shows the monitor `step` places after the first one shown, wrapping around the list. */
+  cycle(step: 1 | -1): void {
+    const { monitors, shown } = this
+    if (!monitors.length) return
+    const at = shown[0] ? monitors.findIndex((each) => sameField(each, shown[0]!)) : 0
+    this.showMonitor(monitors[(at + step + monitors.length) % monitors.length]!)
+  }
+
+  /** Sets a monitor's element and value range. */
+  setMonitor(monitor: Monitor): void {
+    const rest = this.#options.filter((each) => !sameField(each, monitor))
+    this.#options = monitor.id !== undefined || monitor.range ? [...rest, monitor] : rest
     this.#save()
     this.#changed()
   }
 
-  addPlot(plot: Plot): void {
-    if (!this.#plots.some((each) => samePlot(each, plot))) this.setPlots([...this.#plots, plot])
+  #setShown(shown: readonly Field[]): void {
+    this.#shown = shown.map(({ table, field }) => ({ table, field }))
+    this.#save()
+    this.#changed()
   }
 
-  removePlot(plot: Plot): void {
-    this.setPlots(this.#plots.filter((each) => !samePlot(each, plot)))
-  }
-
-  /** Narrows `plot` to the element `id`, or widens it to every element. If the resulting plot
-   *  already exists, `plot` is removed instead of duplicated. */
-  plotElement(plot: Plot, id?: Id): void {
-    const next = plotWith(plot, id, plot.range)
-    if (samePlot(next, plot)) return
-    const exists = this.#plots.some((each) => samePlot(each, next))
-    this.setPlots(
-      exists
-        ? this.#plots.filter((each) => !samePlot(each, plot))
-        : this.#plots.map((each) => (samePlot(each, plot) ? next : each)),
+  #monitorList(): MonitorList {
+    const outputs = this.#results?.outputs
+    const listed = this.#studio.files.get(this.uri)?.summary?.recording.listed
+    const cached = this.#listed
+    if (
+      cached &&
+      cached.outputs === outputs &&
+      cached.listed === listed &&
+      cached.options === this.#options &&
+      cached.shown === this.#shown
     )
-  }
-
-  plotRange(plot: Plot, range?: ValueRange): void {
-    this.setPlots(
-      this.#plots.map((each) => (samePlot(each, plot) ? plotWith(each, each.id, range) : each)),
+      return cached
+    const monitors = signalsOf(outputs && { outputs }, listed).map(
+      (field) => this.#options.find((each) => sameField(each, field)) ?? field,
     )
+    const visible = shownOf(monitors, this.#shown)
+    // Unchanged lists keep their identity, so views are not sent them again.
+    const same = <T>(previous: T[] | undefined, next: T[]) =>
+      previous && JSON.stringify(previous) === JSON.stringify(next) ? previous : next
+    return (this.#listed = {
+      outputs,
+      listed,
+      options: this.#options,
+      shown: this.#shown,
+      monitors: same(cached?.monitors, monitors),
+      visible: same(cached?.visible, visible),
+    })
   }
 
   setWindow(window?: readonly [number, number]): void {
@@ -556,11 +613,17 @@ export class Session {
     this.#framing = framing
   }
 
+  /** Reads the settings again. Each part is replaced only when it changed, so the views that do
+   *  not read it keep what they draw. */
   reconfigure(): void {
-    const settings = displayOf(vscode.Uri.parse(this.uri))
-    if (JSON.stringify(settings) === JSON.stringify(this.#settings)) return
-    this.#settings = settings
-    this.#changed()
+    const uri = vscode.Uri.parse(this.uri)
+    const settings = displayOf(uri)
+    const exportSettings = exportOf(uri)
+    const views = JSON.stringify(settings) !== JSON.stringify(this.#settings)
+    const exports = JSON.stringify(exportSettings) !== JSON.stringify(this.#exportSettings)
+    if (views) this.#settings = settings
+    if (exports) this.#exportSettings = exportSettings
+    if (views || exports) this.#changed()
   }
 
   /** The case was renamed, moved or deleted, so stop saving under the old name. */
@@ -687,7 +750,8 @@ export class Session {
       : this.#pending
     const saved: Saved = {
       mappings: this.#mappings,
-      plots: this.#plots,
+      monitors: this.#options,
+      shown: this.#shown,
       table: this.#table,
       ...(results && { results }),
     }

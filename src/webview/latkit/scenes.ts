@@ -7,6 +7,7 @@ import {
   field,
   type Fit,
   type Gestures,
+  type Legend,
   type Mark,
   type Scene,
   type Source,
@@ -20,9 +21,10 @@ import {
   type Drawing,
   type Field,
   fieldDefinition,
+  tableLabel,
 } from '../../shared/document.js'
 import { type Channel, CHANNELS, type Mappings } from '../../shared/mappings.js'
-import type { Plot, Results } from '../../shared/messages.js'
+import type { Monitor, Results } from '../../shared/messages.js'
 import type { SettingsReader } from '../../shared/settings.js'
 import { type Background, NO_MAP } from './maps.js'
 import { caseSpan, GAP } from './span.js'
@@ -39,6 +41,8 @@ interface Style extends Field {
   readonly option: 'color' | 'radius' | 'elevation' | 'width' | 'dash'
   readonly source?: TableInput
   readonly range?: ValueRange
+  /** A legend of the colors, which needs the fixed range. */
+  readonly legend?: Legend
 }
 
 export function sampledFields(
@@ -97,20 +101,25 @@ function options(
   placement: Style['placement'],
   sizes: NetworkSizes,
   height: number,
-): Record<string, Expr> {
+): Record<string, Expr | Legend> {
   return Object.fromEntries(
     styles
       .filter((style) => style.table === table && style.placement === placement)
-      .map((style) => [style.option, optionOf(style, map, sizes, height)]),
+      .flatMap((style) => [
+        [style.option, optionOf(style, map, sizes, height)],
+        ...(style.legend && style.option === 'color' ? [['legend', style.legend]] : []),
+      ]),
   )
 }
 
-/** `mappings` as styles; a sampled field is left out until `sampled` has its frames. */
+/** `mappings` as styles; a sampled field is left out until `sampled` has its frames. With
+ *  `legends`, each color over a fixed range gets a legend. */
 export function stylesOf(
   definition: CaseDefinition,
   mappings: Mappings,
   outputs: readonly RecordedField[],
   sampled: (table: string, field: string) => Source | undefined,
+  legends = false,
 ): Style[] {
   return Object.entries(mappings).flatMap(([channel, mapping]) => {
     const { option, placement } = CHANNELS[channel as Channel]
@@ -121,6 +130,7 @@ export function stylesOf(
     if (fieldDefinition(definition, mapping.table, mapping.field)?.kind === 'sampled' && !source)
       return []
     const range = mapping.range ?? recorded?.domain
+    const spec = fieldDefinition(definition, mapping.table, mapping.field)
     return [
       {
         table: mapping.table,
@@ -129,6 +139,14 @@ export function stylesOf(
         option,
         ...(source && { source: [source.name, mapping.table] as const }),
         ...(range && { range }),
+        ...(legends &&
+          range &&
+          option === 'color' && {
+            legend: {
+              title: `${tableLabel(definition, mapping.table)} ${spec?.label ?? mapping.field}`,
+              unit: spec?.unit ? ' ' + spec.unit : null,
+            },
+          }),
       },
     ]
   })
@@ -147,6 +165,8 @@ interface SceneExtras {
   readonly background?: Ground
   /** The sun's time in epoch seconds, or null for even lighting. */
   readonly daylight?: number | null
+  /** Whether mapped colors show their legends. */
+  readonly legends?: boolean
 }
 
 export function sceneOf(
@@ -154,7 +174,14 @@ export function sceneOf(
   definition: CaseDefinition,
   settings: SettingsReader,
   theme: Theme,
-  { mappings = {}, results, sampled = () => undefined, background, daylight }: SceneExtras,
+  {
+    mappings = {},
+    results,
+    sampled = () => undefined,
+    background,
+    daylight,
+    legends = false,
+  }: SceneExtras,
 ): Scene {
   const outputs =
     results?.outputs.map((output) => ({
@@ -166,7 +193,7 @@ export function sceneOf(
     definition.drawing,
     settings,
     theme,
-    stylesOf(definition, mappings, outputs, sampled),
+    stylesOf(definition, mappings, outputs, sampled, legends),
     background,
     daylight,
   )
@@ -244,11 +271,11 @@ export function networkScene(
   }
 }
 
-/** A plot of `plot`'s traces, colored by `series`. The axes show only ticks; images have no lane
- *  header, so they pass `name` to label the value axis. */
+/** A plot of `monitor`'s traces, colored by `series`. The axes show only ticks, since the Monitor
+ *  lists each monitor's name. Exports pass `name` to label the value axis. */
 export function plotScene(
   source: Source,
-  plot: Plot,
+  monitor: Monitor,
   settings: SettingsReader,
   theme: Theme,
   name?: string,
@@ -261,14 +288,25 @@ export function plotScene(
     controls: controls(settings, 'monitor', { 'shift+primary': 'zoomBox' }),
     marks: [
       {
-        lines: [source.name, plot.table],
-        trace: plot.field,
-        name: plot.field,
+        lines: [source.name, monitor.table],
+        trace: monitor.field,
+        name: monitor.field,
         color: field('series').colormap(settings.get('monitor.colormap')),
         width: settings.get('monitor.lineWidth'),
         interpolation: settings.get('monitor.interpolation') === 'step' ? 'stepAfter' : 'linear',
       },
     ],
+  }
+}
+
+/** The band above an export: the case's name, and the time as its subtitle. */
+export function captionScene(theme: Theme, text: string, subtitle: string): Scene {
+  return {
+    space: { plane: { grid: 'off' } },
+    theme,
+    ease: 0,
+    marks: [],
+    title: { text, subtitle, place: 'top-left' },
   }
 }
 

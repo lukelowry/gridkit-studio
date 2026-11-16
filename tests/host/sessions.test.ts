@@ -61,11 +61,11 @@ suite('Sessions', () => {
 
   test('forgets cases deleted while it was closed, and keeps those that exist', async () => {
     const session = studio.get(studio.active!)!
-    session.setPlots([])
+    session.setTable({})
     const gone = savedKey(
       vscode.Uri.joinPath(folder(), `gone-${randomUUID()}.case.json`).toString(),
     )
-    await studio.context.workspaceState.update(gone, { plots: [] })
+    await studio.context.workspaceState.update(gone, { monitors: [] })
     await studio.prune()
     const keys = studio.context.workspaceState.keys()
     assert.ok(!keys.includes(gone), 'A deleted case keeps no saved state')

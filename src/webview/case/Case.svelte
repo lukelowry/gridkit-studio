@@ -119,8 +119,7 @@
               ...(field && { field: { table: type, field } }),
               ...(id !== null && { element: { table: type, id } }),
             },
-            viewState.mappings,
-            { sort: order, filtered: !!(filter || equal) },
+            { mappings: viewState.mappings, sort: order, filtered: !!(filter || equal) },
           ),
         )
       : '{}'

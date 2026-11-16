@@ -12,6 +12,7 @@ import { gridkitOf } from '../../src/extension/settings.js'
 import type { Studio } from '../../src/extension/studio.js'
 import { available } from '../../src/gridkit/index.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
+import { monitorWith } from '../../src/shared/monitors.js'
 import { Bench, extension, folder } from '../host/studio.js'
 
 export { extension, type Solver } from '../host/studio.js'
@@ -406,8 +407,10 @@ export class TestHost extends Bench {
     return this.session.results!
   }
 
+  /** Shows the Vm monitor narrowed to the first bus. */
   plot(): void {
-    this.session.setPlots([{ table: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
+    this.session.setMonitor(monitorWith(VM, this.source.buses[0]!.number, undefined))
+    this.session.showMonitor(VM)
   }
 
   /** The GridKit build in use, since timings differ between builds. */

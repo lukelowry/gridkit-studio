@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Results, Summary, ViewState } from '../../shared/messages.js'
-import { DEFAULTS, exportable, framed, videoTimes } from './video.js'
+import { exportDefaults } from '../../shared/settings.js'
+import { type ExportJob, framed, framesOf, problemOf, videoTimes } from './video.js'
 
 // These helpers never call the extension.
 vi.mock('../bridge.js', () => ({ bridge: {} }))
@@ -35,19 +36,41 @@ describe('a video', () => {
     })
   })
 
-  it('exports once it has times, a view, a size and a speed', () => {
+  it('exports once it has a view, a span that ends after it starts, and a speed', () => {
     const state: ViewState = { summary, results: results([0, 2]) }
-    const job = { ...DEFAULTS, timeRange: [0, 2] as [number, number], rate: 1 }
-    expect(exportable(job, state)).toBe(true)
-    expect(exportable(undefined, state)).toBe(false)
-    expect(exportable({ ...job, views: [] }, state)).toBe(false)
-    // latkit rounds sizes to encoder blocks, so it refuses only a size under one block.
-    expect(exportable({ ...job, width: 1279 }, state)).toBe(true)
-    expect(exportable({ ...job, width: 2 }, state)).toBe(false)
-    expect(exportable({ ...job, rate: 0 }, state)).toBe(false)
-    const plotted: ViewState = { ...state, plots: [{ table: 'Bus', field: 'Vm' }] }
-    expect(exportable({ ...job, views: ['monitor'] }, plotted)).toBe(false)
+    const job: ExportJob = {
+      format: 'video',
+      views: ['network'],
+      layout: 'column',
+      timeRange: [0, 2],
+      rate: 1,
+      settings: exportDefaults,
+    }
+    expect(problemOf(job, state)).toBeUndefined()
+    expect(problemOf({ ...job, views: [] }, state)).toMatch(/view/)
+    expect(problemOf({ ...job, timeRange: [2, 2] }, state)).toMatch(/span/)
+    expect(problemOf({ ...job, rate: 0 }, state)).toMatch(/speed/)
+    // An image shows one instant, so it needs no span.
+    expect(problemOf({ ...job, format: 'image', timeRange: [1, 1] }, state)).toBeUndefined()
+    // The Monitor exports only a monitor the results record.
+    const shown: ViewState = { ...state, shown: [{ table: 'Bus', field: 'Vm' }] }
+    expect(problemOf({ ...job, views: ['monitor'] }, shown)).toMatch(/no recorded signal/)
     const recorded = { ...results([0, 2]), outputs: [{ table: 'Bus', field: 'Vm', ids: [1] }] }
-    expect(exportable({ ...job, views: ['monitor'] }, { ...plotted, results: recorded })).toBe(true)
+    expect(
+      problemOf({ ...job, views: ['monitor'] }, { ...shown, results: recorded }),
+    ).toBeUndefined()
+  })
+
+  it('has a frame per frame interval at its speed, and one more to end on its last time', () => {
+    const job: ExportJob = {
+      format: 'video',
+      views: ['network'],
+      layout: 'column',
+      timeRange: [0, 2],
+      rate: 0.5,
+      settings: { ...exportDefaults, 'export.frameRate': 30 },
+    }
+    // Two simulated seconds at half speed take four seconds of video.
+    expect(framesOf(job)).toBe(4 * 30 + 1)
   })
 })

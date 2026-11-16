@@ -10,12 +10,12 @@ const results = (frames: number, outputs: Results['outputs']) =>
 it('sends a view each part it reads when that part changes, and the page ends with the same state', () => {
   const outputs = [{ table: 'Bus', field: 'Vm', ids: [1, 2] }]
   const selection = { table: 'Bus', id: 1 }
-  const plots = [{ table: 'Bus', field: 'Vm' }]
+  const monitors = [{ table: 'Bus', field: 'Vm' }]
   const states: ViewState[] = [
-    { uri: summary.uri, summary, plots, selection },
-    { uri: summary.uri, summary, plots, selection, results: results(1, outputs) },
-    { uri: summary.uri, summary, plots, selection, results: results(2, outputs) },
-    { uri: summary.uri, summary, plots, window: [0, 1] },
+    { uri: summary.uri, summary, monitors, selection },
+    { uri: summary.uri, summary, monitors, selection, results: results(1, outputs) },
+    { uri: summary.uri, summary, monitors, selection, results: results(2, outputs) },
+    { uri: summary.uri, summary, monitors, window: [0, 1] },
   ]
   let sent: ViewState = {}
   let page: ViewState = {}
@@ -46,4 +46,7 @@ it('sends a view nothing about a part it does not read', () => {
   const table = { type: 'Bus' }
   expect(changes('network', { uri: summary.uri, table }, {})).toEqual({ uri: summary.uri })
   expect(changes('case', { uri: summary.uri, table }, {})).toEqual({ uri: summary.uri, table })
+  // The Network's scene never rebuilds for a monitor the Monitor shows.
+  const shown = [{ table: 'Bus', field: 'Vm' }]
+  expect(changes('network', { uri: summary.uri, shown }, {})).toEqual({ uri: summary.uri })
 })

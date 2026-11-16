@@ -15,6 +15,7 @@ export const COMMANDS = [
   'openCasePanel',
   'revealInCasePanel',
   'openMonitor',
+  'revealInMonitor',
   'showJson',
   'copyId',
   'copyValue',
@@ -24,10 +25,11 @@ export const COMMANDS = [
   'runSimulationAgain',
   'stopSimulation',
   'clearResults',
-  'plotSignal',
-  'addPlot',
-  'removePlot',
-  'choosePlotElement',
+  'splitMonitor',
+  'unsplitMonitor',
+  'previousMonitor',
+  'nextMonitor',
+  'chooseElement',
   'openResults',
   'exportCsv',
   'showOutput',
@@ -56,13 +58,14 @@ export const COMMANDS = [
   'removeMapping',
   'networkSettings',
   'monitorSettings',
+  'exportSettings',
   'exportVideo',
   'exportImage',
 ] as const
 export type Command = (typeof COMMANDS)[number]
 
-/** The Network editor, the three webview panels, and Monitored Signals. */
-export const VIEWS = ['network', 'case', 'monitor', 'export', 'signals'] as const
+/** The Network editor and the three webview panels. */
+export const VIEWS = ['network', 'case', 'monitor', 'export'] as const
 export type View = (typeof VIEWS)[number]
 
 /** The context keys Studio sets for the manifest's `when` clauses. */
@@ -75,6 +78,8 @@ export const CONTEXT_KEYS = [
   'hasSelection',
   'caseReady',
   'caseFiltered',
+  /** The Monitor has a monitor it does not show. */
+  'canSplit',
 ] as const
 export type ContextKey = (typeof CONTEXT_KEYS)[number]
 

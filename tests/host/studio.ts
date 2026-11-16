@@ -300,11 +300,13 @@ export class Bench {
       await vscode.workspace.fs.writeFile(this.solver, new TextEncoder().encode(this.solverText))
   }
 
-  /** Clears selection, mappings, plots and table filters, and resets the playback rate. Framing is
-   *  left to the Network, which reports it as it changes. */
+  /** Clears selection, mappings, monitor choices and table filters, and resets the playback rate.
+   *  Framing is left to the Network, which reports it as it changes. */
   protected clean(session: Session): void {
     session.select()
-    session.setPlots([])
+    for (const { table, field } of session.monitors) session.setMonitor({ table, field })
+    const [first] = session.monitors
+    if (first) session.showMonitor(first)
     for (const { table, field } of Object.values(session.mappings))
       session.map({ table, field }, [])
     session.setTable({

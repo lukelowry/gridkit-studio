@@ -1,5 +1,5 @@
-/** The Monitor's commands. Every signal picker offers the same signals: the outputs of the shown
- *  results, or, before there are any, the signals the case records. */
+/** The Monitor's commands. It lists one monitor per recorded signal and shows one, or several
+ *  split, as the Terminal lists terminals and shows one or a split group. */
 
 import type { Id } from 'latkit'
 import * as vscode from 'vscode'
@@ -9,73 +9,33 @@ import { rm } from '../platform/files.js'
 import { browser, tmpdir } from '../platform/host.js'
 import { join, nameOf } from '../platform/path.js'
 import { display } from '../shared/cells.js'
-import {
-  type CaseDefinition,
-  type Entity,
-  fieldDefinition,
-  tableDefinition,
-  tableLabel,
-} from '../shared/document.js'
+import { type Field, tableDefinition, tableLabel } from '../shared/document.js'
 import { caseStem } from '../shared/format.js'
-import type { Plot, Summary } from '../shared/messages.js'
-import { plotName, samePlot } from '../shared/plots.js'
+import type { Monitor, Summary } from '../shared/messages.js'
+import { monitorName, monitorWith, sameField } from '../shared/monitors.js'
 import { askRange, type Commands, type Context } from './commands.js'
-import { publish } from './exports.js'
-import type { Session } from './session.js'
+import { exported, publish } from './exports.js'
 import { reference } from './uris.js'
 
 const TYPING_MS = 90
 
-/** The plottable signals, limited to `type` when given. */
-function plottable(session: Session, summary: Summary, type?: string): Plot[] {
-  const outputs = session.results?.outputs ?? []
-  const offered = outputs.length
-    ? outputs.map(({ table, field }) => ({ table, field }))
-    : Object.entries(summary.recording.listed).flatMap(([table, fields]) =>
-        Object.entries(fields).flatMap(([field, count]) => (count > 0 ? [{ table, field }] : [])),
-      )
-  return type === undefined ? offered : offered.filter(({ table }) => table === type)
-}
-
-const signalItem = (definition: CaseDefinition, plot: Plot) => ({
-  label: plotName(definition, plot),
-  detail: fieldDefinition(definition, plot.table, plot.field)?.label,
-  plot,
-})
-
-export function registerPlots({ studio, command, focus, rows }: Commands) {
-  /** Adds `plot` to the Monitor and shows it, selecting `element`. */
-  const showPlot = (session: Session, plot: Plot, element?: Entity) => {
-    session.addPlot(plot)
-    return focus(session, 'monitor', element)
+export function registerMonitor({ studio, command, focus, rows }: Commands) {
+  /** Picks one of `monitors`, or the only one without asking. */
+  const pickMonitor = async (summary: Summary, monitors: readonly Monitor[], title: string) => {
+    if (monitors.length < 2) return monitors[0]
+    const picked = await vscode.window.showQuickPick(
+      monitors.map((monitor) => ({ label: monitorName(summary.definition, monitor), monitor })),
+      { title },
+    )
+    return picked?.monitor
   }
-  const pickSignal = async (session: Session, summary: Summary, title: string, type?: string) => {
-    const { definition } = summary
-    const offered = plottable(session, summary, type)
-    if (!offered.length)
-      throw new Error(
-        `There is no ${type ? tableLabel(definition, type) + ' ' : ''}signal to plot.`,
-      )
-    return (
-      await vscode.window.showQuickPick(
-        offered.map((plot) => signalItem(definition, plot)),
-        { title },
-      )
-    )?.plot
-  }
-  /** The plot a command acts on: the menu's plot, the only plot, or one the user picks. */
-  const plotOf = async (context: Context, title: string) => {
-    const { plots } = context.session
-    const target = context.target?.plot
-    if (target) return plots.find((each) => samePlot(each, target))
-    if (plots.length < 2) return plots[0]
-    const { definition } = await context.summary()
-    return (
-      await vscode.window.showQuickPick(
-        plots.map((plot) => signalItem(definition, plot)),
-        { title },
-      )
-    )?.plot
+  /** The monitor a command acts on: its menu's, else the first one shown. */
+  const monitorOf = (context: Context): Monitor => {
+    const { session, target } = context
+    const field: Field | undefined = target?.monitor ?? session.shown[0]
+    const monitor = field && session.monitors.find((each) => sameField(each, field))
+    if (!monitor) throw new Error('The case records no signals.')
+    return monitor
   }
   /** Prompts for an element of `type` with live search. With `every`, the first item stands for
    *  every element and resolves null. */
@@ -154,52 +114,56 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
     })
   }
 
-  // Plots the field in context, or a picked signal, of the element in context alone.
-  command('plotSignal', async (context) => {
+  // Shows the element's monitor in the Monitor, with the element selected so its trace stands out.
+  command('revealInMonitor', async (context) => {
     const { session, element, field } = context
+    if (!element) return
     const summary = await context.summary()
-    const signal =
-      field && fieldDefinition(summary.definition, field.table, field.field)?.kind === 'sampled'
-        ? field
-        : await pickSignal(
-            session,
-            summary,
-            element ? 'Plot Signal of ' + element.id : 'Plot Signal',
-            element?.table,
-          )
-    if (!signal) return
-    const id = element?.table === signal.table ? element.id : undefined
-    await showPlot(
-      session,
-      { table: signal.table, field: signal.field, ...(id !== undefined && { id }) },
-      element,
+    const own = session.monitors.filter((monitor) => monitor.table === element.table)
+    if (!own.length)
+      throw new Error(`No ${tableLabel(summary.definition, element.table)} signal is recorded.`)
+    const monitor =
+      own.find((each) => field && sameField(each, field)) ??
+      (await pickMonitor(summary, own, 'Reveal in Monitor'))
+    if (!monitor) return
+    session.showMonitor(monitor)
+    await focus(session, 'monitor', element)
+  })
+  command('splitMonitor', async (context) => {
+    const { session } = context
+    const hidden = session.monitors.filter(
+      (monitor) => !session.shown.some((each) => sameField(each, monitor)),
     )
+    const monitor = context.target?.monitor
+      ? monitorOf(context)
+      : await pickMonitor(await context.summary(), hidden, 'Split Monitor')
+    if (monitor) session.split(monitor)
   })
-  // From the Monitor's title bar: a signal of every element.
-  command('addPlot', async (context) => {
-    const plot = await pickSignal(context.session, await context.summary(), 'Add Plot')
-    if (plot) await showPlot(context.session, plot)
+  command('unsplitMonitor', async (context) => {
+    const { session } = context
+    const monitor = context.target?.monitor
+      ? monitorOf(context)
+      : await pickMonitor(await context.summary(), session.shown, 'Unsplit Monitor')
+    if (monitor) session.unsplit(monitor)
   })
-  command('removePlot', async (context) => {
-    const plot = await plotOf(context, 'Remove Plot')
-    if (plot) context.session.removePlot(plot)
-  })
-  command('choosePlotElement', async (context) => {
-    const plot = await plotOf(context, 'Choose Plot')
-    if (!plot) return
-    const id = await pickElement(await context.summary(), plot.table, 'Every element')
-    if (id !== undefined) context.session.plotElement(plot, id ?? undefined)
+  command('previousMonitor', ({ session }) => session.cycle(-1))
+  command('nextMonitor', ({ session }) => session.cycle(1))
+  command('chooseElement', async (context) => {
+    const monitor = monitorOf(context)
+    const id = await pickElement(await context.summary(), monitor.table, 'Every element')
+    if (id !== undefined)
+      context.session.setMonitor(monitorWith(monitor, id ?? undefined, monitor.range))
   })
   command('valueRange', async (context) => {
-    const plot = await plotOf(context, 'Choose Plot')
-    if (!plot) return
+    const monitor = monitorOf(context)
     const { definition } = await context.summary()
     const range = await askRange(
-      'Value Range of ' + plotName(definition, plot),
-      plot.range,
+      'Value Range of ' + monitorName(definition, monitor),
+      monitor.range,
       'fits the values shown',
     )
-    if (range !== undefined) context.session.plotRange(plot, range ?? undefined)
+    if (range !== undefined)
+      context.session.setMonitor(monitorWith(monitor, monitor.id, range ?? undefined))
   })
   command('timeWindow', async ({ session }) => {
     const range = await askRange(
@@ -240,6 +204,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
       try {
         await studio.client.worker.call('export', { results: shared, path })
         if (staged) await publish(path, uri)
+        exported(browser ? name : reference(uri))
       } finally {
         if (staged) await rm(path, { force: true })
       }

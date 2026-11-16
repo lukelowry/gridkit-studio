@@ -1,12 +1,11 @@
-import { type Gpu, type Rect, View } from 'latkit'
+import { type Gpu, type Rect, type Theme, View } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
-import type { Results, ViewState } from '../../shared/messages.js'
-import { isRecorded, plotName } from '../../shared/plots.js'
+import type { Monitor, Results, ViewState } from '../../shared/messages.js'
+import { isRecorded, monitorName } from '../../shared/monitors.js'
 import { reader } from '../../shared/settings.js'
 import { resultTiles } from '../latkit/results.js'
 import { plotScene } from '../latkit/scenes.js'
-import { nativeTheme } from '../latkit/theme.js'
 import { plotCamera } from '../monitor/plot.js'
 
 interface PlotViews {
@@ -14,8 +13,8 @@ interface PlotViews {
   release(): void
 }
 
-/** Offscreen views of the Monitor's plots over `timeWindow`, stacked in `region` as the Monitor
- *  stacks them, for images and videos. Each fetches its samples as a shot draws it. */
+/** Offscreen views of the shown monitors over `timeWindow`, side by side in `region` for a row and
+ *  stacked for a column, as the Monitor shows them. Each fetches its samples as a shot draws it. */
 export async function plotViews(
   state: ViewState,
   results: Results,
@@ -23,27 +22,34 @@ export async function plotViews(
   timeWindow: TimeRange,
   region: Rect,
   signal: AbortSignal,
+  { theme, direction }: { readonly theme: Theme; readonly direction: 'row' | 'column' },
 ): Promise<PlotViews> {
   const settings = reader(state.settings)
-  const theme = nativeTheme(settings, 'monitor')
-  const plots = (state.plots ?? []).filter((plot) => isRecorded(results, plot))
+  const monitors: Monitor[] = (state.shown ?? []).filter((monitor) => isRecorded(results, monitor))
   const placed: Array<{ view: View; region: Rect }> = []
   const release = () => {
     for (const { view } of placed) view.destroy()
   }
   try {
-    for (const [lane, plot] of plots.entries()) {
-      const tiles = resultTiles(results.id, plot.table, plot.field, plot.id)
-      const name = plotName(state.summary?.definition, plot)
-      const scene = plotScene(tiles, plot, settings, theme, name)
+    for (const [index, monitor] of monitors.entries()) {
+      const tiles = resultTiles(results.id, monitor.table, monitor.field, monitor.id)
+      const name = monitorName(state.summary?.definition, monitor)
+      const scene = plotScene(tiles, monitor, settings, theme, name)
       const view = await View.create(null, scene, {
         gpu,
         sources: [tiles],
-        camera: plotCamera(plot, timeWindow),
+        camera: plotCamera(monitor, timeWindow),
         signal,
       })
-      const height = region[3] / plots.length
-      placed.push({ view, region: [region[0], region[1] + lane * height, region[2], height] })
+      const [x, y, width, height] = region
+      const share = 1 / monitors.length
+      placed.push({
+        view,
+        region:
+          direction === 'row'
+            ? [x + index * share * width, y, share * width, height]
+            : [x, y + index * share * height, width, share * height],
+      })
     }
     return { placed, release }
   } catch (error) {

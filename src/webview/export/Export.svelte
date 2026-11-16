@@ -3,90 +3,161 @@
 
   import { formatNumber } from '../../shared/format.js'
   import type { VideoView, ViewState } from '../../shared/messages.js'
+  import { monitorName } from '../../shared/monitors.js'
+  import {
+    exportDefaults,
+    type ExportSettings,
+    nearest,
+    validateSettings,
+  } from '../../shared/settings.js'
+  import { advance, type ClockState, IDLE } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
+  import NumberField from '../ui/NumberField.svelte'
   import Section from '../ui/Section.svelte'
   import Select from '../ui/Select.svelte'
   import Switch from '../ui/Switch.svelte'
-  import { renderVideo } from './controller.js'
+  import { renderExport } from './controller.js'
   import {
-    DEFAULTS,
-    exportable,
-    type VideoProgress,
-    type VideoSettings,
+    CHOICES,
+    type ExportChoices,
+    type ExportJob,
+    framesOf,
+    problemOf,
     videoTimes,
     viewsOf,
   } from './video.js'
 
+  /** Common sizes; any other size is set by width and height. */
+  const SIZES = [
+    [1280, 720, '720p'],
+    [1920, 1080, '1080p'],
+    [2560, 1440, '1440p'],
+    [3840, 2160, '4K'],
+    [1080, 1080, 'Square'],
+    [1080, 1920, 'Portrait'],
+  ] as const
+  const FORMATS = [
+    { value: 'video', label: 'Video · MP4' },
+    { value: 'png', label: 'Image · PNG' },
+    { value: 'jpeg', label: 'Image · JPEG' },
+    { value: 'webp', label: 'Image · WebP' },
+  ] as const
+
   let viewState = $state.raw<ViewState>({})
-  let rate = $state(1)
-  let settings = $state.raw<VideoSettings>({
-    ...DEFAULTS,
-    ...bridge.state<{ settings?: Partial<VideoSettings> }>({}).settings,
+  /** The clock, and when it arrived, to read the playhead at any moment. */
+  let clock = $state.raw<{ state: ClockState; at: number }>({ state: IDLE, at: 0 })
+  /** The Export settings, changed here at once and in VS Code's settings after. */
+  let style = $state.raw<ExportSettings>(exportDefaults)
+  let choices = $state.raw<ExportChoices>({
+    ...CHOICES,
+    ...bridge.state<{ choices?: Partial<ExportChoices> }>({}).choices,
   })
-  let progress = $state.raw<VideoProgress | null>(null)
-  let status = $state<'idle' | 'running' | 'done' | 'cancelled'>('idle')
-  let saved = $state('')
-  let stop: AbortController | undefined
-  let cancelled = false
-  const busy = $derived(status === 'running')
+  let running = $state<AbortController>()
+  const video = $derived(choices.format === 'video')
   const views = $derived(viewsOf(viewState))
   const times = $derived(videoTimes(viewState))
-  const job = $derived(times && { ...settings, timeRange: times, rate })
-  const ready = $derived(exportable(job, viewState))
-  const percent = $derived(
-    progress ? Math.floor((100 * progress.frames) / Math.max(1, progress.total)) : 0,
+  const playhead = $derived(clock.state.t)
+  const job = $derived.by((): ExportJob => {
+    const from = choices.from ?? times?.[0] ?? NaN
+    const to = choices.to ?? times?.[1] ?? NaN
+    return {
+      format: choices.format,
+      views: choices.views,
+      layout: choices.layout,
+      timeRange: video ? [from, to] : [playhead, playhead],
+      rate: choices.rate ?? clock.state.rate,
+      settings: style,
+    }
+  })
+  const problem = $derived(
+    viewState.results?.frames
+      ? problemOf(job, viewState)
+      : 'Run a simulation or open results to export them.',
   )
-  $effect(() => bridge.save({ settings }))
-  const change = (next: Partial<VideoSettings>) => (settings = { ...settings, ...next })
-  function toggle(videoView: VideoView, on: boolean) {
-    change({
-      views: on
-        ? [...settings.views, videoView]
-        : settings.views.filter((item) => item !== videoView),
+  const size = $derived(
+    SIZES.find(
+      ([width, height]) => width === style['export.width'] && height === style['export.height'],
+    ),
+  )
+  const megabits = $derived(
+    (style['export.width'] *
+      style['export.height'] *
+      style['export.frameRate'] *
+      style['export.bitsPerPixel']) /
+      1e6,
+  )
+  const shownNames = $derived(
+    (viewState.shown ?? []).map((monitor) => monitorName(viewState.summary?.definition, monitor)),
+  )
+
+  $effect(() => bridge.save({ choices }))
+  const choose = (next: Partial<ExportChoices>) => (choices = { ...choices, ...next })
+  /** Sets an Export setting here, then in VS Code. A value no setting takes is refused. */
+  function set<K extends keyof ExportSettings>(key: K, value: ExportSettings[K] | undefined) {
+    if (value === undefined) return
+    const coerced = nearest(key, value) as ExportSettings[K]
+    try {
+      validateSettings({ [key]: coerced })
+    } catch {
+      return
+    }
+    style = { ...style, [key]: coerced }
+    bridge.send({ kind: 'display', values: { [key]: coerced } })
+  }
+  function toggle(view: VideoView, on: boolean) {
+    choose({
+      views: on ? [...choices.views, view] : choices.views.filter((each) => each !== view),
     })
   }
   async function start() {
-    const chosen = job
-    if (busy || !exportable(chosen, viewState)) return
-    const controller = (stop = new AbortController())
-    status = 'running'
-    cancelled = false
-    progress = null
-    bridge.send({ kind: 'busy', busy: true })
+    if (running || problem) return
+    const chosen: ExportJob = video ? job : { ...job, timeRange: [now(), now()] }
+    const controller = (running = new AbortController())
+    let reported = -1
     try {
-      const path = await renderVideo(
-        chosen,
-        viewState,
-        controller.signal,
-        (value) => (progress = value),
-      )
-      saved = path ?? ''
-      status = path ? 'done' : 'idle'
+      await renderExport(chosen, viewState, controller.signal, (status) => {
+        // A notification shows whole percents, so send only those.
+        const percent = Math.floor((100 * status.done) / status.total)
+        if (percent === reported) return
+        reported = percent
+        bridge.send({ kind: 'export', status })
+      })
     } catch (error) {
-      status = cancelled ? 'cancelled' : 'idle'
-      if (!cancelled) bridge.report(error)
+      if (!controller.signal.aborted) bridge.report(error)
     } finally {
-      if (stop === controller) stop = undefined
-      bridge.send({ kind: 'busy', busy: false })
+      running = undefined
+      bridge.send({ kind: 'export', status: null })
     }
   }
+  /** The playhead now, which moves while playing. */
+  const now = () => advance(clock.state, performance.now() - clock.at).t
   onMount(() => {
     const off = bridge.on((message) => {
       if (message.kind === 'clock') {
-        rate = message.clock.rate
+        clock = { state: message.clock, at: performance.now() }
+        return
+      }
+      if (message.kind === 'action') {
+        if (message.command === 'cancelExport') running?.abort()
+        else if (message.command === 'exportVideo') choose({ format: 'video' })
         return
       }
       if (message.kind !== 'state') return
+      const previous = viewState
       viewState = message.state
+      if (viewState.exportSettings) style = viewState.exportSettings
+      // Times chosen for other results do not carry over.
+      if (previous.results?.id !== viewState.results?.id)
+        choose({ from: undefined, to: undefined, rate: undefined })
       const offered = viewsOf(viewState).map(({ value }) => value)
-      if (viewState.summary && settings.views.some((videoView) => !offered.includes(videoView)))
-        change({ views: settings.views.filter((videoView) => offered.includes(videoView)) })
+      if (viewState.summary && choices.views.some((view) => !offered.includes(view)))
+        choose({ views: choices.views.filter((view) => offered.includes(view)) })
     })
     const hooks = window as Window & { gridkitExport?: () => unknown }
-    hooks.gridkitExport = () => ({ status, progress })
+    hooks.gridkitExport = () => ({ running: !!running, problem, job })
     bridge.ready()
     return () => {
-      stop?.abort()
+      running?.abort()
       off()
       delete hooks.gridkitExport
     }
@@ -97,131 +168,201 @@
   <div class="c-empty"><p class="c-empty__text">Open a GridKit case.</p></div>
 {:else}
   <form
-    class="export c-settings"
-    data-testid="video-export"
+    class="export"
+    data-testid="export"
     onsubmit={(event) => {
       event.preventDefault()
-      void start()
+      if (running) running.abort()
+      else void start()
     }}
   >
-    <fieldset disabled={busy} class="export__fields">
+    <fieldset disabled={!!running} class="export__fields">
+      <Select
+        label="Format"
+        options={FORMATS}
+        data-testid="export-format"
+        bind:value={
+          () => (video ? 'video' : style['export.imageFormat']),
+          (format) => {
+            if (format === 'video') choose({ format: 'video' })
+            else if (format) {
+              choose({ format: 'image' })
+              set('export.imageFormat', format)
+            }
+          }
+        }
+      />
       <Section label="Views">
         {#each views as option (option.value)}
           <Switch
             label={option.label}
             bind:checked={
-              () => settings.views.includes(option.value), (on) => toggle(option.value, on)
+              () => choices.views.includes(option.value), (on) => toggle(option.value, on)
             }
           />
         {/each}
+        {#if choices.views.includes('monitor') && shownNames.length}
+          <p class="c-note">{shownNames.join(', ')}, as the Monitor shows.</p>
+        {/if}
         <Select
-          label="Arrangement"
-          disabled={settings.views.length < 2}
+          label="Layout"
+          disabled={choices.views.length < 2}
           options={[
             { value: 'column', label: 'Stacked' },
             { value: 'row', label: 'Side by side' },
           ]}
           bind:value={
-            () => settings.layout,
+            () => choices.layout,
             (layout) => {
-              if (layout) change({ layout })
+              if (layout) choose({ layout })
             }
           }
         />
       </Section>
-      <!-- The Monitor's time window and the playback speed set the video's span and length. -->
-      {#if times}
-        <Section label="Time">
-          <p class="c-note" data-testid="video-time">
-            {formatNumber(times[0])} to {formatNumber(times[1])} s, as the Monitor shows, at
-            {formatNumber(rate)}× playback speed: {formatNumber((times[1] - times[0]) / rate)} s of video.
-          </p>
-        </Section>
-      {/if}
+      <Section label="Time">
+        {#if video}
+          <NumberField
+            label="From"
+            unit="s"
+            value={choices.from}
+            placeholder={times && formatNumber(times[0])}
+            onchange={(from) => choose({ from })}
+          />
+          <NumberField
+            label="To"
+            unit="s"
+            value={choices.to}
+            placeholder={times && formatNumber(times[1])}
+            onchange={(to) => choose({ to })}
+          />
+          <NumberField
+            label="Speed"
+            unit="×"
+            value={choices.rate}
+            placeholder={formatNumber(clock.state.rate)}
+            onchange={(rate) => choose({ rate })}
+          />
+          {#if !problem}
+            <p class="c-note" data-testid="video-time">
+              {formatNumber((job.timeRange[1] - job.timeRange[0]) / job.rate)} s of video,
+              {framesOf(job).toLocaleString()} frames. Empty fields follow the Monitor's window and the
+              playback speed.
+            </p>
+          {/if}
+        {:else}
+          <p class="c-note">At {formatNumber(playhead)} s, where the playhead is.</p>
+        {/if}
+      </Section>
       <Section label="Output">
-        <p class="c-note">MP4 / H.264</p>
         <Select
-          label="Resolution"
+          label="Size"
           options={[
-            { value: 720, label: '720p' },
-            { value: 1080, label: '1080p' },
-            { value: 2160, label: '4K' },
+            ...SIZES.map(([width, height, label]) => ({ value: `${width}x${height}`, label })),
+            ...(size ? [] : [{ value: 'custom', label: 'Custom' }]),
           ]}
-          data-testid="video-resolution"
           bind:value={
-            () => settings.height,
-            (height) => {
-              if (height) change({ height, width: (height * 16) / 9 })
+            () => (size ? `${size[0]}x${size[1]}` : 'custom'),
+            (value) => {
+              const found = SIZES.find(([width, height]) => `${width}x${height}` === value)
+              if (!found) return
+              set('export.width', found[0])
+              set('export.height', found[1])
             }
           }
         />
+        <NumberField
+          label="Width"
+          unit="px"
+          step={1}
+          min={4}
+          value={style['export.width']}
+          onchange={(width) => set('export.width', width)}
+        />
+        <NumberField
+          label="Height"
+          unit="px"
+          step={1}
+          min={2}
+          value={style['export.height']}
+          onchange={(height) => set('export.height', height)}
+        />
+        <NumberField
+          label="Scale"
+          unit="×"
+          value={style['export.scale']}
+          onchange={(scale) => set('export.scale', scale)}
+        />
+        {#if video}
+          <NumberField
+            label="Frame rate"
+            unit="fps"
+            value={style['export.frameRate']}
+            onchange={(rate) => set('export.frameRate', rate)}
+          />
+          <NumberField
+            label="Bits per pixel"
+            value={style['export.bitsPerPixel']}
+            onchange={(bits) => set('export.bitsPerPixel', bits)}
+          />
+          <p class="c-note">About {formatNumber(Number(megabits.toPrecision(2)))} Mbit/s.</p>
+        {:else if style['export.imageFormat'] === 'jpeg'}
+          <NumberField
+            label="Quality"
+            step={1}
+            min={1}
+            max={100}
+            value={style['export.jpegQuality']}
+            onchange={(quality) => set('export.jpegQuality', quality)}
+          />
+        {:else}
+          <Switch
+            label="Transparent background"
+            bind:checked={() => style['export.transparent'], (on) => set('export.transparent', on)}
+          />
+        {/if}
+      </Section>
+      <Section label="Style">
         <Select
-          label="Frame rate"
-          options={[24, 30, 60].map((value) => ({ value, label: value + ' fps' }))}
+          label="Theme"
+          options={[
+            { value: 'auto', label: 'Match VS Code' },
+            { value: 'light', label: 'Light' },
+            { value: 'dark', label: 'Dark' },
+          ]}
           bind:value={
-            () => settings.frameRate,
-            (frameRate) => {
-              if (frameRate) change({ frameRate })
+            () => style['export.theme'],
+            (theme) => {
+              if (theme) set('export.theme', theme)
             }
           }
         />
-        <Select
-          label="Quality"
-          options={[
-            { value: 'medium', label: 'Medium' },
-            { value: 'high', label: 'High' },
-            { value: 'very-high', label: 'Very high' },
-          ]}
-          bind:value={
-            () => settings.quality,
-            (quality) => {
-              if (quality) change({ quality })
-            }
-          }
+        <Switch
+          label="Case name and time"
+          bind:checked={() => style['export.caption'], (on) => set('export.caption', on)}
+        />
+        <Switch
+          label="Color legends"
+          bind:checked={() => style['export.legend'], (on) => set('export.legend', on)}
         />
       </Section>
     </fieldset>
     <div class="export__footer">
-      <div class="export__actions">
-        <button
-          class="c-btn c-btn--primary"
-          type="submit"
-          disabled={busy || !ready}
-          data-testid="video-start"
-        >
-          Export Video
-        </button>
-        {#if busy}
-          <button
-            class="c-btn c-btn--secondary"
-            type="button"
-            onclick={() => {
-              cancelled = true
-              stop?.abort()
-            }}
-          >
-            Cancel
-          </button>
-        {/if}
-      </div>
-      <div class="export__status">
-        {#if busy}
-          <progress max="100" value={percent} aria-label="Video export progress"></progress>
-          <p class="c-note" role="status">
-            {progress ? 'Exporting video: ' + percent + '%' : 'Preparing video…'}
-          </p>
-        {:else if status === 'done'}
-          <p class="c-note" role="status" data-testid="video-done">Exported {saved}</p>
-        {:else if status === 'cancelled'}
-          <p class="c-note" role="status">Export cancelled.</p>
-        {/if}
-      </div>
+      <button
+        class="c-btn {running ? 'c-btn--secondary' : 'c-btn--primary'} export__start"
+        type="submit"
+        disabled={!running && !!problem}
+        data-testid="export-start"
+      >
+        {running ? 'Cancel' : video ? 'Export Video' : 'Export Image'}
+      </button>
+      {#if problem && !running}<p class="c-note export__problem">{problem}</p>{/if}
     </div>
   </form>
 {/if}
 
 <style>
   .export {
+    --row-label: 7.5rem;
     display: flex;
     flex-direction: column;
     block-size: 100%;
@@ -230,33 +371,23 @@
 
   .export__fields {
     min-inline-size: 0;
+    padding-block: var(--spacing-xs);
   }
 
   .export__footer {
+    position: sticky;
+    inset-block-end: 0;
     margin-block-start: auto;
     padding: var(--spacing-md) var(--spacing-sm);
     border-block-start: 1px solid var(--color-border);
+    background: var(--color-bg);
   }
 
-  .export__actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--spacing-sm);
-  }
-
-  .export__status {
-    min-block-size: 4rem;
-    padding-block-start: var(--spacing-sm);
-    overflow-wrap: anywhere;
-  }
-
-  .export__status .c-note {
-    margin-inline: 0;
-  }
-
-  progress {
+  .export__start {
     inline-size: 100%;
-    block-size: 0.4rem;
-    accent-color: var(--vscode-progressBar-background, var(--color-primary-text));
+  }
+
+  .export__problem {
+    margin-inline: 0;
   }
 </style>

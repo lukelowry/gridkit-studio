@@ -29,8 +29,9 @@
 </div>
 
 <style>
+  /* A form sets --row-label so its controls line up. */
   .select {
-    grid-template-columns: auto minmax(8ch, 1fr);
+    grid-template-columns: var(--row-label, auto) minmax(8ch, 1fr);
   }
 
   /* Sized like VS Code's dropdowns. */

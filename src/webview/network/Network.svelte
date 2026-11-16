@@ -10,7 +10,7 @@
   import { reader, TILTED } from '../../shared/settings.js'
   import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
-  import { saveImage, viewShot } from '../export/image.js'
+  import { imageOptions, saveImage, viewShot } from '../export/image.js'
   import type { CanvasView } from '../latkit/canvas.js'
   import { CaseRows } from '../latkit/data.js'
   import { MAX_FRAME_RATE, PlayheadFeed } from '../latkit/frames.js'
@@ -20,7 +20,7 @@
   import { LatkitPage } from '../latkit/page.svelte.js'
   import { caseFit, daylightOf, sampledFields, sceneFields, sceneOf } from '../latkit/scenes.js'
   import { nativeTheme } from '../latkit/theme.js'
-  import { nativeMenu } from '../menu.js'
+  import { contextOf, nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
 
   const PROJECTIONS = [
@@ -200,7 +200,7 @@
         bridge.send({ kind: 'select', element })
       },
       open: (element) => bridge.send({ kind: 'open', element }),
-      menu: (point, element) => nativeMenu(canvas, point, element, viewState, 'network'),
+      menu: (point, element) => nativeMenu(canvas, point, contextOf(viewState, 'network', element)),
       camera: scheduleFraming,
       error: fail,
     })
@@ -320,10 +320,20 @@
           canvasView.fit(caseFit(loadedCase.data, loadedCase.summary.definition.drawing))
         else if (message.command === 'exportImage' && canvasView && loadedCase && viewState.uri) {
           const [exported, uri, name] = [canvasView, viewState.uri, loadedCase.summary.name]
+          const options = imageOptions(viewState.exportSettings)
           // Wait for the first fit, so the image is never just the background.
           void exported
             .framed()
-            .then(() => saveImage(viewShot(exported.view), uri, name, 'network', lifetime.signal))
+            .then(() =>
+              saveImage(
+                viewShot(exported.view, options),
+                uri,
+                name,
+                'network',
+                options,
+                lifetime.signal,
+              ),
+            )
             .catch(fail)
         }
       }

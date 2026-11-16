@@ -157,7 +157,7 @@ export async function run() {
       dt_monitor: 0.01,
       events: faultAt(16, [0.5, 0.6], 0.01),
     })
-    bench.session.setPlots([{ table: VM.table, field: VM.field }])
+    bench.session.showMonitor(VM)
     await vscode.commands.executeCommand('workbench.action.closeSidebar')
     const monitor = await bench.show('monitor')
     bench.session.transport.seek(0.55)

@@ -131,7 +131,7 @@ suite('Journeys', function () {
     const video = vscode.Uri.joinPath(bench.uri, '..', 'IEEE39 run.mp4')
     await rm(video.fsPath, { force: true })
     const exporter = await bench.show('export')
-    await visible(exporter, '[data-testid="video-export"]')
+    await visible(exporter, '[data-testid="export"]')
     for (const [name, on] of [
       ['Network', false],
       ['Monitor', true],
@@ -139,14 +139,18 @@ suite('Journeys', function () {
       const toggle = exporter.getByRole('switch', { name, exact: true })
       if (((await toggle.getAttribute('aria-checked')) === 'true') !== on) await toggle.click()
     }
-    await exporter.locator('[data-testid="video-resolution"]').selectOption({ label: '720p' })
-    const start = exporter.locator('[data-testid="video-start"]')
+    await exporter.getByLabel('Size', { exact: true }).selectOption({ label: '720p' })
+    const start = exporter.locator('[data-testid="export-start"]')
     await until(() => start.isEnabled(), 'the export can start')
     await start.press('Enter')
     await bench.dialog(video.fsPath)
     await until(
       async () =>
-        (await exporter.evaluate<{ status: string }>('gridkitExport()')).status === 'done',
+        !(await exporter.evaluate<boolean>('gridkitExport().running')) &&
+        (await readFile(video.fsPath).then(
+          () => true,
+          () => false,
+        )),
       'the video written',
     )
     const bytes = await readFile(video.fsPath)

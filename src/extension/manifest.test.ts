@@ -73,6 +73,36 @@ describe('the manifest', () => {
     expect(keys([vm])).toEqual(['monitor', true, false])
     expect(keys([vm, va])).toEqual(['monitor', true, true])
   })
+  it("offers in the Monitor list's empty area only what the Monitor's title bar offers", async () => {
+    const menus = new Menus(JSON.parse(await readFile('package.json', 'utf8')) as Manifest)
+    const [vm, va] = [
+      { table: 'Bus', field: 'Vm' },
+      { table: 'Bus', field: 'Va' },
+    ]
+    const list = (shown: (typeof vm)[]) =>
+      menus
+        .offered(
+          'webview/context',
+          menuContext(
+            { definition },
+            { uri: '', version: 0, origin: 'monitor' },
+            { monitors: shown, listed: [vm, va] },
+          ),
+        )
+        .map((each) => each.command)
+    const title = menus
+      .offered('view/title', {
+        view: viewId('monitor'),
+        [contextKey('canSplit')]: true,
+        [contextKey('hasSamples')]: true,
+      })
+      .map((each) => each.command)
+    expect(list([vm])).toContain(commandId('newMonitor'))
+    for (const command of list([vm])) expect(title).toContain(command)
+    // Split, as in the title bar, only while the Monitor lists a monitor it does not show.
+    expect(list([vm])).toContain(commandId('splitMonitor'))
+    expect(list([vm, va])).not.toContain(commandId('splitMonitor'))
+  })
   it('takes only the values of a view setting’s kind and range', () => {
     expect(validateSettings({ 'network.vertexRadius': 4 })).toEqual({ 'network.vertexRadius': 4 })
     expect(() => validateSettings({ 'network.vertexRadius': NaN })).toThrow('Invalid value')

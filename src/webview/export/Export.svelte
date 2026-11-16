@@ -3,7 +3,6 @@
 
   import { formatNumber } from '../../shared/format.js'
   import type { VideoView, ViewState } from '../../shared/messages.js'
-  import { monitorName } from '../../shared/monitors.js'
   import {
     exportDefaults,
     type ExportSettings,
@@ -21,7 +20,6 @@
     CHOICES,
     type ExportChoices,
     type ExportJob,
-    framesOf,
     problemOf,
     videoTimes,
     viewsOf,
@@ -78,16 +76,6 @@
     SIZES.find(
       ([width, height]) => width === style['export.width'] && height === style['export.height'],
     ),
-  )
-  const megabits = $derived(
-    (style['export.width'] *
-      style['export.height'] *
-      style['export.frameRate'] *
-      style['export.bitsPerPixel']) /
-      1e6,
-  )
-  const shownNames = $derived(
-    (viewState.shown ?? []).map((monitor) => monitorName(viewState.summary?.definition, monitor)),
   )
 
   $effect(() => bridge.save({ choices }))
@@ -201,9 +189,6 @@
             }
           />
         {/each}
-        {#if choices.views.includes('monitor') && shownNames.length}
-          <p class="c-note">{shownNames.join(', ')}, as the Monitor shows.</p>
-        {/if}
         <Select
           label="Layout"
           disabled={choices.views.length < 2}
@@ -219,8 +204,9 @@
           }
         />
       </Section>
-      <Section label="Time">
-        {#if video}
+      <!-- An image is taken at the playhead. Empty fields show the Monitor's window and speed. -->
+      {#if video}
+        <Section label="Time">
           <NumberField
             label="From"
             unit="s"
@@ -242,17 +228,8 @@
             placeholder={formatNumber(clock.state.rate)}
             onchange={(rate) => choose({ rate })}
           />
-          {#if !problem}
-            <p class="c-note" data-testid="video-time">
-              {formatNumber((job.timeRange[1] - job.timeRange[0]) / job.rate)} s of video,
-              {framesOf(job).toLocaleString()} frames. Empty fields follow the Monitor's window and the
-              playback speed.
-            </p>
-          {/if}
-        {:else}
-          <p class="c-note">At {formatNumber(playhead)} s, where the playhead is.</p>
-        {/if}
-      </Section>
+        </Section>
+      {/if}
       <Section label="Output">
         <Select
           label="Size"
@@ -304,7 +281,6 @@
             value={style['export.bitsPerPixel']}
             onchange={(bits) => set('export.bitsPerPixel', bits)}
           />
-          <p class="c-note">About {formatNumber(Number(megabits.toPrecision(2)))} Mbit/s.</p>
         {:else if style['export.imageFormat'] === 'jpeg'}
           <NumberField
             label="Quality"
@@ -347,15 +323,17 @@
       </Section>
     </fieldset>
     <div class="export__footer">
+      <!-- Why it cannot start shows on hover, as VS Code explains a disabled action. A disabled
+        button shows no tooltip, so it is marked disabled and refuses in `start`. -->
       <button
         class="c-btn {running ? 'c-btn--secondary' : 'c-btn--primary'} export__start"
         type="submit"
-        disabled={!running && !!problem}
+        aria-disabled={!running && !!problem}
+        title={running ? undefined : problem}
         data-testid="export-start"
       >
         {running ? 'Cancel' : video ? 'Export Video' : 'Export Image'}
       </button>
-      {#if problem && !running}<p class="c-note export__problem">{problem}</p>{/if}
     </div>
   </form>
 {/if}
@@ -385,9 +363,5 @@
 
   .export__start {
     inline-size: 100%;
-  }
-
-  .export__problem {
-    margin-inline: 0;
   }
 </style>

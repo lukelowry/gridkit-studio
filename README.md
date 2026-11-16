@@ -29,7 +29,7 @@ Clear the setting to use the included solver again. In remote workspaces, the pa
 Right-click a `*.solver.json` and choose **Run Dynamic Simulation**. The Monitor plots results as GridKit runs. On the web, results stay in your browser. Use **Export CSV** to download them.
 
 - The Monitor lists the signals the case records. Right-click one to map it onto the network.
-- **Show Last Results** on a solver file shows what its last run wrote, and **Run Simulation Again** in the Monitor runs it again.
+- **Show Last Results** on a solver file shows what its last run wrote.
 - **Open Results…** in the Monitor shows any other CSV GridKit wrote.
 
 ## Features

@@ -22,9 +22,9 @@ export const COMMANDS = [
   'copyFieldPath',
   'runSimulation',
   'showLastResults',
-  'runSimulationAgain',
   'stopSimulation',
   'clearResults',
+  'newMonitor',
   'splitMonitor',
   'unsplitMonitor',
   'previousMonitor',
@@ -72,7 +72,6 @@ export type View = (typeof VIEWS)[number]
 export const CONTEXT_KEYS = [
   'hasCase',
   'running',
-  'fromSolver',
   'hasResults',
   'hasSamples',
   'hasSelection',

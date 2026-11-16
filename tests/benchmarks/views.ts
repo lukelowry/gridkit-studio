@@ -517,7 +517,10 @@ export async function run() {
 
       // ── Video export ──
       await vscode.commands.executeCommand('gridkitStudio.exportVideo', uri)
-      const exporter = await viewShowing('export', '[data-testid="export-start"]:enabled')
+      const exporter = await viewShowing(
+        'export',
+        '[data-testid="export-start"]:not([aria-disabled="true"])',
+      )
       for (const [name, on] of [
         ['Network', true],
         ['Monitor', false],

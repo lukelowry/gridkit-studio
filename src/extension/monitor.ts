@@ -129,6 +129,11 @@ export function registerMonitor({ studio, command, focus, rows }: Commands) {
     session.showMonitor(monitor)
     await focus(session, 'monitor', element)
   })
+  // Disabled in the manifest: a new monitor records another signal, which means writing the case's
+  // mon lists, and Studio opens case files read-only.
+  command('newMonitor', () => {
+    throw new Error('Studio opens case files read-only, so it cannot record another signal.')
+  })
   command('splitMonitor', async (context) => {
     const { session } = context
     const hidden = session.monitors.filter(

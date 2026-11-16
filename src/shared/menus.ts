@@ -11,8 +11,9 @@ import { channelsOf, type Mappings, NUMERIC } from './mappings.js'
 import type { Monitor, Revision, Summary } from './messages.js'
 import { sameField } from './monitors.js'
 
-/** What a menu acts on: an element, one of its values, a Case panel column, or a monitor. */
-type Scope = 'element' | 'value' | 'column' | 'monitor'
+/** What a menu acts on: an element, one of its values, a Case panel column, a monitor, or the
+ *  Monitor's list of them. */
+type Scope = 'element' | 'value' | 'column' | 'monitor' | 'monitors'
 
 /** What a menu was opened on; its commands act on exactly this. */
 export interface Target extends Revision {
@@ -24,12 +25,13 @@ export interface Target extends Revision {
 }
 
 /** What a menu's view shows besides the target: the Case panel's sort and filter, and the
- *  monitors the Monitor shows. */
+ *  monitors the Monitor shows and lists. */
 interface Shown {
   mappings?: Mappings
   sort?: { field: string; direction: 'ascending' | 'descending' }
   filtered?: boolean
   monitors?: readonly Field[]
+  listed?: readonly Field[]
 }
 
 /** Whether a Network channel can show `field`, and whether one does. */
@@ -52,18 +54,20 @@ export function mappingOf(
 export function menuContext(
   summary: Pick<Summary, 'definition'>,
   target: Target,
-  { mappings = {}, sort, filtered = false, monitors = [] }: Shown = {},
+  { mappings = {}, sort, filtered = false, monitors = [], listed = [] }: Shown = {},
 ) {
   const { field } = target
   const type = field?.table ?? target.element?.table
   const definition = field && fieldDefinition(summary.definition, field.table, field.field)
   const scope: Scope = target.monitor
     ? 'monitor'
-    : target.origin === 'case' && field
-      ? target.element
-        ? 'value'
-        : 'column'
-      : 'element'
+    : target.origin === 'monitor' && !target.element
+      ? 'monitors'
+      : target.origin === 'case' && field
+        ? target.element
+          ? 'value'
+          : 'column'
+        : 'element'
   const { mappable, mapped } = mappingOf(summary, mappings, field)
   const shown = !!target.monitor && monitors.some((each) => sameField(each, target.monitor!))
   return {
@@ -85,6 +89,8 @@ export function menuContext(
     'gridkitStudio.caseFiltered': filtered,
     'gridkitStudio.shown': shown,
     'gridkitStudio.split': shown && monitors.length > 1,
+    // As the title bar's key of the same name: a monitor the Monitor lists but does not show.
+    'gridkitStudio.canSplit': listed.some((each) => !monitors.some((one) => sameField(one, each))),
   }
 }
 

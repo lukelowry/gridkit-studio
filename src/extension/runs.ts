@@ -10,7 +10,7 @@ import type { Results } from '../shared/messages.js'
 import type { Commands } from './commands.js'
 import { gridkitOf } from './settings.js'
 import { exists, solverAt, writtenBy } from './solvers.js'
-import { reference, uriOf } from './uris.js'
+import { reference } from './uris.js'
 
 function solverOf(target: unknown, doing: string): vscode.Uri {
   if (!(target instanceof vscode.Uri)) throw new Error(`Right-click a .solver.json to ${doing}.`)
@@ -114,12 +114,8 @@ export function registerRuns({ studio, registrations, command }: Commands) {
     await session.load(reference(output), reference(solver))
   }
 
-  // Run and Show Last Results take the solver file from their menu; the rest use the active case.
+  // A run starts only from a solver file's menu, as do its last results. Stop acts on the active
+  // case.
   registrations.push(studio.command('runSimulation', run), studio.command('showLastResults', show))
   command('stopSimulation', ({ session }) => session.stop())
-  command('runSimulationAgain', ({ session }) => {
-    const { solver } = session.results ?? {}
-    if (!solver) throw new Error('These results were not written by a run of a solver file.')
-    return run(uriOf(solver))
-  })
 }

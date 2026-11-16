@@ -66,7 +66,7 @@ suite('Runs', function () {
     assert.equal(typeof value, 'number')
   })
 
-  test('shows what its solver file wrote last, and runs it again, plotting what that records', async () => {
+  test('shows what its solver file wrote last, and a new run plots what that records', async () => {
     await host.run()
     const written = host.session.results!
     assert.deepEqual(fields(host.session.shown), [VM])
@@ -79,7 +79,8 @@ suite('Runs', function () {
     // what it recorded.
     await host.record('Bus', ['Va'])
     assert.deepEqual(fields(host.session.monitors), [VM])
-    const again = await host.run('gridkitStudio.runSimulationAgain')
+    // A run starts only from its solver file's menu.
+    const again = await host.run()
     assert.equal(again.state, 'complete', again.message)
     const va = { table: 'Bus', field: 'Va' }
     assert.deepEqual(fields(host.session.monitors), [va])

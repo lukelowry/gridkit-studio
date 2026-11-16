@@ -270,7 +270,6 @@ export class Studio implements vscode.Disposable {
     const values: Record<ContextKey, boolean> = {
       hasCase: !!session,
       running: !!session?.running,
-      fromSolver: !!session?.results?.solver,
       hasResults: !!session?.results,
       hasSamples: (session?.results?.frames ?? 0) > 0,
       hasSelection: !!session?.selection,

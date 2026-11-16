@@ -2,7 +2,8 @@ import type { Entity } from '../shared/document.js'
 import { menuContext, type Target } from '../shared/menus.js'
 import type { Monitor, ViewState } from '../shared/messages.js'
 
-/** The context keys for a menu in a view: on an element, a monitor, or both. */
+/** The context keys for a menu in a view: on an element, a monitor, both, or neither (the
+ *  Monitor's list). */
 export function contextOf(
   state: ViewState,
   origin: Target['origin'],
@@ -19,7 +20,7 @@ export function contextOf(
       ...(element && { element }),
       ...(monitor && { field: { table: monitor.table, field: monitor.field }, monitor }),
     },
-    { mappings: state.mappings, monitors: state.shown },
+    { mappings: state.mappings, monitors: state.shown, listed: state.monitors },
   )
 }
 

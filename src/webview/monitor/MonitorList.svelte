@@ -48,6 +48,9 @@ focuses its plot, and a row's menu holds the rest. -->
   const channels = (monitor: Monitor) =>
     channelsOf(viewState.mappings ?? {}, monitor).map((channel) => CHANNELS[channel].label)
   const menuOf = (monitor: Monitor) => contextOf(viewState, 'monitor', undefined, monitor)
+  /** The menu of the list itself, where no row is: as the Terminal's tab list offers new and
+   *  split terminals, it offers what the Monitor's title bar does for monitors. */
+  const listMenu = $derived(JSON.stringify(contextOf(viewState, 'monitor')))
 
   /** Keeps the keyboard row on a monitor that exists. */
   $effect(() => {
@@ -119,6 +122,7 @@ focuses its plot, and a row's menu holds the rest. -->
     aria-multiselectable="true"
     aria-activedescendant={monitors.length ? rowId(focus) : undefined}
     tabindex="0"
+    data-vscode-context={listMenu}
     bind:this={list}
     onkeydown={keydown}
   >

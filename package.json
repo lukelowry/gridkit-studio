@@ -201,13 +201,6 @@
         "icon": "$(graph-line)"
       },
       {
-        "command": "gridkitStudio.runSimulationAgain",
-        "title": "Run Simulation Again",
-        "category": "GridKit Studio",
-        "icon": "$(debug-rerun)",
-        "enablement": "isWorkspaceTrusted && gridkitStudio.fromSolver && !gridkitStudio.running"
-      },
-      {
         "command": "gridkitStudio.stopSimulation",
         "title": "Stop Simulation",
         "category": "GridKit Studio",
@@ -220,6 +213,13 @@
         "category": "GridKit Studio",
         "icon": "$(clear-all)",
         "enablement": "gridkitStudio.hasResults"
+      },
+      {
+        "command": "gridkitStudio.newMonitor",
+        "title": "New Monitor…",
+        "category": "GridKit Studio",
+        "icon": "$(add)",
+        "enablement": "false"
       },
       {
         "command": "gridkitStudio.splitMonitor",
@@ -585,19 +585,19 @@
           "group": "2_source@1"
         },
         {
-          "command": "gridkitStudio.stopSimulation",
-          "when": "view == gridkitStudio.monitor && gridkitStudio.running",
+          "command": "gridkitStudio.newMonitor",
+          "when": "view == gridkitStudio.monitor",
           "group": "navigation@0"
         },
         {
-          "command": "gridkitStudio.runSimulationAgain",
-          "when": "view == gridkitStudio.monitor && gridkitStudio.fromSolver && !gridkitStudio.running",
-          "group": "navigation@0"
+          "command": "gridkitStudio.stopSimulation",
+          "when": "view == gridkitStudio.monitor && gridkitStudio.running",
+          "group": "navigation@1"
         },
         {
           "command": "gridkitStudio.splitMonitor",
           "when": "view == gridkitStudio.monitor && gridkitStudio.canSplit",
-          "group": "navigation@1"
+          "group": "1_monitors@1"
         },
         {
           "command": "gridkitStudio.timeWindow",
@@ -744,12 +744,32 @@
         {
           "command": "gridkitStudio.splitMonitor",
           "when": "gridkitStudio.scope == monitor && !gridkitStudio.shown",
-          "group": "4_split@1"
+          "group": "1_split@1"
         },
         {
           "command": "gridkitStudio.unsplitMonitor",
           "when": "gridkitStudio.scope == monitor && gridkitStudio.split",
-          "group": "4_split@2"
+          "group": "1_split@2"
+        },
+        {
+          "command": "gridkitStudio.newMonitor",
+          "when": "gridkitStudio.scope == monitors",
+          "group": "1_new@1"
+        },
+        {
+          "command": "gridkitStudio.splitMonitor",
+          "when": "gridkitStudio.scope == monitors && gridkitStudio.canSplit",
+          "group": "2_monitors@1"
+        },
+        {
+          "command": "gridkitStudio.openResults",
+          "when": "gridkitStudio.scope == monitors",
+          "group": "3_results@1"
+        },
+        {
+          "command": "gridkitStudio.monitorSettings",
+          "when": "gridkitStudio.scope == monitors",
+          "group": "4_view@1"
         }
       ],
       "commandPalette": [
@@ -800,10 +820,6 @@
         {
           "command": "gridkitStudio.showLastResults",
           "when": "false"
-        },
-        {
-          "command": "gridkitStudio.runSimulationAgain",
-          "when": "gridkitStudio.fromSolver && !gridkitStudio.running"
         },
         {
           "command": "gridkitStudio.stopSimulation",

@@ -39,23 +39,27 @@
   block-size: 16px;
 }
 
-.c-btn:hover:not(:disabled),
-.c-icon-btn:hover:not(:disabled),
-button.c-row:hover:not(:disabled) {
+/* A button marked aria-disabled looks and acts disabled but keeps its tooltip, which explains why. */
+.c-btn:hover:not(:disabled, [aria-disabled='true']),
+.c-icon-btn:hover:not(:disabled, [aria-disabled='true']),
+button.c-row:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--color-row-hover);
   color: var(--color-text-1);
 }
 
-.c-btn:disabled,
-.c-icon-btn:disabled,
-button.c-row:disabled {
+.c-btn:is(:disabled, [aria-disabled='true']),
+.c-icon-btn:is(:disabled, [aria-disabled='true']),
+button.c-row:is(:disabled, [aria-disabled='true']) {
   cursor: not-allowed;
   opacity: 0.45;
 }
 
 /* After the hover rule, which ties with the icon button's selector on specificity. */
 .c-btn:is([aria-expanded='true'], [aria-pressed='true']),
-.c-icon-btn:is([aria-expanded='true'], [aria-pressed='true']):not(:disabled) {
+.c-icon-btn:is([aria-expanded='true'], [aria-pressed='true']):not(
+    :disabled,
+    [aria-disabled='true']
+  ) {
   background: var(--color-selected);
   color: var(--color-primary-text);
 }
@@ -65,7 +69,7 @@ button.c-row:disabled {
   color: var(--color-on-primary);
 }
 
-.c-btn--primary:hover:not(:disabled) {
+.c-btn--primary:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--vscode-button-hoverBackground, var(--color-primary));
   color: var(--color-on-primary);
 }
@@ -75,7 +79,7 @@ button.c-row:disabled {
   color: var(--vscode-button-secondaryForeground, var(--color-text-1));
 }
 
-.c-btn--secondary:hover:not(:disabled) {
+.c-btn--secondary:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--vscode-button-secondaryHoverBackground, var(--color-row-hover));
   color: var(--vscode-button-secondaryForeground, var(--color-text-1));
 }
@@ -95,15 +99,6 @@ button.c-row:disabled {
 
 .c-empty__text {
   max-width: 280px;
-}
-
-/* Caption text under a group of rows, indented to the row label. */
-.c-note {
-  margin: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
-  color: var(--color-text-2);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
 }
 
 /* A label left and a control or value right. As a button, the whole row is the target and its

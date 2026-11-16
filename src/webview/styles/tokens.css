@@ -75,7 +75,8 @@ body.vscode-high-contrast {
   --focus-width: 3px;
 }
 
-body.vscode-high-contrast :is(.c-btn, .c-icon-btn, button.c-row):hover:not(:disabled),
+body.vscode-high-contrast
+  :is(.c-btn, .c-icon-btn, button.c-row):hover:not(:disabled, [aria-disabled='true']),
 body.vscode-high-contrast :is(.c-btn, .c-icon-btn)[aria-pressed='true'] {
   outline: 1px dashed var(--vscode-contrastActiveBorder, var(--color-focus-ring));
   outline-offset: -1px;

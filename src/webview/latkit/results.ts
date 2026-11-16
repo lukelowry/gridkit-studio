@@ -3,6 +3,7 @@
 import { type Id, Tiles } from 'latkit'
 
 import type { TileRequest } from '../../shared/data.js'
+import { quiet } from '../../shared/errors.js'
 import { bridge } from '../bridge.js'
 
 const SCHEME = 'results:'
@@ -33,13 +34,26 @@ export function tileRequest(url: string): TileRequest {
   }
 }
 
-const fetch = (url: string) => bridge.request('tile', tileRequest(url))
-
 /** The tiles of the results last asked for, by URL. latkit shares what it fetched only among the
  *  views of one `Tiles`, and keeps it while that `Tiles` lives. So every plot of a field draws the
  *  same one, a plot that closes and opens again fetches nothing, and other results' tiles are let
  *  go. */
 let held: { readonly results: string; readonly tiles: Map<string, Tiles> } | undefined
+
+/** One file of results' tiles, for latkit. A request that something replaced has no answer: the
+ *  page was shown another case, or the results closed or were read again. latkit reports any
+ *  rejection as a failure of the tiles, and keeps it for as long as they live, yet the plot that
+ *  asked is about to go. So such a request stays unanswered, and the tiles held are let go: a plot
+ *  of what replaced them draws tiles of its own. */
+export async function tile(url: string): Promise<Uint8Array> {
+  try {
+    return await bridge.request('tile', tileRequest(url))
+  } catch (error) {
+    if (!quiet(error)) throw error
+    held = undefined
+    return new Promise<never>(() => {})
+  }
+}
 
 /** Time tiles of `table`'s `field`: every recorded row, or only `id`. Named by their URL. */
 export function resultTiles(results: string, table: string, field: string, id?: Id): Tiles {
@@ -47,7 +61,7 @@ export function resultTiles(results: string, table: string, field: string, id?: 
   const url = `${SCHEME}${[results, table, field, rows].map(encodeURIComponent).join('/')}/frames.json`
   if (held?.results !== results) held = { results, tiles: new Map() }
   let tiles = held.tiles.get(url)
-  if (!tiles) held.tiles.set(url, (tiles = new Tiles(url, url, { fetch })))
+  if (!tiles) held.tiles.set(url, (tiles = new Tiles(url, url, { fetch: tile })))
   return tiles
 }
 

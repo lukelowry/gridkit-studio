@@ -4,18 +4,18 @@ import { Data, reference } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
 import { rowsOf } from '../shared/cells.js'
-import type { ProjectionCursor, ProjectionSelection } from '../shared/data.js'
+import { type CaseRowsCursor, type FieldSelection, PAGE_BYTES } from '../shared/data.js'
 import { loadNative } from '../workers/native.js'
 import { Case } from './case.js'
 import { catalog } from './definition.js'
-import type { ProjectedDocument } from './document.js'
-import { CaseQueries, projectionPage } from './projection.js'
+import type { CaseColumns } from './document.js'
+import { CaseQueries, caseRowsPage } from './rows.js'
 
 const signal = AbortSignal.any([])
 
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 
-const document: ProjectedDocument = {
+const document: CaseColumns = {
   key: 'revision-1',
   definition: {
     tables: [
@@ -53,20 +53,20 @@ const document: ProjectedDocument = {
   ]),
 }
 
-/** The case `text` holds, as views project it. */
-const projected = async (text: string) =>
-  (await Case.parse(new TextEncoder().encode(text), catalog)).projected()
+/** Parses `text` and returns the columns views read. */
+const caseColumns = async (text: string) =>
+  (await Case.parse(new TextEncoder().encode(text), catalog)).columns()
 
-/** `selection` of `document` in `data`, page after page, as a view reads it; how many pages. */
-async function project(
+/** Applies every page of `selection` to `data`, as a view does, and returns the page count. */
+async function loadPages(
   data: Data,
-  document: ProjectedDocument,
-  selection: readonly ProjectionSelection[],
+  document: CaseColumns,
+  selection: readonly FieldSelection[],
 ): Promise<number> {
   let pages = 0
-  let cursor: ProjectionCursor | undefined
+  let cursor: CaseRowsCursor | undefined
   do {
-    const page = await projectionPage(document, selection, cursor, signal)
+    const page = await caseRowsPage(document, selection, cursor, signal)
     data.apply(page.bytes)
     cursor = page.next
     pages++
@@ -76,7 +76,7 @@ async function project(
 
 it('projects reference identities before fields and queries lazily', async () => {
   using data = new Data('case')
-  await project(data, document, [{ table: 'Device', fields: ['bus'] }])
+  await loadPages(data, document, [{ table: 'Device', fields: ['bus'] }])
   expect(data.get('Device', 'a/b', 'bus')).toEqual(2)
   expect(data.query({ of: 'Bus' }).ids).toEqual([1, 2])
   const queries = new CaseQueries(document)
@@ -91,12 +91,12 @@ it('projects reference identities before fields and queries lazily', async () =>
     queries.destroy()
   }
   await expect(
-    projectionPage(document, [{ table: 'Bus', fields: ['missing'] }], undefined, signal),
+    caseRowsPage(document, [{ table: 'Bus', fields: ['missing'] }], undefined, signal),
   ).rejects.toThrow('Unknown field')
 })
 
-it('queries typed fields in empty tables and rejects filtered source-order anchors', async () => {
-  const empty: ProjectedDocument = {
+it('queries typed fields in empty tables', async () => {
+  const empty: CaseColumns = {
     ...document,
     tables: new Map([
       ['Bus', { ids: [], read: (name: string) => (name === 'v' ? new Float64Array() : []) }],
@@ -114,22 +114,97 @@ it('queries typed fields in empty tables and rejects filtered source-order ancho
       signal,
     )
     expect(references.fields.bus).toEqual({ reference: 'Bus', ids: [] })
-    await expect(
-      queries.page(
-        { table: 'Bus', fields: ['v'], offset: 0, limit: 10, anchor: 1, search: 'A' },
-        signal,
-      ),
-    ).rejects.toThrow('source order')
   } finally {
     queries.destroy()
   }
 })
 
-it('reads a column whose first rows hold nothing, past what the panel loads at a time', async () => {
-  // More rows than a table's columns load in at once, the first of them all without a note.
+/** A table of `rows` buses with `note`, a voltage decreasing by row, and an odd or even label. */
+const buses = (rows: number, note = ''): CaseColumns => ({
+  key: 'revision-1',
+  definition: {
+    tables: [
+      {
+        name: 'Bus',
+        label: 'Bus',
+        labelField: '@studio.label',
+        fields: [
+          { name: '@studio.label', kind: 'text', label: 'Name' },
+          { name: 'note', kind: 'text', label: 'Note' },
+          { name: 'v', kind: 'number', label: 'Voltage' },
+        ],
+      },
+    ],
+    drawing: { geographic: false, vertices: [], edges: [] },
+  },
+  tables: new Map([
+    [
+      'Bus',
+      {
+        ids: Array.from({ length: rows }, (_, row) => row),
+        read: (name: string, offset: number, count: number) =>
+          name === 'v'
+            ? Float64Array.from({ length: count }, (_, at) => -(offset + at))
+            : Array.from({ length: count }, (_, at) =>
+                name === 'note' ? note : (offset + at) % 2 ? 'odd' : 'even',
+              ),
+      },
+    ],
+  ]),
+})
+
+it('shows an anchored page among the rows its request keeps, in its order', async () => {
+  const queries = new CaseQueries(buses(100))
+  try {
+    const request = {
+      table: 'Bus',
+      fields: ['v'],
+      offset: 3,
+      limit: 30,
+      search: 'odd',
+      order: { field: 'v', direction: 'ascending' },
+    } as const
+    // Odd rows, highest id first, with the anchor a few rows down the page.
+    const page = await queries.page({ ...request, anchor: 51 }, signal)
+    expect(page.anchored).toBe(true)
+    expect(page.ids.slice(0, 3)).toEqual([71, 69, 67])
+    expect(page.ids.indexOf(51)).toBeGreaterThan(0)
+    expect(page.ids.indexOf(51)).toBeLessThan(request.limit)
+    // An anchor the request filters out falls back to the requested page and reports it.
+    const left = await queries.page({ ...request, anchor: 50 }, signal)
+    expect(left).toMatchObject({ anchored: false, offset: request.offset })
+    expect(left.ids[0]).toBe(99 - 2 * request.offset)
+    // A page without an anchor has no `anchored` property.
+    expect(await queries.page(request, signal)).not.toHaveProperty('anchored')
+  } finally {
+    queries.destroy()
+  }
+})
+
+it('sends a table heavier than a page in pages that each fit, sized from the one before', async () => {
+  const rows = 3000
+  const note = 'x'.repeat(4096)
+  const document = buses(rows, note)
+  using data = new Data('case')
+  const sizes: number[] = []
+  let cursor: CaseRowsCursor | undefined
+  do {
+    const page = await caseRowsPage(document, [{ table: 'Bus', fields: ['note'] }], cursor, signal)
+    data.apply(page.bytes)
+    sizes.push(page.bytes.byteLength)
+    cursor = page.next
+  } while (cursor)
+  expect(Math.max(...sizes)).toBeLessThanOrEqual(PAGE_BYTES)
+  // About as few pages as the bytes require, with every row's note present.
+  expect(sizes.length).toBeLessThan((2 * rows * note.length) / PAGE_BYTES + 2)
+  expect(data.get('Bus', rows - 1, 'note')).toBe(note)
+})
+
+it('reads a column whose first rows are empty, past one load step', async () => {
+  // More rows than one load step, where only the last few have a note.
   const rows = 10_000
   const noted = rows - 3
-  const table: ProjectedDocument = {
+  const table: CaseColumns = {
     key: 'revision-1',
     definition: {
       tables: [
@@ -174,7 +249,7 @@ it('reads a column whose first rows hold nothing, past what the panel loads at a
       },
       signal,
     )
-    // The rows that hold it, in order, of which the page is the second.
+    // The matching rows in order, and the page is the second of them.
     expect(page.total).toBe(rows - noted)
     expect(page.ids).toEqual([rows - 2])
     expect(page.fields.note).toEqual(['late'])
@@ -189,7 +264,7 @@ it('reads a column whose first rows hold nothing, past what the panel loads at a
 })
 
 it('reads sparse native identities and static values through native queries and patches', async () => {
-  const document = await projected(`{
+  const document = await caseColumns(`{
  "buses": [
   {"class":"Bus","number":42,"name":"Tokyo 1","params":{"kv":230.000},"extension":{"longitude":-100.00,"latitude":32.5}},
   {"class":"Bus","number":7,"name":"Seven","params":{"kv":115.0}}
@@ -209,7 +284,7 @@ it('reads sparse native identities and static values through native queries and 
     )
     expect(rowsOf(page).map((row) => row.id)).toEqual([42, 7])
     expect(rowsOf(page).map((row) => row.values['extension.longitude'])).toEqual([-100, null])
-    await project(data, document, [{ table: 'Bus', fields: ['name'] }])
+    await loadPages(data, document, [{ table: 'Bus', fields: ['name'] }])
     expect(data.query({ of: 'Bus' }).ids).toEqual([42, 7])
   } finally {
     queries.destroy()
@@ -222,21 +297,21 @@ it('sends a view each table whole, in few pages however many its rows', async ()
     number: at + 1,
     name: 'Bus ' + (at + 1),
   }))
-  const document = await projected(JSON.stringify({ buses }))
+  const document = await caseColumns(JSON.stringify({ buses }))
   using data = new Data('case')
-  // Its identities, then its names: far fewer pages than it has rows.
-  expect(await project(data, document, [{ table: 'Bus', fields: ['name'] }])).toBeLessThan(10)
+  // Ids, then names, in far fewer pages than rows.
+  expect(await loadPages(data, document, [{ table: 'Bus', fields: ['name'] }])).toBeLessThan(10)
   expect(data.query({ of: 'Bus' }).ids).toHaveLength(buses.length)
   expect(data.get('Bus', buses.length, 'name')).toBe('Bus ' + buses.length)
 })
 
-it('declares reference fields even on empty projected tables', async () => {
+it('declares reference fields even on empty columns tables', async () => {
   const text = JSON.stringify({
     buses: [0, 1].map((number) => ({ class: 'Bus', number, name: `Bus ${number}` })),
     devices: [{ class: 'Branch', id: 'line/[]', ports: { bus1: 0, bus2: 1 } }],
   })
-  const document = await projected(text)
-  // A device type the case has none of, whose ports reference other rows.
+  const document = await caseColumns(text)
+  // A device type with no records whose ports reference other rows.
   const empty = document.definition.tables.find(
     (table) =>
       !document.tables.get(table.name)!.ids.length &&
@@ -244,7 +319,7 @@ it('declares reference fields even on empty projected tables', async () => {
   )!
   const ports = empty.fields.filter((field) => field.kind === 'reference').map(({ name }) => name)
   using data = new Data('case')
-  await project(data, document, [{ table: empty.name, fields: ports }])
+  await loadPages(data, document, [{ table: empty.name, fields: ports }])
   const fields = data.describe().tables.find((table) => table.name === empty.name)!.fields
   expect(fields.every((field) => field.kind === 'reference')).toBe(true)
   expect(fields.length).toBe(ports.length)

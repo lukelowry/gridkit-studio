@@ -3,7 +3,7 @@ import type { Camera } from 'latkit'
 import type { TimeRange } from '../../shared/data.js'
 import type { Plot, Results } from '../../shared/messages.js'
 
-/** How long a zoom or pan rests before the Monitor says the window it shows. */
+/** How long a zoom or pan must settle before the Monitor reports its window. */
 export const SETTLE_MS = 120
 
 export function monitorWindow(results: Results | undefined, chosen?: TimeRange): TimeRange {
@@ -14,7 +14,7 @@ export function sameWindow(a: TimeRange | undefined, b: TimeRange | undefined): 
   return a === b || (!!a && !!b && a[0] === b[0] && a[1] === b[1])
 }
 
-/** How `plot` frames `range`: the times, over the values the plot was given, else those it shows. */
+/** The camera over `range`: the plot's fixed value range if set, else a fit to its values. */
 export const plotCamera = (plot: Plot, range: TimeRange): Camera => ({
   x: [...range],
   y: plot.range ? [...plot.range] : null,

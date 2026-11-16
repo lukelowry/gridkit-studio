@@ -1,5 +1,4 @@
-/** The extension-host suites. Each starts from IEEE39 alone and followed, so the order matters only
- *  to the report. */
+/** Each suite starts from the same state, so order only affects the report. */
 
 import './runs.test.js'
 import './playback.test.js'

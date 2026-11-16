@@ -1,4 +1,4 @@
-/** What the views draw, as latkit scenes: the Network of a case, and a plot of a recorded field. */
+/** latkit scenes for the Network and the Monitor's plots. */
 
 import {
   type ColormapName,
@@ -14,7 +14,7 @@ import {
   type Theme,
 } from 'latkit'
 
-import type { ProjectionSelection, RecordedField, ValueRange } from '../../shared/data.js'
+import type { FieldSelection, RecordedField, ValueRange } from '../../shared/data.js'
 import {
   type CaseDefinition,
   type Drawing,
@@ -27,22 +27,20 @@ import type { SettingsReader } from '../../shared/settings.js'
 import { type Background, NO_MAP } from './maps.js'
 import { caseSpan, GAP } from './span.js'
 
-/** Background geography does not determine the extent of the case being inspected. */
+/** Fits the case's own tables, so a background map does not widen the fit. */
 export function caseFit(data: Data, drawing: Drawing): Fit {
   const tables = [...drawing.vertices, ...drawing.edges].map((item) => item.table)
   return { tables: [...new Set(tables)].map((table) => data.table(table)) }
 }
 
-/** A mapped field as the marks of its type draw it: the marks it styles and which of their options,
- *  as its channel in CHANNELS says, where its values are read, and the values the option spans. */
-export interface Style extends Field {
+/** A mapped field as a mark option: which option, where its values are read, and their range. */
+interface Style extends Field {
   readonly placement: 'vertex' | 'edge'
   readonly option: 'color' | 'radius' | 'elevation' | 'width' | 'dash'
   readonly source?: TableInput
   readonly range?: ValueRange
 }
 
-/** The sampled fields the mappings read from `results`, each once, as `[table, field]`. */
 export function sampledFields(
   definition: CaseDefinition,
   mappings: Mappings = {},
@@ -64,23 +62,20 @@ interface NetworkSizes {
   readonly width: number
 }
 
-/** The Network's sizes in CSS pixels, as the settings give them on every case: a vertex never
- *  narrower than twice its edges, so it shows past the edges that meet it. */
+/** CSS pixel sizes; the radius is at least the edge width, so a vertex shows past its edges. */
 function networkSizes(settings: SettingsReader): NetworkSizes {
   const width = settings.get('network.edgeWidth')
   return { width, radius: Math.max(width, settings.get('network.vertexRadius')) }
 }
 
-/** What each channel's mapped values span: a size from the mark's own to three times it, so a
- *  mapping only enlarges a mark, which draws no smaller than it does unmapped; a height, a share of
- *  the case's span. */
+/** Each channel's output range: a size from 1 to 3 times the mark's own, so mapping only enlarges
+ *  a mark; an elevation as a share of the case's span. */
 const RANGES: Record<'radius' | 'elevation' | 'width', [low: number, high: number]> = {
   radius: [1, 3],
   elevation: [0, 1],
   width: [1, 3],
 }
 
-/** What a mark's option reads of the field `style` maps. */
 function optionOf(style: Style, map: ColormapName, sizes: NetworkSizes, height: number): Expr {
   let value = field(style.field)
   if (style.source) value = value.from(style.source)
@@ -95,7 +90,6 @@ function optionOf(style: Style, map: ColormapName, sizes: NetworkSizes, height: 
   return ranged.mul(size).fallback(size)
 }
 
-/** The options the marks of `table` drawn as `placement` take from `styles`. */
 function options(
   table: string,
   styles: readonly Style[],
@@ -111,8 +105,7 @@ function options(
   )
 }
 
-/** `mappings` as the marks draw them: each over the values it was given, else those the results
- *  hold of it. A sampled field draws once `sampled` has its frames. */
+/** `mappings` as styles; a sampled field is left out until `sampled` has its frames. */
 export function stylesOf(
   definition: CaseDefinition,
   mappings: Mappings,
@@ -141,26 +134,21 @@ export function stylesOf(
   })
 }
 
-/** The map a scene draws under a case: its marks, and whose map it is. */
 type Ground = Pick<Background, 'marks' | 'attribution'>
 
-/** The time the sun lights the earth at while the Daylight setting is `lit`: now, read once by
- *  whoever draws, so every scene of one view lights alike. */
-export const daylightOf = (lit: boolean): number | null => (lit ? Date.now() / 1000 : null)
+/** The current time in epoch seconds when `enabled`, else null. Read once per view, so its
+ *  scenes match. */
+export const daylightOf = (enabled: boolean): number | null => (enabled ? Date.now() / 1000 : null)
 
-/** What a scene of a case draws besides the case: its mappings' results and a map. */
 interface SceneExtras {
   readonly mappings?: Mappings
   readonly results?: Results
-  /** The source of a mapped sampled field, once its frames are held. */
   readonly sampled?: (table: string, field: string) => Source | undefined
-  /** The map drawn under the case. */
   readonly background?: Ground
-  /** Seconds since the epoch the sun lights the earth at, or none to light it evenly. */
+  /** The sun's time in epoch seconds, or null for even lighting. */
   readonly daylight?: number | null
 }
 
-/** The Network of `data`, as the view and every export draws it. */
 export function sceneOf(
   data: Data,
   definition: CaseDefinition,
@@ -184,10 +172,8 @@ export function sceneOf(
   )
 }
 
-/** What the wheel does in a view, as its Wheel behavior setting says. Every other input keeps
- *  latkit's own: a drag pans, Shift or the right button turns, two fingers pinch to zoom and slide
- *  to pan. A trackpad scrolls to pan, and its pinch, which reaches a page as the wheel with
- *  Control held, zooms. */
+/** Gestures for each Wheel behavior setting; other inputs keep latkit's defaults. A trackpad pinch
+ *  arrives as the wheel with Control held. */
 const WHEEL: Record<'wheel' | 'trackpad' | 'modifier' | 'off', Gestures> = {
   wheel: {},
   trackpad: { wheel: 'pan', 'control+wheel': 'zoom', 'meta+wheel': 'zoom' },
@@ -195,7 +181,6 @@ const WHEEL: Record<'wheel' | 'trackpad' | 'modifier' | 'off', Gestures> = {
   off: { wheel: 'none', pinch: 'none' },
 }
 
-/** How a view of `kind` answers its inputs: the wheel as its setting says, then `gestures`. */
 function controls(settings: SettingsReader, kind: 'network' | 'monitor', gestures: Gestures = {}) {
   return {
     keyboard: true,
@@ -220,8 +205,7 @@ export function networkScene(
   daylight: number | null = null,
 ): Scene {
   const sizes = networkSizes(settings)
-  // The highest mapped value raises a vertex a share of the case's span, whatever the space's
-  // units and however large the case: its relief reads alike on every case.
+  // Elevation scales with the case's span, so relief looks the same in any space and at any size.
   const height = styles.some((style) => style.option === 'elevation')
     ? settings.get('network.height') * caseSpan(data, drawing)
     : 0
@@ -250,19 +234,18 @@ export function networkScene(
     theme,
     ease: settings.get('network.transitionDuration'),
     controls: { ...controls(settings, 'network'), cycle: true },
-    // The map under everything, then branches, then buses. Where depth varies, the nearest
-    // opaque pixel shows, and a mark whose rows a mapped height raises draws them lowest first:
-    // farthest first wherever they overlap, from any camera.
+    // Map, then branches, then buses. latkit draws elevated rows lowest first, so overlaps
+    // resolve correctly from any camera.
     marks: [...background.marks, ...edges, ...vertices],
-    // Whose map it is, in a corner over the marks, as the view and every picture of it say.
-    title: background.attribution ? { text: background.attribution, place: 'bottom-right' } : null,
+    // The map's attribution, also in exports; a subtitle because title text is large.
+    title: background.attribution
+      ? { text: '', subtitle: background.attribution, place: 'bottom-right' }
+      : null,
   }
 }
 
-/** A plot of `plot`'s field over the times its camera shows, each trace in its own color by its
- *  place among them (`series`). Its axes carry ticks alone: every plot shares the time axis, whose
- *  last tick says it is seconds, and the Monitor names each plot in its lane. A picture has no
- *  lanes, so it passes `name` for the plot to name itself on its value axis. */
+/** A plot of `plot`'s traces, colored by `series`. The axes show only ticks; images have no lane
+ *  header, so they pass `name` to label the value axis. */
 export function plotScene(
   source: Source,
   plot: Plot,
@@ -274,7 +257,7 @@ export function plotScene(
     space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
     theme,
     ease: 0,
-    // Shift and a drag frames a span of time, which becomes the window the Monitor shows.
+    // Shift and drag zooms to a span of time, which becomes the Monitor's window.
     controls: controls(settings, 'monitor', { 'shift+primary': 'zoomBox' }),
     marks: [
       {
@@ -289,16 +272,13 @@ export function plotScene(
   }
 }
 
-/** Only fields the Network's marks need; sampled fields live in their own bounded sources. */
-export function sceneFields(
-  definition: CaseDefinition,
-  mappings: Mappings = {},
-): ProjectionSelection[] {
+/** The case fields the Network's marks read; sampled fields come from their own sources. */
+export function sceneFields(definition: CaseDefinition, mappings: Mappings = {}): FieldSelection[] {
   const selected = new Map<string, Set<string>>()
   const add = (table: string, fields: readonly string[]) => {
-    const held = selected.get(table) ?? new Set<string>()
-    for (const name of fields) held.add(name)
-    selected.set(table, held)
+    const names = selected.get(table) ?? new Set<string>()
+    for (const name of fields) names.add(name)
+    selected.set(table, names)
   }
   const drawing = definition.drawing
   for (const vertex of drawing.vertices)

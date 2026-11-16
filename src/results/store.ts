@@ -1,4 +1,4 @@
-/** Persistent scientific blocks and native visualization levels, committed by one atomic watermark. */
+/** On-disk result blocks and visualization levels, committed by one atomic manifest write. */
 import { randomUUID } from '../platform/crypto.js'
 import {
   type FileHandle,
@@ -13,16 +13,18 @@ import {
 import { alive, caseless, owner as ownerId } from '../platform/host.js'
 import { dirname, join, resolve } from '../platform/path.js'
 import type { TimeRange } from '../shared/data.js'
+import { problem } from '../shared/errors.js'
 import type { LongColumns } from './csv.js'
 import type { FrameBlock, VisualizationRun } from './frames.js'
 import type { PyramidState } from './pyramid.js'
 import { same, type Stamp } from './stamp.js'
 
-export const FORMAT = 'results-native-3'
-/** How many bytes one read of adjacent rows aims for. */
+export const FORMAT = 'results-native-4'
+/** A store that no longer matches its manifest, so the results file must be read again. */
+export const lost = (message: string, cause?: unknown) =>
+  problem('results-lost', message, cause === undefined ? {} : { cause })
 const READ_BYTES = 4 << 20
-/** A block of frames as the file gave them: their times, then each field's rows, a row's frames
- *  together. */
+/** Raw frames on disk: the times, then each field's values, row by row. */
 export interface RawIndex {
   readonly kind: 'raw'
   readonly first: number
@@ -32,8 +34,7 @@ export interface RawIndex {
   readonly at: number
   readonly fields: readonly number[]
 }
-/** A block of one field's buckets at one level: each bucket's first and last times, then each
- *  row's least values, a row's buckets together, then each row's greatest. */
+/** One field's buckets at one level: their times, then minimums and maximums, row by row. */
 export interface LevelIndex {
   readonly kind: 'level'
   readonly field: number
@@ -45,15 +46,14 @@ export interface LevelIndex {
   readonly at: number
   readonly values: number
 }
+/** A store's committed state. A sweep reads it for every store, so it stays small. */
 export interface Manifest {
   readonly format: typeof FORMAT
   readonly path: string
   readonly stamp: Stamp
   readonly read: number
   readonly fingerprint: string
-  /** The columns, as the wide layout names them; a long layout's are its first sample's. */
-  readonly header: readonly string[]
-  /** Where GridKit's long layout's columns are, for a file in it: a row per variable and sample. */
+  /** Column positions for a file in GridKit's long layout (one row per variable and sample). */
   readonly long?: LongColumns
   readonly frames: number
   readonly domain: TimeRange
@@ -63,20 +63,26 @@ export interface Manifest {
   readonly rawBytes: number
   readonly levelBytes: number
   readonly indexBytes: number
+}
+/** The state a resumed read needs, kept apart from the manifest because it grows with the file. */
+export interface Resume {
+  readonly header: readonly string[]
   readonly reducers: readonly PyramidState[]
 }
 export type Checkpoint = Omit<
   Manifest,
   'format' | 'rows' | 'rawBytes' | 'levelBytes' | 'indexBytes'
->
+> &
+  Resume
 export function fileKey(path: string): string {
   const full = resolve(path)
   return caseless ? full.toLowerCase() : full
 }
+const missing = (error: unknown) => (error as { code?: unknown } | null)?.code === 'ENOENT'
 async function readAll(file: FileHandle, bytes: Uint8Array, position: number): Promise<void> {
   for (let read = 0; read < bytes.length;) {
     const { bytesRead } = await file.read(bytes, read, bytes.length - read, position + read)
-    if (!bytesRead) throw new Error('A results store ends before its committed watermark.')
+    if (!bytesRead) throw lost('A results store ends before what it says it holds.')
     read += bytesRead
   }
 }
@@ -92,16 +98,15 @@ async function writeAll(file: FileHandle, bytes: Uint8Array, position: number): 
     written += bytesWritten
   }
 }
-/** Removes `folder`, as far as the system lets it now: one held open, as Windows holds a file
- *  another process reads, stays for a later sweep. */
-const removed = (folder: string) => rm(folder, { recursive: true, force: true }).catch(() => {})
+/** Removes `folder` if possible. One that Windows keeps open is left for a later sweep. */
+const removeFolder = (folder: string) =>
+  rm(folder, { recursive: true, force: true }).catch(() => {})
 async function manifestOf(folder: string): Promise<Manifest | undefined> {
   try {
     const manifest = JSON.parse(await readFile(join(folder, 'manifest.json'), 'utf8')) as Manifest
     if (
       manifest.format !== FORMAT ||
       !Array.isArray(manifest.rows) ||
-      !Array.isArray(manifest.reducers) ||
       ![
         manifest.read,
         manifest.frames,
@@ -120,15 +125,14 @@ export class Store {
   readonly raw: RawIndex[] = []
   readonly levels = new Map<string, LevelIndex[]>()
   #rows: readonly number[] = []
-  /** Each selection of rows a reader asks of, checked against the rows a field records, and its
-   *  places in the order they lie on disk: a window reads many blocks of one selection. */
+  /** Cached per selection, because a window reads many blocks with one selection. */
   readonly #orders = new WeakMap<readonly number[], { rows: number; order: Uint32Array }>()
   #manifest?: Manifest
   #rawBytes = 0
   #levelBytes = 0
   #indexBytes = 0
   #files?: Promise<[FileHandle, FileHandle, FileHandle, FileHandle]>
-  #restoring?: Promise<void>
+  #restoring?: Promise<Resume | undefined>
   constructor(
     readonly folder: string,
     readonly key: string,
@@ -158,7 +162,8 @@ export class Store {
     this.#rows = [...rows]
   }
   #handles(): Promise<[FileHandle, FileHandle, FileHandle, FileHandle]> {
-    return (this.#files ??= (async () => {
+    if (this.#files) return this.#files
+    const opening = (this.#files = (async () => {
       const handles: FileHandle[] = []
       try {
         for (const name of ['raw.bin', 'levels.bin', 'index.jsonl', 'source.csv'])
@@ -166,28 +171,56 @@ export class Store {
         return handles as [FileHandle, FileHandle, FileHandle, FileHandle]
       } catch (error) {
         await Promise.allSettled(handles.map((file) => file.close()))
-        throw error
+        // A file the manifest lists that is missing means the store is lost.
+        throw this.#manifest && missing(error)
+          ? lost('A results store lacks a file it holds.', error)
+          : error
       }
     })())
+    opening.catch(() => {
+      if (this.#files === opening) this.#files = undefined
+    })
+    return opening
   }
-  /** Takes the store as it last said it holds, once each time it is opened: the blocks its index
-   *  lists that far, and nothing written past them, as a read that never wrote down what it kept
-   *  leaves behind. */
-  async restore(): Promise<void> {
-    return (this.#restoring ??= (async () => {
-      const manifest = this.#manifest
-      if (!manifest) return
-      const files = await this.#handles()
-      const sizes = [manifest.rawBytes, manifest.levelBytes, manifest.indexBytes, manifest.read]
-      for (let i = 0; i < files.length; i++) {
-        if ((await files[i]!.stat()).size < sizes[i]!)
-          throw new Error('A committed result store is truncated.')
-      }
-      const bytes = new Uint8Array(manifest.indexBytes)
-      await readAll(files[2], bytes, 0)
-      this.raw.length = 0
-      this.levels.clear()
-      let expected = 0
+  /** Loads the last checkpoint once per open, truncating anything written after it. */
+  restore(): Promise<Resume | undefined> {
+    if (this.#restoring) return this.#restoring
+    const restoring = (this.#restoring = this.#restore())
+    restoring.catch(() => {
+      if (this.#restoring === restoring) this.#restoring = undefined
+    })
+    return restoring
+  }
+  async #restore(): Promise<Resume | undefined> {
+    const manifest = this.#manifest
+    if (!manifest) return undefined
+    const files = await this.#handles()
+    const sizes = [manifest.rawBytes, manifest.levelBytes, manifest.indexBytes, manifest.read]
+    for (let i = 0; i < files.length; i++) {
+      if ((await files[i]!.stat()).size < sizes[i]!)
+        throw lost('A committed result store is truncated.')
+    }
+    let resume: Resume & { read?: unknown; frames?: unknown }
+    try {
+      resume = JSON.parse(await readFile(join(this.folder, 'resume.json'), 'utf8')) as typeof resume
+    } catch (error) {
+      if (error instanceof SyntaxError || missing(error))
+        throw lost('A results store lacks what a read takes it up with.', error)
+      throw error
+    }
+    if (
+      resume.read !== manifest.read ||
+      resume.frames !== manifest.frames ||
+      !Array.isArray(resume.header) ||
+      !Array.isArray(resume.reducers)
+    )
+      throw lost('A results store was only partly written.')
+    const bytes = new Uint8Array(manifest.indexBytes)
+    await readAll(files[2], bytes, 0)
+    this.raw.length = 0
+    this.levels.clear()
+    let expected = 0
+    try {
       for (const line of new TextDecoder().decode(bytes).split('\n')) {
         if (!line) continue
         const index = JSON.parse(line) as RawIndex | LevelIndex
@@ -211,12 +244,15 @@ export class Store {
       }
       if (expected !== manifest.frames)
         throw new Error('Results checkpoint has a different frame count.')
-      // Only bytes beyond the committed watermark are discarded after an interrupted write.
-      for (let i = 0; i < files.length; i++) await files[i]!.truncate(sizes[i])
-      this.#rawBytes = manifest.rawBytes
-      this.#levelBytes = manifest.levelBytes
-      this.#indexBytes = manifest.indexBytes
-    })())
+    } catch (error) {
+      throw lost('A results store is damaged.', error)
+    }
+    // Discard bytes past the checkpoint, left by an interrupted write.
+    for (let i = 0; i < files.length; i++) await files[i]!.truncate(sizes[i])
+    this.#rawBytes = manifest.rawBytes
+    this.#levelBytes = manifest.levelBytes
+    this.#indexBytes = manifest.indexBytes
+    return { header: resume.header, reducers: resume.reducers }
   }
   async #index(index: RawIndex | LevelIndex): Promise<void> {
     const bytes = new TextEncoder().encode(JSON.stringify(index) + '\n')
@@ -283,8 +319,7 @@ export class Store {
       )
         throw new Error('Invalid visualization bucket block.')
       at.set(run.at, 2 * i)
-      // A row's buckets together, as a block of frames keeps a row's frames, so a plot of few
-      // rows reads those rows alone.
+      // Row by row, like raw frames, so a plot of a few rows reads only those rows.
       for (let row = 0; row < rows; row++) {
         values[row * count + i] = run.values[row]!
         values[(rows + row) * count + i] = run.values[rows + row]!
@@ -319,8 +354,7 @@ export class Store {
     await readAll(file, new Uint8Array(at.buffer), index.at + offset * 8)
     return at
   }
-  /** The places of `selected` in the order they lie on disk, once each is checked to be one of a
-   *  field's `rows`. */
+  /** Indexes into `selected` in disk order. */
   #order(selected: readonly number[], rows: number): Uint32Array {
     const known = this.#orders.get(selected)
     if (known?.rows === rows) return known.order
@@ -333,10 +367,8 @@ export class Store {
     this.#orders.set(selected, { rows, order })
     return order
   }
-  /** Reads `count` entries from `offset` of each row `selected` names, out of a plane at `start`
-   *  of `file` that keeps `rows` rows, a row's `span` entries together. Adjacent rows are read
-   *  together, about READ_BYTES at a time, and each entry's rows go into `into` in the order asked
-   *  for, from entry `base` on: a few rows of a wide field read those rows' entries alone. */
+  /** Reads `count` entries of each selected row of a plane of `rows` rows by `span` entries,
+   *  merging adjacent rows into reads of about READ_BYTES. */
   async #plane<T extends Float64Array | Float32Array>(
     file: FileHandle,
     start: number,
@@ -369,7 +401,6 @@ export class Store {
       first = stop
     }
   }
-  /** `count` frames from `offset` of `index`, of the rows `places` names of `field`. */
   async readRaw(
     index: RawIndex,
     field: number,
@@ -392,7 +423,6 @@ export class Store {
     )
     return { first: index.first + offset, at, values }
   }
-  /** `count` buckets from `offset` of `index`, of the rows `places` names of its field. */
   async readLevel(
     index: LevelIndex,
     places: readonly number[],
@@ -405,7 +435,7 @@ export class Store {
     const rows = this.#rows[index.field]!
     const at = new Float64Array(count * 2)
     await readAll(file, new Uint8Array(at.buffer), index.at + offset * 16)
-    // Every bucket's least values, then every one's greatest, as Patch.frames takes them.
+    // Every bucket's minimums, then every bucket's maximums, as Patch.frames expects.
     const values = new Float32Array(places.length * count * 2)
     const greatest = index.values + rows * index.count * values.BYTES_PER_ELEMENT
     await this.#plane(file, index.values, index.count, rows, places, offset, count, values)
@@ -416,9 +446,9 @@ export class Store {
     const files = await this.#handles()
     await writeAll(files[3], bytes, position)
   }
-  /** Writes down what the store holds, as `value` says, once every byte of it is on disk: what a
-   *  later reader of the store takes it to hold. A read asks once, as it ends. */
-  async checkpoint(value: Checkpoint): Promise<void> {
+  /** Commits the store once every file is synced. resume.json goes first, so a manifest that
+   *  disagrees with it marks a partial commit. */
+  async checkpoint({ header, reducers, ...value }: Checkpoint): Promise<void> {
     const files = await this.#handles()
     await Promise.all(files.map((file) => file.sync()))
     const written: Manifest = {
@@ -429,10 +459,16 @@ export class Store {
       levelBytes: this.#levelBytes,
       indexBytes: this.#indexBytes,
     }
-    const draft = join(this.folder, 'manifest.json.draft')
-    await writeFile(draft, JSON.stringify(written), { flush: true })
-    await rename(draft, join(this.folder, 'manifest.json'))
+    const write = async (name: string, content: object) => {
+      const draft = join(this.folder, `${name}.draft`)
+      await writeFile(draft, JSON.stringify(content), { flush: true })
+      await rename(draft, join(this.folder, name))
+    }
+    await write('resume.json', { read: value.read, frames: value.frames, header, reducers })
+    await write('manifest.json', written)
     this.#manifest = written
+    // A later restore while the store is open returns the state just written.
+    this.#restoring = Promise.resolve({ header, reducers })
     await this.owner?.finished(this)
   }
   async close(remove = false): Promise<void> {
@@ -442,18 +478,16 @@ export class Store {
     await files
       ?.then((handles) => Promise.allSettled(handles.map((file) => file.close())))
       .catch(() => {})
-    if (remove) await removed(this.folder)
+    if (remove) await removeFolder(this.folder)
   }
 }
 
 export class Stores {
-  /** The latest store read through of each results file, by its key. */
+  /** The latest committed store of each results file. */
   readonly #latest = new Map<string, Store>()
-  /** The stores of the results files read now, and how many read each. */
+  /** Reader counts. */
   readonly #using = new Map<Store, number>()
-  /** The sweep the stores wait for before any is made or found. */
   #swept: Promise<void> = Promise.resolve()
-  /** This window's own stores. */
   readonly #own: string
 
   constructor(
@@ -464,31 +498,26 @@ export class Stores {
     this.#own = join(this.root, String(owner))
   }
 
-  /** Keeps the latest store read through of each results file `kept` names, of this window's and
-   *  of the windows since gone, whose stores it takes as its own, and removes the rest of those:
-   *  stores never read through, those of files no saved session names, and those a later store
-   *  took the place of. A window still open keeps its own, whatever they hold. Asked as the worker
-   *  starts, before it reads anything. */
+  /** Adopts closed windows' stores and keeps the latest committed store of each file in `kept`,
+   *  removing the rest. Stores of open windows are left alone. */
   sweep(kept: readonly string[]): Promise<void> {
     return (this.#swept = this.#sweep(new Set(kept.map(fileKey))))
   }
 
   async #sweep(named: ReadonlySet<string>): Promise<void> {
     await mkdir(this.#own, { recursive: true })
-    // Stores of another format are no stores of this Studio's.
     const formats = dirname(this.root)
     for (const name of await readdir(formats).catch(() => []))
-      if (name !== FORMAT) await removed(join(formats, name))
+      if (name !== FORMAT) await removeFolder(join(formats, name))
     for (const name of await readdir(this.root).catch(() => [])) {
       const folder = join(this.root, name)
       const window = /^(?:\d+|[\da-f-]{36})$/.test(name) ? name : undefined
       if (folder === this.#own || (window !== undefined && (await alive(window)))) continue
-      // A window gone leaves its stores to the next, moved within one folder, never copied; what
-      // is no window's folder is no store of Studio's now.
+      // A closed window's stores are moved, never copied, into this window's folder.
       if (window !== undefined)
         for (const store of await readdir(folder).catch(() => []))
           await rename(join(folder, store), join(this.#own, store)).catch(() => {})
-      await removed(folder)
+      await removeFolder(folder)
     }
     const names = await readdir(this.#own).catch(() => [])
     const found = await Promise.all(
@@ -512,7 +541,7 @@ export class Stores {
         this.#latest.set(key, new Store(folder, key, manifest, this))
       }
     }
-    await Promise.all(gone.map(removed))
+    await Promise.all(gone.map(removeFolder))
   }
 
   #use(store: Store): Store {
@@ -520,7 +549,6 @@ export class Stores {
     return store
   }
 
-  /** A new store of the results file at `path`, to keep its frames as they are read. */
   async create(path: string): Promise<Store> {
     await this.#swept
     const folder = join(this.#own, randomUUID())
@@ -528,10 +556,8 @@ export class Stores {
     return this.#use(new Store(folder, fileKey(path), undefined, this))
   }
 
-  /** The store read through of the results file at `path`, which `now` stamps, matched against a
-   *  case of `fingerprint`: the latest, when it read that same file as it stands now. One whose
-   *  read stopped short is read on by one reader at a time, so while one reads it on, none is
-   *  found. */
+  /** The latest store still valid for the file's stamp `now` and the case `fingerprint`. A partial
+   *  store goes to one reader at a time. */
   async find(path: string, now: Stamp, fingerprint: string): Promise<Store | undefined> {
     await this.#swept
     const store = this.#latest.get(fileKey(path))
@@ -548,23 +574,20 @@ export class Stores {
     return this.#use(store)
   }
 
-  /** A reader of `store` found it would not read: it is let go of, and goes, so the file it holds
-   *  is read again from its CSV. */
   async discard(store: Store): Promise<void> {
     if (this.#latest.get(store.key) === store) this.#latest.delete(store.key)
     await this.release(store)
   }
 
-  /** A read of `store` ended, and wrote down what it holds: it is the latest of its results file,
-   *  which the one before gives way to. */
+  /** Marks a committed store as its file's latest, and removes the one it replaces. */
   async finished(store: Store): Promise<void> {
     const before = this.#latest.get(store.key)
     this.#latest.set(store.key, store)
     if (before && before !== store && !this.#using.has(before)) await before.close(true)
   }
 
-  /** A reader of `store` lets go of it. Once none reads it, it closes: and it goes, never read
-   *  through, or once a later store took its place. */
+  /** Releases one reader. With none left the store closes, and is removed if uncommitted or
+   *  superseded. */
   async release(store: Store): Promise<void> {
     const readers = (this.#using.get(store) ?? 1) - 1
     if (readers > 0) {

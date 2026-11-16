@@ -1,15 +1,13 @@
-/** The case's elements as the views find them and offer them to VS Code's native menu. */
-
 import type { Entity } from '../shared/document.js'
 import { menuContext, type Target } from '../shared/menus.js'
 import type { Plot, ViewState } from '../shared/messages.js'
 
-/** Opens VS Code's menu for `elements` at `point`. Latkit picks asynchronously, so a synthetic
- *  event on a temporary node carries the exact hit's context. */
+/** Opens VS Code's menu for `element` at `point`. latkit picks asynchronously, so a synthetic
+ *  event on a temporary node carries the hit's context. */
 export function nativeMenu(
   canvas: HTMLCanvasElement,
   point: readonly [number, number],
-  elements: Entity[],
+  element: Entity | undefined,
   state: ViewState,
   origin: Target['origin'],
   plot?: Plot,
@@ -23,8 +21,7 @@ export function nativeMenu(
         uri: state.summary.uri,
         version: state.summary.version,
         origin,
-        element: elements[0],
-        items: elements,
+        ...(element && { element }),
         ...(plot && { field: { table: plot.table, field: plot.field }, plot }),
       },
       state.mappings,
@@ -32,7 +29,7 @@ export function nativeMenu(
   )
   document.body.append(node)
   const bounds = canvas.getBoundingClientRect()
-  // Cancelable as the browser's own is, so code that handles it first can keep VS Code's away.
+  // Cancelable like the browser's own, so an earlier handler can prevent VS Code's menu.
   node.dispatchEvent(
     new MouseEvent('contextmenu', {
       bubbles: true,

@@ -5,13 +5,11 @@ import { advance, type ClockState, IDLE } from '../shared/transport.js'
 import { bridge } from './bridge.js'
 
 export interface Clock {
-  /** The clock as of its last change. */
   readonly state: ClockState
-  /** The current playhead. */
   now(): number
-  /** Moves the playhead here at once, and in every view once the extension relays it. */
+  /** Moves the playhead here at once, and in other views once the extension relays it. */
   seek(t: number): void
-  /** Any other transport action; it takes effect when the extension answers. */
+  /** Any other transport action; it applies when the extension replies. */
   act(action: Exclude<TransportAction, { action: 'seek' }>): void
   stop(): void
 }
@@ -21,12 +19,11 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
   let state: ClockState = IDLE
   /** `performance.now()` when `state` arrived. */
   let since = 0
-  /** This view's latest action in the showing it counts them in, which the extension counts alike
-   *  from naught as the view shows anew; its answers carry it back. */
+  /** The sequence number of this view's latest action. It restarts at zero each generation, as the
+   *  extension's count does, and replies echo it. */
   let seq = 0
-  let counted = bridge.of.showing
-  /** The seek to send at the next frame, of the showing it was made in. */
-  let sending = 0
+  let generation = bridge.of.generation
+  let seekFrame = 0
   let failed = false
   const draw = (t: number) => {
     try {
@@ -38,21 +35,21 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     }
   }
   const now = () => advance(state, performance.now() - since).t
-  const set = (next: ClockState) => {
+  const apply = (next: ClockState) => {
     state = next
     since = performance.now()
     draw(next.t)
   }
   const off = bridge.on((message) => {
-    if (message.kind === 'shown') return
-    // A showing begins with its state, and counts its changes to the clock from naught.
-    if (message.kind === 'state' && message.of.showing !== counted) {
-      counted = message.of.showing
+    if (message.kind === 'visible') return
+    if (message.kind === 'state' && message.of.generation !== generation) {
+      generation = message.of.generation
       seq = 0
     }
-    // Skip a clock of another showing, and answers to actions this view has since superseded.
-    if (message.kind !== 'clock' || message.of.showing !== counted || message.seq < seq) return
-    set(message.clock)
+    // Ignore clocks of another generation, and replies to actions this view has since superseded.
+    if (message.kind !== 'clock' || message.of.generation !== generation || message.seq < seq)
+      return
+    apply(message.clock)
     changed()
   })
   return {
@@ -62,13 +59,13 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     now,
     seek(t) {
       if (state.status === 'idle') return
-      set({ ...state, t })
+      apply({ ...state, t })
       seq++
-      // One message per frame, carrying wherever the playhead has reached, of the showing the seek
-      // was made in: a showing past drops it.
+      // At most one message per frame, with the latest playhead, in the envelope the seek was made
+      // in: the extension drops it if that generation has passed.
       const from = bridge.of
-      sending ||= requestAnimationFrame(() => {
-        sending = 0
+      seekFrame ||= requestAnimationFrame(() => {
+        seekFrame = 0
         bridge.send({ kind: 'transport', seq, action: 'seek', value: state.t }, from)
       })
     },
@@ -77,7 +74,7 @@ export function createClock(paint: (t: number) => void, changed: () => void = ()
     },
     stop() {
       off()
-      cancelAnimationFrame(sending)
+      cancelAnimationFrame(seekFrame)
     },
   }
 }

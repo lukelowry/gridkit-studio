@@ -1,19 +1,20 @@
-/** The VS Code theme as the renderers read it, through the CSS tokens. */
+/** The VS Code theme as latkit reads it, through the CSS tokens. */
 
 import type { Theme as NativeTheme } from 'latkit'
 
 import type { SettingsReader } from '../../shared/settings.js'
 
-/** Each renderer color's token, and its color when the theme leaves the token out. */
+/** Each color's CSS token, and a fallback for when the theme leaves it unset. */
 const PALETTE = {
   background: ['--color-bg', '#1e1e1e'],
-  /** The editor's background, which the Network sits on wherever it draws, a video's
-   *  too, though the page drawing them sits elsewhere. */
+  /** The Network's background everywhere, videos included, whatever surface the page is on. */
   editor: ['--vscode-editor-background', '#1e1e1e'],
   surface2: ['--color-surface-2', '#252526'],
   text1: ['--color-text-1', '#cccccc'],
   text2: ['--color-text-2', '#aaaaaa'],
   border: ['--color-border', '#444444'],
+  /** Faint enough for grid lines in every theme. */
+  guide: ['--vscode-editorIndentGuide-background', '#404040'],
   focus: ['--color-focus-ring', '#007fd4'],
   network: ['--color-network', '#cccccc'],
   primaryText: ['--color-primary-text', '#3794ff'],
@@ -21,8 +22,7 @@ const PALETTE = {
 
 export type Palette = Readonly<Record<keyof typeof PALETTE, string>>
 
-/** The theme's colors, and the workbench's font family. */
-export interface Theme {
+interface Theme {
   readonly palette: Palette
   readonly font: string
 }
@@ -31,7 +31,6 @@ let current: Theme | undefined
 const listeners = new Set<() => void>()
 let observer: MutationObserver | undefined
 
-/** The current theme, read from the tokens once each time it changes. */
 export function theme(): Theme {
   observe()
   if (current) return current
@@ -63,28 +62,26 @@ function changed() {
   for (const listener of listeners) listener()
 }
 
-/** VS Code colors feed native theme properties directly. */
 export function nativeTheme(settings: SettingsReader, kind: 'network' | 'monitor'): NativeTheme {
   const { palette, font } = theme()
   const classes = document.body.classList
+  const highContrast =
+    classes.contains('vscode-high-contrast') || classes.contains('vscode-high-contrast-light')
   return {
     base:
       classes.contains('vscode-light') || classes.contains('vscode-high-contrast-light')
         ? 'light'
         : 'dark',
-    // A high contrast theme keeps colormap colors at WCAG's enhanced contrast with the background,
-    // and a plot's traces keep its minimum for graphics in any theme.
-    ...(classes.contains('vscode-high-contrast') || classes.contains('vscode-high-contrast-light')
-      ? { contrast: 7 }
-      : kind === 'monitor' && { contrast: 3 }),
+    // WCAG contrast against the background: enhanced (7:1) in high contrast themes, and the 3:1
+    // minimum for graphics in plots.
+    ...(highContrast ? { contrast: 7 } : kind === 'monitor' && { contrast: 3 }),
     background: kind === 'monitor' ? palette.background : palette.editor,
-    grid: palette.border,
-    // Labels, ticks and titles in the workbench's font, as the page around them.
+    // High contrast borders are too loud for a grid behind the case.
+    grid: highContrast ? palette.guide : palette.border,
     text: { color: palette.text1, ...(font && { font }) },
     focus: { selected: palette.focus, hover: palette.primaryText },
     vertex: { color: palette.network },
-    // Native endpoint blending follows static and sampled vertex colors. A mark's explicit
-    // edge-color mapping still takes precedence, including in exported network scenes.
+    // null blends each edge from its endpoints' vertex colors; an edge color mapping overrides it.
     edge: { color: null },
     line: { color: palette.primaryText },
     earth: {

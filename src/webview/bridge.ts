@@ -1,5 +1,4 @@
-/** A view's side of its channel to the extension: the state it is sent, what it says back, the
- *  requests it makes, and the messages it hears. */
+/** A view's side of the channel to the extension. */
 
 import { problemOf, quiet, superseded } from '../shared/errors.js'
 import type { FromView, Of, ToView, ViewApi, ViewMessage, ViewState } from '../shared/messages.js'
@@ -12,53 +11,48 @@ declare function acquireVsCodeApi(): {
   setState(value: unknown): void
 }
 
-/** What a page hears: the extension's messages, with the state whole in place of its changes. */
-export type Heard =
+/** A message from the extension, with state changes applied to give the full state. */
+export type Received =
   Exclude<ToView, { kind: 'state' | 'reply' }> | { kind: 'state'; of: Of; state: ViewState }
 
 const api = acquireVsCodeApi()
-const listeners = new Set<(message: Heard) => void>()
-/** The showing of the case the view shows, as the last state it was sent says: what the view says
- *  and asks is of it, and what the extension says of another is no longer the view's. */
-let of: Of = { uri: undefined, showing: 0 }
-/** The state of that showing, as the extension's changes leave it. */
+const listeners = new Set<(message: Received) => void>()
+/** The envelope of the last state received. Outgoing messages carry it, and incoming ones of
+ *  another generation are dropped. */
+let of: Of = { uri: undefined, generation: 0 }
 let state: ViewState = {}
 const extension = new Caller<ViewApi>((message) =>
   api.postMessage({ ...message, of } satisfies FromView),
 )
 
 export const bridge = {
-  /** The showing the view shows now. An action made now and said later, as a seek is at the next
-   *  frame, is said of it still. */
+  /** The current envelope. A message sent later, such as a seek on the next frame, can pass the
+   *  envelope it was made in. */
   get of(): Of {
     return of
   },
-  /** Says `message` of the showing `from`: the one the view shows now, unless said otherwise. */
   send(message: ViewMessage, from: Of = of) {
     api.postMessage({ ...message, of: from } satisfies FromView)
   },
-  /** Tells the extension the page has loaded, and listens. */
   ready() {
     api.postMessage({ kind: 'ready' } satisfies FromView)
   },
-  on(listener: (message: Heard) => void) {
+  on(listener: (message: Received) => void) {
     listeners.add(listener)
     return () => listeners.delete(listener)
   },
-  /** What the page kept for itself, which outlasts its being hidden, or `fallback`. */
+  /** The page's saved webview state, which survives hiding, or `fallback`. */
   state<T>(fallback: T): T {
     return (api.getState() as T | undefined) ?? fallback
   },
   save(value: unknown) {
     api.setState(value)
   },
-  /** Tell the user why something failed, in the one place Studio does: a notification from the
-   *  extension. A failure that is none says nothing. */
+  /** Shows `reason` as an extension notification, unless it is quiet, such as a cancellation. */
   report(reason: unknown, context?: unknown) {
     if (quiet(reason)) return
     api.postMessage({ kind: 'error', problem: problemOf(reason), context, of } satisfies FromView)
   },
-  /** Calls `method` in the extension, as long as it takes unless `signal` lets go of it. */
   request<K extends keyof ViewApi>(
     method: K,
     input: ViewApi[K]['input'],
@@ -71,33 +65,33 @@ export const bridge = {
 window.addEventListener('message', (event: MessageEvent<ToView>) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
-  let heard: Heard
-  if (message.kind === 'shown') {
-    document.body.dataset.shown = String(message.shown)
-    heard = message
+  let received: Received
+  if (message.kind === 'visible') {
+    document.body.dataset.visible = String(message.visible)
+    received = message
   } else if (message.kind === 'state') {
-    if (message.of.showing !== of.showing) {
-      // A showing begins with its state: what the view held and asked of the one before is past.
+    if (message.of.generation !== of.generation) {
+      // A new generation starts from its own state; requests of the previous one fail.
       of = message.of
       state = {}
       extension.fail(superseded())
     }
     state = applied(state, message.changed)
     document.body.dataset.uri = state.uri ?? ''
-    heard = { kind: 'state', of, state }
-  } else if (message.of?.showing !== of.showing) return
+    received = { kind: 'state', of, state }
+  } else if (message.of?.generation !== of.generation) return
   else if (message.kind === 'reply') return extension.settle(message)
-  else heard = message
-  // One listener's failure leaves the others their message.
+  else received = message
+  // One listener's failure must not keep the message from the others.
   for (const listener of listeners)
     try {
-      listener(heard)
+      listener(received)
     } catch (error) {
       bridge.report(error)
     }
 })
 window.addEventListener('error', (event) => {
-  // A resize the browser put off to the next frame is no failure, and says nothing.
+  // Benign: the browser deferred a resize to the next frame.
   if (!event.error && /^ResizeObserver loop/.test(event.message)) return
   bridge.report(event.error ?? event.message)
 })

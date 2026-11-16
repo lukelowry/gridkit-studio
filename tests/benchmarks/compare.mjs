@@ -1,28 +1,20 @@
 /**
- * Compares runs of the benchmarks in views.ts, with a failing gate for qualifying timing regressions.
- * Work counters are compared only within the same renderer version.
- *
+ * Compares benchmark runs from views.ts and fails on timing regressions:
  *   node tests/benchmarks/compare.mjs base.json head.json
  *   node tests/benchmarks/compare.mjs base-1.json base-2.json -- head-1.json head-2.json
  *   node tests/benchmarks/compare.mjs head.json
- *
- * Each side may be several rounds, best alternated with the other's. A case's round in which a
- * canary took more than 15% longer than in its quickest round ran on a busy machine, and is left out: GridKit's own
- * simulation, and a fixed piece of work timed through the case. Each scenario is then the median of
- * the rounds' medians. Runs on different GridKit builds are not compared.
- *
- * It reports scenarios slower than the base, work that changed, and time per bus that grows faster
- * than linearly across the cases.
+ * Rounds whose canaries ran over 15% slower than their quickest are skipped, and each scenario is
+ * the median of round medians. Work counters are compared only on the same renderer, and timings
+ * only on the same GridKit build. Also reports superlinear time per bus.
  */
 import { readFileSync } from 'node:fs'
 
 const SLOWER = 1.25
 const SLACK_MS = 5
-/** How much longer than in its quickest round a case's canary may take before its round is left
- *  out: one round in 1.4 slow made a case read a third slower. */
+/** Canary slowdown, relative to its quickest round, past which a case's round is skipped. */
 const BUSY = 1.15
-// Fixed costs make the smallest case dear per bus; quadratic work would still grow 250 times from
-// 39 buses to 10,000.
+// Fixed costs inflate the smallest case per bus; quadratic work would still grow 250x from 39 buses
+// to 10,000.
 const SUPERLINEAR = 3
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
 const median = (values) => {
@@ -31,19 +23,17 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
 }
 const sizeOf = (name) => /(\d+) buses/.exec(name)?.[1]
-/** The scenarios that time the machine, not Studio, in a case of `size` buses. */
+/** Scenarios that measure the machine rather than Studio. */
 const canaries = (size) => [
   `simulation ${size} buses > simulate 1 s`,
   `machine ${size} buses > canary`,
 ]
-/** A canary's time in `run`: its slowest sample, as one slow stretch spoils the case. */
+/** A canary's slowest sample, since one slow stretch affects the whole case. */
 const canary = (run, name) => {
   const samples = run.timings[name]
   return samples?.length ? Math.max(...samples) : undefined
 }
 
-/** How long each canary took in its quickest round, over every round of both sides: the machine's
- *  pace when nothing else ran, which no one side's busy rounds set. */
 function quickestOf(runs) {
   const quickest = new Map()
   for (const run of runs)
@@ -59,23 +49,20 @@ function quickestOf(runs) {
   return quickest
 }
 
-/** Whether the case of `size` buses ran on a busy machine in `run`: one of its canaries took longer
- *  than its quickest by more than BUSY allows. */
 const busy = (run, size, quickest) =>
   canaries(size).some((name) => canary(run, name) > BUSY * quickest.get(name))
 
-/** The rounds' timings as one run: each scenario the median of its rounds' medians, over the rounds
- *  in which its case's canaries kept near their `quickest` time. The lowest sample of every round is kept
- *  too, so a run is slower only when both its best and its typical times are. */
+/** Merges rounds, skipping busy ones: each scenario's median of medians, plus its lowest sample so
+ *  a run counts as slower only when both its best and typical times are. */
 function pooled(runs, quickest) {
   const medians = {}
   const lowest = {}
-  let left = 0
+  let skipped = 0
   for (const run of runs)
     for (const [name, samples] of Object.entries(run.timings)) {
       const size = sizeOf(name)
       if (size && busy(run, size, quickest)) {
-        left++
+        skipped++
         continue
       }
       ;(medians[name] ??= []).push(median(samples))
@@ -83,7 +70,7 @@ function pooled(runs, quickest) {
     }
   return {
     gridkit: runs.map((run) => run.gridkit),
-    left,
+    skipped,
     work: runs.at(-1).work,
     timings: Object.fromEntries(
       Object.entries(medians).map(([name, values]) => [
@@ -111,8 +98,8 @@ for (const [side, run] of [
   ['base', base],
   ['head', head],
 ])
-  if (run?.left)
-    lines.push(`${side}: ${run.left} timings left out, taken while the machine ran slow`)
+  if (run?.skipped)
+    lines.push(`${side}: ${run.skipped} timings left out, taken while the machine ran slow`)
 
 const builds = new Set([...(base?.gridkit ?? []), ...head.gridkit].filter(Boolean))
 if (builds.size > 1) {
@@ -147,7 +134,7 @@ if (base && baseRuns.at(-1).renderer === headRuns.at(-1).renderer)
 
 const scaled = new Map()
 for (const [name, { median: time }] of Object.entries(head.timings)) {
-  // Groups are named `<area> <size> buses`, such as `network 2000 buses` or `playback 39 buses`.
+  // Names look like `network 2000 buses > select`.
   const match = /^(.*?) (\d+) buses > (.*)$/.exec(name)
   if (!match) continue
   const key = `${match[1]} > ${match[3]}`

@@ -1,5 +1,4 @@
-/** Workspace Trust, in a fresh profile with an untrusted folder: the case opens for inspection,
- *  and a run of its solver file is refused. */
+/** Workspace Trust in a fresh profile with an untrusted folder: cases open, runs are refused. */
 
 import assert from 'node:assert/strict'
 
@@ -12,7 +11,7 @@ export async function run(): Promise<void> {
   const { studio } = await extension().activate()
   const session = await studio.open(vscode.Uri.joinPath(folder(), 'IEEE39.case.json').toString())
   assert.ok(studio.state(session.uri).summary, 'Inspection remains available without trust')
-  // A command whose enablement fails runs anyway when called; the run itself refuses.
+  // Enablement does not stop a direct call, so the run itself must refuse.
   const errors = studio.reporter.errors.length
   await vscode.commands.executeCommand(
     'gridkitStudio.runSimulation',

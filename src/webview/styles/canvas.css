@@ -1,5 +1,4 @@
-/* A renderer's canvas filling its host, with a start fallback and the Network's toolbar. The
-   scene itself credits the Network's map, as its tiles' license asks. */
+/* A canvas filling its host, with a loading fallback and the Network's toolbar. */
 .canvas-host {
   position: relative;
   inline-size: 100%;
@@ -16,7 +15,6 @@
   inset: 0;
 }
 
-/* The Network's projections and rotation, over its top right. */
 .toolbar {
   position: absolute;
   z-index: 1;

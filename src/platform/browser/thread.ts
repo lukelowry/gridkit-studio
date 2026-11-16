@@ -94,18 +94,18 @@ export class Worker {
     ])
   }
   #emit(name: string, value: unknown) {
-    for (const hear of [...(this.#listeners.get(name) ?? [])]) hear(value)
+    for (const listener of [...(this.#listeners.get(name) ?? [])]) listener(value)
   }
-  on(name: string, hear: (value: any) => void) {
+  on(name: string, listener: (value: any) => void) {
     let listeners = this.#listeners.get(name)
     if (!listeners) this.#listeners.set(name, (listeners = new Set()))
-    listeners.add(hear)
+    listeners.add(listener)
     return this
   }
-  once(name: string, hear: (value: any) => void) {
+  once(name: string, listener: (value: any) => void) {
     const once = (value: unknown) => {
       this.#listeners.get(name)?.delete(once)
-      hear(value)
+      listener(value)
     }
     return this.on(name, once)
   }

@@ -1,6 +1,3 @@
-/** The catalog of GridKit's classes the Catalog setting names, which the worker reads in place of
- *  the bundled one as it starts. */
-
 import * as vscode from 'vscode'
 
 import { catalogOf } from '../gridkit/index.js'
@@ -10,9 +7,9 @@ import { message } from '../shared/errors.js'
 import { setting } from './settings.js'
 import { reference } from './uris.js'
 
-/** The catalog the setting names, checked as the worker reads it: none when it names none, or when
- *  the file does not read, which `report` hears. A relative path resolves against the first
- *  workspace folder. */
+/** The class catalog named by the Catalog setting, which replaces the bundled one when the worker
+ *  starts. Undefined when unset or unreadable (reported to `report`). A relative path resolves
+ *  against the first workspace folder. */
 export async function catalogFile(report: (error: unknown) => void): Promise<unknown> {
   const path = setting('catalog').trim()
   if (!path) return undefined

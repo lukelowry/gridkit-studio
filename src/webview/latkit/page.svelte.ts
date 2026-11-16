@@ -1,7 +1,6 @@
-/** What every page of latkit views keeps: whether VS Code shows it, the theme's version, and the GPU
- *  its views draw with, opened once the page is in sight and made anew as Reload View asks. */
+/** Per-page latkit state: visibility, the theme version, and the GPU. */
 
-import type { Gpu } from 'latkit'
+import type { Gpu, View } from 'latkit'
 import { tick, untrack } from 'svelte'
 
 import { quiet } from '../../shared/errors.js'
@@ -10,48 +9,44 @@ import { openGpu, startOver } from './load.js'
 import { watchTheme } from './theme.js'
 
 export class LatkitPage {
-  /** The GPU the page's views draw with, once open. */
   gpu = $state.raw<Gpu>()
-  /** Whether VS Code shows the page. */
   visible = $state(true)
-  /** Whether the window the page is in is hidden. */
   hidden = $state(document.hidden)
-  /** Counts the theme's changes, which every scene of the page reads. */
+  /** Incremented on each theme change; every scene of the page reads it. */
   themeVersion = $state(0)
-  /** Whether the page is in sight: its views draw only then. */
   readonly active = $derived(this.visible && !this.hidden)
 
   readonly #report: (error: unknown) => void
-  readonly #stop: Array<() => unknown>
+  readonly #cleanup: Array<() => unknown>
   #generation = 0
   #opening = false
   #closed = false
+  #unfollow?: () => void
 
-  /** A page whose failures `report` says, made as its component is. */
+  /** Construct during component initialization, since it creates an effect. */
   constructor(report: (error: unknown) => void) {
     this.#report = report
     const visibility = () => (this.hidden = document.hidden)
     document.addEventListener('visibilitychange', visibility)
-    this.#stop = [
+    this.#cleanup = [
       () => document.removeEventListener('visibilitychange', visibility),
       bridge.on((message) => {
-        if (message.kind === 'shown') this.visible = message.shown
+        if (message.kind === 'visible') this.visible = message.visible
       }),
       watchTheme(() => this.themeVersion++),
     ]
-    // A GPU that did not open is asked for again as the page comes back into sight.
+    // Retry a GPU that failed to open whenever the page becomes visible.
     $effect(() => {
       if (this.active && !this.gpu) untrack(() => void (this.#opening || this.open()))
     })
   }
 
-  /** Says `error`, unless it is no failure, or latkit stopped and the page starts over for it. */
+  /** Reports `error`, unless it is quiet or the page reloads for it. */
   readonly fail = (error: unknown): void => {
     if (!quiet(error) && !startOver(error)) this.#report(error)
   }
 
-  /** Opens a GPU in place of the one open, which goes once the views drawing with it have gone with
-   *  the markup that shows them: as the page first comes into sight, and as Reload View asks. */
+  /** Replaces the GPU. The old one is destroyed after a tick, once the views using it unmount. */
   async open(): Promise<void> {
     const generation = ++this.#generation
     this.#opening = true
@@ -60,9 +55,9 @@ export class LatkitPage {
     try {
       await tick()
       previous?.destroy()
-      const made = await openGpu()
-      if (this.#closed || generation !== this.#generation) return made.destroy()
-      this.gpu = made
+      const opened = await openGpu()
+      if (this.#closed || generation !== this.#generation) return opened.destroy()
+      this.gpu = opened
     } catch (error) {
       if (generation === this.#generation) this.fail(error)
     } finally {
@@ -70,11 +65,24 @@ export class LatkitPage {
     }
   }
 
-  /** Lets go of everything the page holds, as it goes. */
+  /** While `playing` and active, sets `views()` to `now()` on every GPU frame. Call again whenever
+   *  any of these may have changed. */
+  follow(playing: boolean, views: () => Iterable<View>, now: () => number): void {
+    this.#unfollow?.()
+    this.#unfollow = undefined
+    const { gpu } = this
+    if (!gpu || !this.active || !playing) return
+    this.#unfollow = gpu.on('frame', () => {
+      const at = now()
+      for (const view of views()) view.at = at
+    })
+  }
+
   destroy(): void {
     this.#closed = true
     this.#generation++
-    for (const stop of this.#stop) stop()
+    this.#unfollow?.()
+    for (const cleanup of this.#cleanup) cleanup()
     this.gpu?.destroy()
   }
 }

@@ -1,14 +1,10 @@
 /** Icon glyphs on a 16-unit grid, drawn with one shared stroke. */
 
-/** Path data, or a circle as `[cx, cy, r]`. */
 type Shape = string | readonly [cx: number, cy: number, r: number]
 
 const GLYPHS = {
   close: ['M4 4l8 8M12 4l-8 8'],
-  chevron: ['M4 6.5 8 10.5 12 6.5'],
-  check: ['m3 8 3 3 7-7'],
 
-  // Network view controls.
   'projection-flat': ['M2.5 4.5h11v7h-11z', 'M5.25 4.5v7M10.75 4.5v7M2.5 8h11'],
   'projection-tilt': ['M5.5 4.5h5l3 7h-11z', 'M8 4.5v7M4 8h8'],
   'projection-globe': [
@@ -25,7 +21,7 @@ const GLYPHS = {
 
 export type IconName = keyof typeof GLYPHS
 
-/** The glyph as SVG markup, hidden from assistive technology: its control carries the name. */
+/** SVG markup, hidden from assistive technology since its control carries the name. */
 export function icon(name: IconName): string {
   const shapes = GLYPHS[name]
     .map((shape) =>

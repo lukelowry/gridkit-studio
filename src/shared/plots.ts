@@ -1,4 +1,4 @@
-/** The Monitor's plots: which the results on show can draw, and what each is called. */
+/** Monitor plot helpers: which plots the shown results can draw, and their names. */
 
 import {
   type CaseDefinition,
@@ -10,19 +10,17 @@ import {
 import type { Plot } from './messages.js'
 import type { Results } from './simulation.js'
 
-/** Whether `value` names a plot: a field of a type. */
+/** Whether `value` is a plot: a type and field name. */
 export const isPlot = (value: unknown): value is Plot =>
   !!value &&
   typeof value === 'object' &&
   typeof (value as Plot).table === 'string' &&
   typeof (value as Plot).field === 'string'
 
-/** Whether `a` and `b` plot the same. */
 export const samePlot = (a: Plot, b: Plot): boolean =>
   a.table === b.table && a.field === b.field && a.id === b.id
 
-/** `plot`'s field of the element `id`, or of every element with none, over the values `range`, or
- *  fitting the values it shows with none. */
+/** `plot`'s field for element `id` (or every element) over `range` (or fitted to its values). */
 export const plotWith = ({ table, field }: Plot, id: Plot['id'], range: Plot['range']): Plot => ({
   table,
   field,
@@ -30,20 +28,20 @@ export const plotWith = ({ table, field }: Plot, id: Plot['id'], range: Plot['ra
   ...(range && { range: [range[0], range[1]] as const }),
 })
 
-/** Whether `results` hold the field `plot` draws. */
-export const holdsPlot = (
+/** Whether `results` contain the field `plot` draws. */
+export const isRecorded = (
   results: Pick<Results, 'outputs'> | undefined,
   { table, field }: Field,
 ): boolean => !!results?.outputs.some((output) => output.table === table && output.field === field)
 
-/** The plots `results` can draw: those of fields they hold, else their first field. */
+/** The plots `results` can draw, or their first field when none can. */
 export function plotsFor(results: Pick<Results, 'outputs'>, plots: readonly Plot[]): Plot[] {
-  const kept = plots.filter((plot) => holdsPlot(results, plot))
+  const kept = plots.filter((plot) => isRecorded(results, plot))
   const first = results.outputs[0]
   return kept.length || !first ? kept : [{ table: first.table, field: first.field }]
 }
 
-/** A plot's name: its type, the element when it plots one, and its field, as "Bus 16 · Va [rad]". */
+/** A plot's name: type, element if any, and field, as in "Bus 16 · Va [rad]". */
 export function plotName(document: CaseDefinition | undefined, plot: Plot): string {
   if (!document) return plot.field
   const element = plot.id === undefined ? '' : ' ' + String(plot.id)

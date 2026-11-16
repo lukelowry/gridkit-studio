@@ -17,7 +17,7 @@
     viewsOf,
   } from './video.js'
 
-  let view = $state.raw<ViewState>({})
+  let viewState = $state.raw<ViewState>({})
   let rate = $state(1)
   let settings = $state.raw<VideoSettings>({
     ...DEFAULTS,
@@ -29,30 +29,37 @@
   let stop: AbortController | undefined
   let cancelled = false
   const busy = $derived(status === 'running')
-  const views = $derived(viewsOf(view))
-  const times = $derived(videoTimes(view))
+  const views = $derived(viewsOf(viewState))
+  const times = $derived(videoTimes(viewState))
   const job = $derived(times && { ...settings, timeRange: times, rate })
-  const ready = $derived(exportable(job, view))
+  const ready = $derived(exportable(job, viewState))
   const percent = $derived(
     progress ? Math.floor((100 * progress.frames) / Math.max(1, progress.total)) : 0,
   )
   $effect(() => bridge.save({ settings }))
   const change = (next: Partial<VideoSettings>) => (settings = { ...settings, ...next })
-  function toggle(shown: VideoView, on: boolean) {
+  function toggle(videoView: VideoView, on: boolean) {
     change({
-      views: on ? [...settings.views, shown] : settings.views.filter((item) => item !== shown),
+      views: on
+        ? [...settings.views, videoView]
+        : settings.views.filter((item) => item !== videoView),
     })
   }
   async function start() {
     const chosen = job
-    if (busy || !exportable(chosen, view)) return
+    if (busy || !exportable(chosen, viewState)) return
     const controller = (stop = new AbortController())
     status = 'running'
     cancelled = false
     progress = null
     bridge.send({ kind: 'busy', busy: true })
     try {
-      const path = await renderVideo(chosen, view, controller.signal, (value) => (progress = value))
+      const path = await renderVideo(
+        chosen,
+        viewState,
+        controller.signal,
+        (value) => (progress = value),
+      )
       saved = path ?? ''
       status = path ? 'done' : 'idle'
     } catch (error) {
@@ -70,10 +77,10 @@
         return
       }
       if (message.kind !== 'state') return
-      view = message.state
-      const offered = viewsOf(view).map(({ value }) => value)
-      if (view.summary && settings.views.some((shown) => !offered.includes(shown)))
-        change({ views: settings.views.filter((shown) => offered.includes(shown)) })
+      viewState = message.state
+      const offered = viewsOf(viewState).map(({ value }) => value)
+      if (viewState.summary && settings.views.some((videoView) => !offered.includes(videoView)))
+        change({ views: settings.views.filter((videoView) => offered.includes(videoView)) })
     })
     const hooks = window as Window & { gridkitExport?: () => unknown }
     hooks.gridkitExport = () => ({ status, progress })
@@ -86,8 +93,9 @@
   })
 </script>
 
-<!-- With no case open there is nothing to export. -->
-{#if view.uri}
+{#if !viewState.uri}
+  <div class="c-empty"><p class="c-empty__text">Open a GridKit case.</p></div>
+{:else}
   <form
     class="export c-settings"
     data-testid="video-export"
@@ -98,11 +106,11 @@
   >
     <fieldset disabled={busy} class="export__fields">
       <Section label="Views">
-        {#each views as shown (shown.value)}
+        {#each views as option (option.value)}
           <Switch
-            label={shown.label}
+            label={option.label}
             bind:checked={
-              () => settings.views.includes(shown.value), (on) => toggle(shown.value, on)
+              () => settings.views.includes(option.value), (on) => toggle(option.value, on)
             }
           />
         {/each}
@@ -121,7 +129,7 @@
           }
         />
       </Section>
-      <!-- The Monitor's time window and the playback speed choose these, as they do what plays. -->
+      <!-- The Monitor's time window and the playback speed set the video's span and length. -->
       {#if times}
         <Section label="Time">
           <p class="c-note" data-testid="video-time">
@@ -181,11 +189,11 @@
           disabled={busy || !ready}
           data-testid="video-start"
         >
-          Export video
+          Export Video
         </button>
         {#if busy}
           <button
-            class="c-btn"
+            class="c-btn c-btn--secondary"
             type="button"
             onclick={() => {
               cancelled = true
@@ -224,10 +232,6 @@
     min-inline-size: 0;
   }
 
-  .export__fields:disabled {
-    opacity: 0.7;
-  }
-
   .export__footer {
     margin-block-start: auto;
     padding: var(--spacing-md) var(--spacing-sm);
@@ -253,6 +257,6 @@
   progress {
     inline-size: 100%;
     block-size: 0.4rem;
-    accent-color: var(--color-primary-text);
+    accent-color: var(--vscode-progressBar-background, var(--color-primary-text));
   }
 </style>

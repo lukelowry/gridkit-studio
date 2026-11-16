@@ -3,10 +3,13 @@ import * as vscode from 'vscode'
 import { nonce } from '../platform/crypto.js'
 import { open } from '../platform/files.js'
 import { basename } from '../platform/path.js'
+import { EXTENSION } from '../shared/ids.js'
 
-/** Transfer one chunk at a time to a download backed by the webview's browser storage. */
+/** Downloads a file in a browser host by streaming it in chunks to a webview. Closing the webview
+ *  cancels it. */
 export async function download(path: string, name = basename(path)): Promise<void> {
-  const extension = vscode.extensions.getExtension('lukelowery.gridkit-studio')!
+  const extension = vscode.extensions.getExtension(EXTENSION)
+  if (!extension) throw new Error('GridKit Studio is not installed.')
   const root = vscode.Uri.joinPath(extension.extensionUri, 'dist/webview')
   const panel = vscode.window.createWebviewPanel(
     'gridkitStudio.download',
@@ -25,7 +28,6 @@ export async function download(path: string, name = basename(path)): Promise<voi
   const messages = panel.webview.onDidReceiveMessage((message: { error?: string }) =>
     message.error ? reject(new Error(message.error)) : resolve(),
   )
-  const timer = setTimeout(() => reject(new Error('The download view did not respond.')), 30_000)
   const closed = panel.onDidDispose(() =>
     reject(new DOMException('Download closed.', 'AbortError')),
   )
@@ -40,7 +42,6 @@ export async function download(path: string, name = basename(path)): Promise<voi
   }
   try {
     await waiting
-    clearTimeout(timer)
     const file = await open(path, 'r')
     try {
       const bytes = new Uint8Array(1 << 20)
@@ -58,7 +59,6 @@ export async function download(path: string, name = basename(path)): Promise<voi
     panel.dispose()
     throw error
   } finally {
-    clearTimeout(timer)
     messages.dispose()
     closed.dispose()
   }

@@ -1,47 +1,44 @@
-/** What a case records, and where: each element's `mon` list, and the case's `monitors`. GridKit
- *  writes a column for every output an element lists, so the lists are all a run records. */
+/** What a case records: each element's `mon` list and the case's `monitors`. GridKit writes a
+ *  column for every listed output, so the lists define everything a run records. */
 
+import { text } from '../platform/bytes.js'
 import type { Summary } from '../shared/messages.js'
 import type { Sink } from '../shared/study.js'
 import type { Case, Table } from './case.js'
-import { utf8 } from './columns.js'
 import type { Shape } from './definition.js'
 import { STEP_RECORDS, Turns } from './turns.js'
 
-/** GridKit's name for `field`, an output of `table`: its label, which its field's name differs
- *  from where a record's own member has it. */
+/** GridKit's name for output `field` of `table`: its label, which differs from the field name when
+ *  the field was renamed to avoid a clash. */
 export function outputName(table: Table, field: string): string {
   const plan = table.shape.plan.get(field)
   return plan?.role === 'output' ? plan.definition.label : field
 }
 
-/** `name` in a `mon` list of a record of `shape`, as GridKit matches it: a bus's in any case, as its
- *  BusDataJSONParser reads it, a device's as written. */
+/** `name` as GridKit matches it in a `mon` list: case-insensitive for a bus, as BusDataJSONParser
+ *  reads it, and exact for a device. */
 const monKey = (shape: Shape, name: string) => (shape.kind === 'bus' ? name.toLowerCase() : name)
 
-/** What the case records: how many of each type's elements list each output, whether any element
- *  of any class lists one, and the monitor GridKit writes to. Read a slice of records at a time,
- *  until `signal` lets go. */
+/** Per type, how many elements list each output, and the monitor GridKit writes to. */
 export async function recordingOf(
   kase: Case,
   signal = AbortSignal.any([]),
 ): Promise<Summary['recording']> {
   const work = new Turns(signal)
-  // Each type in the case's order, and its outputs in its own.
   const listed: Record<string, Record<string, number>> = {}
   let anything = false
   for (const table of kase.tables.values()) {
     const { shape } = table
     const mons = shape.array === null ? undefined : kase.arrays[shape.array]?.mons
     if (!mons) continue
-    /** How many of the table's records list each name: a list that names one twice counts once. */
+    /** Per name, how many records list it. A name listed twice in one record counts once. */
     const counts = new Map<string, number>()
     const { records } = table
     for (let row = 0; row < records.length; row++) {
       if ((row & STEP_RECORDS) === 0) await work.step()
       const from = mons[2 * records[row]!]!
       if (from === 0) continue
-      const list: unknown = JSON.parse(utf8(kase.file, from, mons[2 * records[row]! + 1]!))
+      const list: unknown = JSON.parse(text(kase.file, from, mons[2 * records[row]! + 1]!))
       if (!Array.isArray(list)) continue
       for (const name of new Set(
         list.filter((name) => typeof name === 'string').map((name) => monKey(shape, name)),
@@ -58,12 +55,12 @@ export async function recordingOf(
   return { listed, anything, ...(monitor && { monitor }) }
 }
 
-/** The CSV file GridKit writes the case's samples to, by its own rule in parseStudyData: the last
- *  CSV monitor that separates with commas. One that names no file leaves it to the solver file. */
+/** The CSV file GridKit writes samples to, by parseStudyData's rule: the last comma-separated CSV
+ *  monitor. A monitor without a file name leaves the choice to the solver file. */
 function monitorOf(kase: Case): Sink | undefined {
   const monitors = kase.member('monitors')
   if (!monitors) return undefined
-  const sinks: unknown = JSON.parse(utf8(kase.file, monitors.value, monitors.end))
+  const sinks: unknown = JSON.parse(text(kase.file, monitors.value, monitors.end))
   if (!Array.isArray(sinks)) return undefined
   let file = ''
   for (const sink of sinks) {

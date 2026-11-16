@@ -1,36 +1,29 @@
-/** A results file followed as GridKit writes it: its header, then runs of whole frames. */
+/** Follows a results file as GridKit writes it: the header, then segments of whole frames. */
 import { type FileHandle, open } from '../platform/files.js'
 import { basename } from '../platform/path.js'
 import { setTimeout } from '../platform/timing.js'
 import { problem } from '../shared/errors.js'
 import { PROGRESS_MS, SEGMENT_BYTES } from './limits.js'
-import { same, type Stamp, stampOf } from './stamp.js'
+import { same, type Stamp, stampAt, stampOf } from './stamp.js'
 
-/** How long a follower waits before it looks again for a file, or for more of it. */
 export const POLL_MS = 40
 const QUOTE = 0x22
 const COMMA = 0x2c
 const RETURN = 0x0d
 const NEWLINE = 0x0a
 
-/** How the file's writer stands: writing still; done, all it wrote whole; or stopped, its last row
- *  maybe cut short. A file opened alone has no writer, and is done. */
+/** The writer's state: still writing; done, with every row complete; or stopped, with the last row
+ *  possibly truncated. A file opened directly has no writer and is done. */
 export type Writer = 'writing' | 'done' | 'stopped'
 
-/** A piece of a results file: its header line, with the file it is read from; a segment of whole
- *  frames; and, once it is read to its end, the file as it stood then, unless more came past what
- *  was read. */
+/** The end piece carries the final stamp unless the file grew past what was read. */
 export type Piece =
   | { readonly kind: 'header'; readonly bytes: Uint8Array; readonly stamp: Stamp }
   | { readonly kind: 'segment'; readonly bytes: Uint8Array }
   | { readonly kind: 'end'; readonly stamp?: Stamp }
 
-/** The file at `path` as it is written, until `writer` is no longer writing and it has nothing more:
- *  its header, then each segment, every piece handled before more is read. A segment ends at the
- *  first row end past SEGMENT_BYTES. While the writer writes, one also ends at the last whole row
- *  read each time the views would hear of it, so a live run's frames come at its pace. A last row
- *  with no newline is the writer's own only when it is done. The file `last` stamps, which a run
- *  before left at `path`, is not the writer's until the writer writes it again. */
+/** Yields the file at `path` as it is written, until `writer` stops and nothing remains. A file
+ *  matching `last`, left by a previous run, is ignored until rewritten. */
 export async function* follow(
   path: string,
   signal: AbortSignal,
@@ -42,14 +35,14 @@ export async function* follow(
   let opened!: Stamp
   while (!file) {
     signal.throwIfAborted()
-    // Asked before opening: a writer done by then has made its file if it ever will.
+    // Checked before opening: a writer that is done by then has created its file if it ever will.
     const over = writer() !== 'writing'
     try {
       const found = await open(path, 'r')
       try {
         opened = stampOf(await found.stat({ bigint: true }))
         if (same(opened, last))
-          throw Object.assign(new Error(`${basename(path)} is what the last run left.`), {
+          throw Object.assign(new Error(`${basename(path)} is still the previous run's output.`), {
             code: 'ENOENT',
           })
       } catch (error) {
@@ -63,21 +56,22 @@ export async function* follow(
     }
   }
   try {
-    /** The bytes read and not yet given, `from` to `to` of `buffer`, which grows to hold a row. */
+    /** Bytes read but not yet yielded are `buffer[from..to)`. */
     let buffer = new Uint8Array(2 * SEGMENT_BYTES)
     let from = 0
     let to = 0
-    /** How far the file has been read. */
     if (resume && (opened.file !== resume.stamp.file || opened.size < resume.offset))
-      throw problem('results-lost', `${basename(path)} changed before what was kept of it.`)
+      throw problem(
+        'results-lost',
+        `${basename(path)} changed while GridKit Studio was reading it.`,
+      )
     let at = resume?.offset ?? 0
     let header = !!resume
-    /** Where the search for the header's end, or a segment's, resumes in `buffer`. */
+    /** Where the search for the end of the header or of a segment resumes. */
     let scan = 0
     let quoted = false
     /** Whether the byte before `scan` closed a quoted name. */
     let closing = false
-    /** When the last segment was cut. The first is cut as soon as it can be. */
     let cutAt = -Infinity
     const cut = (length: number): Piece => {
       const bytes = buffer.subarray(from, from + length)
@@ -88,25 +82,27 @@ export async function* follow(
     }
     while (true) {
       signal.throwIfAborted()
-      // Asked before reading: a writer done by then has written everything this read can see.
+      // Checked before reading: a writer done by then has written everything this read sees.
       const state = writer()
-      // Room for a segment's worth past what is held: moved to the front, or a larger buffer.
+      // Make room for a segment by compacting or growing the buffer.
       if (buffer.length - to < SEGMENT_BYTES) {
-        const held = to - from
+        const unread = to - from
         const next =
-          held + SEGMENT_BYTES > buffer.length ? new Uint8Array(2 * (held + SEGMENT_BYTES)) : buffer
+          unread + SEGMENT_BYTES > buffer.length
+            ? new Uint8Array(2 * (unread + SEGMENT_BYTES))
+            : buffer
         next.set(buffer.subarray(from, to), 0)
         scan -= from
         buffer = next
         from = 0
-        to = held
+        to = unread
       }
       const room = buffer.length - to
       const { bytesRead } = await file.read(buffer, to, room, at)
       at += bytesRead
       to += bytesRead
       const finished = state !== 'writing' && bytesRead === 0
-      // Only the header quotes; past it, a row ends at its newline.
+      // Only the header has quoted names. After it, a row ends at its newline.
       for (; !header && scan < to; scan++) {
         const byte = buffer[scan]!
         if (closing && byte !== QUOTE && byte !== COMMA && byte !== RETURN && byte !== NEWLINE)
@@ -118,7 +114,7 @@ export async function* follow(
         }
         if (byte !== NEWLINE || quoted) continue
         header = true
-        // A copy: the header outlives the read it came in.
+        // The header outlives this buffer.
         yield {
           kind: 'header',
           bytes: new Uint8Array(buffer.subarray(from, scan + 1)),
@@ -135,8 +131,8 @@ export async function* follow(
           }
           yield cut(newline + 1 - from)
         }
-        // Once the writer is done, everything it wrote is a segment; once it stopped, its whole
-        // rows. Before, the whole rows read so far are, whenever the views would next hear of them.
+        // When the writer is done, everything left is a segment; when it stopped, only whole rows.
+        // While writing, whole rows are cut every PROGRESS_MS.
         const rows = () => buffer.subarray(from, to).lastIndexOf(NEWLINE) + 1
         const length = finished
           ? state === 'done'
@@ -153,8 +149,20 @@ export async function* follow(
         yield { kind: 'end', ...(stamp.size === at && { stamp }) }
         return
       }
-      // A read short of the room caught up with the writer, which is given time to write more.
-      if (bytesRead < room && state === 'writing') await setTimeout(POLL_MS, undefined, { signal })
+      // A short read caught up with the writer. The file only grows, so one that shrank or was
+      // replaced is an error.
+      if (bytesRead < room && state === 'writing') {
+        const [now, there] = await Promise.all([
+          file.stat({ bigint: true }),
+          stampAt(path).catch(() => undefined),
+        ])
+        if (Number(now.size) < at || (there && there.file !== opened.file))
+          throw problem(
+            'io',
+            `${basename(path)} was written over while GridKit Studio was reading it.`,
+          )
+        await setTimeout(POLL_MS, undefined, { signal })
+      }
     }
   } finally {
     await file.close()

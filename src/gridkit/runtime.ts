@@ -15,12 +15,10 @@ const ASK_MS = 10_000
 export type Runtime =
   | { readonly kind: 'wasm'; readonly program: string }
   | { readonly kind: 'installed'; readonly program: string; readonly path: string }
-/** Whether GridKit installed here outlives the window that started it, should that window die
- *  mid-run: on Linux and macOS it runs in a process group of its own; on Windows it ends with its
- *  window. */
+/** Whether a run can outlive a window that dies mid-run: only outside Windows, in its own group. */
 const outlives = process.platform !== 'win32'
 
-/** What process `pid` is, as when it started and its command line; undefined once it has exited. */
+/** Identifies process `pid` by its start time and command line. Undefined once it has exited. */
 async function identityOf(pid: number): Promise<string | undefined> {
   if (process.platform === 'linux')
     try {
@@ -28,8 +26,8 @@ async function identityOf(pid: number): Promise<string | undefined> {
         readFile(`/proc/${pid}/stat`, 'utf8'),
         readFile(`/proc/${pid}/cmdline`, 'utf8'),
       ])
-      // Its start, in clock ticks since boot, is the 22nd field; the 2nd, its name in parentheses,
-      // may hold spaces and parentheses itself.
+      // The start time, in clock ticks since boot, is field 22. Field 2, the name in parentheses,
+      // may contain spaces and parentheses.
       const start = status.slice(status.lastIndexOf(')') + 2).split(' ')[19]
       return start && `${start} ${command}`
     } catch {
@@ -45,41 +43,37 @@ async function identityOf(pid: number): Promise<string | undefined> {
   )
 }
 
-/** A run of GridKit installed here, written down while it runs: the window that started it, and
- *  what its process is. */
-interface Written {
+interface RunRecord {
   readonly host: number
   readonly pid: number
   readonly identity: string
 }
 
-/** Writes down in `folder` the process `pid` this window started, and returns what crosses it out. */
-export async function writeDown(folder: string, pid: number): Promise<() => Promise<void>> {
+/** Records in `folder` that this window started process `pid`, and returns its remover. */
+export async function recordRun(folder: string, pid: number): Promise<() => Promise<void>> {
   const identity = await identityOf(pid)
   if (!identity) return async () => {}
   await mkdir(folder, { recursive: true })
   const path = join(folder, `${process.pid}-${pid}.json`)
-  await writeFile(path, JSON.stringify({ host: process.pid, pid, identity } satisfies Written))
-  return () => rm(path, { force: true })
+  await writeFile(path, JSON.stringify({ host: process.pid, pid, identity } satisfies RunRecord))
+  return () => rm(path, { force: true }).catch(() => {})
 }
 
-/** Ends the runs of GridKit installed here that windows since exited wrote down in `folder`, and
- *  crosses them out. A run is ended only while its process is still the one written down, so a
- *  process id the system has since given another is never touched. */
+/** Kills the runs recorded in `folder` by windows that have exited, and removes their records. A
+ *  process is killed only while its identity still matches, so a reused pid is never touched. */
 export async function sweepOrphans(folder: string): Promise<void> {
   const names = await readdir(folder).catch(() => [])
   await Promise.all(
     names.map(async (name) => {
       const path = join(folder, name)
       try {
-        const { host, pid, identity } = JSON.parse(await readFile(path, 'utf8')) as Written
-        // A window still open ends its own runs.
+        const { host, pid, identity } = JSON.parse(await readFile(path, 'utf8')) as RunRecord
+        // A window that is still open stops its own runs.
         if (alive(host)) return
         if ((await identityOf(pid)) === identity) process.kill(-pid, 'SIGKILL')
       } catch {
-        // Unreadable, or ended as it was swept: either way, done with.
+        // Unreadable, or already gone.
       }
-      // One the system holds open now goes at a later sweep.
       await rm(path, { force: true }).catch(() => {})
     }),
   )
@@ -122,29 +116,25 @@ function threads(env: NodeJS.ProcessEnv) {
     OPENBLAS_NUM_THREADS: env.OPENBLAS_NUM_THREADS ?? '1',
   }
 }
-/** Whether `child` has exited. */
 const exited = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null
 
-/** Stops `child` and every process it started; should that leave it running, ends it alone. */
+/** Stops `child` and its descendants, then `child` alone if it is still running. */
 async function stopProcess(child: ChildProcess, owned: RuntimeProcess): Promise<void> {
   if (!child.pid || exited(child)) return
   await terminateRuntime(owned).catch(() => {})
   if (!exited(child)) child.kill('SIGKILL')
 }
 
-/** What a launch hears of its run. */
 export interface Launch {
-  /** Aborting it stops the run. */
   readonly signal: AbortSignal
-  /** Hears each line the run prints. */
   readonly log: (text: string) => void
-  /** Hears of the process while it lives, and once it ends. */
+  /** Called with the process when it starts, and with nothing when it ends. */
   readonly lifecycle?: (process?: RuntimeProcess) => void
-  /** The folder this machine's windows write their runs down in, when a run may outlive them. */
+  /** The folder where windows record runs that may outlive them. */
   readonly runs?: string
 }
 
-/** Runs the selected executable on `solver`, in the solver file's folder. */
+/** Runs the executable on `solver`, in the solver file's folder. */
 export function launch(
   runtime: Extract<Runtime, { kind: 'installed' }>,
   solver: string,
@@ -154,8 +144,7 @@ export function launch(
   const folder = dirname(solver)
   const command = runtime.path
   const args = [basename(solver)]
-  /** Why a program that is there did not start, as a broken install's: which, and where to look,
-   *  the system's code saying why. The system says so at once, or as the process fails. */
+  /** The error for a program that exists but did not start, such as a broken install. */
   const unstarted = (error: NodeJS.ErrnoException) =>
     new Error(
       `${basename(command)} did not start (${error.code ?? error.message}). Check GridKit Studio: GridKit Path.`,
@@ -179,14 +168,13 @@ export function launch(
   }
   if (child.pid) lifecycle(owned)
   // A native process group may outlive this window.
-  const written =
+  const recorded =
     child.pid && runs && outlives
-      ? writeDown(runs, child.pid).catch(() => async () => {})
+      ? recordRun(runs, child.pid).catch(() => async () => {})
       : undefined
-  /** How the run's writing stands: on, done with its last row whole, or stopped partway. */
   let writer: 'writing' | 'done' | 'stopped' = 'writing'
-  /** Why the run failed, should it: the first error GridKit printed, said on its line or the next.
-   *  GridKit also prints errors it goes on from, so only how it exits says whether it failed. */
+  /** The first error GridKit printed, from its line or the next. GridKit also prints errors it
+   *  recovers from, so only the exit code decides failure. */
   let nativeError: SolverLine | undefined
   let cleanup: Promise<void> | undefined
   const stop = () => (cleanup ??= stopProcess(child, owned))
@@ -201,7 +189,7 @@ export function launch(
       if (!nativeError) {
         if (/\[ERROR\]/i.test(text)) nativeError = readSolverLine(text)
       } else if (!nativeError.text && text.trim())
-        // GridKit often says an error on the line after its [ERROR], as "\n\tInvalid device class".
+        // GridKit often prints the message on the line after [ERROR]: "\n\tInvalid device class".
         nativeError = { level: 'error', text: text.trim() }
       log(text)
     })
@@ -221,7 +209,7 @@ export function launch(
     signal.removeEventListener('abort', onAbort)
     await cleanup
     await (
-      await written
+      await recorded
     )?.()
     lifecycle()
   })
@@ -229,8 +217,7 @@ export function launch(
   return { done, stop, writer: () => writer }
 }
 
-/** Stops the process `owned` names and every process it started, on the workspace host. The
- *  extension also calls it, should the worker exit before cleaning up. */
+/** Kills process `owned` and its descendants. The extension also calls it if the worker dies. */
 export async function terminateRuntime(owned: RuntimeProcess): Promise<void> {
   if (!owned.pid) return
   if (process.platform === 'win32')

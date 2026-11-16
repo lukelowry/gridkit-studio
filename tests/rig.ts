@@ -1,5 +1,4 @@
-/** The worker as the extension runs it, for the worker's and the client's tests: bundled for Node,
- *  and asked through the extension's own side of the protocol. */
+/** Runs the bundled results worker for tests, through the extension's side of the protocol. */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -12,15 +11,14 @@ import type { FromWorker, WorkerApi, WorkerEvent, WorkerOptions } from '../src/s
 import { Caller } from '../src/shared/rpc.js'
 
 const require = createRequire(import.meta.url)
-/** What the tests start the worker with, but for where it keeps the results it reads: room for the
- *  files they let go of to rest, and no saved session's results to keep. */
+/** Test worker options, minus the store path: a 64 MiB cache and no saved sessions. */
 export const OPTIONS: Omit<WorkerOptions, 'store'> = {
   cacheBytes: 64 << 20,
   saved: [],
   wasmPath: require.resolve('latkit/wasm'),
 }
 
-/** Bundles the worker into `output/tests/<folder>`, as the extension ships it; its path. */
+/** Bundles the worker into `output/tests/<folder>` as the extension ships it; returns its path. */
 export async function bundle(folder: string): Promise<string> {
   const outfile = resolve('output/tests', folder, 'worker.mjs')
   await build({
@@ -39,8 +37,7 @@ export async function bundle(folder: string): Promise<string> {
   return outfile
 }
 
-/** The worker at `script`, started with `options`, with a folder of files of its own, where it
- *  keeps the results it reads, every event it sends kept. */
+/** Starts the worker at `script` with its own store folder, collecting every event it sends. */
 export async function start(
   script: string,
   { folder, options }: { folder?: string; options?: Partial<WorkerOptions> } = {},
@@ -70,5 +67,4 @@ export async function start(
   }
 }
 
-/** A worker as `start` starts one. */
 export type Rig = Awaited<ReturnType<typeof start>>

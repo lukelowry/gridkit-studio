@@ -1,6 +1,5 @@
-/** The Monitor's commands: what it plots and over which values and times, and the results it
- *  shows. Every picker of signals offers the same ones: those the results on show hold, or, before
- *  there are any, those the case records. */
+/** The Monitor's commands. Every signal picker offers the same signals: the outputs of the shown
+ *  results, or, before there are any, the signals the case records. */
 
 import type { Id } from 'latkit'
 import * as vscode from 'vscode'
@@ -8,7 +7,7 @@ import * as vscode from 'vscode'
 import { randomUUID } from '../platform/crypto.js'
 import { rm } from '../platform/files.js'
 import { browser, tmpdir } from '../platform/host.js'
-import { join } from '../platform/path.js'
+import { join, nameOf } from '../platform/path.js'
 import { display } from '../shared/cells.js'
 import {
   type CaseDefinition,
@@ -17,6 +16,7 @@ import {
   tableDefinition,
   tableLabel,
 } from '../shared/document.js'
+import { caseStem } from '../shared/format.js'
 import type { Plot, Summary } from '../shared/messages.js'
 import { plotName, samePlot } from '../shared/plots.js'
 import { askRange, type Commands, type Context } from './commands.js'
@@ -24,10 +24,9 @@ import { publish } from './exports.js'
 import type { Session } from './session.js'
 import { reference } from './uris.js'
 
-/** How long typing in a search rests before it searches. */
 const TYPING_MS = 90
 
-/** The signals there are to plot, of `type` alone when it is given. */
+/** The plottable signals, limited to `type` when given. */
 function plottable(session: Session, summary: Summary, type?: string): Plot[] {
   const outputs = session.results?.outputs ?? []
   const offered = outputs.length
@@ -38,7 +37,6 @@ function plottable(session: Session, summary: Summary, type?: string): Plot[] {
   return type === undefined ? offered : offered.filter(({ table }) => table === type)
 }
 
-/** A plot as a picker lists it. */
 const signalItem = (definition: CaseDefinition, plot: Plot) => ({
   label: plotName(definition, plot),
   detail: fieldDefinition(definition, plot.table, plot.field)?.label,
@@ -46,13 +44,11 @@ const signalItem = (definition: CaseDefinition, plot: Plot) => ({
 })
 
 export function registerPlots({ studio, command, focus, rows }: Commands) {
-  /** Shows `plot` in the Monitor of the session's case, with `element` selected. What a run
-   *  records is the case's own to say, in its records' `mon` lists. */
+  /** Adds `plot` to the Monitor and shows it, selecting `element`. */
   const showPlot = (session: Session, plot: Plot, element?: Entity) => {
     session.addPlot(plot)
     return focus(session, 'monitor', element)
   }
-  /** A signal the user picks, of `type` alone when it is given. */
   const pickSignal = async (session: Session, summary: Summary, title: string, type?: string) => {
     const { definition } = summary
     const offered = plottable(session, summary, type)
@@ -67,8 +63,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
       )
     )?.plot
   }
-  /** The plot a command acts on: the one its menu was opened on, the only one, or one the user
-   *  picks. */
+  /** The plot a command acts on: the menu's plot, the only plot, or one the user picks. */
   const plotOf = async (context: Context, title: string) => {
     const { plots } = context.session
     const target = context.target?.plot
@@ -82,8 +77,8 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
       )
     )?.plot
   }
-  /** Searches the `type` elements as the user types: the id of the one picked. With `every`, the
-   *  first choice is every element, which picks null. */
+  /** Prompts for an element of `type` with live search. With `every`, the first item stands for
+   *  every element and resolves null. */
   const pickElement = (
     summary: Summary,
     type: string,
@@ -91,7 +86,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
   ): Promise<Id | null | undefined> => {
     type Item = vscode.QuickPickItem & { id: Id | null }
     const picker = vscode.window.createQuickPick<Item>()
-    picker.title = 'Choose ' + type
+    picker.title = 'Choose ' + tableLabel(summary.definition, type)
     picker.placeholder = 'Search names or IDs'
     picker.matchOnDescription = true
     const first: Item[] = every ? [{ label: every, id: null, alwaysShow: true }] : []
@@ -111,7 +106,8 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
             table: type,
             fields: name ? [name] : [],
             offset: 0,
-            limit: 100,
+            // Fetch every match; the picker scrolls.
+            limit: Math.max(1, summary.counts[type] ?? 1),
             ...(picker.value ? { search: picker.value } : {}),
           },
           controller.signal,
@@ -158,7 +154,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
     })
   }
 
-  // The field in context, or one of the element in context the user picks, of that element alone.
+  // Plots the field in context, or a picked signal, of the element in context alone.
   command('plotSignal', async (context) => {
     const { session, element, field } = context
     const summary = await context.summary()
@@ -168,7 +164,7 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
         : await pickSignal(
             session,
             summary,
-            element ? 'Plot a signal of ' + element.id : 'Plot signal',
+            element ? 'Plot Signal of ' + element.id : 'Plot Signal',
             element?.table,
           )
     if (!signal) return
@@ -179,27 +175,27 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
       element,
     )
   })
-  // From the Monitor's title: a signal of every element.
+  // From the Monitor's title bar: a signal of every element.
   command('addPlot', async (context) => {
-    const plot = await pickSignal(context.session, await context.summary(), 'Add plot')
+    const plot = await pickSignal(context.session, await context.summary(), 'Add Plot')
     if (plot) await showPlot(context.session, plot)
   })
   command('removePlot', async (context) => {
-    const plot = await plotOf(context, 'Remove plot')
+    const plot = await plotOf(context, 'Remove Plot')
     if (plot) context.session.removePlot(plot)
   })
   command('choosePlotElement', async (context) => {
-    const plot = await plotOf(context, 'Choose plot')
+    const plot = await plotOf(context, 'Choose Plot')
     if (!plot) return
     const id = await pickElement(await context.summary(), plot.table, 'Every element')
     if (id !== undefined) context.session.plotElement(plot, id ?? undefined)
   })
   command('valueRange', async (context) => {
-    const plot = await plotOf(context, 'Choose plot')
+    const plot = await plotOf(context, 'Choose Plot')
     if (!plot) return
     const { definition } = await context.summary()
     const range = await askRange(
-      'Value range of ' + plotName(definition, plot),
+      'Value Range of ' + plotName(definition, plot),
       plot.range,
       'fits the values shown',
     )
@@ -207,14 +203,13 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
   })
   command('timeWindow', async ({ session }) => {
     const range = await askRange(
-      'Time window [s]',
+      'Time Window [s]',
       session.window ?? session.results?.domain,
       'shows the whole run',
     )
     if (range !== undefined) session.setWindow(range ?? undefined)
   })
 
-  // Any GridKit results file, read for the case as a run's own is, and plotted as they are.
   command('openResults', async ({ session }) => {
     const selected = await vscode.window.showOpenDialog({
       filters: { 'GridKit results': ['csv'] },
@@ -225,26 +220,31 @@ export function registerPlots({ studio, command, focus, rows }: Commands) {
   command('exportCsv', async ({ session }) => {
     const { results } = session
     if (!results) throw new Error('There are no results to export.')
-    // Held while the user chooses where: results shown meanwhile take nothing from the export.
-    const held = randomUUID()
-    await studio.client.worker.call('share', { results: results.id, as: held })
+    // Share the results so they stay open while the user picks a destination.
+    const shared = randomUUID()
+    await studio.client.worker.call('share', { results: results.id, as: shared })
     try {
+      const name = `${caseStem(nameOf(session.uri))}-results.csv`
       const uri = browser
-        ? vscode.Uri.from({ scheme: 'opfs', path: '/results.csv' })
-        : await vscode.window.showSaveDialog({ filters: { CSV: ['csv'] } })
+        ? vscode.Uri.from({ scheme: 'opfs', path: '/' + name })
+        : await vscode.window.showSaveDialog({
+            title: 'Export CSV',
+            defaultUri: vscode.Uri.joinPath(vscode.Uri.parse(session.uri), '..', name),
+            filters: { CSV: ['csv'] },
+          })
       if (!uri) return
       const staged = browser || uri.scheme !== 'file'
       const path = staged
         ? join(tmpdir(), 'gridkit-export-' + randomUUID() + '.csv')
         : reference(uri)
       try {
-        await studio.client.worker.call('export', { results: held, path })
+        await studio.client.worker.call('export', { results: shared, path })
         if (staged) await publish(path, uri)
       } finally {
         if (staged) await rm(path, { force: true })
       }
     } finally {
-      studio.closeResults(held)
+      studio.closeResults(shared)
     }
   })
   command('clearResults', ({ session }) => session.clear())

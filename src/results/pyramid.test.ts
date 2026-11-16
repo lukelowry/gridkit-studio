@@ -16,7 +16,7 @@ it('reduces exact eight-way boundaries with irregular times, gaps, and restart t
   second.push(37, times.slice(37), values.slice(37))
   expect(actual).toEqual(expected)
   expect(actual.filter((run) => run.level === 1)).toHaveLength(8)
-  // A frame without a value is left out of its buckets, as latkit's own levels leave it.
+  // A frame without a value is left out of its buckets, as in latkit's own levels.
   expect(actual.find((run) => run.level === 1 && run.first === 2)?.values).toEqual(
     Float32Array.of(16, 1000),
   )
@@ -38,14 +38,14 @@ it("ends each level with the bucket still filling, over every frame since the le
     at: Float64Array.of(7.2, 7.4),
     values: Float32Array.of(144, -149, 148, -145),
   })
-  // Level 2's filling bucket holds level 1's full bucket of frames 64 to 71, and its filling one.
+  // Level 2's partial bucket covers level 1's full bucket of frames 64 to 71 and its partial one.
   expect(pyramid.tail(2)).toEqual({
     level: 2,
     first: 1,
     at: Float64Array.of(6.4, 7.4),
     values: Float32Array.of(128, -149, 148, -129),
   })
-  // All 75 lie in the bucket of 512 filling at level 3.
+  // All 75 frames are in the partial 512-frame bucket at level 3.
   expect(pyramid.tail(3)?.first).toBe(0)
   expect(pyramid.tail(3)?.at).toEqual(Float64Array.of(0, 7.4))
   const even = new Pyramid(1, () => {})

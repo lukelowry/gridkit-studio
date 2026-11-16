@@ -4,7 +4,7 @@ import { advance, type ClockState, IDLE, Transport } from './transport.js'
 
 const SPAN: readonly [number, number] = [0, 10]
 
-/** A state playing SPAN from 0 at rate 1, unless `over` says otherwise. */
+/** A state playing SPAN from 0 at rate 1, with `over` applied. */
 const playing = (over: Partial<ClockState> = {}): ClockState => ({
   ...IDLE,
   epoch: 1,
@@ -13,7 +13,7 @@ const playing = (over: Partial<ClockState> = {}): ClockState => ({
   ...over,
 })
 
-/** A transport on a manual wall clock, with every change it reports. */
+/** A transport on a manual wall clock that records every change it reports. */
 function rig() {
   let now = 1_000
   const changes: ClockState[] = []
@@ -29,7 +29,7 @@ afterEach(() => {
 })
 
 describe('advance', () => {
-  it('holds a clock that is not playing, within its span', () => {
+  it('keeps a clock that is not playing within its span', () => {
     expect(advance(playing({ status: 'paused', t: 4 }), 5_000).t).toBe(4)
     expect(advance(playing({ status: 'paused', t: 99 }), 0)).toEqual({ t: 10, ended: false })
   })
@@ -38,13 +38,13 @@ describe('advance', () => {
     expect(advance(playing({ t: 1, rate: 2 }), 1_500)).toEqual({ t: 4, ended: false })
     expect(advance(playing({ t: 9 }), 2_000)).toEqual({ t: 10, ended: true })
     expect(advance(playing({ t: 9 }), 1_000)).toEqual({ t: 10, ended: true })
-    // Every time of an empty span is its end.
+    // In an empty span every time is the end.
     expect(advance(playing({ t: 3, span: [3, 3] }), 500)).toEqual({ t: 3, ended: true })
   })
 })
 
 describe('Transport', () => {
-  it('takes a span on as a new epoch, paused at its start, and drops it back to idle', () => {
+  it('starts a span as a new epoch, paused at its start, and clears back to idle', () => {
     const { transport, changes } = rig()
     expect(transport.state).toBe(IDLE)
     transport.setSpan([0, 4])
@@ -77,7 +77,7 @@ describe('Transport', () => {
     expect(changes).toHaveLength(3)
   })
 
-  it('plays other results at the speed the results before played at, until it is cleared', () => {
+  it('keeps the playback speed across results until cleared', () => {
     const { transport } = rig()
     transport.setSpan([0, 4])
     transport.setRate(2)
@@ -88,7 +88,7 @@ describe('Transport', () => {
     expect(transport.state.rate).toBe(1)
   })
 
-  it('follows a live head, lets go on a seek back, and latches again at the head', () => {
+  it('follows a live head, stops following on a seek back, and follows again at the head', () => {
     const { transport, changes } = rig()
     transport.setSpan([0, 1], { live: true })
     transport.grow(0.75)
@@ -97,7 +97,7 @@ describe('Transport', () => {
 
     transport.seek(0.2)
     expect(transport.state).toMatchObject({ t: 0.2, follow: false })
-    // A playhead behind the head stays put, and nothing changes that anyone need hear of.
+    // A playhead behind the head stays put, and no change is reported.
     transport.grow(0.9)
     expect(transport.state.t).toBe(0.2)
     expect(changes).toHaveLength(3)
@@ -129,7 +129,7 @@ describe('Transport', () => {
     transport.setSpan([0, 1], { live: true })
     transport.grow(2)
     expect(transport.state).toMatchObject({ span: [0, 2], t: 2, follow: true })
-    // Frames that reach no further still move the head the playhead follows.
+    // Frames that do not extend the span still move a following playhead to the head.
     transport.seek(0)
     transport.seek(2)
     transport.grow(2)
@@ -148,7 +148,7 @@ describe('Transport', () => {
     expect(changes).toHaveLength(3)
   })
 
-  it('plays a finished span that plays once from its start again, and never an empty one', () => {
+  it('replays a finished span from its start, and never plays an empty one', () => {
     const { transport } = rig()
     transport.setSpan([5, 7])
     transport.seek(7)
@@ -219,7 +219,7 @@ describe('Transport', () => {
     transport.dispose()
   })
 
-  it('pauses at the end of its span, woken by its own alarm, and reports it', () => {
+  it('pauses at the end of its span on its own timer, and reports it', () => {
     vi.useFakeTimers()
     const { transport, wait, changes } = rig()
     transport.setSpan([0, 1])
@@ -236,7 +236,7 @@ describe('Transport', () => {
   it('plays on through a span longer than a timer can wait, and pauses only at its end', () => {
     vi.useFakeTimers()
     const { transport, wait } = rig()
-    // A thousand days, which no single timer waits out.
+    // A thousand days, longer than setTimeout's maximum delay.
     const days = 1_000
     const day = 86_400_000
     transport.setSpan([0, days * 86_400])
@@ -252,7 +252,7 @@ describe('Transport', () => {
     transport.dispose()
   })
 
-  it('settles at the edge when paused after the end has passed', () => {
+  it('stops at the end when paused after the end has passed', () => {
     const { transport, wait } = rig()
     transport.setSpan([0, 1])
     transport.play()
@@ -273,12 +273,12 @@ describe('Transport', () => {
     expect(changes).toHaveLength(reported)
   })
 
-  it('gives a reader the clock settled at the instant it asks', () => {
+  it('gives a reader the clock as of the moment it asks', () => {
     const { transport, wait } = rig()
     transport.setSpan([0, 10])
     transport.play()
     wait(4_000)
-    // `state` itself holds the last change.
+    // `state` reflects the last change.
     expect(transport.snapshot()).toMatchObject({ status: 'playing', t: 4 })
     expect(transport.state).toMatchObject({ status: 'playing', t: 0 })
     transport.dispose()

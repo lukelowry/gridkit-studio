@@ -1,5 +1,4 @@
-/** The VS Code under test: the host tests' bench, driven from outside too, by Playwright over the
- *  window's DevTools port. */
+/** The host tests' bench, also driven by Playwright over the window's DevTools port. */
 
 import assert from 'node:assert/strict'
 import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -9,8 +8,8 @@ import { type Browser, chromium, type Frame, type Locator, type Page } from 'pla
 import * as vscode from 'vscode'
 
 import type { Session } from '../../src/extension/session.js'
-import type { Sessions } from '../../src/extension/sessions.js'
 import { gridkitOf } from '../../src/extension/settings.js'
+import type { Studio } from '../../src/extension/studio.js'
 import { available } from '../../src/gridkit/index.js'
 import type { Results, ViewKind } from '../../src/shared/messages.js'
 import { Bench, extension, folder } from '../host/studio.js'
@@ -18,21 +17,15 @@ import { Bench, extension, folder } from '../host/studio.js'
 export { extension, type Solver } from '../host/studio.js'
 
 const TIMEOUT = 30_000
-/** How long a read of what the page shows now waits for it: a moment, not a timeout. */
+/** For reading what the page shows right now, not waiting for a change. */
 const READ = { timeout: 1000 }
-/** The results file the suites play: a second of every bus's voltage. */
 const SYNTHETIC = 'Synthetic waveform.csv'
 
-/** The window size every suite starts from. */
 export const VIEWPORT = { width: 1600, height: 1000 }
 
-/** A bus's recorded voltage magnitude: the signal the suites map, plot and play. */
 export const VM = { table: 'Bus', field: 'Vm' } as const
 
-/** Wait until `get` answers something truthy, and return it. A `label` that is a function says,
- *  once the wait fails, what it found instead. Unlike the bench's own wait, it asks every moment,
- *  as a page's state comes with no event of Studio's, and it waits on what comes before Studio
- *  starts. */
+/** Polls `get` until truthy; unlike the bench's event-driven `until`, this works on page state. */
 export async function until<T>(
   get: () => Promise<T> | T,
   label: string | (() => Promise<string> | string),
@@ -49,9 +42,8 @@ export async function until<T>(
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-/** Do `act` until `done` holds. VS Code drops an input it gets while busy, as a right-click that
- *  opens no menu, or a click on a menu or a box that does not take: once the act has had `settle`
- *  milliseconds to take effect and has not, it is done again. */
+/** Repeats `act` every `settle` ms until `done` is true, since VS Code drops input while busy (a
+ *  right-click that opens no menu, a click that does not register). */
 export async function again(
   act: () => Promise<unknown>,
   done: () => Promise<boolean> | boolean,
@@ -71,19 +63,17 @@ export async function again(
   throw new Error('Timed out: ' + (typeof label === 'string' ? label : await label()))
 }
 
-/** Wait for `selector` to show in `frame`. One that never shows says what the page held. */
 export async function visible(frame: Frame, selector: string): Promise<void> {
   try {
     await frame.locator(selector).first().waitFor({ state: 'visible', timeout: TIMEOUT })
   } catch (error) {
-    throw new Error(`${selector} never showed. The page held ${await held(frame)}`, {
+    throw new Error(`${selector} never showed. The page held ${await pageSummary(frame)}`, {
       cause: error,
     })
   }
 }
 
-/** A page's text, and each canvas's size and whether it drew. */
-const held = (frame: Frame) =>
+const pageSummary = (frame: Frame) =>
   frame
     .evaluate<string>(
       `JSON.stringify({
@@ -97,11 +87,10 @@ const held = (frame: Frame) =>
     )
     .catch((error: unknown) => `nothing readable (${String(error)})`)
 
-/** A canvas view's counters, as `gridkitStats()` reports them. */
 export const stats = <T extends { frames: number } = { frames: number }>(frame: Frame) =>
   frame.evaluate<T>('gridkitStats()')
 
-/** Wait for a canvas view to stop drawing, and return its counters. One that draws on says so. */
+/** Waits for a canvas view to stop drawing and returns its counters. */
 export async function idle<T extends { frames: number } = { frames: number }>(
   frame: Frame,
 ): Promise<T> {
@@ -118,10 +107,8 @@ export async function idle<T extends { frames: number } = { frames: number }>(
   return now
 }
 
-/** Plays `session`'s results over and over once played, for a test that measures playing for
- *  longer than they last: each time playback stops at their end, it starts again from their start.
- *  Dispose of what it returns to stop. */
-export function replaying(studio: Sessions, session: Session): vscode.Disposable {
+/** Restarts playback each time it stops at the end, for measurements longer than the results. */
+export function replaying(studio: Studio, session: Session): vscode.Disposable {
   const { transport } = session
   return studio.clock.event((uri) => {
     const { status, t, span } = transport.state
@@ -129,13 +116,12 @@ export function replaying(studio: Sessions, session: Session): vscode.Disposable
   })
 }
 
-/** VS Code's own file dialog, which a test can type a path into; `undefined` restores the OS's. */
+/** Switches to VS Code's own file dialog, which tests type into; `undefined` restores the OS's. */
 export const simpleDialog = (on: true | undefined) =>
   vscode.workspace
     .getConfiguration()
     .update('files.simpleDialog.enable', on, vscode.ConfigurationTarget.Global)
 
-/** Playwright on the VS Code window the tests run in. */
 async function attach(): Promise<{ browser: Browser; page: Page }> {
   const [port] = (
     await readFile(join(process.env.GRIDKIT_TEST_PROFILE!, 'DevToolsActivePort'), 'utf8')
@@ -146,29 +132,23 @@ async function attach(): Promise<{ browser: Browser; page: Page }> {
   return { browser, page }
 }
 
-/** The command that shows each panel view; the extension's own commands take the case. */
 const PANELS = {
   case: 'gridkitStudio.openCasePanel',
   monitor: 'gridkitStudio.openMonitor',
   export: 'gridkitStudio.exportVideo',
 } as const
 
-/** The bench, with the window's pages in reach: its views, menus and prompts as the user meets
- *  them, and what they drew. */
+/** The bench plus Playwright access to the window's views, menus and prompts. */
 export class TestHost extends Bench {
-  /** What the run measured, written beside the screenshots when it ends. */
   readonly report: Record<string, unknown>
-  /** Errors Studio's own pages threw. */
   readonly errors: string[] = []
-  /** Errors VS Code's own code threw in its pages, kept in the report: VS Code's to fix. */
+  /** Errors thrown by VS Code's own code; reported but not failing the run. */
   readonly vscodeErrors: string[] = []
 
   private constructor(
     readonly browser: Browser,
-    /** The VS Code window. */
     readonly page: Page,
     text: string,
-    /** Where screenshots and the report are written. */
     readonly output: string,
     solver: string,
   ) {
@@ -181,7 +161,7 @@ export class TestHost extends Bench {
     }
     page.on('pageerror', (error) => {
       const text = error.stack ?? error.message
-      // Studio's pages run its own bundles; anything else threw in VS Code's code.
+      // Errors from outside Studio's bundles come from VS Code.
       ;(/[\\/]dist[\\/]webview[\\/]/.test(text) ? this.errors : this.vscodeErrors).push(text)
     })
   }
@@ -189,11 +169,10 @@ export class TestHost extends Bench {
   static override async start(): Promise<TestHost> {
     const installed = extension()
     const uri = vscode.Uri.joinPath(folder(), 'IEEE39.case.json')
-    // Playwright sees only the frames that attach once it connects, so it connects before any view
-    // opens: a view opened before it, even one closed and opened again, it may never see.
+    // Connect before any view opens: Playwright may never see frames attached before it connected.
     const { browser, page } = await attach()
     const started = performance.now()
-    // Opening a case is what activates the extension; nothing here calls activate().
+    // Opening a case activates the extension; nothing here calls activate().
     await vscode.commands.executeCommand('vscode.open', uri)
     await until(() => installed.isActive, 'a case opening activates the extension')
     const openCaseMs = performance.now() - started
@@ -210,7 +189,6 @@ export class TestHost extends Bench {
     return bench
   }
 
-  /** Every frame of every VS Code page, webviews' included. */
   #frames(): Frame[] {
     return this.browser
       .contexts()
@@ -218,9 +196,7 @@ export class TestHost extends Bench {
       .flatMap((page) => page.frames())
   }
 
-  /** Each of Studio's webviews Playwright sees: its kind, whether it is hidden, and the case it
-   *  shows, which it hears of in its first state. */
-  async #seen(): Promise<string[]> {
+  async #webviews(): Promise<string[]> {
     const seen: string[] = []
     for (const frame of this.#frames()) {
       const body = await frame
@@ -228,21 +204,19 @@ export class TestHost extends Bench {
         .catch(() => undefined)
       if (body?.kind)
         seen.push(
-          `${body.kind}${body.shown === 'false' ? ' (hidden)' : ''} of ${body.uri || 'no case yet'}`,
+          `${body.kind}${body.visible === 'false' ? ' (hidden)' : ''} of ${body.uri || 'no case yet'}`,
         )
     }
     return seen
   }
 
-  /** The webview showing `kind`, of the case at `uri` when given. A wait that fails says what
-   *  webviews there were instead. */
   view(kind: ViewKind, uri?: string): Promise<Frame> {
     return until(
       async () => {
         for (const candidate of this.#frames())
           if (
             await candidate
-              .locator('body[data-kind="' + kind + '"]:not([data-shown="false"])')
+              .locator('body[data-kind="' + kind + '"]:not([data-visible="false"])')
               .isVisible()
               .catch(() => false)
           )
@@ -258,14 +232,13 @@ export class TestHost extends Bench {
               : tab.label,
           )
         return (
-          `${kind} webview${uri ? ' of ' + uri : ''}, among: ${(await this.#seen()).join('; ') || 'none'}` +
+          `${kind} webview${uri ? ' of ' + uri : ''}, among: ${(await this.#webviews()).join('; ') || 'none'}` +
           ` (${this.#frames().length} frames; tabs: ${tabs.join(', ') || 'none'})`
         )
       },
     )
   }
 
-  /** Show the case in the Network, and wait for its first frame. */
   async open(column = vscode.ViewColumn.One): Promise<Frame> {
     await vscode.commands.executeCommand(
       'vscode.openWith',
@@ -278,8 +251,7 @@ export class TestHost extends Bench {
     return frame
   }
 
-  /** Copy a case, named by its path from the repository root or in full, into the workspace and
-   *  show it alone in Network, so that the only network webview is this case's. */
+  /** Copies a case into the workspace and opens it alone in the Network. */
   async openCase(path: string): Promise<{ uri: vscode.Uri; network: Frame }> {
     const name = basename(path)
     const uri = vscode.Uri.joinPath(folder(), name)
@@ -292,27 +264,22 @@ export class TestHost extends Bench {
     return { uri, network }
   }
 
-  /** Show one of the case's panel views. */
   async show(kind: keyof typeof PANELS): Promise<Frame> {
     await vscode.commands.executeCommand(PANELS[kind], this.uri)
     return this.view(kind)
   }
 
-  /** A playback item of the status bar by the start of its name: Previous sample, Play, Pause,
-   *  Replay, Next sample, Time, Speed, Go to end or Go live. */
+  /** A status bar playback item by name prefix: Previous Sample, Play, Pause, Replay, Next Sample,
+   *  Go to Time or Playback Speed. */
   playback(name: string): Locator {
     return this.page
       .locator('.part.statusbar')
       .getByRole('button', { name: new RegExp('^' + name) })
   }
 
-  // ── Commands, from where the user finds them ──
-  //
-  // The manifest decides what each title bar and menu offers, and the command runs with what
-  // VS Code passes it there, without waiting on a popup VS Code may drop.
+  // ── Commands, run as the manifest's menus offer them, without VS Code's popups ──
 
-  /** Choose `item` from the title bar of the editor in front, its More Actions included, once it
-   *  is offered there and enabled. */
+  /** Runs `item` from the active editor's title bar (More Actions included) once it is enabled. */
   async title(item: string): Promise<void> {
     const editor = () => vscode.window.tabGroups.activeTabGroup.activeTab?.input
     const keys = () => {
@@ -340,13 +307,10 @@ export class TestHost extends Bench {
         }
       },
     )
-    // An editor's title bar gives its command the editor's file.
     this.command(command, (editor() as vscode.TabInputCustom).uri)
   }
 
-  /** Choose `item` from the Explorer's menu on the file `uri`, the solver file unless given, as a
-   *  user runs GridKit on a solver file: without waiting on it. What keeps a run from starting is
-   *  said in a notification. */
+  /** Runs `item` from the Explorer context menu on `uri` without waiting for it. */
   explorer(item: string, uri = this.solver): void {
     const keys = { ...this.keys(), resourceFilename: basename(uri.path) }
     const { command } = this.menus.find('explorer/context', item, keys)
@@ -355,17 +319,15 @@ export class TestHost extends Bench {
 
   // ── VS Code's own prompts, answered from the keyboard ──
 
-  /** The quick input on show: a quick pick, an input box, or a file dialog. One closed stays in the
-   *  page hidden, holding what it last asked. What it says is read with `READ`, as one may close
-   *  between two reads, and a read would otherwise wait out the whole timeout for another. */
-  #prompt() {
+  /** The visible quick input: a quick pick, input box or file dialog. Read it with `READ`, since it
+   *  may close between two reads. */
+  #quickInput() {
     const widget = this.page.locator('.quick-input-widget:visible')
     return { widget, input: widget.locator('.quick-input-box input').first() }
   }
 
-  /** The title of the prompt on show, which says what it asks. */
-  async #asked(): Promise<string> {
-    const { widget, input } = this.#prompt()
+  async #promptTitle(): Promise<string> {
+    const { widget, input } = this.#quickInput()
     await input.waitFor({ state: 'visible' })
     return widget
       .locator('.quick-input-title')
@@ -373,11 +335,10 @@ export class TestHost extends Bench {
       .catch(() => '')
   }
 
-  /** Press Enter on the prompt that asked `asked` until it takes `entered`: it closes, or asks
-   *  something else. One that still asks it with the same text has not taken it, so Enter only
-   *  ever reaches the prompt. */
-  async #take(asked: string, entered: string): Promise<void> {
-    const { widget, input } = this.#prompt()
+  /** Presses Enter on the prompt titled `asked` until it accepts `entered` (closes or changes).
+   *  Enter is pressed only while that prompt still shows that text. */
+  async #submit(asked: string, entered: string): Promise<void> {
+    const { widget, input } = this.#quickInput()
     const asking = async () =>
       (await widget.isVisible()) &&
       (await widget
@@ -394,29 +355,25 @@ export class TestHost extends Bench {
     )
   }
 
-  /** Answer the file dialog on show, VS Code's own, with `path`. */
   async dialog(path: string): Promise<void> {
-    const { input } = this.#prompt()
-    // The dialog opens on the folder it starts in; a picker still closing holds other text.
+    const { input } = this.#quickInput()
+    // The dialog starts with a folder path; a picker that is still closing shows other text.
     await until(
       async () => /[\\/]/.test(await input.inputValue(READ).catch(() => '')),
       'the file dialog',
     )
-    const asked = await this.#asked()
+    const asked = await this.#promptTitle()
     await input.fill(path)
-    await this.#take(asked, path)
+    await this.#submit(asked, path)
   }
 
-  /** Save a picture of the whole VS Code window. */
   async capture(name: string): Promise<void> {
     await vscode.commands.executeCommand('notifications.clearAll')
     await pause(300)
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
   }
 
-  /** Results to play: a second of every bus's voltage, each a little out of step with the last,
-   *  shown with the first bus's plotted. Those on show, or, once others took their place, the file
-   *  read anew. */
+  /** One second of every bus's voltage, first bus plotted; reuses the results already shown. */
   async results(): Promise<Results> {
     const shown = this.session.results
     if (shown?.name === SYNTHETIC && !shown.growing) return shown
@@ -425,8 +382,7 @@ export class TestHost extends Bench {
     return results
   }
 
-  /** Results of `frames` frames over `seconds`, every bus's voltage a little out of step with the
-   *  last, written beside the case as `name` and shown once they are read. */
+  /** Writes `frames` samples of phase-shifted bus voltages over `seconds` to `name`; loads it. */
   async waveform(name: string, frames: number, seconds: number): Promise<Results> {
     const csv = vscode.Uri.joinPath(this.uri, '..', name)
     const { buses } = this.source
@@ -450,13 +406,11 @@ export class TestHost extends Bench {
     return this.session.results!
   }
 
-  /** Plot the first bus's voltage in the Monitor. */
   plot(): void {
     this.session.setPlots([{ table: VM.table, field: VM.field, id: this.source.buses[0]!.number }])
   }
 
-  /** Which GridKit the runs use: the pinned WASM artifact or the
-   *  installed program. Runs on different builds time different simulations. */
+  /** The GridKit build in use, since timings differ between builds. */
   async gridkitBuild(): Promise<string> {
     const runtime = await available(gridkitOf(this.uri))
     if (runtime.kind === 'installed') return runtime.program
@@ -466,10 +420,9 @@ export class TestHost extends Bench {
     return (JSON.parse(new TextDecoder().decode(bytes)) as { artifact: string }).artifact
   }
 
-  /** Back to the case alone in its Network editor: its file as found, nothing selected or mapped,
-   *  its clock at rest. */
+  /** Restores the case, alone in its Network editor, with nothing selected or mapped. */
   override async reset(): Promise<void> {
-    // A prompt a test left asking holds its command open, and would take the next one's keys.
+    // A prompt left open by a test would receive the next test's keys.
     await vscode.commands.executeCommand('workbench.action.closeQuickOpen')
     await this.restore()
     await this.open()
@@ -481,7 +434,7 @@ export class TestHost extends Bench {
     session.show(undefined)
   }
 
-  /** Keep what every view showed when `test` failed, with the files of its results. */
+  /** Logs every view's state, and saves a screenshot and the run's files, after `test` failed. */
   async failed(test: string): Promise<void> {
     const session = this.studio.get(this.key)
     for (const frame of this.#frames())
@@ -494,7 +447,7 @@ export class TestHost extends Bench {
     console.error('Page errors:', this.errors)
     console.error('Studio failures:', this.studio.reporter.errors)
     console.error('Case state:', JSON.stringify(this.studio.state(this.key)).slice(0, 2000))
-    // A run the test left going would slow every test after it.
+    // A run left going would slow every later test.
     session?.stop()
     const name = 'failure-' + test.replace(/[^\w]+/g, '-').toLowerCase()
     await this.page.screenshot({ path: join(this.output, 'playwright', name + '.png') })
@@ -515,7 +468,7 @@ export class TestHost extends Bench {
     }
   }
 
-  /** Write the report and let go of the window; a page that threw fails the run. */
+  /** Writes the report and closes the browser; a page error fails the run. */
   async finish(): Promise<void> {
     try {
       this.report.worker = await this.studio.client.stats()
@@ -535,51 +488,44 @@ export class TestHost extends Bench {
 
 let started: Promise<TestHost> | undefined
 
-/** The latkit the extension was built with, as a benchmark names its renderer: only runs on the
- *  same one compare their work. */
+/** The renderer name benchmarks record; only runs on the same latkit version are compared. */
 export async function renderer(): Promise<string> {
   const path = join(process.env.GRIDKIT_TEST_ROOT!, 'node_modules', 'latkit', 'package.json')
   return 'latkit@' + (JSON.parse(await readFile(path, 'utf8')) as { version: string }).version
 }
 
-/** The one TestHost, reset: every suite starts from the case alone in its Network editor, so each
- *  runs alone as it does among the others. */
+/** The shared TestHost, reset so each suite starts from the same state. */
 export async function testHost(): Promise<TestHost> {
   const bench = await (started ??= TestHost.start())
   await bench.reset()
   return bench
 }
 
-/** What VS Code says of the test profile itself, which `--disable-extensions` causes. */
+/** Shown because of `--disable-extensions`. */
 const PROFILE_NOTICES = new Set(['All installed extensions are temporarily disabled.'])
-/** A run's own progress, titled by its program and solver file, which says how far it has come
- *  rather than that anything failed. A notice that a run failed names it the same way. */
+/** A run's progress notification (program and solver file), excluding failure notices. */
 const PROGRESS = /^\S+ .+?\.solver\.json\b(?!.*\bfailed\b)/i
 
-/** The notifications VS Code shows, which are then cleared. Studio shows one only when something
- *  the user asked for fails, so a test that sees one expected it or found a fault. */
+/** Returns and clears the visible notifications, minus profile notices and run progress. */
 export async function notifications(): Promise<string[]> {
   const bench = await started?.catch(() => undefined)
   if (!bench) return []
-  const shown = await bench.page
+  const texts = await bench.page
     .locator('.notifications-toasts .notification-list-item-message')
     .filter({ visible: true })
     .allInnerTexts()
-  const said = shown.filter(
+  const unexpected = texts.filter(
     (text) => !PROFILE_NOTICES.has(text.trim()) && !PROGRESS.test(text.trim()),
   )
-  // Cleared only once there is something to say: clearing a run's progress alone would clear the
-  // failure that follows it as it shows.
-  if (said.length) await vscode.commands.executeCommand('notifications.clearAll')
-  return said
+  // Clearing progress alone could also clear a failure that is about to show.
+  if (unexpected.length) await vscode.commands.executeCommand('notifications.clearAll')
+  return unexpected
 }
 
-/** Keep what VS Code showed when `test` failed. */
 export async function failed(test: string): Promise<void> {
   await (await started?.catch(() => undefined))?.failed(test)
 }
 
-/** Close the run: its report is written, and a page that threw fails it. */
 export async function finish(): Promise<void> {
   await (await started?.catch(() => undefined))?.finish()
 }

@@ -6,7 +6,7 @@ import { beforeAll, expect, it, vi } from 'vitest'
 import { loadNative } from '../../workers/native.js'
 import { DatasetSlot } from './data.js'
 
-// The page's channel to the extension, which only a webview has.
+// The bridge needs a webview.
 vi.mock('../bridge.js', () => ({ bridge: {} }))
 
 const signal = AbortSignal.any([])

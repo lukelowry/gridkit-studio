@@ -1,18 +1,14 @@
 import { type Placed, Shot, type View } from 'latkit'
 
+import { caseStem } from '../../shared/format.js'
 import { bridge } from '../bridge.js'
 
-/** Pixels per CSS pixel of an image: twice the page's, so it stays sharp in a document. */
-export const SCALE = 2
+/** Image pixels per CSS pixel: 2 keeps an image sharp in a document. */
+const SCALE = 2
 
-/** The case's file name without `.case.json`, as an export names its file. */
-export const caseStem = (name: string) =>
-  name.replace(/(\.case)?\.json$/i, '').replace(/[\\/:*?"<>|]/g, '_')
-
-/** A picture of exactly what `view`'s canvas shows. */
 export const viewShot = (view: View) => Shot.of(view, { scale: SCALE, capture: 'now' })
 
-/** A picture `size` CSS pixels large of `views`, each drawn into its region. */
+/** A shot of `views`, each in its region, `size` in CSS pixels. */
 export const picture = (size: readonly [number, number], views: readonly Placed[]) =>
   new Shot([Math.round(size[0] * SCALE), Math.round(size[1] * SCALE)], {
     scale: SCALE,
@@ -20,7 +16,7 @@ export const picture = (size: readonly [number, number], views: readonly Placed[
     views,
   })
 
-/** Draws `shot` and asks the user where beside the case at `uri` to save it as a PNG. */
+/** Encodes `shot` as a PNG and asks the user where to save it, next to the case at `uri`. */
 export async function saveImage(
   shot: Shot,
   uri: string,

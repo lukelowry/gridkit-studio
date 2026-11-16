@@ -3,16 +3,19 @@ import { createRequire } from 'node:module'
 import { Data, Expr, type Mark, reference } from 'latkit'
 import { beforeAll, expect, it } from 'vitest'
 
-import { catalog } from '../../gridkit/definition.js'
+import { catalog, definitionsOf } from '../../gridkit/definition.js'
 import { defaults, EDGE_WIDTH, reader } from '../../shared/settings.js'
 import { loadNative } from '../../workers/native.js'
 import { caseFit, networkScene, plotScene, sampledFields, sceneFields, stylesOf } from './scenes.js'
 import { caseSpan, GAP } from './span.js'
+
+/** Every class of the bundled catalog, as a case of each would define it. */
+const definition = definitionsOf([...catalog.shapes.values()])
 beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
 it('builds native scenes and projects only mark fields with separate sampled sources', () => {
   using data = new Data('case')
   const settings = reader()
-  const network = networkScene(data, catalog.definition.drawing, settings, {}, [])
+  const network = networkScene(data, definition.drawing, settings, {}, [])
   expect(network.layout).toEqual({ stress: { gap: GAP } })
   // The wheel's default leaves every input to latkit.
   expect(network.controls).toEqual(
@@ -20,29 +23,28 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   )
   // A trackpad scrolls a canvas to pan and pinches to zoom.
   const trackpad = reader({ 'network.wheelBehavior': 'trackpad' })
-  expect(networkScene(data, catalog.definition.drawing, trackpad, {}, []).controls).toMatchObject({
+  expect(networkScene(data, definition.drawing, trackpad, {}, []).controls).toMatchObject({
     gestures: { wheel: 'pan', 'control+wheel': 'zoom' },
   })
-  const projected = sceneFields(catalog.definition, {
+  const columns = sceneFields(definition, {
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
-  expect(projected.flatMap((table) => table.fields)).not.toContain('Vm')
-  expect(projected.find((table) => table.table === 'Branch')?.fields).toContain('ports.bus1')
+  expect(columns.flatMap((table) => table.fields)).not.toContain('Vm')
+  expect(columns.find((table) => table.table === 'Branch')?.fields).toContain('ports.bus1')
   const plot = { table: 'Bus', field: 'Vm' }
   const monitored = plotScene(data, plot, settings, {})
   expect(monitored.marks).toMatchObject([
     { trace: 'Vm', interpolation: 'linear', width: settings.get('monitor.lineWidth') },
   ])
-  // Shift and a drag frames a span of time; a wheel turned off neither zooms nor pinches.
+  // Shift and drag zooms to a span of time; a wheel turned off neither zooms nor pinches.
   expect(monitored.controls).toMatchObject({ gestures: { 'shift+primary': 'zoomBox' } })
   expect(
     plotScene(data, plot, reader({ 'monitor.wheelBehavior': 'off' }), {}).controls,
   ).toMatchObject({
     gestures: { wheel: 'none', pinch: 'none', 'shift+primary': 'zoomBox' },
   })
-  // The Monitor's lanes name their plots, whose axes carry ticks alone; a picture's plot, which
-  // has no lane, names itself on its value axis. Neither titles the time axis: its last tick says
-  // it is seconds.
+  // The Monitor's lanes name their plots, whose axes show only ticks; an image's plot has no lane
+  // and labels its value axis. Neither titles the time axis, whose last tick shows the unit.
   expect(monitored.space).toEqual({ plot: { x: { unit: ' s' }, y: { label: null } } })
   expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
     plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm' } },
@@ -55,7 +57,7 @@ it('joins sparse sampled mappings by ID with a stable whole-run domain', () => {
     .replace('Bus', [42])
     .frames('Bus', 'Vm', { first: 0, at: [0, 1], values: [1, 2] })
   const styles = stylesOf(
-    catalog.definition,
+    definition,
     { vertexSize: { table: 'Bus', field: 'Vm' } },
     [{ table: 'Bus', field: 'Vm', ids: [42], domain: [0, 10] }],
     () => sampled,
@@ -77,8 +79,8 @@ it('joins sparse sampled mappings by ID with a stable whole-run domain', () => {
     vertexSize: { table: 'Bus', field: 'Vm' },
     edgeColor: { table: 'Bus', field: 'Vm' },
   }
-  expect(sampledFields(catalog.definition, both, results)).toEqual([['Bus', 'Vm']])
-  expect(sampledFields(catalog.definition, both)).toEqual([])
+  expect(sampledFields(definition, both, results)).toEqual([['Bus', 'Vm']])
+  expect(sampledFields(definition, both)).toEqual([])
 })
 it("frames whole case tables, and raises the highest mapped value a share of the case's span", () => {
   const vertices = [{ table: 'Bus', position: ['x', 'y'] as [string, string] }]
@@ -116,7 +118,7 @@ it("frames whole case tables, and raises the highest mapped value a share of the
   expect(raised(plane, false)[1]).toBeCloseTo(0.2 * 4 * GAP)
 })
 
-it('draws the map, then branches, then the buses over them, and says whose map it is', () => {
+it('draws the map, then branches, then the buses over them, and credits the map', () => {
   using data = new Data('case').replace('Bus', [1], { x: [0], y: [0] })
   const drawing = {
     geographic: true,
@@ -132,8 +134,8 @@ it('draws the map, then branches, then the buses over them, and says whose map i
     'lines' in mark ? 'lines' : 'vertices' in mark ? 'vertices' : 'edges',
   )
   expect(kinds).toEqual(['lines', 'edges', 'vertices'])
-  expect(scene.title).toEqual({ text: '© the map', place: 'bottom-right' })
-  // The sun lights the earth at the time given, so every scene of one view lights alike.
+  expect(scene.title).toEqual({ text: '', subtitle: '© the map', place: 'bottom-right' })
+  // The sun is placed at the time given, so every scene of one view is lit the same.
   expect(networkScene(data, drawing, reader(), {}, [], undefined, 1000).space).toMatchObject({
     earth: { daylight: 1000 },
   })

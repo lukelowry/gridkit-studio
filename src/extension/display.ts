@@ -1,20 +1,19 @@
-/** Commands on what the views draw: framing and reloading them, mapping a field onto the Network,
- *  their settings, and a video or image of them. */
+/** View commands: fit, reload, Network mappings, view settings and video or image export. */
 
 import * as vscode from 'vscode'
 
-import { type Field, fieldDefinition, leaf, networkRole } from '../shared/document.js'
+import { type Field, leaf, networkRole } from '../shared/document.js'
 import { settingsOf, viewId } from '../shared/ids.js'
-import { CHANNELS, channelsFor, channelsOf, NUMERIC, rangeOf } from '../shared/mappings.js'
-import type { Target } from '../shared/menus.js'
+import { CHANNELS, channelsFor, channelsOf, rangeOf } from '../shared/mappings.js'
+import { mappingOf, type Target } from '../shared/menus.js'
 import type { Summary } from '../shared/messages.js'
 import { TILTED } from '../shared/settings.js'
 import { askRange, type Commands, type Context } from './commands.js'
 import { displayOf, setDisplay } from './settings.js'
 
-export function registerCanvases({ studio, registrations, command, action, focus }: Commands) {
-  /** The view a command acts on: the one its menu was opened on, else the Network in front alone,
-   *  as its title bar or the Command Palette asks. */
+export function registerDisplay({ studio, registrations, command, action, focus }: Commands) {
+  /** The view a command acts on: its menu's view, else the active Network editor alone (title bar
+   *  or Command Palette). */
   const canvasOf = (context: Context): { view?: Target['origin']; active: boolean } => {
     if (context.target) return { view: context.target.origin, active: false }
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
@@ -22,29 +21,19 @@ export function registerCanvases({ studio, registrations, command, action, focus
       ? { view: 'network', active: true }
       : { active: false }
   }
-  command('fit', (context) => {
+  command('fitAll', (context) => {
     const { view, active } = canvasOf(context)
-    action(context, 'fit', undefined, view, active)
+    action(context, 'fitAll', view, active)
   })
-  // Every view of the case, and its results, read and drawn again.
   command('reloadView', (context) => {
     context.session.retry()
     action(context, 'reloadView')
   })
-  // A neighborhood shows in the Network, whatever menu asks: of the element, or, where the Network
-  // does not draw it, of the elements nearest it.
-  command('zoomToNeighborhood', async (context) => {
-    const { session, element } = context
-    if (!element) return
-    session.select(element)
-    const shown = await session.networkSelectionOf(element, await context.summary())
-    action(context, 'neighborhood', shown, 'network')
-  })
 
-  /** The numeric field in context, which a network channel can show. */
-  const mappable = ({ field }: Context, { definition }: Summary): Field => {
-    if (!field || !NUMERIC.has(fieldDefinition(definition, field.table, field.field)?.kind))
-      throw new Error('Choose a numeric field to map.')
+  /** The field in context, if a Network channel can show it. */
+  const mappable = ({ field, session }: Context, summary: Summary): Field => {
+    if (!field || !mappingOf(summary, session.mappings, field).mappable)
+      throw new Error('Choose a number field of a type the Network draws.')
     return field
   }
   command('mapTo', async (context) => {
@@ -64,7 +53,7 @@ export function registerCanvases({ studio, registrations, command, action, focus
     if (!picked) return
     const channels = picked.map(({ channel }) => channel)
     session.map(field, channels, rangeOf(mappings, field))
-    // A height shows only from the side: a flat Network tilts, as its Tilt button tilts it.
+    // Height is only visible from the side, so tilt a flat Network as its Tilt button does.
     const uri = vscode.Uri.parse(session.uri)
     if (channels.includes('vertexHeight') && displayOf(uri)['network.tilt'] === 0)
       await setDisplay(uri, 'network.tilt', TILTED)
@@ -74,7 +63,7 @@ export function registerCanvases({ studio, registrations, command, action, focus
     const field = mappable(context, await context.summary())
     const { mappings } = session
     const range = await askRange(
-      'Mapping range of ' + leaf(field.field),
+      'Mapping Range of ' + leaf(field.field),
       rangeOf(mappings, field),
       'measures the values shown',
     )
@@ -84,7 +73,6 @@ export function registerCanvases({ studio, registrations, command, action, focus
     if (field) session.map(field, [])
   })
 
-  // A view's settings are VS Code's own, with a case or without.
   for (const [id, category] of [
     ['networkSettings', 'network'],
     ['monitorSettings', 'monitor'],
@@ -95,13 +83,13 @@ export function registerCanvases({ studio, registrations, command, action, focus
       ),
     )
   command('exportVideo', ({ session }) => focus(session, 'export'))
-  // The Network's title bar names its file, and a menu its view; the Monitor's title bar names
-  // nothing, so the Command Palette leaves this out.
+  // The Network's title bar passes its file and a menu its target; the Monitor's title bar passes
+  // nothing, which is why the Command Palette hides this command.
   command('exportImage', (context, value) => {
     const { view, active } =
       value instanceof vscode.Uri || context.target
         ? canvasOf(context)
         : { view: 'monitor' as const, active: false }
-    action(context, 'exportImage', undefined, view, active)
+    action(context, 'exportImage', view, active)
   })
 }

@@ -1,9 +1,8 @@
-/** The datasets a page's views draw, each published whole: a case's rows as the extension projects
- *  them, and whatever else arrives as pages of patches. */
+/** Datasets for a page's views, each published only once complete. */
 
 import { Data } from 'latkit'
 
-import type { ProjectionCursor, ProjectionPage, ProjectionSelection } from '../../shared/data.js'
+import type { CaseRowsCursor, CaseRowsPage, FieldSelection } from '../../shared/data.js'
 import type { ViewApi } from '../../shared/messages.js'
 import { bridge } from '../bridge.js'
 import { loadLatkit } from './load.js'
@@ -13,7 +12,7 @@ interface DatasetVersion {
   readonly data: Data
 }
 
-/** Publish complete revisions only. Views keep their previous native source until reassigned. */
+/** Publishes complete revisions only; views keep the previous one until their sources change. */
 export class DatasetSlot {
   #current?: DatasetVersion
   #pending?: Data
@@ -63,15 +62,15 @@ export class DatasetSlot {
   }
 }
 
-/** The rows of a case a page draws, read from the extension a page at a time. */
-export class CaseProjection {
+/** A case's rows, read from the extension in pages. */
+export class CaseRows {
   readonly slot = new DatasetSlot()
   #request = ''
   #controller?: AbortController
 
   async receive(
-    source: ViewApi['project']['input'],
-    fields: readonly ProjectionSelection[],
+    source: ViewApi['caseRows']['input'],
+    fields: readonly FieldSelection[],
     abort?: AbortSignal,
   ): Promise<boolean> {
     const key = JSON.stringify([source, fields])
@@ -86,17 +85,16 @@ export class CaseProjection {
     try {
       await loadLatkit()
       signal.throwIfAborted()
-      const first = await bridge.request('project', { ...source, fields }, signal)
+      const first = await bridge.request('caseRows', { ...source, fields }, signal)
       async function* pages() {
-        let page: ProjectionPage = first
+        let page: CaseRowsPage = first
         for (;;) {
           signal.throwIfAborted()
           yield page.bytes
-          const cursor: ProjectionCursor | undefined = page.next
+          const cursor: CaseRowsCursor | undefined = page.next
           if (!cursor) return
-          page = await bridge.request('project', { ...source, fields, cursor }, signal)
-          if (page.key !== first.key)
-            throw new Error('The projection revision changed while loading.')
+          page = await bridge.request('caseRows', { ...source, fields, cursor }, signal)
+          if (page.key !== first.key) throw new Error('The case changed while its rows loaded.')
         }
       }
       return await this.slot.receive('case', first.key, pages(), signal)

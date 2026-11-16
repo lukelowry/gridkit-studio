@@ -3,7 +3,6 @@ export interface ClockState {
   /** Increments with every new span, so readers can tell spans apart. */
   readonly epoch: number
   readonly status: 'idle' | 'playing' | 'paused'
-  /** The playhead at the last change. */
   readonly t: number
   /** Simulated seconds per wall-clock second. */
   readonly rate: number
@@ -12,7 +11,6 @@ export interface ClockState {
   readonly follow: boolean
 }
 
-/** The clock before any result: idle at the origin of an empty span. */
 export const IDLE: ClockState = {
   epoch: 0,
   status: 'idle',
@@ -25,7 +23,6 @@ export const IDLE: ClockState = {
 /** The speeds a playhead plays at, in simulated seconds per second. */
 export const RATES = [0.25, 0.5, 1, 2, 4] as const
 
-/** Where a playhead lands in its span, and whether it ran into the end. */
 interface Played {
   readonly t: number
   readonly ended: boolean
@@ -35,8 +32,7 @@ export function clamp(t: number, [start, end]: readonly [number, number]): numbe
   return Math.max(start, Math.min(end, t))
 }
 
-/** The playhead `elapsed` milliseconds after `state` was set: one not playing holds its place, and
- *  one playing stops at the end of its span. */
+/** The playhead `elapsed` milliseconds after `state` was set, stopping at the span's end. */
 export function advance(state: ClockState, elapsed: number): Played {
   if (state.status !== 'playing') return { t: clamp(state.t, state.span), ended: false }
   const [start, end] = state.span
@@ -45,13 +41,12 @@ export function advance(state: ClockState, elapsed: number): Played {
 }
 
 interface SpanOptions {
-  /** Whether frames are arriving, so the playhead follows the head. */
   readonly live?: boolean
 }
 
-/** How long past the computed end the end timer fires, so it never lands short of the edge. */
+/** Extra delay on the end timer so it never fires short of the end. */
 const SLACK_MS = 50
-/** The longest a timer waits: a longer one fires at once. */
+/** The longest delay setTimeout supports; longer ones fire immediately. */
 const LONGEST_WAIT_MS = 2 ** 31 - 1
 
 /** The playback clock: seeking, playing to the end, and following a live head. Between changes,
@@ -75,30 +70,26 @@ export class Transport {
     return this.#state
   }
 
-  /** Whether frames are arriving. */
   get live(): boolean {
     return this.#live
   }
 
-  /** The current playhead, without changing the state. */
   currentT(): number {
     return advance(this.#state, this.now() - this.#since).t
   }
 
-  /** The clock settled at this instant, for a reader that integrates from when it receives it. */
+  /** The clock at this instant, for a reader that advances it from when it receives it. */
   snapshot(): ClockState {
     return { ...this.#state, t: this.currentT() }
   }
 
-  /** Drops the span: idle at the origin, in a new epoch. */
   clear(): void {
     this.#live = false
     this.#head = 0
     this.#commit({ ...IDLE, epoch: this.#state.epoch + 1 })
   }
 
-  /** Starts `span` in a new epoch: paused at its start, at the speed it played at before, following
-   *  when live. */
+  /** Starts `span` in a new epoch, paused at its start, following the head when live. */
   setSpan(span: readonly [number, number], { live = false }: SpanOptions = {}): void {
     this.#live = live
     this.#head = span[0]
@@ -112,8 +103,7 @@ export class Transport {
     })
   }
 
-  /** Frames now reach `end`: the span widens to it, and a following playhead moves with the head,
-   *  as one change. Any other playhead stays where it is. */
+  /** Widens the span to `end` and moves a following playhead there, in one change. */
   grow(end: number): void {
     if (this.#state.status === 'idle') return
     this.#head = end
@@ -134,9 +124,9 @@ export class Transport {
     this.#commit({ ...this.#state, follow: false, t: clamp(this.#head, this.#state.span) })
   }
 
-  /** Behind a live head, a seek stops following; at the head, it follows again. */
+  /** Seeking behind a live head stops following; seeking to the head follows again. */
   seek(t: number): void {
-    if (this.#state.status === 'idle') return
+    if (this.#state.status === 'idle' || !Number.isFinite(t)) return
     const target = clamp(t, this.#state.span)
     const follow = this.#live && target >= this.#head - Number.EPSILON
     this.#commit({
@@ -147,7 +137,7 @@ export class Transport {
     })
   }
 
-  /** Plays from the start again when a span no frames still reach has finished; stops following. */
+  /** Plays, restarting from the start if a finished span is no longer live; stops following. */
   play(): void {
     if (this.#state.status !== 'paused') return
     const [start, end] = this.#state.span
@@ -173,7 +163,6 @@ export class Transport {
     else this.play()
   }
 
-  /** Jumps to the head and follows it. */
   goLive(): void {
     if (!this.#live || this.#state.status === 'idle') return
     this.#commit({
@@ -184,14 +173,12 @@ export class Transport {
     })
   }
 
-  /** Ignores a rate that is not positive. */
   setRate(rate: number): void {
-    if (this.#state.status === 'idle' || !(rate > 0)) return
+    if (this.#state.status === 'idle' || !(rate > 0 && Number.isFinite(rate))) return
     this.#settle()
     this.#commit({ ...this.#state, rate })
   }
 
-  /** Stops the end timer. */
   dispose(): void {
     this.#disarm()
   }
@@ -215,8 +202,8 @@ export class Transport {
     this.changed(next)
   }
 
-  /** While the clock plays, wakes at the span's end to pause, so readers that never poll see it; the
-   *  end is forced, so timer drift cannot matter. */
+  /** While playing, pauses at the span's end so readers that never poll see it. The end time is
+   *  set explicitly, so timer drift does not matter. */
   #arm(): void {
     this.#disarm()
     const { status, span, t, rate } = this.#state
@@ -227,7 +214,7 @@ export class Transport {
         this.#alarm = null
         this.#settle()
         if (this.#state.status !== 'playing') return
-        // A wait longer than a timer holds wakes before the end, and waits on.
+        // A wait longer than setTimeout supports fires early and re-arms.
         if (wait > LONGEST_WAIT_MS) return this.#arm()
         this.#commit({ ...this.#state, status: 'paused', t: this.#state.span[1] })
       },

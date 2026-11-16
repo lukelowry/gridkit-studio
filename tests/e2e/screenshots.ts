@@ -1,4 +1,4 @@
-/** The README's pictures, from real GridKit runs of the cases in cases/, written to docs/media. */
+/** Captures the README screenshots from real GridKit runs into docs/media. */
 
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -14,12 +14,10 @@ const ROOT = process.env.GRIDKIT_TEST_ROOT!
 const MEDIA = join(ROOT, 'docs/media')
 const WINDOW = { width: 1280, height: 800 }
 const KV = { table: 'Bus', field: 'params.kv' } as const
-/** How far ACTIVSg25k's picture stands back from its fault: wheel notches out from the faulted
- *  bus's neighborhood, turned over that bus, which so stays where the neighborhood framed it. */
-const NOTCHES_OUT = 4
+/** Wheel notches to zoom in on the faulted bus from the whole ACTIVSg25k case. */
+const NOTCHES_IN = 4
 
-/** Run the case at `uri` with the solver file `solver` beside it, from that file's menu, and wait
- *  for the run to finish. */
+/** Writes `solver` beside the case, runs it from the Explorer menu, and waits for completion. */
 async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promise<void> {
   const session = bench.studio.get(uri.toString())!
   const previous = session.run?.id
@@ -32,14 +30,13 @@ async function simulate(bench: TestHost, uri: vscode.Uri, solver: Solver): Promi
   if (session.run?.state !== 'complete') throw new Error(session.run?.message ?? 'The run failed.')
 }
 
-/** A fault on `bus` from `from` to `to` through reactance `X`, as GridKit's events give it. */
 const faultAt = (bus: number, [from, to]: readonly [number, number], X: number) => [
   { time: from, type: 'fault_on', bus, R: 0, X },
   { time: to, type: 'fault_off', bus },
 ]
 
-/** Save the workbench below its title bar, which names the test host, once `view` settles with
- *  nothing hovered: latkit forgets the pointer once its canvas loses focus. */
+/** Screenshots the workbench below the title bar once `view` settles. Blurring the canvas clears
+ *  latkit's hover. */
 async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> {
   await vscode.commands.executeCommand('notifications.clearAll')
   const canvas = view.locator('canvas').first()
@@ -54,8 +51,7 @@ async function shoot(bench: TestHost, name: string, view: Frame): Promise<void> 
   })
 }
 
-/** A bus of the case at `path`, from the repository root, to fault: of the highest voltage, the one
- *  with the most branches. */
+/** The highest-voltage bus with the most branches in the case at `path`. */
 async function hub(path: string): Promise<number> {
   const source = JSON.parse(await readFile(join(ROOT, path), 'utf8')) as {
     buses: { number: number; params: { kv: number } }[]
@@ -71,7 +67,6 @@ async function hub(path: string): Promise<number> {
   return best!.number
 }
 
-/** Show the case at `path` alone, full window, with `map` driving `channels`. */
 async function show(bench: TestHost, path: string, map: Field, channels: Channel[]) {
   const { uri, network } = await bench.openCase(path)
   bench.studio.get(uri.toString())!.map(map, channels)
@@ -80,21 +75,17 @@ async function show(bench: TestHost, path: string, map: Field, channels: Channel
   return { uri, network, session: bench.studio.get(uri.toString())! }
 }
 
-/** Tilt the camera from the view's own control. */
 async function tilt({ network }: Awaited<ReturnType<typeof show>>) {
   await network.getByRole('button', { name: 'Tilt', exact: true }).click()
   await until(async () => {
-    const shown = await network.evaluate<{ camera: { pitch?: number } } | null>(
-      'gridkitSelection()',
-    )
-    return (shown?.camera.pitch ?? 0) > 0
+    const view = await network.evaluate<{ camera: { pitch?: number } } | null>('gridkitSelection()')
+    return (view?.camera.pitch ?? 0) > 0
   }, 'tilted')
 }
 
 export async function run() {
   const bench = await testHost()
-  // Vertices a size larger, and each picture a colormap and height of its own; every setting
-  // changed is put back after, the tilt the Network's own control sets too.
+  // Every setting changed here is restored at the end, including the tilt the Tilt button sets.
   const settings = vscode.workspace.getConfiguration('gridkitStudio')
   const changed = new Set(['network.tilt'])
   const set = (key: string, value: unknown) => {
@@ -108,8 +99,7 @@ export async function run() {
     await mkdir(MEDIA, { recursive: true })
     await bench.page.setViewportSize(WINDOW)
 
-    // ACTIVSg70k, tilted and unlabeled: each bus's voltage level as its color and, high over the
-    // map, its height.
+    // ACTIVSg70k, tilted and unlabeled, with nominal voltage as color and height.
     await set('network.labels', false)
     const large = await show(bench, 'cases/ACTIVSg70k.case.json', KV, [
       'vertexColor',
@@ -123,8 +113,7 @@ export async function run() {
     await shoot(bench, 'activsg70k', large.network)
     await set('network.labels', undefined)
 
-    // ACTIVSg25k mid-fault on its busiest highest-voltage bus, framed on it: voltage magnitude as
-    // color and height, so the buses the fault pulls down sink below the rest.
+    // ACTIVSg25k mid-fault, with voltage magnitude as color and height so depressed buses sink.
     await bench.reset()
     await set('network.colormap', 'spectral')
     const path = 'cases/ACTIVSg25k.case.json'
@@ -134,43 +123,30 @@ export async function run() {
     await simulate(bench, wide.uri, {
       tmax: 1,
       dt_monitor: 0.01,
-      // A fault this near to bolted takes GridKit's solver more steps between samples than it
-      // allows by default.
+      // A near-bolted fault needs more solver steps between samples than the default allows.
       max_steps: 5000,
       events: faultAt(fault, [0.1, 0.2], 0.001),
     })
     await vscode.commands.executeCommand('workbench.action.closePanel')
     wide.session.transport.seek(0.15)
     await tilt(wide)
-    // Framed on the faulted bus and those it links to, as Zoom to Neighborhood frames it, with
-    // nothing selected, so nothing else dims; then stood back from the fault, with the network it
-    // pulls down rising behind it.
-    const { version } = await bench.studio.files.read(wide.uri.toString())
-    await vscode.commands.executeCommand('gridkitStudio.zoomToNeighborhood', {
-      uri: wide.uri.toString(),
-      version,
-      origin: 'network',
-      element: { table: 'Bus', id: fault },
-    })
     await idle(wide.network)
-    wide.session.select()
-    await idle(wide.network)
+    // Zoom in around the faulted bus, which stays under the pointer.
     const canvas = (await wide.network.locator('canvas').boundingBox())!
     const [x, y] = await wide.network.evaluate<[number, number]>(
       `gridkitLocate({ table: 'Bus', id: ${fault} })`,
     )
     await bench.page.mouse.move(canvas.x + x, canvas.y + y)
-    // Each notch settles before the next, as a notch turned during another's easing counts less.
-    for (let notch = 0; notch < NOTCHES_OUT; notch++) {
-      await bench.page.mouse.wheel(0, 120)
+    // Let each notch settle; a notch during another's easing counts for less.
+    for (let notch = 0; notch < NOTCHES_IN; notch++) {
+      await bench.page.mouse.wheel(0, -120)
       await idle(wide.network)
     }
     await bench.page.mouse.move(0, WINDOW.height / 2)
     await shoot(bench, 'activsg25k', wide.network)
     await set('network.tilt', undefined)
 
-    // IEEE39 during a fault at bus 16, as its solver file has one: every bus voltage on the network
-    // and in the Monitor.
+    // IEEE39 during a fault at bus 16, with every bus voltage in the Network and the Monitor.
     await bench.reset()
     await set('network.colormap', 'thermal')
     const ieee = await bench.open()
@@ -186,8 +162,8 @@ export async function run() {
     const monitor = await bench.show('monitor')
     bench.session.transport.seek(0.55)
     await visible(monitor, 'canvas[data-rendered=true]')
-    // The Monitor takes room from the Network, which then frames the case again.
-    await vscode.commands.executeCommand('gridkitStudio.fit', bench.uri)
+    // The Monitor shrinks the Network, so refit the case.
+    await vscode.commands.executeCommand('gridkitStudio.fitAll', bench.uri)
     await shoot(bench, 'monitor', ieee)
     console.log('Screenshots written to ' + MEDIA)
   } finally {

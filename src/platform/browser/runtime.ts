@@ -4,7 +4,7 @@ export async function available(gridkit: GridKit, signal?: AbortSignal) {
   signal?.throwIfAborted()
   if (gridkit.path.trim())
     throw new Error(
-      'GridKit Path requires a desktop or remote workspace. Clear it to use the included solver.',
+      'GridKit Path needs a desktop or remote workspace. Clear it to use the included solver.',
     )
   return { kind: 'wasm' as const, program: PROGRAM }
 }

@@ -3,9 +3,9 @@ import type { Revision } from './messages.js'
 
 /** Where GridKit runs: bundled WebAssembly, or an explicit installation on the workspace host. */
 export interface GridKit {
-  /** The program a run starts, with the solver file as its one argument. */
+  /** The program a run starts, with the solver file as its only argument. */
   readonly program: string
-  /** Its install folder, or its program; empty selects bundled WebAssembly. */
+  /** The install folder or program path; empty selects bundled WebAssembly. */
   readonly path: string
 }
 
@@ -15,67 +15,58 @@ export interface RuntimeProcess {
   executable: string
 }
 
-/** What a GridKit results file read for a case is: fixed once its header is read. */
+/** The fixed part of a results file read against a case, settled once its header is read. */
 export interface ResultsLayout {
-  /** The case revision it is read against, and that case's content. */
+  /** The case revision it is read against, and that case's content fingerprint. */
   readonly revision: Revision
   readonly fingerprint: string
-  /** The file's name. */
   readonly name: string
   readonly path: string
-  /** What the file holds, once its header is read. */
   readonly outputs: readonly RecordedField[]
-  /** The times a run will cover, as its solver file says. */
+  /** The run's full time span, from its solver file. */
   readonly span?: TimeRange
-  /** The solver file whose run wrote it, when one did. */
   readonly solver?: string
 }
 
-/** How far a results file is read: what grows as its frames come. */
+/** The part of a results file that grows as frames are read. */
 export interface ResultsProgress {
   readonly frames: number
   readonly domain: TimeRange
   /** Finite value ranges over every frame read, shared by all views and time windows. */
   readonly domains?: Record<string, Record<string, ValueRange>>
-  /** Whether more frames may come: a run still writes it, or Studio is still reading through it. */
+  /** Whether more frames may come: a run is still writing it, or Studio is still reading it. */
   readonly growing: boolean
-  /** Why reading it stopped before its end, when it did. */
+  /** Why reading stopped before the end, if it did. */
   readonly error?: string
 }
 
-/** A GridKit results file read for a case, as the views draw it, whether a run writes it or it was
- *  opened. Its frames only grow while a run writes it, and no frame read ever changes. */
+/** A results file read against a case, written by a run or opened. Frames are only appended;
+ *  frames already read never change. */
 export interface Results extends ResultsLayout, ResultsProgress {
-  /** The id the extension chose for it, which it holds the results by until it closes them. */
+  /** The id the extension assigned, valid until it closes the results. */
   readonly id: string
 }
 
 /** A run of GridKit's DynamicSimulation on a solver file. */
 export interface Run {
-  /** The id the extension chose for it, which everything said of the run carries. */
+  /** The id the extension assigned; every event about the run carries it. */
   id: string
-  /** The case it runs. */
   uri: string
-  /** What a shell would run, as `DynamicSimulation IEEE39.solver.json`. */
+  /** The equivalent shell command, such as `DynamicSimulation IEEE39.solver.json`. */
   command: string
   state: 'running' | 'complete' | 'cancelled' | 'failed' | 'interrupted'
   message?: string
 }
 
-/** A run on a solver file, with what Studio read of it, of the case at the revision its results are
- *  read against. */
+/** A request to run a solver file. The revision is the case its results are read against. */
 export interface RunRequest extends Revision {
-  /** The run's id. */
   run: string
-  /** The id of the results the run writes, which the extension then holds. */
+  /** The id of the results the run writes, which the extension then owns. */
   results: string
-  /** The .solver.json GridKit runs, in its folder. */
   solver: string
-  /** Where GridKit writes its samples, as the solver file and its case say. */
   output: string
-  /** The state file the solver file names, which GridKit reads beside the case. */
+  /** The solver file's state file, which GridKit reads along with the case. */
   state?: string
-  /** When the run ends, for its progress. */
   tmax: number
   gridkit: GridKit
 }

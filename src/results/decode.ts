@@ -1,4 +1,4 @@
-/** Decodes GridKit's CSV results a batch of frames at a time, never a whole run at once. */
+/** Decodes GridKit's CSV results one batch of frames at a time, never a whole run at once. */
 
 import type { Id } from 'latkit'
 
@@ -9,61 +9,51 @@ import { problem } from '../shared/errors.js'
 import { csvMessages, type LongReading } from './csv.js'
 import { CHUNK_BYTES } from './limits.js'
 
-/** One output a results file holds: a field of some rows of a table. */
 export interface Field {
   readonly table: string
   readonly field: string
   readonly ids: readonly Id[]
 }
 
-/** Decoded frames, in arrays of their own that nothing writes again. */
+/** Decoded frames, in fresh arrays that nothing writes again. */
 export interface Decoded {
   readonly firstFrame: number
   readonly count: number
   readonly coordinates: Float64Array
-  /** Per output decoded, in the order read, `count` frames of its rows, frame-major. */
+  /** Per output, `count` frames of its rows, frame-major. */
   readonly values: readonly Float64Array[]
 }
 
 interface Reading {
   readonly signal: AbortSignal
-  /** The frame the source starts at, which `publish` hears frames counted from. */
   readonly first?: number
-  /** Keeps `frames` as they are: each batch is decoded into arrays of its own, and none crosses
-   *  from one chunk into the next. */
+  /** Receives each batch. No batch crosses a chunk boundary. */
   readonly publish: (frames: Decoded) => void | Promise<void>
-  /** Whether the source ends the file, which ends a long layout's only sample. */
+  /** Whether the source ends the file, which completes a long layout's only sample. */
   readonly final?: boolean
 }
 
-/** Where each output's rows are among the columns. */
 interface Plan {
-  /** Per output, the column of each of its rows. */
   readonly columns: readonly Int32Array[]
-  /** Per output, the step between its rows' columns when they are evenly spaced; -1 when not. */
+  /** Per output, the step between its rows' columns when evenly spaced, else -1. */
   readonly strides: Int32Array
 }
 
-/** How a results file reads, learned once from its header: its columns, what it holds, and the
- *  column each output's row reads. Every page reuses it, so a wide run's names are matched once. */
+/** Learned once from the header and reused by every page, so a wide run's names match once. */
 export interface Layout {
-  /** The header's column names, which a page after the first is read with. */
   header?: readonly string[]
-  /** What the header says the file holds, and where. */
   read?: { readonly fields: readonly Field[]; readonly plan: Plan }
-  /** A long layout's reading, whose first sample gives the header. */
+  /** Long-layout state. The first sample provides the header. */
   long?: LongReading
 }
 
-/** Frames per chunk of a file holding `fields`: as many as CHUNK_BYTES of decoded frames hold. */
 function chunkFrames(fields: readonly Field[]): number {
   const frameBytes = 8 * (1 + fields.reduce((n, field) => n + field.ids.length, 0))
   return Math.max(1, Math.floor(CHUNK_BYTES / frameBytes))
 }
 
-/** Reads the results in `source`, publishing each batch of frames as it decodes. The header says
- *  what the file holds, so a run's file and one opened alone read alike. Once `layout` holds the
- *  header's names, `source` is rows alone; a header alone learns them. */
+/** Publishes each batch of frames as it decodes. Once `layout` has the header, `source` has rows
+ *  only. */
 export async function readResults(
   source: AsyncIterable<Uint8Array>,
   kase: Case,
@@ -95,7 +85,6 @@ export async function readResults(
       const { length, values: cells, width } = message
       for (let from = 0, count = 0; from < length; from += count) {
         reading.signal.throwIfAborted()
-        // Up to the next chunk's first frame.
         count = Math.min(length - from, chunk - ((first + received + from) % chunk))
         for (let t = from; t < from + count; t++) {
           const value = cells[t * width]!
@@ -129,7 +118,6 @@ export async function readResults(
   }
 }
 
-/** Copies each output's rows into its array of `fields`, one in turn. */
 function copyRows(
   source: Float64Array,
   width: number,
@@ -144,7 +132,7 @@ function copyRows(
     const rows = placed.length
     const stride = plan.strides[f]!
     if (stride >= 0) {
-      // Native channels are usually interleaved regularly; walk both buffers forwards.
+      // Evenly spaced columns are common, so walk both buffers forward.
       let into = 0
       for (let t = 0; t < count; t++) {
         let at = (from + t) * width + placed[0]!
@@ -159,23 +147,20 @@ function copyRows(
   }
 }
 
-/** A row's columns' common start: `<class>_<identity>_`. */
+/** `<class>_<identity>_`. */
 function stemOf(kase: Case, table: Table, row: number): string {
   const identity =
     table.shape.kind === 'bus' ? kase.cell(table, 'name', row) : kase.native(table, row)
   return `${table.shape.type}_${identity}_`
 }
 
-/** How a results file whose header `names` reads for `kase`, as a store of it read through says. */
 export const layoutFrom = (names: readonly string[], kase: Case): Layout => ({
   header: names,
   read: layoutOf(names, kase),
 })
 
-/** What a results file holds, from its header alone: each output of the case it has a column for,
- *  matched by complete name, case-insensitively, in catalog and row order, and the column each of
- *  their rows reads. A name that repeats matches its rows in turn. A column the case has no output
- *  for is left unread. */
+/** The case's outputs with columns in `header`, matched by full name case-insensitively. A repeated
+ *  name matches successive rows. */
 function layoutOf(header: readonly string[], kase: Case): { fields: readonly Field[]; plan: Plan } {
   const named = new Map<string, number[]>()
   header.forEach((name, column) => {
@@ -185,7 +170,7 @@ function layoutOf(header: readonly string[], kase: Case): { fields: readonly Fie
     if (columns) columns.push(column)
     else named.set(folded, [column])
   })
-  // A column is `<class>_<identity>_<output>`, so a class no column starts with is passed over.
+  // Columns are `<class>_<identity>_<output>`, so skip classes that no column starts with.
   const classes = new Set([...named.keys()].map((name) => name.slice(0, name.indexOf('_'))))
   const fields: Field[] = []
   const columns: Int32Array[] = []
@@ -229,7 +214,6 @@ export function recordedFields(fields: readonly Field[]): RecordedField[] {
   return fields.map((field) => ({ ...field, ids: [...field.ids] }))
 }
 
-/** A column name as names match: NFC-normalized, in lower case. */
 function fold(name: string): string {
   return name.normalize('NFC').toLowerCase()
 }

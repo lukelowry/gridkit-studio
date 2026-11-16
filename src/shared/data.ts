@@ -2,30 +2,31 @@ import type { Id, QueryResult } from 'latkit'
 
 import type { Entity } from './document.js'
 
-/** Times, in seconds, from the first to the last. */
+/** A time range in seconds, start first. */
 export type TimeRange = readonly [number, number]
-/** Values of a field, from the lowest to the highest. */
+/** A value range, lowest first. */
 export type ValueRange = readonly [number, number]
 
-/** Whether `range` is two finite numbers, the low first. */
 export const isRange = (range: unknown): range is [number, number] =>
   Array.isArray(range) && range.length === 2 && range.every(Number.isFinite) && range[0] < range[1]
 
-export interface ProjectionSelection {
+export interface FieldSelection {
   readonly table: string
   readonly fields: readonly string[]
 }
 
-export interface ProjectionCursor {
+export interface CaseRowsCursor {
   readonly phase: 'identities' | 'fields'
   readonly table: number
   readonly offset: number
+  /** The previous page's row count, used to size the next page. */
+  readonly count?: number
 }
 
-export interface ProjectionPage {
+export interface CaseRowsPage {
   readonly key: string
   readonly bytes: Uint8Array
-  readonly next?: ProjectionCursor
+  readonly next?: CaseRowsCursor
 }
 
 export interface TableRequest {
@@ -40,47 +41,45 @@ export interface TableRequest {
   readonly order?: { readonly field: string; readonly direction: 'ascending' | 'descending' }
 }
 
-export type TablePage = QueryResult & { readonly offset: number }
+/** A page of a table's rows from `offset`. A page requested around an `anchor` row starts a little
+ *  before it, and reports whether the filters keep that row. */
+export type TablePage = QueryResult & { readonly offset: number; readonly anchored?: boolean }
 
 export interface RecordedField {
   readonly table: string
   readonly field: string
   readonly ids: readonly Id[]
-  /** The values the results hold of it. */
   readonly domain?: ValueRange
 }
 
-/** The frames ahead of the playhead a field the Network maps reads, within `bytes`. */
+/** One page of a mapped field's frames, for every row, from the frame at or before `range[0]`
+ *  through the first frame after `range[1]`. */
 export interface FrameRequest {
   readonly results: string
   readonly table: string
   readonly field: string
-  readonly ids?: readonly Id[]
   readonly range: TimeRange
-  readonly bytes: number
-  /** Seconds of the run between the frames a view shows, the rate over the frames it shows a
-   *  second: of the frames stored, those last at or before each such time from `range[0]` go, so
-   *  no more frames go than show. 0 sends every frame stored. */
+  /** Simulated seconds between frames the view displays (playback rate / frames per second). Only
+   *  the last stored frame at or before each step from `range[0]` is sent. 0 sends every frame. */
   readonly step: number
 }
 
+/** A page of a field's frames as a standalone dataset named `source`: the time axis, every row,
+ *  and frames up to PAGE_BYTES (at least one). The next page starts where this one ends. */
 export interface FramePage {
-  readonly key: string
   readonly source: string
   readonly table: string
   readonly field: string
   readonly bytes: Uint8Array
-  readonly complete: boolean
-  readonly next?: string
 }
 
-/** A file of a recorded field's time tiles, as latkit's `Tiles` fetch them: the manifest, the
- *  dataset of the rows without their samples, or span `index` of `level`. */
+/** A time-tile file of a recorded field, as latkit's `Tiles` fetch them: the manifest, the base
+ *  dataset of rows without samples, or tile `index` of `level`. */
 export interface TileRequest {
   readonly results: string
   readonly table: string
   readonly field: string
-  /** The one row tiled; without it, every row recorded. */
+  /** A single row to tile; without it, every recorded row. */
   readonly id?: Id
   readonly file: 'frames.json' | 'base.latk' | { readonly level: number; readonly index: number }
 }
@@ -96,7 +95,5 @@ export interface ExactSample {
   readonly value: number | null
 }
 
+/** Target size of one page of table rows or frames. */
 export const PAGE_BYTES = 4 * 1024 * 1024
-export const ENTRY_BYTES = 16 * 1024 * 1024
-/** The most frame pages a view keeps, and so the most a playhead window may hold. */
-export const PAYLOAD_BYTES = 96 * 1024 * 1024

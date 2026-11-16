@@ -22,8 +22,8 @@ export interface PyramidState {
   })[]
 }
 
-/** The least and greatest values of each row, `low` then `high`, as Patch.frames takes a bucket's:
- *  NaN for a row with none. */
+/** Each row's minimum, then each row's maximum, as Patch.frames expects a bucket. NaN for a row
+ *  without values. */
 function bounds(rows: number, low: Float32Array, high: Float32Array): Float32Array {
   const values = new Float32Array(rows * 2)
   for (let row = 0; row < rows; row++) {
@@ -33,9 +33,9 @@ function bounds(rows: number, low: Float32Array, high: Float32Array): Float32Arr
   return values
 }
 
-/** Eight-way streaming min/max reduction, as latkit keeps a sampled field's levels of detail: at
- *  level `k` each row's least and greatest value over buckets of `8^k` frames, the frames without a
- *  value left out. At most seven children per level stay resident. */
+/** Eight-way streaming min/max reduction matching latkit's levels of detail: level `k` has each
+ *  row's minimum and maximum over buckets of `8^k` frames, ignoring missing values. At most seven
+ *  children per level stay in memory. */
 export class Pyramid {
   readonly #levels: Array<Bucket | undefined> = []
   #next = 0
@@ -48,7 +48,7 @@ export class Pyramid {
       throw new Error('A pyramid needs a positive row count.')
   }
 
-  /** Reduces `at.length` frames from frame `first` on, whose times the results file has checked. */
+  /** Reduces `at.length` frames from frame `first`. The caller has already checked their times. */
   push(first: number, at: Float64Array, input: Float64Array): void {
     if (first !== this.#next || input.length !== at.length * this.rows) {
       throw new Error('Pyramid input must contain consecutive complete frames.')
@@ -62,9 +62,9 @@ export class Pyramid {
     this.#next += at.length
   }
 
-  /** The bucket of `level` still filling, as latkit takes a level's last entry: each row's least
-   *  and greatest value over every frame reduced since its last full bucket, those of the finer
-   *  buckets still filling too. None while every frame lies in a full bucket of `level`. */
+  /** The partial bucket of `level`, as latkit expects a level's last entry: each row's minimum and
+   *  maximum over every frame since the last full bucket, including finer partial buckets.
+   *  Undefined when every frame is in a full bucket. */
   tail(level: number): VisualizationRun | undefined {
     const stride = 8 ** level
     if (level < 1 || this.#next % stride === 0) return undefined
@@ -142,7 +142,7 @@ export class Pyramid {
     this.#next = state.next
   }
 
-  /** Takes the child `child` of `level`'s bucket in progress: a bucket below it, or a frame. */
+  /** Adds child `child` (a finer bucket, or a frame) to `level`'s partial bucket. */
   #add(
     level: number,
     child: number,

@@ -2,7 +2,7 @@ import { type Camera, type Placed, Shot, type Video, View } from 'latkit'
 
 import type { TimeRange } from '../../shared/data.js'
 import type { Framing, VideoView, ViewState } from '../../shared/messages.js'
-import { holdsPlot } from '../../shared/plots.js'
+import { isRecorded } from '../../shared/plots.js'
 import { monitorWindow } from '../monitor/plot.js'
 
 export interface VideoSettings {
@@ -13,9 +13,8 @@ export interface VideoSettings {
   readonly frameRate: number
   readonly quality: 'medium' | 'high' | 'very-high'
 }
-/** The camera that frames in a picture `size` pixels wide and high what `framing`'s canvas showed:
- *  its own place, tilt and turn, zoomed by as much as the picture is larger than the canvas, so
- *  all the canvas showed fits. A zoom is log₂ of pixels per unit, so it scales by adding. */
+/** The camera that fits what `framing`'s canvas showed into a `width` by `height` picture. Zoom is
+ *  log₂ of pixels per unit, so scaling adds to it. */
 export function framed({ camera, size }: Framing, [width, height]: readonly [number, number]) {
   if (!('zoom' in camera)) return camera
   const scale = Math.min(width / size[0], height / size[1])
@@ -51,14 +50,13 @@ export function viewsOf({ summary }: ViewState): Array<{ value: VideoView; label
   ]
 }
 export function videoTimes(state: ViewState): TimeRange | undefined {
-  const held = state.results?.domain
-  if (!held || held[1] <= held[0]) return undefined
-  const shown = monitorWindow(state.results, state.window)
-  const range: TimeRange = [Math.max(held[0], shown[0]), Math.min(held[1], shown[1])]
+  const domain = state.results?.domain
+  if (!domain || domain[1] <= domain[0]) return undefined
+  const timeWindow = monitorWindow(state.results, state.window)
+  const range: TimeRange = [Math.max(domain[0], timeWindow[0]), Math.min(domain[1], timeWindow[1])]
   return range[0] < range[1] ? range : undefined
 }
-/** Whether `job` makes a video: a size at least one encoder block, which latkit rounds to whole
- *  blocks, and a positive rate over a span. */
+/** At least one encoder block (latkit rounds to whole blocks), and a positive rate over a span. */
 function valid(job: VideoJob): boolean {
   return (
     Number.isFinite(job.width) &&
@@ -81,12 +79,12 @@ export function exportable(job: VideoJob | undefined, state: ViewState): job is 
     !!state.summary &&
     !!job.views.length &&
     (!job.views.includes('monitor') ||
-      !!state.plots?.some((plot) => holdsPlot(state.results, plot))) &&
+      !!state.plots?.some((plot) => isRecorded(state.results, plot))) &&
     valid(job)
   )
 }
 
-/** Records `job`, which `exportable` takes, of the views `placed` to `output`. */
+/** Encodes `job` from the `placed` views to `output`; `job` must pass `exportable`. */
 export async function exportVideo(
   job: VideoJob,
   placed: readonly Placed[],
@@ -96,7 +94,8 @@ export async function exportVideo(
   progress: (value: VideoProgress) => void,
 ): Promise<void> {
   const [from, to] = job.timeRange
-  const total = Math.max(1, Math.ceil(((to - from) / job.rate) * job.frameRate))
+  // One frame per 1 / frameRate seconds of video, plus one at the end so the video ends on it.
+  const total = Math.ceil(((to - from) / job.rate) * job.frameRate) + 1
   if (!Number.isSafeInteger(total)) throw new Error('The video contains too many frames.')
   const bitrate =
     job.width *
@@ -124,12 +123,4 @@ export async function exportVideo(
     else await output.abort(error).catch(() => {})
     throw error
   }
-}
-
-export function videoOutput(
-  write: (bytes: Uint8Array) => Promise<void>,
-  finish: () => Promise<void>,
-  abort: (reason: unknown) => Promise<void>,
-): WritableStream<Uint8Array> {
-  return new WritableStream<Uint8Array>({ write, close: finish, abort })
 }

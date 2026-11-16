@@ -14,12 +14,12 @@ describe('the cases in cases/', () => {
     '%s parses whole',
     async (name) => {
       const kase = await Case.parse(await readFile(join('cases', name)), catalog)
-      // Every class and member is one the catalog knows.
+      // Every class and member is known to the catalog.
       expect(await diagnose(kase, AbortSignal.any([]))).toEqual([])
-      // Each table projects its rows under their own identities, in file order.
-      const projected = kase.projected()
-      expect(projected.key).toBe(kase.version)
-      for (const [type, table] of projected.tables) {
+      // Each table lists its rows by id, in file order.
+      const columns = kase.columns()
+      expect(columns.key).toBe(kase.version)
+      for (const [type, table] of columns.tables) {
         expect(table.ids.length).toBe(kase.table(type).records.length)
         if (!table.ids.length) continue
         const first = { table: type, id: table.ids[0]! }

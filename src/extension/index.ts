@@ -3,16 +3,16 @@ import type { ExtensionContext } from 'vscode'
 import { catalogFile } from './catalog.js'
 import { registerCommands } from './commands.js'
 import { Reporter } from './report.js'
-import { Sessions } from './sessions.js'
 import { registerSignals } from './signals.js'
+import { Studio } from './studio.js'
 import { registerViews } from './views.js'
 import { workspaceAccess } from './workspace.js'
-let studio: Sessions | undefined
+let studio: Studio | undefined
 export async function activate(context: ExtensionContext) {
   const started = performance.now()
   workspaceAccess()
   const reporter = new Reporter()
-  studio = new Sessions(context, await catalogFile((error) => reporter.report(error)), reporter)
+  studio = new Studio(context, await catalogFile((error) => reporter.report(error)), reporter)
   context.subscriptions.push(
     ...registerViews(studio),
     ...registerCommands(studio),

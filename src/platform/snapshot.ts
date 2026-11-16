@@ -35,7 +35,7 @@ export function statistics(path: string, size: number, mtime: number, ctime = mt
     ctimeNs: BigInt(Math.floor(ctime * 1e6)),
   }
 }
-/** VS Code providers expose whole-file reads. Keep one snapshot, then release it on close. */
+/** VS Code file system providers only read whole files, so keep one snapshot until close. */
 export class Snapshot implements FileHandle {
   constructor(
     private bytes: Uint8Array,

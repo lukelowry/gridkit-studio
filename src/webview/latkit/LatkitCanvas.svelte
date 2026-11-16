@@ -1,7 +1,4 @@
-<!-- @component
-  A latkit view on a canvas of its own: made while `active`, on `gpu`, and kept to what its props
-  say. `onready` hears the view once it is made, and may return what to undo as it ends.
--->
+<!-- @component A latkit view on its own canvas. `onready` may return a cleanup. -->
 <script lang="ts">
   import type { Camera, Gpu, Scene, Source } from 'latkit'
   import { untrack } from 'svelte'
@@ -23,19 +20,19 @@
     gpu: Gpu
     scene: Scene
     sources: readonly Source[]
-    /** The time the view shows, where its owner does not set it itself. */
+    /** The time to show, unless the owner sets it on the view itself. */
     at?: number
     active?: boolean
-    /** Where the view looks first; without one, it frames everything. */
+    /** The initial camera; without one, the view fits everything. */
     camera?: Partial<Camera>
     onready: (view: CanvasView) => (() => void) | void
-    /** Hears once a frame first draws the view whole. */
+    /** Called once a frame first draws the view completely. */
     ondrawn?: () => void
     onerror: (error: unknown) => void
     label: string
   } = $props()
 
-  let shown = $state.raw<CanvasView>()
+  let canvasView = $state.raw<CanvasView>()
 
   function attach(canvas: HTMLCanvasElement) {
     const device = gpu
@@ -59,7 +56,7 @@
         owned = opened
         try {
           disconnect = untrack(() => onready(opened))
-          shown = opened
+          canvasView = opened
         } catch (error) {
           opened.destroy()
           owned = undefined
@@ -76,19 +73,19 @@
         disconnect?.()
       } finally {
         owned?.destroy()
-        if (shown === owned) shown = undefined
+        if (canvasView === owned) canvasView = undefined
       }
     }
   }
 
   $effect(() => {
-    if (shown) shown.view.sources = sources
+    if (canvasView) canvasView.view.sources = sources
   })
   $effect(() => {
-    if (shown) shown.scene = scene
+    if (canvasView) canvasView.scene = scene
   })
   $effect(() => {
-    if (shown && at !== undefined) shown.view.at = at
+    if (canvasView && at !== undefined) canvasView.view.at = at
   })
 </script>
 

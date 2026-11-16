@@ -1,56 +1,51 @@
 import { Data, type Expr, field, type Fields, Patch, type Query } from 'latkit'
 
-import { createHash } from '../platform/crypto.js'
 import {
+  type CaseRowsCursor,
+  type CaseRowsPage,
+  type FieldSelection,
   PAGE_BYTES,
-  type ProjectionCursor,
-  type ProjectionPage,
-  type ProjectionSelection,
   type TablePage,
   type TableRequest,
 } from '../shared/data.js'
 import { LABEL } from '../shared/document.js'
-import type { ProjectedDocument } from './document.js'
+import type { CaseColumns } from './document.js'
 import { Turns } from './turns.js'
 
-/** How many rows the Case panel's columns load in at a time, between turns. */
+/** Rows the Case panel's query columns load per step, between turns. */
 const ROWS_PER_STEP = 4096
 
-/** The patch `write` makes of as many of `rows` rows as fit a page: all of them, halved until they
- *  do, so a case goes to a view in as few pages as its bytes take. One row always goes, whatever it
- *  weighs. */
+/** The fraction of a page rows are sized to fill, leaving room for slightly larger rows. */
+const FILL = 0.9
+
+/** Writes up to `count` rows as one page, retrying with the count the measured size suggests
+ *  when it exceeds PAGE_BYTES. At least one row always goes. */
 async function paged(
   rows: number,
+  count: number,
   write: (count: number) => Uint8Array,
   turns: Turns,
 ): Promise<{ bytes: Uint8Array; count: number }> {
-  for (let count = rows; ;) {
+  for (count = Math.min(rows, count); ;) {
     const bytes = write(count)
     turns.signal.throwIfAborted()
     if (bytes.byteLength <= PAGE_BYTES || count <= 1) return { bytes, count }
-    count = Math.max(1, Math.floor(count / 2))
+    const fits = Math.floor((FILL * count * PAGE_BYTES) / bytes.byteLength)
+    count = Math.max(1, Math.min(count - 1, fits))
     await turns.step()
   }
 }
 
-function projectionKey(
-  document: ProjectedDocument,
-  selection: readonly ProjectionSelection[],
-): string {
-  return (
-    document.key +
-    ':' +
-    createHash('sha256').update(JSON.stringify(selection)).digest('hex').slice(0, 16)
-  )
-}
+const caseRowsKey = (document: CaseColumns, selection: readonly FieldSelection[]): string =>
+  document.key + ':' + JSON.stringify(selection)
 
-/** Validate the field set and establish reference targets before any references are written. */
-function included(document: ProjectedDocument, selection: readonly ProjectionSelection[]) {
+/** Validates the selection and adds reference target tables before any references are written. */
+function included(document: CaseColumns, selection: readonly FieldSelection[]) {
   const tables = new Map<string, readonly string[]>()
   for (const { table, fields } of selection) {
     const definition = document.definition.tables.find((item) => item.name === table)
     if (!definition || !document.tables.has(table)) throw new Error(`Unknown table: ${table}`)
-    if (tables.has(table)) throw new Error(`Repeated projection table: ${table}`)
+    if (tables.has(table)) throw new Error(`Repeated table: ${table}`)
     for (const name of fields) {
       const definitionField = definition.fields.find((item) => item.name === name)
       if (!definitionField) throw new Error(`Unknown field: ${table}.${name}`)
@@ -71,30 +66,32 @@ function included(document: ProjectedDocument, selection: readonly ProjectionSel
   return [...tables]
 }
 
-/** Stateless, bounded pages. A cursor refers to a single immutable source revision/selection. */
-export async function projectionPage(
-  document: ProjectedDocument,
-  selection: readonly ProjectionSelection[],
-  cursor: ProjectionCursor | undefined,
+/** Stateless, bounded pages. A cursor carries the previous page's row count to size the next. */
+export async function caseRowsPage(
+  document: CaseColumns,
+  selection: readonly FieldSelection[],
+  cursor: CaseRowsCursor | undefined,
   signal: AbortSignal,
-): Promise<ProjectionPage> {
+): Promise<CaseRowsPage> {
   const tables = included(document, selection)
   let { phase, table: index, offset } = cursor ?? { phase: 'identities', table: 0, offset: 0 }
+  const previousCount = cursor?.count
   if (
     (phase !== 'identities' && phase !== 'fields') ||
     !Number.isSafeInteger(index) ||
     index < 0 ||
     index > tables.length ||
     !Number.isSafeInteger(offset) ||
-    offset < 0
+    offset < 0 ||
+    (previousCount !== undefined && !(Number.isSafeInteger(previousCount) && previousCount >= 1))
   )
-    throw new Error('Invalid projection cursor.')
+    throw new Error('Invalid rows cursor.')
   const turns = new Turns(signal)
   for (;;) {
     await turns.step()
     if (index === tables.length) {
       if (phase === 'fields')
-        return { key: projectionKey(document, selection), bytes: new Patch('case').toBytes() }
+        return { key: caseRowsKey(document, selection), bytes: new Patch('case').toBytes() }
       phase = 'fields'
       index = 0
       offset = 0
@@ -102,16 +99,18 @@ export async function projectionPage(
     }
     const [name, fields] = tables[index]!
     const table = document.tables.get(name)!
-    if (offset > table.ids.length) throw new Error('Projection cursor exceeds its table.')
+    if (offset > table.ids.length) throw new Error('Rows cursor exceeds its table.')
     if (phase === 'fields' && fields.length === 0) {
       index++
       offset = 0
       continue
     }
     if (table.ids.length === offset && offset !== 0)
-      throw new Error('Projection cursor is past its last row.')
+      throw new Error('Rows cursor is past its last row.')
+    const rows = table.ids.length - offset
     const { bytes, count } = await paged(
-      table.ids.length - offset,
+      rows,
+      offset > 0 && previousCount !== undefined ? previousCount : rows,
       (count) => {
         const values: Record<string, Fields[string]> = {}
         if (phase === 'fields') {
@@ -138,24 +137,27 @@ export async function projectionPage(
       while (index < tables.length && tables[index]![1].length === 0) index++
     }
     return {
-      key: projectionKey(document, selection),
+      key: caseRowsKey(document, selection),
       bytes,
-      ...(index < tables.length ? { next: { phase, table: index, offset } } : {}),
+      ...(index < tables.length
+        ? { next: { phase, table: index, offset, ...(offset > 0 && { count }) } }
+        : {}),
     }
   }
 }
 
-/** A revision owns its native query dataset and releases it with its parser/cache entry. */
+/** A revision's query dataset, released with its cache entry. */
 export class CaseQueries {
   readonly data = new Data('case-query')
-  readonly #held = new Map<string, Set<string>>()
+  /** Per table, the fields already loaded into `data`. */
+  readonly #loaded = new Map<string, Set<string>>()
   #destroyed = false
 
-  constructor(private readonly document: ProjectedDocument) {
+  constructor(private readonly document: CaseColumns) {
     try {
       for (const [name, table] of document.tables) {
         this.data.replace(name, table.ids)
-        this.#held.set(name, new Set())
+        this.#loaded.set(name, new Set())
       }
     } catch (error) {
       this.data.destroy()
@@ -165,10 +167,10 @@ export class CaseQueries {
 
   async #ensure(tableName: string, fields: readonly string[], signal: AbortSignal): Promise<void> {
     const table = this.document.tables.get(tableName)
-    const held = this.#held.get(tableName)
+    const loaded = this.#loaded.get(tableName)
     const definition = this.document.definition.tables.find((item) => item.name === tableName)
-    if (!table || !held || !definition) throw new Error(`Unknown table: ${tableName}`)
-    const missing = [...new Set(fields)].filter((name) => !held.has(name))
+    if (!table || !loaded || !definition) throw new Error(`Unknown table: ${tableName}`)
+    const missing = [...new Set(fields)].filter((name) => !loaded.has(name))
     for (const name of missing) {
       const field = definition.fields.find((item) => item.name === name)
       if (!field || field.kind === 'sampled')
@@ -194,7 +196,7 @@ export class CaseQueries {
       this.data.set(tableName, table.ids.slice(offset, offset + count), values)
     }
     signal.throwIfAborted()
-    for (const name of missing) held.add(name)
+    for (const name of missing) loaded.add(name)
   }
 
   async page(request: TableRequest, signal: AbortSignal): Promise<TablePage> {
@@ -205,12 +207,6 @@ export class CaseQueries {
       request.limit < 1
     ) {
       throw new Error('Invalid table page.')
-    }
-    if (
-      request.anchor !== undefined &&
-      (request.ids || request.search || request.equal || request.order)
-    ) {
-      throw new Error('An anchored page requires the unfiltered source order.')
     }
     const definition = this.document.definition.tables.find((item) => item.name === request.table)
     if (!definition) throw new Error(`Unknown table: ${request.table}`)
@@ -240,28 +236,32 @@ export class CaseQueries {
           : field(name).eq(typeof value === 'boolean' ? Number(value) : value)
       filter = filter ? filter.and(equal) : equal
     }
-    const anchor =
-      request.anchor === undefined
-        ? -1
-        : this.document.tables.get(request.table)!.ids.indexOf(request.anchor)
-    const offset = anchor >= 0 ? Math.max(0, anchor - 10) : request.offset
-    const query: Query = {
+    const kept: Query = {
       of: request.table,
-      offset,
-      limit: request.limit,
-      select: Object.fromEntries(request.fields.map((name) => [name, field(name)])),
       ...(request.ids ? { ids: [...request.ids] } : {}),
       ...(filter ? { filter } : {}),
       ...(request.order ? { sort: [[field(request.order.field), request.order.direction]] } : {}),
     }
-    const result = this.data.query(query)
+    // An anchored page shows its anchor a few rows down. When the anchor is filtered out, the
+    // requested offset is used and `anchored` is false.
+    const at =
+      request.anchor === undefined
+        ? undefined
+        : this.data.query({ ...kept, select: {} }).ids.indexOf(request.anchor)
+    const offset = at !== undefined && at >= 0 ? Math.max(0, at - 10) : request.offset
+    const result = this.data.query({
+      ...kept,
+      offset,
+      limit: request.limit,
+      select: Object.fromEntries(request.fields.map((name) => [name, field(name)])),
+    })
     signal.throwIfAborted()
-    return { ...result, offset }
+    return { ...result, offset, ...(at !== undefined && { anchored: at >= 0 }) }
   }
 
   destroy(): void {
     this.#destroyed = true
-    this.#held.clear()
+    this.#loaded.clear()
     this.data.destroy()
   }
 }

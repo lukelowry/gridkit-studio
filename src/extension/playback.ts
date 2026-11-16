@@ -1,7 +1,5 @@
-/** Playback: its commands, and the status bar that runs them, right of the problem counts behind a
- *  bar: step back, play or pause, step forward, the time, and the speed. They follow the active
- *  case's clock while its results have samples. A playback command neither reads the case nor
- *  needs it to read: a key held down plays on while the case's file changes. */
+/** Playback commands and status bar items. The commands never read the case, so a held key keeps
+ *  working while the case file changes. */
 
 import * as vscode from 'vscode'
 
@@ -10,14 +8,44 @@ import { type Command, commandId, PREFIX } from '../shared/ids.js'
 import { RATES } from '../shared/transport.js'
 import type { Commands } from './commands.js'
 
-/** How often the time follows a playing clock. */
 const TICK_MS = 100
-/** The priority of VS Code's problem counts at the left of the status bar. */
+/** The status bar priority of VS Code's problem counts. */
 const PROBLEMS = 50
+
+/** Prompts for a speed in simulated seconds per second: a preset or any typed positive number. */
+function pickRate(): Promise<number | undefined> {
+  type Item = vscode.QuickPickItem & { readonly rate: number }
+  const item = (rate: number, typed = false): Item => ({
+    label: formatNumber(rate) + '×',
+    rate,
+    alwaysShow: typed,
+  })
+  const presets = RATES.map((rate) => item(rate))
+  const picker = vscode.window.createQuickPick<Item>()
+  picker.title = 'Playback Speed'
+  picker.placeholder = 'Simulated seconds per second, or type another speed'
+  picker.items = presets
+  picker.onDidChangeValue((value) => {
+    const rate = Number(value.trim().replace(/[×x]$/i, ''))
+    const typed = value.trim() && rate > 0 && Number.isFinite(rate)
+    picker.items = typed ? [item(rate, true), ...presets] : presets
+  })
+  return new Promise((resolve) => {
+    picker.onDidAccept(() => {
+      resolve(picker.selectedItems[0]?.rate)
+      picker.hide()
+    })
+    picker.onDidHide(() => {
+      resolve(undefined)
+      picker.dispose()
+    })
+    picker.show()
+  })
+}
 
 export function registerPlayback({ studio, registrations, command }: Commands) {
   command('playPause', ({ session }) => session.transport.playPause())
-  // To the head while frames arrive, else to the run's last sample.
+  // Jumps to the live head while frames arrive, else to the last sample.
   command('goToEnd', ({ session }) => {
     const { transport } = session
     if (session.live) transport.goLive()
@@ -29,10 +57,10 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
       typeof value === 'number'
         ? String(value)
         : await vscode.window.showInputBox({
-            title: 'Time [s]',
-            value: String(transport.currentT()),
+            title: 'Go to Time [s]',
+            value: formatNumber(transport.currentT()),
             validateInput: (input) =>
-              input.trim() && Number.isFinite(Number(input)) ? null : 'A finite time',
+              input.trim() && Number.isFinite(Number(input)) ? null : 'Enter a time in seconds',
           })
     if (text === undefined) return
     transport.pause()
@@ -44,14 +72,11 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
   ] as const)
     command(id, ({ session }) => session.step(direction))
   command('playbackSpeed', async ({ session: { transport } }) => {
-    const chosen = await vscode.window.showQuickPick(
-      RATES.map((rate) => ({ label: formatNumber(rate) + '×', rate })),
-      { title: 'Playback speed', placeHolder: 'Simulated seconds per second' },
-    )
-    if (chosen) transport.setRate(chosen.rate)
+    const rate = await pickRate()
+    if (rate !== undefined) transport.setRate(rate)
   })
 
-  // Higher priorities sit further left, so the items keep the order they are made in.
+  // Higher priorities sit further left, so decreasing priorities keep creation order.
   let priority = PROBLEMS
   const item = (id: string, name: string, command?: Command) => {
     const made = vscode.window.createStatusBarItem(
@@ -73,16 +98,16 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
   const time = item('goToTime', 'Go to Time', 'goToTime')
   const speed = item('playbackSpeed', 'Playback Speed', 'playbackSpeed')
   const items = [bar, back, play, forward, time, speed]
-  /** What each item says now: while the clock plays, only the time changes, so only it is sent. */
-  const said = new Map<vscode.StatusBarItem, string>()
-  const say = (target: vscode.StatusBarItem, text: string, label: string) => {
-    if (said.get(target) === text + '\n' + label) return
-    said.set(target, text + '\n' + label)
+  /** Each item's current text, so only changed items are updated while playing. */
+  const texts = new Map<vscode.StatusBarItem, string>()
+  const setText = (target: vscode.StatusBarItem, text: string, label: string) => {
+    if (texts.get(target) === text + '\n' + label) return
+    texts.set(target, text + '\n' + label)
     target.text = text
     target.tooltip = label
     target.accessibilityInformation = { label, role: 'button' }
   }
-  let shown = false
+  let visible = false
   let timer: ReturnType<typeof setInterval> | undefined
 
   const show = () => {
@@ -91,8 +116,8 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
     const results = session?.results
     const state = session?.transport.state
     if (!session || !results?.frames || !state || state.status === 'idle') {
-      if (shown) for (const each of items) each.hide()
-      shown = false
+      if (visible) for (const each of items) each.hide()
+      visible = false
       clearInterval(timer)
       timer = undefined
       return
@@ -101,24 +126,25 @@ export function registerPlayback({ studio, registrations, command }: Commands) {
     const t = transport.currentT()
     const playing = state.status === 'playing'
     const finished = !session.live && !playing && t >= state.span[1]
-    // The times a run will cover, which its samples fill as they arrive.
+    // The run's full time span, which its samples fill as they arrive.
     const [from, to] = results.span ?? results.domain
-    const unit = 's'
-    say(back, '$(chevron-left)', 'Previous sample')
-    say(
+    // Enough decimals to distinguish samples, at a width that stays fixed while playing.
+    const digits = Math.min(9, Math.max(2, Math.ceil(-Math.log10(to - from || 1)) + 2))
+    setText(back, '$(chevron-left)', 'Previous Sample')
+    setText(
       play,
       playing ? '$(debug-pause)' : finished ? '$(debug-restart)' : '$(play)',
       playing ? 'Pause' : finished ? 'Replay' : 'Play',
     )
-    say(forward, '$(chevron-right)', 'Next sample')
-    say(
+    setText(forward, '$(chevron-right)', 'Next Sample')
+    setText(
       time,
-      `${t.toFixed(2)} / ${to.toFixed(2)} ${unit}`,
-      `Time ${formatNumber(t)} ${unit} of ${formatNumber(from)} to ${formatNumber(to)} ${unit}. Go to a time`,
+      `${t.toFixed(digits)} / ${to.toFixed(digits)} s`,
+      `Go to Time… (${formatNumber(t)} s of ${formatNumber(from)}–${formatNumber(to)} s)`,
     )
-    say(speed, `${formatNumber(state.rate)}×`, `Speed: ${formatNumber(state.rate)}×`)
-    if (!shown) for (const each of items) each.show()
-    shown = true
+    setText(speed, `${formatNumber(state.rate)}×`, `Playback Speed… (${formatNumber(state.rate)}×)`)
+    if (!visible) for (const each of items) each.show()
+    visible = true
     if (playing && !timer) timer = setInterval(show, TICK_MS)
     else if (!playing && timer) {
       clearInterval(timer)

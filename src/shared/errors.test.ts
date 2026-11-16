@@ -13,8 +13,8 @@ import {
   UNEXPECTED,
 } from './errors.js'
 
-describe('errors for people and for the log', () => {
-  it('tells the user a sentence, and a defect only that it happened', () => {
+describe('errors', () => {
+  it('shows the user an error message, and only a generic message for a defect', () => {
     expect(message(new Error('Choose a numeric field to map.'))).toBe(
       'Choose a numeric field to map.',
     )
@@ -22,7 +22,7 @@ describe('errors for people and for the log', () => {
     const read = new TypeError("Cannot read properties of undefined (reading 'fields')")
     expect(defect(read)).toBe(true)
     expect(message(read)).toBe(UNEXPECTED)
-    // An error that crossed from the worker says what it was.
+    // An error from the worker carries its defect flag and detail.
     const crossed = Object.assign(new Error(UNEXPECTED), { defect: true, detail: 'TypeError: x' })
     expect(defect(crossed)).toBe(true)
     expect(detail(crossed)).toBe('TypeError: x')
@@ -35,7 +35,7 @@ describe('errors for people and for the log', () => {
     expect(detail('As text.')).toBe('As text.')
   })
 
-  it('knows a cancellation, and the failures that are none, from a failure', () => {
+  it('distinguishes cancellations and quiet failures from real failures', () => {
     expect(cancelled(new DOMException('Cancelled', 'AbortError'))).toBe(true)
     expect(cancelled(Object.assign(new Error('Canceled'), { name: 'Canceled' }))).toBe(true)
     expect(cancelled(new Error('Cancelled'))).toBe(false)
@@ -45,7 +45,7 @@ describe('errors for people and for the log', () => {
     expect(quiet(problem('invalid-input', 'Read the case again.'))).toBe(false)
   })
 
-  it('keeps a code, and what comes with it, across a channel', () => {
+  it('keeps an error code and its details across a channel', () => {
     const range = { start: [4, 0], end: [4, 2] }
     const made = problem('invalid-input', 'Read the case again.', { range })
     expect(failedWith(made, 'invalid-input')).toBe(true)

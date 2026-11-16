@@ -4,21 +4,21 @@ import type { SettingsReader } from '../../shared/settings.js'
 import { asset } from './load.js'
 import { type Palette, theme } from './theme.js'
 
-/** A map under the Network: the datasets it draws, its marks, and whose map it is. */
+/** A map drawn under the Network. Its datasets last as long as the page, so restyling it reads
+ *  nothing again. */
 export interface Background {
   readonly sources: ReadonlyArray<Data | Tiles>
   readonly marks: readonly Mark[]
   readonly attribution?: string
-  destroy?(): void
 }
 
-/** No map: a case off the earth, or the Map setting's `none`. */
+/** No map: a case that is not geographic, or the Map setting `none`. */
 export const NO_MAP: Background = { sources: [], marks: [] }
 
 const modeOf = (settings: SettingsReader, geographic: boolean) =>
   geographic ? settings.get('network.map.source') : 'none'
 
-/** What the map `mapOf` makes depends on: a page makes it again only once this changes. */
+/** Everything `mapOf` depends on; the map is rebuilt only when this changes. */
 export function mapKey(settings: SettingsReader, geographic: boolean): string {
   return JSON.stringify([
     modeOf(settings, geographic),
@@ -28,8 +28,6 @@ export function mapKey(settings: SettingsReader, geographic: boolean): string {
   ])
 }
 
-/** The map the settings choose under a case, as the Network and every export draw it: none for a
- *  case off the earth. */
 export async function mapOf(
   settings: SettingsReader,
   geographic: boolean,
@@ -38,8 +36,22 @@ export async function mapOf(
   const mode = modeOf(settings, geographic)
   const { palette } = theme()
   if (mode === 'borders') {
-    const { data, marks } = await borderMaps(new URL(asset('latkit-assets')), palette, signal)
-    return { sources: data, marks, destroy: () => data.forEach((source) => source.destroy()) }
+    signal.throwIfAborted()
+    const data = await borderData(new URL(asset('latkit-assets')))
+    signal.throwIfAborted()
+    return {
+      sources: data,
+      marks: data.map((source, index): Mark => ({
+        lines: [source.name, 'lines'],
+        name: source.name,
+        geometry: 'geometry',
+        color: palette.text2,
+        width: index === 0 ? 0.6 : 1,
+        dash: index === 0,
+        pick: false,
+        select: false,
+      })),
+    }
   }
   if (mode === 'streets') {
     const { source, marks } = streetMaps(settings.get('network.map.tilesUrl'), palette)
@@ -48,46 +60,38 @@ export async function mapOf(
   return NO_MAP
 }
 
-export async function borderMaps(
-  base: URL,
-  palette: Palette,
-  signal: AbortSignal,
-): Promise<{ data: Data[]; marks: Mark[] }> {
-  const results = await Promise.allSettled(
-    ['provinces', 'countries', 'coastline'].map((name) =>
-      Data.read(new URL(`maps/${name}.geojson.gz`, base).href, { name: `map:${name}`, signal }),
-    ),
-  )
-  const failure = results.find((result) => result.status === 'rejected')
-  if (failure || signal.aborted) {
-    for (const result of results) if (result.status === 'fulfilled') result.value.destroy()
-    if (failure) throw failure.reason
-    signal.throwIfAborted()
-  }
-  const data = results.map((result) => (result as PromiseFulfilledResult<Data>).value)
-  return {
-    data,
-    marks: data.map((source, index): Mark => ({
-      lines: [source.name, 'lines'],
-      name: source.name,
-      geometry: 'geometry',
-      color: palette.text2,
-      width: index === 0 ? 0.6 : 1,
-      dash: index === 0,
-      pick: false,
-      select: false,
-    })),
-  }
+let borders: Promise<Data[]> | undefined
+
+/** The bundled borders under `base`, provinces first. Read once per page; a failed read releases
+ *  the borders that did load, and the next call reads them all again. */
+export function borderData(base: URL): Promise<Data[]> {
+  if (borders) return borders
+  const reading = (async () => {
+    const results = await Promise.allSettled(
+      ['provinces', 'countries', 'coastline'].map((name) =>
+        Data.read(new URL(`maps/${name}.geojson.gz`, base).href, { name: `map:${name}` }),
+      ),
+    )
+    const failure = results.find((result) => result.status === 'rejected')
+    if (failure) {
+      for (const result of results) if (result.status === 'fulfilled') result.value.destroy()
+      throw failure.reason
+    }
+    return results.map((result) => (result as PromiseFulfilledResult<Data>).value)
+  })()
+  borders = reading
+  reading.catch(() => {
+    if (borders === reading) borders = undefined
+  })
+  return reading
 }
 
-/** The street map's tiles, one per URL for the page's life: a theme or setting that restyles the
- *  map fetches nothing again. */
 const streets = new Map<string, Tiles>()
 
-/** OpenMapTiles' layers as the ground under a case. The tiles have no land layer: the land is the
- *  earth's ground, so water is what differs from it. Roads show by class, the smaller ones once a
- *  town's streets can be told apart, and borders only of countries and states on land. */
-export function streetMaps(url: string, palette: Palette): { source: Tiles; marks: Mark[] } {
+/** OpenMapTiles layers under a case. The tiles have no land layer, so land is the earth's ground
+ *  color and only water differs. Minor roads appear from zoom 12; borders only for countries and
+ *  states, on land. */
+function streetMaps(url: string, palette: Palette): { source: Tiles; marks: Mark[] } {
   let source = streets.get(url)
   if (!source) streets.set(url, (source = new Tiles('map:streets', url)))
   const kind = field('class')

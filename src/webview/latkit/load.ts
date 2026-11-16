@@ -1,22 +1,21 @@
-/** latkit in a page: its WebAssembly and worker, and the GPU its views draw with. */
+/** Loads latkit's WebAssembly and worker, and opens GPUs. */
 
 import { Gpu, load } from 'latkit'
 
 import { failedWith } from '../../shared/errors.js'
 
-/** Whether this page started over after latkit stopped, and has not drawn since. */
+/** Set when the page reloads after latkit stopped; cleared once the page draws again. */
 const STOPPED = 'gridkitStudio.stopped'
 
-/** The URL of the bundled asset the page's `name` meta names. */
+/** The URL of a bundled asset, from the page's `<meta name>`. */
 export function asset(name: string): string {
   const value = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content
-  if (!value) throw new Error(`Missing bundled asset: ${name}`)
+  if (!value) throw new Error(`Missing included asset: ${name}`)
   return value
 }
 
-/** Loads latkit. latkit loads once per page, shares that load, and tries a failed one again. The
- *  worker sits on the webview's resource origin, so latkit fetches it through the page and starts
- *  it from a blob. Jobs start only once this resolves. */
+/** Loads latkit once per page, retrying after a failure. The worker is on the webview's resource
+ *  origin, so latkit fetches it through the page and starts it from a blob. */
 export const loadLatkit = (): Promise<void> =>
   load({ wasm: asset('latkit-wasm'), worker: asset('latkit-worker') })
 
@@ -25,25 +24,25 @@ export async function openGpu(): Promise<Gpu> {
   return Gpu.create()
 }
 
-/** Whether latkit stopped after an internal error, and the page starts over for it: once, until it
- *  draws again. Stopping again before then, the page stays, and the error is said like any other. */
+/** Reloads the page once after latkit stops on an internal error; returns whether it did. Stopping
+ *  again before the page draws is reported like any other error. */
 export function startOver(error: unknown): boolean {
   if (!failedWith(error, 'stopped')) return false
   try {
     if (sessionStorage.getItem(STOPPED)) return false
     sessionStorage.setItem(STOPPED, 'true')
   } catch {
-    // A page without storage cannot tell it started over before, and starts over.
+    // Without storage, reload anyway.
   }
   location.reload()
   return true
 }
 
-/** The page drew: should latkit stop again, it starts over again. */
-export function drew(): void {
+/** Lets `startOver` reload again, once the page has drawn. */
+export function clearStopped(): void {
   try {
     sessionStorage.removeItem(STOPPED)
   } catch {
-    // Nothing was kept to forget.
+    // Without storage, nothing was set.
   }
 }

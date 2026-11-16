@@ -1,11 +1,8 @@
-/** Where Studio's manifest offers its commands, read as VS Code reads it: what a menu, a title bar or
- *  shows in a context, and whether each command there is enabled. The VS Code suites run a command
- *  from where the user finds it through this, so no test waits on VS Code's own popups. */
+/** Evaluates the manifest's menus and enablement as VS Code does, so tests can run a command from
+ *  where the user finds it without waiting on VS Code's popups. */
 
-/** Context keys and their values, as VS Code holds them. */
 export type Keys = Readonly<Record<string, unknown>>
 
-/** The parts of an extension manifest that place commands. */
 export interface Manifest {
   contributes: {
     commands: readonly { command: string; title: string; enablement?: string }[]
@@ -13,8 +10,7 @@ export interface Manifest {
   }
 }
 
-/** A command as a place offers it, and the group it shows in: a title bar shows its `navigation`
- *  group as buttons, and the rest under More Actions. */
+/** A menu entry. Title bars show the `navigation` group as buttons, the rest under More Actions. */
 export interface Offered {
   readonly command: string
   readonly title: string
@@ -39,16 +35,14 @@ function tokens(when: string): string[] {
   return out
 }
 
-/** A literal as VS Code reads it: quotes dropped. */
 const literal = (token: string) => token.replace(/^(['"])(.*)\1$/, '$2')
 
 /**
- * Whether `when` holds for `keys`, as VS Code evaluates it: `||` binds loosest, then `&&`, then `!`.
- * A term is a key, which holds while its value is truthy, or `key == value` and `key != value`,
- * which compare the value as text and `true` or `false` as the key's truth, or `key =~ /pattern/`,
- * `true`, `false`, or a clause in parentheses. An absent clause always holds.
+ * Evaluates a when clause against `keys` as VS Code does: `||` binds loosest, then `&&`, then `!`.
+ * `==` and `!=` compare as text, except `true` and `false`, which compare the key's truthiness.
+ * Supports `=~ /pattern/` and parentheses. An empty clause is true.
  */
-export function holds(when: string | undefined, keys: Keys): boolean {
+export function evaluateWhen(when: string | undefined, keys: Keys): boolean {
   if (!when?.trim()) return true
   const list = tokens(when)
   let i = 0
@@ -114,8 +108,8 @@ export function holds(when: string | undefined, keys: Keys): boolean {
   return value
 }
 
-/** Every context key a clause names. */
-export function named(when: string | undefined): string[] {
+/** The context keys a clause references. */
+export function contextKeysIn(when: string | undefined): string[] {
   if (!when?.trim()) return []
   const list = tokens(when)
   return list.filter(
@@ -134,38 +128,35 @@ export class Menus {
       manifest.contributes.commands.map((each) => [each.command, each.enablement]),
     )
   }
-  /** The commands `place` shows for `keys`, as the manifest lists them. */
   offered(place: string, keys: Keys): Offered[] {
     return (this.manifest.contributes.menus[place] ?? [])
-      .filter((entry) => holds(entry.when, keys))
+      .filter((entry) => evaluateWhen(entry.when, keys))
       .map((entry) => ({
         command: entry.command,
         title: this.title(entry.command),
         ...(entry.group && { group: entry.group }),
       }))
   }
-  /** What `place` shows for `keys` whose title starts with `title`; throws naming what it shows
-   *  instead when it shows none, or more than one. */
+  /** The one entry in `place` whose title starts with `title`; otherwise throws, listing all. */
   find(place: string, title: string, keys: Keys): Offered {
-    const shown = this.offered(place, keys)
-    const found = shown.filter((each) => each.title.startsWith(title))
+    const offered = this.offered(place, keys)
+    const found = offered.filter((each) => each.title.startsWith(title))
     if (found.length !== 1)
       throw new Error(
         `${place} offers ${found.length ? 'more than one' : 'no'} "${title}" here, but ` +
-          (shown.map((each) => each.title).join(', ') || 'nothing'),
+          (offered.map((each) => each.title).join(', ') || 'nothing'),
       )
     return found[0]!
   }
-  /** Whether `command` runs for `keys`: its enablement holds. */
   enabled(command: string, keys: Keys): boolean {
-    return holds(this.#enablement.get(command), keys)
+    return evaluateWhen(this.#enablement.get(command), keys)
   }
   title(command: string): string {
     const title = this.#titles.get(command)
     if (title === undefined) throw new Error(`${command} has no title`)
     return title
   }
-  /** Every clause the manifest places a command by, with the place it is in. */
+  /** Every when and enablement clause in the manifest, with where it appears. */
   clauses(): { place: string; when: string }[] {
     const out: { place: string; when: string }[] = []
     for (const [place, entries] of Object.entries(this.manifest.contributes.menus))

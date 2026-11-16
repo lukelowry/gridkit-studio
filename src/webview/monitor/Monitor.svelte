@@ -8,44 +8,39 @@
   import { createClock } from '../clock.js'
   import { picture, saveImage } from '../export/image.js'
   import { plotViews } from '../export/plots.js'
-  import { followPlayback } from '../latkit/canvas.js'
   import { LatkitPage } from '../latkit/page.svelte.js'
   import { monitorWindow, sameWindow, SETTLE_MS } from './plot.js'
   import Plot from './Plot.svelte'
 
   const page = new LatkitPage((error) => bridge.report(error))
   const fail = page.fail
-  let app = $state.raw<ViewState>({})
+  let viewState = $state.raw<ViewState>({})
   let t = $state(0)
-  let chosen = $state.raw<TimeRange>()
+  let chosenWindow = $state.raw<TimeRange>()
   const views = new Set<View>()
-  /** Lets go of an image being drawn once the page goes. */
   const lifetime = new AbortController()
-  let following: (() => void) | undefined
-  let telling: ReturnType<typeof setTimeout> | undefined
+  let windowTimer: ReturnType<typeof setTimeout> | undefined
+  let lanes = $state<HTMLElement>()
   const active = $derived(page.active)
-  const results = $derived(app.results)
-  const plots = $derived(app.plots ?? [])
-  /** The window every plot shows, the same one while results arrive that leave it where it was: a
-   *  plot handed a window anew moves its camera, which starts latkit fitting its values again. */
-  let steady: TimeRange | undefined
-  const shown = $derived.by(() => {
-    const next = monitorWindow(results, chosen ?? app.window)
-    return (steady = sameWindow(steady, next) ? steady! : next)
+  const results = $derived(viewState.results)
+  const plots = $derived(viewState.plots ?? [])
+  let previousWindow: TimeRange | undefined
+  /** The window every plot shows, kept identical while equal: a new window moves each plot's
+   *  camera, which restarts latkit's value fit. */
+  const timeWindow = $derived.by(() => {
+    const next = monitorWindow(results, chosenWindow ?? viewState.window)
+    return (previousWindow = sameWindow(previousWindow, next) ? previousWindow! : next)
   })
   const clock = createClock((at) => {
     t = at
     if (active) for (const view of views) view.at = at
   }, follow)
 
+  /** While playing, moves the playhead every frame; the readouts update four times a second. */
   function follow() {
-    following?.()
-    following = undefined
-    const gpu = page.gpu
-    if (!gpu || !active || !views.size || clock.state.status !== 'playing') return
     let reported = 0
-    following = followPlayback(
-      gpu,
+    page.follow(
+      !!views.size && clock.state.status === 'playing',
       () => views,
       () => {
         const at = clock.now()
@@ -67,19 +62,25 @@
       follow()
     }
   }
-  /** An image of every plot, those scrolled out of sight too, as the Monitor stacks them. */
+  /** Exports every plot, including those scrolled out of view, stacked as in the Monitor. */
   async function exportImage() {
-    const lanes = document.querySelector('[data-testid="monitor-lanes"]')
     const gpu = page.gpu
-    if (!gpu || !results || !app.uri || !app.summary || !lanes) return
+    if (!gpu || !results || !viewState.uri || !viewState.summary || !lanes) return
     const size = [lanes.clientWidth, lanes.scrollHeight] as const
-    const plots = await plotViews(app, results, gpu, shown, [0, 0, 1, 1], lifetime.signal)
+    const plots = await plotViews(
+      viewState,
+      results,
+      gpu,
+      timeWindow,
+      [0, 0, 1, 1],
+      lifetime.signal,
+    )
     try {
       for (const { view } of plots.placed) view.at = t
       await saveImage(
         picture(size, plots.placed),
-        app.uri,
-        app.summary.name,
+        viewState.uri,
+        viewState.summary.name,
         'monitor',
         lifetime.signal,
       )
@@ -87,11 +88,11 @@
       plots.release()
     }
   }
-  /** A zoom or pan: the plots show it at once, and the extension hears of it once it rests. */
-  function turn(range: TimeRange) {
-    chosen = range
-    clearTimeout(telling)
-    telling = setTimeout(() => bridge.send({ kind: 'window', bounds: range }), SETTLE_MS)
+  /** Shows a zoom or pan at once, and reports it to the extension once it settles. */
+  function changeWindow(range: TimeRange) {
+    chosenWindow = range
+    clearTimeout(windowTimer)
+    windowTimer = setTimeout(() => bridge.send({ kind: 'window', bounds: range }), SETTLE_MS)
   }
   $effect(() => {
     void active
@@ -101,15 +102,16 @@
   onMount(() => {
     const off = bridge.on((message) => {
       if (message.kind === 'state') {
-        const old = app
-        app = message.state
-        if (old.results?.id !== app.results?.id || old.window !== app.window) chosen = undefined
+        const previous = viewState
+        viewState = message.state
+        if (previous.results?.id !== viewState.results?.id || previous.window !== viewState.window)
+          chosenWindow = undefined
       } else if (message.kind === 'action') {
         if (message.command === 'reloadView') void page.open()
-        else if (message.command === 'fit') {
-          // A zoom or pan not yet said would take Fit's place once it was.
-          clearTimeout(telling)
-          chosen = undefined
+        else if (message.command === 'fitAll') {
+          // An unreported zoom or pan would otherwise replace the fit once sent.
+          clearTimeout(windowTimer)
+          chosenWindow = undefined
           bridge.send({ kind: 'window', bounds: monitorWindow(results) })
         } else if (message.command === 'exportImage') void exportImage().catch(fail)
       }
@@ -129,10 +131,9 @@
     bridge.ready()
     return () => {
       lifetime.abort()
-      following?.()
       clock.stop()
       off()
-      clearTimeout(telling)
+      clearTimeout(windowTimer)
       page.destroy()
       delete hooks.gridkitMonitor
     }
@@ -142,28 +143,28 @@
 <div class="monitor">
   {#if !plots.length || !results}
     <div class="c-empty monitor__empty">
-      {#if app.uri && !app.summary}<p class="c-empty__text">Loading case…</p>
-      {:else if app.uri && !results}<p class="c-empty__text">
+      {#if !viewState.uri}<p class="c-empty__text">Open a GridKit case.</p>
+      {:else if !viewState.summary}<p class="c-empty__text">Loading case…</p>
+      {:else if !results}<p class="c-empty__text">
           Right-click a .solver.json and choose Run Dynamic Simulation to see its results here.
         </p>
-      {:else if results?.outputs.length}<p class="c-empty__text">
-          Add a plot from the title bar.
-        </p>{/if}
+      {:else if results.outputs.length}<p class="c-empty__text">Add a plot from the title bar.</p>
+      {:else}<p class="c-empty__text">These results hold no signals.</p>{/if}
     </div>
   {:else if page.gpu}
-    <div class="monitor__lanes" data-testid="monitor-lanes">
+    <div class="monitor__lanes" data-testid="monitor-lanes" bind:this={lanes}>
       {#each plots as plot (JSON.stringify([results.id, plot.table, plot.field, plot.id]))}
         <Plot
           {plot}
-          {app}
+          {viewState}
           gpu={page.gpu}
           {active}
-          {shown}
+          {timeWindow}
           {t}
           {clock}
           themeVersion={page.themeVersion}
           {register}
-          onwindow={turn}
+          onwindow={changeWindow}
           onerror={fail}
         />
       {/each}

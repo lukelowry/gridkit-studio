@@ -1,19 +1,17 @@
-/** Monitored Signals: what the case's runs record, which is its elements' `mon` lists as the file
- *  says them. A field's row says whether every element records it, or how many do. Its menu acts
- *  on it as a Case panel column's does: it plots and maps it. */
+/** The Monitored Signals view: the signals the case records, from its elements' `mon` lists. A
+ *  field's row shows how many elements record it; its menu matches a Case panel column's. */
 
 import * as vscode from 'vscode'
 
 import { fieldDefinition, fieldLabel, tableLabel } from '../shared/document.js'
 import { viewId } from '../shared/ids.js'
-import { mappingOf, signalContext, type Target } from '../shared/menus.js'
+import { mappingOf, signalContext, TARGET, type Target } from '../shared/menus.js'
 import type { Summary } from '../shared/messages.js'
-import type { Sessions } from './sessions.js'
+import type { Studio } from './studio.js'
 
-/** A recordable type, or one of its fields when `field` is set, which its menu's commands act on
- *  through `gridkitTarget`. */
+/** A recordable type, or one of its fields when `field` is set. */
 class Signal extends vscode.TreeItem {
-  gridkitTarget?: Target
+  [TARGET]?: Target
   constructor(
     readonly type: string,
     readonly field: string | undefined,
@@ -24,7 +22,7 @@ class Signal extends vscode.TreeItem {
   }
 }
 
-/** The types in `summary` with elements and sampled fields, each with those fields. */
+/** The types in `summary` that have elements and sampled fields, with those fields. */
 function recordable(summary: Summary): { type: string; fields: string[] }[] {
   return summary.definition.tables.flatMap(({ name: type, fields }) => {
     const sampled = fields.filter((field) => field.kind === 'sampled').map((field) => field.name)
@@ -32,14 +30,12 @@ function recordable(summary: Summary): { type: string; fields: string[] }[] {
   })
 }
 
-/** How many of `type`'s elements list `field`. */
 const listed = (summary: Summary, type: string, field: string) =>
   summary.recording.listed[type]?.[field] ?? 0
 
-export function registerSignals(studio: Sessions) {
+export function registerSignals(studio: Studio) {
   const changed = new vscode.EventEmitter<void>()
-  /** The active case, its last summary, and what it maps. */
-  const shown = () => {
+  const activeCase = () => {
     const uri = studio.active
     const summary = uri ? studio.state(uri).summary : undefined
     return uri && summary ? { uri, summary, mappings: studio.get(uri)?.mappings ?? {} } : undefined
@@ -49,9 +45,9 @@ export function registerSignals(studio: Sessions) {
     onDidChangeTreeData: changed.event,
     getTreeItem: (item) => item,
     getChildren(parent) {
-      const now = shown()
-      if (!now || parent?.field !== undefined) return []
-      const { uri, summary, mappings } = now
+      const active = activeCase()
+      if (!active || parent?.field !== undefined) return []
+      const { uri, summary, mappings } = active
       const types = recordable(summary)
       if (!parent)
         return types.map(({ type, fields }) => {
@@ -61,7 +57,7 @@ export function registerSignals(studio: Sessions) {
           const item = new Signal(type, undefined, name, vscode.TreeItemCollapsibleState.Collapsed)
           item.id = `${uri}\n${type}`
           item.description = `${on}/${fields.length}`
-          item.tooltip = `${on} of ${fields.length} ${name} values recorded by every ${name}`
+          item.tooltip = `Every ${name} records ${on} of its ${fields.length} signals`
           item.accessibilityInformation = { label: `${name}, ${on} of ${fields.length} recorded` }
           return item
         })
@@ -73,7 +69,6 @@ export function registerSignals(studio: Sessions) {
         const label = fieldLabel(fieldDefinition(summary.definition, type, field)!)
         const item = new Signal(type, field, label, vscode.TreeItemCollapsibleState.None)
         item.id = `${uri}\n${type}\n${field}`
-        // Recorded by every element, by some, or by none.
         item.description =
           count > 0 && count === total
             ? 'Recorded'
@@ -85,7 +80,7 @@ export function registerSignals(studio: Sessions) {
           label: `${name} ${label}, recorded by ${count.toLocaleString()} of ${total.toLocaleString()}`,
         }
         const named = { table: type, field }
-        item.gridkitTarget = { uri, version: summary.version, origin: 'signals', field: named }
+        item[TARGET] = { uri, version: summary.version, origin: 'signals', field: named }
         item.contextValue = signalContext({
           recorded: count > 0,
           ...mappingOf(summary, mappings, named),
@@ -100,15 +95,16 @@ export function registerSignals(studio: Sessions) {
     showCollapseAll: true,
   })
   let revision = ''
-  /** Redraw when the active case, its revision, or what it maps changes: a mapping changes what a
-   *  field's menu offers. */
+  /** Redraws when the active case, its version or its mappings change. */
   const refresh = () => {
-    const now = shown()
-    const next = JSON.stringify([now?.uri, now?.summary.version, now?.mappings])
+    const active = activeCase()
+    const next = JSON.stringify([active?.uri, active?.summary.version, active?.mappings])
     if (next === revision) return
     revision = next
     view.message =
-      now && !recordable(now.summary).length ? 'This case has no recordable signals.' : undefined
+      active && !recordable(active.summary).length
+        ? 'This case has no recordable signals.'
+        : undefined
     changed.fire()
   }
   refresh()

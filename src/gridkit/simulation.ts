@@ -1,5 +1,4 @@
-/** One run of GridKit's DynamicSimulation on a solver file, in its folder, as a shell runs it, read
- *  while it writes its output. */
+/** Runs GridKit on a solver file in its folder, as a shell would, and reads the output live. */
 
 import { mkdir } from '../platform/files.js'
 import { lockOutput } from '../platform/host.js'
@@ -12,25 +11,21 @@ import { launchWasm, solverBytes, type WasmAssets } from './wasm.js'
 
 interface RunContext extends Launch {
   readonly wasm?: WasmAssets
-  /** Hears of the results file the run reads as soon as it reads it, so views can ask it for
-   *  frames as it fills. */
+  /** Called as soon as reading starts, so views can request frames as the file fills. */
   readonly reading: (file: ResultsFile) => void
-  /** Hears of each run of frames read. */
   readonly progress: () => Promise<void> | void
 }
 
-/** The runs writing each output file, by its path as the file system compares paths. */
 const writers = new Map<string, Promise<void>>()
 
-/** Waits for every run before this one that writes `path` to end, unless `signal` lets go first:
- *  two runs writing one file at once would each write over the other. Returns what ends this run's
- *  turn, which the next waits for. */
+/** Waits for earlier runs writing `path`, which would overwrite each other. Returns the function
+ *  that ends this run's turn. */
 export async function turn(path: string, signal: AbortSignal): Promise<() => void> {
   const key = fileKey(path)
   const before = writers.get(key)
   let end!: () => void
   const mine = new Promise<void>((resolve) => (end = resolve))
-  // The next waits for this run and every run before it, however soon this one ends.
+  // The next run waits for this one and every earlier one, even if this one ends first.
   const queue = before ? before.then(() => mine) : mine
   writers.set(key, queue)
   void queue.then(() => {
@@ -54,8 +49,7 @@ export async function turn(path: string, signal: AbortSignal): Promise<() => voi
   return end
 }
 
-/** Runs `request` on `kase`, and reads what it writes into results kept in `stores`, which
- *  `context` hears of before GridKit starts. Letting go of those results stops the run. */
+/** Runs `request` on `kase`. Retiring the results file it reads stops the run. */
 export async function simulate(
   kase: Case,
   request: RunRequest,
@@ -63,11 +57,11 @@ export async function simulate(
   context: RunContext,
 ): Promise<ResultsFile> {
   const { solver, output, gridkit, tmax } = request
-  // Where GridKit runs is settled before anything is touched: a run that cannot start leaves the
-  // last run's file as it was.
+  // Resolve the runtime before touching anything, so a run that cannot start leaves the previous
+  // output intact.
   const runtime = await available(gridkit, context.signal)
   if (runtime.kind === 'wasm') {
-    if (!context.wasm) throw new Error('Bundled GridKit WebAssembly assets are unavailable.')
+    if (!context.wasm) throw new Error('The included GridKit solver is missing.')
     await solverBytes(context.wasm.wasm)
     context.signal.throwIfAborted()
   }
@@ -75,10 +69,9 @@ export async function simulate(
   let unlock: (() => void) | undefined
   try {
     unlock = await lockOutput(output, context.signal)
-    // GridKit opens its output without making the folder it names.
+    // GridKit does not create its output folder.
     await mkdir(dirname(output), { recursive: true })
-    // The file the last run left stays until GridKit writes over it, as a shell's run leaves it: a
-    // run that never starts leaves it whole, and nothing of it is read as this run's.
+    // The previous output stays until GridKit overwrites it, and its stamp keeps it unread.
     const last = await stampAt(output)
     const file = new ResultsFile(kase, await stores.create(output), {
       revision: request,
@@ -94,8 +87,7 @@ export async function simulate(
     try {
       // A quick rerun can keep the same file stamp. Wait for WASM to open its new output.
       if ('started' in process) await process.started
-      // Stopping the run stops GridKit: what it wrote is read to its end, as any stopped writer's
-      // file is, and only letting go of the results stops the reading.
+      // A stopped run's output is still read to the end. Only retiring the results stops reading.
       await file.use(undefined, (signal) =>
         file.ingest(
           signal,
@@ -118,7 +110,6 @@ export async function simulate(
     } finally {
       await process.stop()
       await process.done.catch(() => {})
-      // GridKit has stopped writing: what was read of its file exports, however the reading ended.
       await file.settle()
     }
   } finally {

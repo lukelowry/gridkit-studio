@@ -1,4 +1,4 @@
-/** The entry for the end-to-end journeys, run inside the VS Code that holds the extension. */
+/** Entry point for the e2e journeys. */
 
 import { suites } from '../host/mocha.js'
 import { extension, failed, finish, notifications } from './harness.js'
@@ -12,8 +12,7 @@ export const run = () =>
         console.error(test.err?.stack)
         await failed(test.fullTitle())
       }
-      // An error the user would see only in the log fails the test, as does a notification; a
-      // test that expects one takes it first.
+      // Logged errors and notifications fail the test unless the test took them.
       const logged = extension().exports.studio.reporter.errors.splice(0)
       const shown = await notifications()
       if (logged.length) throw new Error('GridKit Studio logged errors:\n' + logged.join('\n'))

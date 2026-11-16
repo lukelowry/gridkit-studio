@@ -18,7 +18,7 @@ it('sends a message of more buffers than VS Code counts as one buffer of views',
   const sent = packed(message)
   const views = sent.batches.flatMap(({ coordinates, values, rows }) => [coordinates, values, rows])
   expect(new Set(views.map((view) => view.buffer)).size).toBe(1)
-  // Each array is a view of its own type, holding what it held; one array stays one view.
+  // Each array keeps its type and values, and a shared array stays shared.
   expect(sent.batches.map(({ values }) => Array.from(values))).toEqual(
     message.batches.map(({ values }) => Array.from(values)),
   )
@@ -28,7 +28,7 @@ it('sends a message of more buffers than VS Code counts as one buffer of views',
   expect(sent.batches[7]!.at).toBe(7)
 })
 
-it('keeps what is not an array or a plain object as it is, however many buffers a message holds', () => {
+it('leaves values other than arrays and plain objects as they are, however many buffers a message has', () => {
   const names = new Map([['Bus', 1]])
   const message = {
     names,

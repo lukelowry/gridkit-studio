@@ -1,7 +1,6 @@
-/** Lazy parser columns use native scalar arrays; no renderer row-space lives here. */
+/** Lazily decoded parser columns in typed and plain arrays. Nothing here is renderer-specific. */
 import type { Geometry, Values } from 'latkit'
 
-import { text } from '../platform/bytes.js'
 import type { Value } from '../shared/messages.js'
 
 export type DecodeKind = 'number' | 'integer' | 'unsigned' | 'boolean' | 'text' | 'path' | 'json'
@@ -26,10 +25,9 @@ export function deferred<T>(decode: () => T): () => T {
   }
 }
 export const CHUNK_ROWS = 65_536
-export const isInt32 = (value: number) =>
-  Number.isInteger(value) && value >= -0x8000_0000 && value <= 0x7fff_ffff
-export const isUint32 = (value: number) =>
-  Number.isInteger(value) && value >= 0 && value <= 0xffff_ffff
+/** Whether `value` is a valid GridKit id (a size_t): a non-negative integer a double represents
+ *  exactly. */
+export const isId = (value: number) => Number.isSafeInteger(value) && value >= 0
 export const rowCount = (starts: Uint32Array) => starts[starts.length - 1]!
 export function chunkAt(starts: Uint32Array, row: number): number {
   let low = 0
@@ -50,10 +48,7 @@ export function isValid(chunk: Chunk, at: number): boolean {
 export function valueAt(chunk: Chunk, at: number): Value {
   return isValid(chunk, at) ? (chunk[at] as Value) : null
 }
-/** The text of `bytes` from `start` to `end`. */
-export const utf8 = (bytes: Uint8Array, start: number, end: number): string =>
-  text(bytes, start, end)
-/** `array` in a copy twice as long. */
+/** A copy of `array` with twice the length. */
 export function grown<T extends Int32Array | Uint32Array | Float64Array>(array: T): T {
   const next = new (array.constructor as new (length: number) => T)(array.length * 2)
   next.set(array)
@@ -64,7 +59,7 @@ export function hash(bytes: Uint8Array, start: number, end: number): number {
   for (let i = start; i < end; i++) h = Math.imul(h ^ bytes[i]!, 0x01000193)
   return h >>> 0
 }
-/** Copy only requested rows; cached parser buffers never cross a transfer boundary. */
+/** Copies only the requested rows, so cached parser buffers never cross a transfer boundary. */
 export function readColumn(column: Column, offset: number, count: number): Values {
   if (
     !Number.isSafeInteger(offset) ||
@@ -137,18 +132,4 @@ class PathBuilder implements Builder {
   finish(): (Geometry | null)[] {
     return this.#values.slice()
   }
-}
-/** Stable unsigned-key ordering in two 16-bit passes, for source identity validation. */
-export function radixOrder(keys: Uint32Array): Uint32Array {
-  let order = Uint32Array.from(keys.keys())
-  let next = new Uint32Array(keys.length)
-  for (const shift of [0, 16]) {
-    const counts = new Uint32Array(65_537)
-    for (let i = 0; i < order.length; i++) counts[((keys[order[i]!]! >>> shift) & 0xffff) + 1]!++
-    for (let i = 1; i < counts.length; i++) counts[i]! += counts[i - 1]!
-    for (let i = 0; i < order.length; i++)
-      next[counts[(keys[order[i]!]! >>> shift) & 0xffff]!++] = order[i]!
-    ;[order, next] = [next, order]
-  }
-  return order
 }

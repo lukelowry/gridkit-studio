@@ -24,7 +24,6 @@ it("names each file of a field's tiles as latkit resolves it, and reads the name
     id: 'A',
     file: 'base.latk',
   })
-  // A number id stays a number.
   expect(tileRequest(at(resultTiles('r', 'Bus', 'Vm', 7), '3/12.latk'))).toMatchObject({
     id: 7,
     file: { level: 3, index: 12 },
@@ -33,7 +32,7 @@ it("names each file of a field's tiles as latkit resolves it, and reads the name
   expect(() => tileRequest('https://tiles/frames.json')).toThrow('Not a file of results')
 })
 
-it('refreshes as a run grows, once more after a draw for all that came meanwhile', async () => {
+it('refreshes as a run grows, and once more after a draw for what arrived during it', async () => {
   const refresh = vi.fn()
   let draw!: () => void
   const drawn = vi.fn(() => new Promise<void>((resolve) => (draw = resolve)))

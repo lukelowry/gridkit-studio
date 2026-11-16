@@ -1,6 +1,5 @@
-/* Global component classes, composed by name; focus rings come from tokens.css. */
+/* Global component classes; focus rings come from tokens.css. */
 
-/* Buttons. Hover lifts the text; a pressed or expanded button takes the selection tint. */
 .c-btn,
 .c-icon-btn {
   display: inline-flex;
@@ -24,7 +23,6 @@
     opacity var(--motion-mid) var(--motion-hover);
 }
 
-/* A square button holding one glyph. */
 .c-icon-btn {
   flex-shrink: 0;
   min-width: var(--spacing-row-h);
@@ -55,7 +53,7 @@ button.c-row:disabled {
   opacity: 0.45;
 }
 
-/* After the hover rule, which the icon button's selector ties on specificity. */
+/* After the hover rule, which ties with the icon button's selector on specificity. */
 .c-btn:is([aria-expanded='true'], [aria-pressed='true']),
 .c-icon-btn:is([aria-expanded='true'], [aria-pressed='true']):not(:disabled) {
   background: var(--color-selected);
@@ -72,7 +70,16 @@ button.c-row:disabled {
   color: var(--color-on-primary);
 }
 
-/* An empty state: centered caption copy. */
+.c-btn--secondary {
+  background: var(--vscode-button-secondaryBackground, var(--color-surface-2));
+  color: var(--vscode-button-secondaryForeground, var(--color-text-1));
+}
+
+.c-btn--secondary:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, var(--color-row-hover));
+  color: var(--vscode-button-secondaryForeground, var(--color-text-1));
+}
+
 .c-empty {
   display: flex;
   flex-direction: column;
@@ -90,7 +97,7 @@ button.c-row:disabled {
   max-width: 280px;
 }
 
-/* Copy under a group of rows, indented to the row label: it says what is so, never what failed. */
+/* Caption text under a group of rows, indented to the row label. */
 .c-note {
   margin: var(--spacing-2xs) var(--spacing-sm) var(--spacing-sm);
   color: var(--color-text-2);
@@ -99,8 +106,8 @@ button.c-row:disabled {
   overflow-wrap: anywhere;
 }
 
-/* The instrument row: a label left and a control or readout right. As a button, the whole row is
-   the hit target and its focus ring sits inside. */
+/* A label left and a control or value right. As a button, the whole row is the target and its
+   focus ring sits inside. */
 .c-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -117,7 +124,7 @@ button.c-row:disabled {
   color: var(--color-text-1);
   font-size: var(--text-md);
   font-weight: 500;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .c-row__value {
@@ -143,7 +150,6 @@ button.c-row:focus-visible {
   outline-offset: -2px;
 }
 
-/* A settings body. */
 .c-settings {
   min-inline-size: 0;
   padding: var(--spacing-sm);

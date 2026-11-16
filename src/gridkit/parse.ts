@@ -1,7 +1,5 @@
+/** Indexes a case's JSON bytes once and decodes columns on demand, keeping unknown members. */
 import { text } from '../platform/bytes.js'
-/** A case's JSON bytes: members and records indexed once, in file order, then columns decoded on
- *  demand. A member the catalog does not know, or a device class, is found and kept for its own
- *  column or table; invalid values become null. */
 import type { SourceProblem } from '../shared/errors.js'
 import { problem } from '../shared/errors.js'
 import type { DecodeKind } from './columns.js'
@@ -13,11 +11,9 @@ import {
   deferred,
   grown,
   hash,
-  isInt32,
-  isUint32,
+  isId,
   NumericBuilder,
   type TextBuilder,
-  utf8,
 } from './columns.js'
 import {
   type ArrayName,
@@ -42,7 +38,6 @@ const OPEN_OBJECT = 0x7b
 const CLOSE_OBJECT = 0x7d
 const OPEN_ARRAY = 0x5b
 const CLOSE_ARRAY = 0x5d
-/** The first bytes of `null`, `true` and `false`. */
 const NULL_START = 0x6e
 const TRUE_START = 0x74
 const FALSE_START = 0x66
@@ -50,16 +45,15 @@ const UTF8 = new TextEncoder()
 
 export const ARRAYS: readonly ArrayName[] = ['buses', 'signals', 'devices']
 
+/** A top-level member: offsets of its key's opening quote, its value, and just past the value. */
 export interface Member {
   readonly name: string
-  /** The key's opening quote. */
   readonly start: number
   readonly value: number
-  /** Just past the value. */
   readonly end: number
 }
 
-/** One array's brackets, and each record's start and end. */
+/** Byte offsets of an array's brackets and of each record's start and end. */
 export interface Records {
   readonly open: number
   readonly close: number
@@ -67,51 +61,65 @@ export interface Records {
   readonly ends: Uint32Array
 }
 
-export interface Layout {
-  readonly members: readonly Member[]
-  readonly arrays: Readonly<Partial<Record<ArrayName, Records>>>
+/** A key repeated within one object, where GridKit keeps the later value. Spans its quotes. */
+export interface Repeat {
+  readonly type: string
+  readonly row: number
+  readonly start: number
+  readonly end: number
 }
 
-/** The case's members, and each array's records, found as the whole file is checked to be JSON
- *  with no object that repeats a key: what is read after takes the JSON as it is. Read a slice at a
- *  time, until `signal` lets go. */
+export interface Layout {
+  /** Top-level members in file order, keeping only the last of each name. */
+  readonly members: readonly Member[]
+  readonly arrays: Readonly<Partial<Record<ArrayName, Records>>>
+  readonly repeats: readonly Repeat[]
+}
+
+/** Validates the whole file as JSON while locating top-level members and array records. */
 export async function scan(bytes: Uint8Array, signal = AbortSignal.any([])): Promise<Layout> {
   const work = new Turns(signal)
-  // A value's place is kept as a signed 32-bit number, where -1 says a record writes none.
+  // Offsets are stored as signed 32-bit integers, with -1 for a missing value.
   if (bytes.length > 0x7fffffff) throw problem('limit', 'A case file must be smaller than 2 GiB.')
   let i = skipSpace(bytes, 0)
   expect(bytes, i, OPEN_OBJECT, 'a case object')
   const members: Member[] = []
-  const names = new Set<string>()
-  const arrays: Partial<Record<ArrayName, Records>> = {}
+  const repeats: Repeat[] = []
+  const arrays = new Map<ArrayName, Records>()
   i = skipSpace(bytes, i + 1)
   while (bytes[i] !== CLOSE_OBJECT) {
     expect(bytes, i, QUOTE, 'a member name')
     const start = i
     const keyEnd = checkString(bytes, i)
     const name = keyOf(bytes, start, keyEnd)
-    if (names.has(name)) malformed(start, 'a member name the case has not used')
-    names.add(name)
     i = skipSpace(bytes, keyEnd)
     expect(bytes, i, COLON, 'a colon')
     const value = skipSpace(bytes, i + 1)
+    const array = ARRAYS.find((each) => each === name)
     let end: number
-    if ((ARRAYS as readonly string[]).includes(name) && bytes[value] === OPEN_ARRAY) {
+    if (array && bytes[value] === OPEN_ARRAY) {
       const records = { open: value, ...(await recordsFrom(bytes, value + 1, work)) }
-      arrays[name as ArrayName] = records
+      arrays.set(array, records)
       end = records.close + 1
-    } else end = checkValue(bytes, value)
+    } else {
+      // A later non-array value replaces the array.
+      if (array) arrays.delete(array)
+      end = checkValue(bytes, value)
+    }
+    const before = members.findIndex((member) => member.name === name)
+    if (before >= 0) {
+      members.splice(before, 1)
+      repeats.push({ type: CASE, row: 0, start, end: keyEnd })
+    }
     members.push({ name, start, value, end })
     i = skipSpace(bytes, end)
     if (bytes[i] === COMMA) i = skipSpace(bytes, i + 1)
     else if (bytes[i] !== CLOSE_OBJECT) malformed(i, 'a comma or the end of the case')
   }
   if (skipSpace(bytes, i + 1) !== bytes.length) malformed(i + 1, 'the end of the file')
-  return { members, arrays }
+  return { members, arrays: Object.fromEntries(arrays), repeats }
 }
 
-/** The records of an array of `bytes` from `from`, just past the array's opening bracket, each
- *  checked as JSON whole, and where the array closes. */
 async function recordsFrom(
   bytes: Uint8Array,
   from: number,
@@ -129,7 +137,6 @@ async function recordsFrom(
   if (bytes[i] === CLOSE_ARRAY) return done(i)
   for (;;) {
     if ((count & STEP_RECORDS) === 0) await work.step()
-    expect(bytes, i, OPEN_OBJECT, 'a record')
     const end = checkValue(bytes, i)
     if (count === starts.length) {
       starts = grown(starts)
@@ -144,59 +151,18 @@ async function recordsFrom(
   }
 }
 
-/** Where each open object's keys are, and their hashes, as `checkValue` reads: a key is compared
- *  only with those of its own object that hash alike. Grown as needed, and kept between calls. */
-let keyStarts: Int32Array = new Int32Array(256)
-let keyEnds: Int32Array = new Int32Array(256)
-let keyHashes: Int32Array = new Int32Array(256)
-
-/** Just past the JSON value at `i`, checked as JSON whole: its grammar, without comments or trailing
- *  commas, and no object in it that repeats a key. A value nests as deep as it likes: the open
- *  objects and arrays are counted, never recursed into. */
+/** Validates the strict JSON value at `start` and returns the offset past it. Never recurses. */
 function checkValue(bytes: Uint8Array, start: number): number {
-  /** Per open container, 1 for an object, 0 for an array; where an object's keys begin; and, once
-   *  it has many, its keys by hash. */
+  /** Open containers: 1 for an object, 0 for an array. */
   const objects: number[] = []
-  const firsts: number[] = []
-  const indexes: (Map<number, number[]> | undefined)[] = []
-  let keys = 0
   let i = start
-  /** Reads the key at `i`, a repeat of none before it in its object; returns past its colon. */
   const key = (): number => {
     expect(bytes, i, QUOTE, 'a member name')
-    const end = checkString(bytes, i)
-    const hashed = hash(bytes, i, end) | 0
-    const first = firsts.at(-1)!
-    // A few keys are compared in turn; an object with many finds those that hash alike.
-    let index = indexes.at(-1)
-    if (!index && keys - first >= INDEXED_KEYS) {
-      index = new Map()
-      for (let k = first; k < keys; k++) indexed(index, keyHashes[k]!, k)
-      indexes[indexes.length - 1] = index
-    }
-    if (index) {
-      for (const k of index.get(hashed) ?? [])
-        if (sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
-          malformed(i, 'a member name its object has not used')
-      indexed(index, hashed, keys)
-    } else
-      for (let k = first; k < keys; k++)
-        if (keyHashes[k] === hashed && sameKey(bytes, keyStarts[k]!, keyEnds[k]!, i, end))
-          malformed(i, 'a member name its object has not used')
-    if (keys === keyStarts.length) {
-      keyStarts = grown(keyStarts)
-      keyEnds = grown(keyEnds)
-      keyHashes = grown(keyHashes)
-    }
-    keyStarts[keys] = i
-    keyEnds[keys] = end
-    keyHashes[keys++] = hashed
-    const colon = skipSpace(bytes, end)
+    const colon = skipSpace(bytes, checkString(bytes, i))
     expect(bytes, colon, COLON, 'a colon')
     return colon + 1
   }
   for (;;) {
-    // A value at `i`.
     i = skipSpace(bytes, i)
     const first = bytes[i]
     if (first === OPEN_OBJECT || first === OPEN_ARRAY) {
@@ -204,8 +170,6 @@ function checkValue(bytes: Uint8Array, start: number): number {
       i = skipSpace(bytes, i + 1)
       if (bytes[i] !== (object ? CLOSE_OBJECT : CLOSE_ARRAY)) {
         objects.push(object ? 1 : 0)
-        firsts.push(keys)
-        indexes.push(undefined)
         if (object) i = key()
         continue
       }
@@ -215,7 +179,7 @@ function checkValue(bytes: Uint8Array, start: number): number {
     else if (first === 0x66) i = checkWord(bytes, i, FALSE)
     else if (first === 0x6e) i = checkWord(bytes, i, NULL)
     else i = checkNumber(bytes, i)
-    // Past a value: the next of its container's, or the container's end, and so on out.
+    // After a value: move to the next element, or close containers until one continues.
     for (;;) {
       if (!objects.length) return i
       i = skipSpace(bytes, i)
@@ -229,34 +193,19 @@ function checkValue(bytes: Uint8Array, start: number): number {
         malformed(i, object ? 'a comma or the end of an object' : 'a comma or the end of an array')
       i++
       objects.pop()
-      indexes.pop()
-      keys = firsts.pop()!
     }
   }
-}
-
-/** How many keys an object has before its keys are found by hash rather than compared in turn. */
-const INDEXED_KEYS = 128
-
-/** Notes key `k`, which hashes as `hashed`, in `index`. */
-function indexed(index: Map<number, number[]>, hashed: number, k: number): void {
-  const alike = index.get(hashed)
-  if (alike) alike.push(k)
-  else index.set(hashed, [k])
 }
 
 const TRUE = UTF8.encode('true')
 const FALSE = UTF8.encode('false')
 const NULL = UTF8.encode('null')
 
-/** Just past the literal `word` at `i`. */
 function checkWord(bytes: Uint8Array, i: number, word: Uint8Array): number {
   for (let k = 0; k < word.length; k++) if (bytes[i + k] !== word[k]) malformed(i, 'a value')
   return i + word.length
 }
 
-/** Just past the JSON number at `i`: a sign, an integer part without leading zeros, and a fraction
- *  and an exponent, each with digits. */
 function checkNumber(bytes: Uint8Array, i: number): number {
   const start = i
   const digits = () => {
@@ -279,8 +228,6 @@ function checkNumber(bytes: Uint8Array, i: number): number {
   return i
 }
 
-/** Just past the JSON string whose opening quote is at `i`: no control character in it, and each
- *  escape one JSON has. */
 function checkString(bytes: Uint8Array, i: number): number {
   for (let at = i + 1; at < bytes.length; at++) {
     const c = bytes[at]!
@@ -296,25 +243,12 @@ function checkString(bytes: Uint8Array, i: number): number {
   return malformed(i, 'a closed string')
 }
 
-/** `"`, `\`, `/`, `b`, `f`, `n`, `r` and `t`, as an escape names them. */
 const ESCAPES = new Set([0x22, 0x5c, 0x2f, 0x62, 0x66, 0x6e, 0x72, 0x74])
 
 const isHex = (c: number | undefined) =>
   c !== undefined && ((c >= 0x30 && c <= 0x39) || ((c | 0x20) >= 0x61 && (c | 0x20) <= 0x66))
 
-/** Whether the keys at `[a, aEnd)` and `[b, bEnd)` name the same: their bytes, or, with escapes,
- *  the text they decode to. */
-function sameKey(bytes: Uint8Array, a: number, aEnd: number, b: number, bEnd: number): boolean {
-  if (aEnd - a === bEnd - b) {
-    let same = true
-    for (let k = 0; k < aEnd - a && same; k++) same = bytes[a + k] === bytes[b + k]
-    if (same) return true
-  }
-  const escaped = (from: number, to: number) => bytes.subarray(from, to).includes(BACKSLASH)
-  return (escaped(a, aEnd) || escaped(b, bEnd)) && keyOf(bytes, a, aEnd) === keyOf(bytes, b, bEnd)
-}
-
-/** Just past the JSON value at `i`, which `scan` has checked. */
+/** The offset just past the JSON value at `i`, which `scan` has already validated. */
 function skipValue(bytes: Uint8Array, i: number): number {
   const first = bytes[i]
   if (first === QUOTE) return stringEnd(bytes, i)
@@ -337,7 +271,6 @@ function skipValue(bytes: Uint8Array, i: number): number {
   return at === i ? malformed(i, 'a value') : at
 }
 
-/** Just past the string whose opening quote is at `i`. */
 function stringEnd(bytes: Uint8Array, i: number): number {
   for (let at = i + 1; at < bytes.length; at++) {
     const c = bytes[at]
@@ -356,11 +289,10 @@ function skipSpace(bytes: Uint8Array, i: number): number {
   return i
 }
 
-/** One object's members, four numbers each: its key's text inside the quotes, and its value. */
+/** One object's members, four offsets each: key text start and end, value start and end. */
 export class Members {
   spans = new Int32Array(256)
 
-  /** Read the object at `open`; returns how many members it has. */
   read(bytes: Uint8Array, open: number): number {
     expect(bytes, open, OPEN_OBJECT, 'an object')
     let count = 0
@@ -386,22 +318,20 @@ export class Members {
     return count
   }
 
-  /** Which of the `count` members last read is named `key`, as its key spells it, or -1. */
+  /** The last of `count` members named `key`, which GridKit reads, or -1. */
   find(bytes: Uint8Array, count: number, key: string): number {
-    for (let m = 0; m < count; m++)
+    for (let m = count - 1; m >= 0; m--)
       if (jsonText(bytes, this.spans[4 * m]!, this.spans[4 * m + 1]!) === key) return m
     return -1
   }
 }
 
-/** A key's text, its quotes `start` and `end - 1`; escapes, which GridKit's keys never use, decoded
- *  the slow way. */
 const keyOf = (bytes: Uint8Array, start: number, end: number): string =>
   jsonText(bytes, start + 1, end - 1)
 
-/** The text of a JSON string whose text inside its quotes is `[start, end)`, escapes decoded. */
+/** Decodes the JSON string content at `[start, end)`, quotes excluded. */
 export function jsonText(bytes: Uint8Array, start: number, end: number): string {
-  const raw = utf8(bytes, start, end)
+  const raw = text(bytes, start, end)
   return raw.includes('\\') ? (JSON.parse('"' + raw + '"') as string) : raw
 }
 
@@ -409,72 +339,58 @@ function expect(bytes: Uint8Array, i: number, code: number, what: string): void 
   if (bytes[i] !== code) malformed(i, what)
 }
 
-function malformed(at: number, what: string, more: object = {}): never {
-  throw Object.assign(
-    problem('invalid-input', `The case is not valid JSON: expected ${what} at byte ${at}.`),
-    { byte: at, ...more },
-  )
+function malformed(at: number, what: string): never {
+  throw Object.assign(problem('invalid-input', `Invalid JSON: expected ${what}.`), { byte: at })
 }
 
-/** A chunk of a column as it was read: where each row's value is, decoded on its first read. */
+/** A column chunk that keeps each row's value offsets and decodes on first read. */
 export interface IndexedChunk {
-  /** Whether any row writes a value other than `null`, read or not. */
   provided(): boolean
   read(): Chunk
-  /** The rows, ascending, that write a value, not null, the column does not read as its type:
-   *  told where the values are written, when that says, else found as it decodes. */
+  /** Ascending rows whose non-null value fails to decode, found without decoding when possible. */
   wrong(): Uint32Array
 }
 
-/** The kinds of value a member the catalog does not know is written as; a `null` is none. */
+/** Bit flags for the JSON value kinds an unknown member has. `null` sets none. */
 export const TEXT = 1
 export const BOOLEAN = 2
 export const NUMBER = 4
 const NESTED = 8
 
-/** A member of a table's records that the catalog does not know, as a column of the table: the
- *  rows that write it, ascending, and each one's value as a start and an end. */
+/** An unknown member as a column: the ascending rows that have it, and their value spans. */
 export interface FoundColumn {
-  /** The keys to it, from a record's own. */
   readonly path: readonly string[]
   readonly rows: Uint32Array
   readonly spans: Int32Array
-  /** TEXT, BOOLEAN, NUMBER and NESTED, each where a row writes such a value. */
   readonly kinds: number
 }
 
-/** What was read of one table's records. */
-export interface ParsedTable {
+interface ParsedTable {
   readonly shape: Shape
   readonly ids: readonly Chunk[]
   readonly fields: readonly (readonly IndexedChunk[])[]
   readonly ports: readonly (readonly IndexedChunk[])[]
-  /** Each row's record in its array. */
   readonly records: Uint32Array
-  /** The members its records write that the catalog does not know, as each is first written. */
   readonly found: readonly FoundColumn[]
-  /** By each member the shape requires of a record, the rows whose records do not write it. */
+  /** Per required member, the rows that lack it. */
   readonly lacking: readonly Uint32Array[]
 }
 
-/** What was read of a case. */
 export interface Parsed {
-  /** Its tables in order: the catalog's in its own, then each class it does not know as its first
-   *  record comes, then the case's own. */
+  /** The catalog's tables in catalog order, then unknown classes in order of first record, then the
+   *  case's own table. */
   readonly tables: readonly ParsedTable[]
-  /** Each array's records' `mon` values, as a start and an end; 0, 0 where a record has none. */
+  /** Per array, each record's `mon` value as a start and end offset; 0, 0 when absent. */
   readonly mons: Readonly<Partial<Record<ArrayName, Uint32Array>>>
-  /** The records refused, the first PROBLEMS of them. */
   readonly problems: readonly SourceProblem[]
+  readonly repeats: readonly Repeat[]
 }
 
 const NONE = -1
 
 const POW10 = Array.from({ length: 23 }, (_, i) => 10 ** i)
-/** How many problems a read of a case says, at most: the first in the file. */
-const PROBLEMS = 100
 
-/** A fixed set of keys, matched against key bytes with no string made. */
+/** A fixed key set matched against raw key bytes without allocating strings. */
 class Keys {
   readonly #slots: Int32Array
   readonly #names: readonly Uint8Array[]
@@ -491,8 +407,6 @@ class Keys {
     })
   }
 
-  /** The index of the key whose text inside its quotes is `[start, end)`, or -1. A key written with
-   *  escapes is the key they spell, as the check for repeated keys reads it. */
   find(bytes: Uint8Array, start: number, end: number): number {
     for (let i = start; i < end; i++)
       if (bytes[i] === BACKSLASH) {
@@ -521,26 +435,22 @@ class Keys {
 
 const CLASS_KEY = new Keys([CLASS])
 
-/** What a record's own member is, where it is no field of the record's own: the identity it is
- *  known by; its list of the outputs it records; a device's class, which names its table; one the
- *  shape knows only to require; or, from GROUP down, one of the groups its fields are under. */
+/** Roles of top-level members that are not fields. From GROUP down, `GROUP - role` is a group. */
 const ID = -1
 const LIST = -2
 const TABLE = -3
 const OTHER = -4
 const GROUP = -5
 
-/** A column of the rows whose values `spans` place in `bytes`, each a start and an end, -1 where
- *  a row has none: decoded on its first read, when it lets go of its spans and the file, and
- *  finds the rows that write what it cannot read. A port's value is the number of the row it
- *  names. */
+/** A chunk over each row's value span in `bytes` (start and end, -1 when missing). It decodes on
+ *  first read and then drops the spans and the file bytes. A port's value is the row it names. */
 function lazyColumn(
   bytes: Uint8Array,
   spans: Int32Array,
   type: DecodeKind,
   port: boolean,
 ): IndexedChunk {
-  // Held apart, so the decoded column keeps nothing of the file alive.
+  // Kept apart so the decoded chunk does not retain the file bytes.
   let unread: { bytes: Uint8Array; spans: Int32Array } | undefined = { bytes, spans }
   const decode = deferred(() => {
     const { bytes, spans: own } = unread!
@@ -554,20 +464,18 @@ function lazyColumn(
       let read: boolean
       if (port) {
         const number = value < 0 ? NaN : parseNumber(bytes, value, end)
-        read = isUint32(number)
+        read = isId(number)
         if (read) (target as NumericBuilder).pushNumber(number)
-      } else read = value >= 0 && into(bytes, target, type, value, end)
+      } else read = value >= 0 && decodeInto(bytes, target, type, value, end)
       if (read) continue
       target.push(null)
-      // A value written, `null` aside, that does not read as the column's type.
       if (value >= 0 && bytes[value] !== NULL_START) wrong.push(row)
     }
     return { chunk: target.finish(), wrong: Uint32Array.from(wrong) }
   })
-  /** The rows found wrong before the column decodes, where their first bytes say. */
-  let told: Uint32Array | undefined
+  let wrongFromBytes: Uint32Array | undefined
   return {
-    // The same before it decodes and after.
+    // Gives the same answer before and after decoding.
     provided: () =>
       unread
         ? unread.spans.some(
@@ -579,15 +487,13 @@ function lazyColumn(
           ),
     read: () => decode().chunk,
     wrong: () =>
-      (told ??= unread && !port ? wrongOf(unread.bytes, unread.spans, type) : undefined) ??
-      decode().wrong,
+      (wrongFromBytes ??=
+        unread && !port ? wrongOf(unread.bytes, unread.spans, type) : undefined) ?? decode().wrong,
   }
 }
 
-/** The rows of a column of `type` that write a value, not null, it does not read, where a value's
- *  first bytes say so without reading it: JSON's syntax is checked by then, so a string, a boolean
- *  and a number each begin as nothing else does. A column nobody reads is checked so, and stays
- *  undecoded. Undefined for a type only reading a value says of. */
+/** Rows whose non-null value does not match `type`, judged from its first byte, which validated
+ *  JSON makes distinct per kind. Undefined for types that need a full decode. */
 function wrongOf(bytes: Uint8Array, spans: Int32Array, type: DecodeKind): Uint32Array | undefined {
   if (type !== 'number' && type !== 'text' && type !== 'boolean') return undefined
   const wrong: number[] = []
@@ -611,8 +517,8 @@ function wrongOf(bytes: Uint8Array, spans: Int32Array, type: DecodeKind): Uint32
   return Uint32Array.from(wrong)
 }
 
-/** Whether the JSON number at [start, end) is one a double holds: any written without an exponent
- *  in fewer digits than the largest double has, and of the rest, those that read as finite. */
+/** Whether the JSON number at [start, end) is finite as a double. One under 300 characters without
+ *  an exponent always is, so only the rest are parsed. */
 function finite(bytes: Uint8Array, start: number, end: number): boolean {
   if (end - start < 300) {
     let i = start
@@ -622,13 +528,11 @@ function finite(bytes: Uint8Array, start: number, end: number): boolean {
   return Number.isFinite(parseNumber(bytes, start, end))
 }
 
-/** Where a member found is looked for among a table's: by the hash of its key, the text inside
- *  its quotes at `[start, end)` of `key`, and of the group it is under. */
-const placeOf = (key: Uint8Array, start: number, end: number, group: number): number =>
+const keyHash = (key: Uint8Array, start: number, end: number, group: number): number =>
   hash(key, start, end) ^ Math.imul(group + 2, 0x9e3779b1)
 
-/** A member the catalog does not know as its values are read: a FoundColumn as it grows. */
-class Finding {
+/** Builds a FoundColumn as an unknown member's values are read. */
+class FoundColumnBuilder {
   #rows = new Uint32Array(16)
   #spans = new Int32Array(32)
   #count = 0
@@ -636,26 +540,38 @@ class Finding {
 
   constructor(
     readonly path: readonly string[],
-    /** Its key as it is spelled, and the group it is under: -1 for a record's own. */
+    /** The decoded key, and the group it is under (-1 for a top-level member). */
     readonly key: Uint8Array,
     readonly group: number,
   ) {}
 
-  /** Notes that `row` writes it as the value at `[value, end)`. */
-  push(row: number, bytes: Uint8Array, value: number, end: number): void {
-    if (this.#count === this.#rows.length) {
-      this.#rows = grown(this.#rows)
-      this.#spans = grown(this.#spans)
+  get written(): boolean {
+    return this.#count > 0
+  }
+
+  /** Records `row`'s value. Returns false when it replaces one from the same object. */
+  push(row: number, bytes: Uint8Array, value: number, end: number): boolean {
+    const again = this.#count > 0 && this.#rows[this.#count - 1] === row
+    if (!again) {
+      if (this.#count === this.#rows.length) {
+        this.#rows = grown(this.#rows)
+        this.#spans = grown(this.#spans)
+      }
+      this.#rows[this.#count++] = row
     }
-    this.#rows[this.#count] = row
-    this.#spans[2 * this.#count] = value
-    this.#spans[2 * this.#count++ + 1] = end
-    // JSON's syntax is checked by now, so a value's first byte says what it is.
+    this.#spans[2 * this.#count - 2] = value
+    this.#spans[2 * this.#count - 1] = end
+    // JSON is already validated, so the first byte identifies the value's kind.
     const first = bytes[value]!
     if (first === QUOTE) this.#kinds |= TEXT
     else if (first === TRUE_START || first === FALSE_START) this.#kinds |= BOOLEAN
     else if (first === 0x2d || (first >= 0x30 && first <= 0x39)) this.#kinds |= NUMBER
     else if (first !== NULL_START) this.#kinds |= NESTED
+    return !again
+  }
+
+  drop(row: number): void {
+    if (this.#count > 0 && this.#rows[this.#count - 1] === row) this.#count--
   }
 
   finish(): FoundColumn {
@@ -668,32 +584,31 @@ class Finding {
   }
 }
 
-/** One table's rows as its records are read: their identities, and each field's and port's value
- *  as a span, cut into chunks of at most CHUNK_ROWS rows; the members they write that the catalog
- *  does not know; and the rows that write none of a member the shape requires. */
-class Rows {
-  /** A record's own members, what each is, and the bit of each one the shape requires. */
+/** Collects one table's ids, value spans, unknown members and missing members. */
+class TableBuilder {
+  /** Top-level keys, their roles (a field slot or a negative role), and required index or -1. */
   readonly keys: Keys
-  readonly what: Int32Array
-  readonly bits: Int8Array
-  /** The bits of every member the shape requires. */
-  readonly all: number
-  /** By group, the fields and ports under it, and the slot each one's value is staged in: a
-   *  field's is its place among the shape's fields, a port's past them all. */
-  readonly groups: readonly { readonly keys: Keys; readonly slots: Int32Array }[]
-  /** How many values a row stages: one for each field, and one for each port. */
+  readonly roles: Int32Array
+  readonly required: Int32Array
+  /** Per top-level key, the number of the object that last had it, to detect repeated keys. */
+  readonly marks: Int32Array
+  readonly present: Int32Array
+  /** Per group, its field and port keys, their slots (ports after fields), and repeat marks. */
+  readonly groups: readonly {
+    readonly keys: Keys
+    readonly slots: Int32Array
+    readonly marks: Int32Array
+  }[]
   readonly width: number
   ids!: Builder
-  /** How many rows it has. */
   count = 0
   #spans!: Int32Array
-  /** How many rows the chunk being filled has. */
   #staged = 0
   #records = new Uint32Array(256)
   readonly #lacking: number[][]
-  readonly #found: Finding[] = []
-  /** Where each member found is among them, by its key's hash: its place and one, 0 for none. */
-  #places = new Int32Array(64)
+  readonly #found: FoundColumnBuilder[] = []
+  /** Open-addressed index into #found by key hash: index + 1, or 0 for an empty slot. */
+  #foundIndex = new Int32Array(64)
   readonly #chunks: { ids: Chunk[]; fields: IndexedChunk[][]; ports: IndexedChunk[][] }
 
   constructor(
@@ -703,24 +618,24 @@ class Rows {
     const { fields, ports, groups, required } = shape
     this.width = fields.length + ports.length
     const names: string[] = []
-    const what: number[] = []
-    const add = (name: string, is: number) => {
+    const roles: number[] = []
+    const add = (name: string, role: number) => {
       names.push(name)
-      what.push(is)
+      roles.push(role)
     }
     if (shape.array !== null) add(shape.identity.name, ID)
-    // A bus and a device list what they record, and a device's class names its table.
     if (shape.kind === 'bus' || shape.kind === 'device') add(MON, LIST)
     if (shape.kind === 'device') add(CLASS, TABLE)
     fields.forEach((field, slot) => {
       if (field.path.length === 1) add(field.path[0]!, slot)
     })
-    groups.forEach((group, place) => add(group, GROUP - place))
+    groups.forEach((group, index) => add(group, GROUP - index))
     for (const name of required) if (!names.includes(name)) add(name, OTHER)
     this.keys = new Keys(names)
-    this.what = Int32Array.from(what)
-    this.bits = Int8Array.from(names, (name) => required.indexOf(name))
-    this.all = required.length === 0 ? 0 : -1 >>> (32 - required.length)
+    this.roles = Int32Array.from(roles)
+    this.required = Int32Array.from(names, (name) => required.indexOf(name))
+    this.marks = new Int32Array(names.length)
+    this.present = new Int32Array(required.length)
     this.groups = groups.map((group) => {
       const under: string[] = []
       const slots: number[] = []
@@ -729,19 +644,22 @@ class Rows {
         under.push(field.path[1]!)
         slots.push(slot)
       })
-      ports.forEach((port, place) => {
+      ports.forEach((port, index) => {
         if (port.path[0] !== group) return
         under.push(port.path[1]!)
-        slots.push(fields.length + place)
+        slots.push(fields.length + index)
       })
-      return { keys: new Keys(under), slots: Int32Array.from(slots) }
+      return {
+        keys: new Keys(under),
+        slots: Int32Array.from(slots),
+        marks: new Int32Array(under.length),
+      }
     })
     this.#lacking = required.map(() => [])
     this.#chunks = { ids: [], fields: fields.map(() => []), ports: ports.map(() => []) }
-    this.#fresh()
+    this.#startChunk()
   }
 
-  /** Makes room for the row of record `record`, cutting a full chunk first. */
   next(record: number): void {
     if (this.#staged === CHUNK_ROWS) this.#flush()
     if (++this.#staged * 2 * this.width > this.#spans.length) this.#spans = grown(this.#spans)
@@ -749,21 +667,18 @@ class Rows {
     this.#records[this.count++] = record
   }
 
-  /** Keeps where the row's values are, not the values. Its identity alone is read at once. */
+  /** Stores the row's value spans. Only the id is decoded right away. */
   stage(slots: Int32Array): void {
     this.#spans.set(slots.subarray(0, 2 * this.width), (this.#staged - 1) * 2 * this.width)
   }
 
-  /** Notes that the record of `row` writes none of the required members `missing` has a bit of. */
-  lack(row: number, missing: number): void {
-    for (let bit = 0; missing !== 0; bit++, missing >>>= 1)
-      if (missing & 1) this.#lacking[bit]!.push(row)
+  lack(row: number, object: number): void {
+    for (let at = 0; at < this.present.length; at++)
+      if (this.present[at] !== object) this.#lacking[at]!.push(row)
   }
 
-  /** The column of the member the catalog does not know whose key's text inside its quotes is
-   *  `[start, end)`, under the group `group` or, with -1, a record's own: made as it is first
-   *  found. A key written with escapes is the key they spell. */
-  find(group: number, bytes: Uint8Array, start: number, end: number): Finding {
+  /** The column of an unknown key under `group` (-1 for top level), made on first use. */
+  find(group: number, bytes: Uint8Array, start: number, end: number): FoundColumnBuilder {
     let key: Uint8Array = bytes
     let spelled: string | undefined
     for (let i = start; i < end; i++)
@@ -774,34 +689,37 @@ class Rows {
         end = key.length
         break
       }
-    let mask = this.#places.length - 1
-    let slot = placeOf(key, start, end, group) & mask
-    for (; this.#places[slot] !== 0; slot = (slot + 1) & mask) {
-      const found = this.#found[this.#places[slot]! - 1]!
+    let mask = this.#foundIndex.length - 1
+    let slot = keyHash(key, start, end, group) & mask
+    for (; this.#foundIndex[slot] !== 0; slot = (slot + 1) & mask) {
+      const found = this.#found[this.#foundIndex[slot]! - 1]!
       if (found.group !== group || found.key.length !== end - start) continue
       let same = true
       for (let i = 0; i < found.key.length && same; i++) same = found.key[i] === key[start + i]
       if (same) return found
     }
-    const name = spelled ?? utf8(bytes, start, end)
-    const found = new Finding(
+    const name = spelled ?? text(bytes, start, end)
+    const found = new FoundColumnBuilder(
       group < 0 ? [name] : [this.shape.groups[group]!, name],
-      // A copy, so the column keeps nothing of the file alive.
+      // Copied so the column does not retain the file bytes.
       Uint8Array.from(key.subarray(start, end)),
       group,
     )
-    this.#places[slot] = this.#found.push(found)
-    if (this.#found.length * 2 > this.#places.length) {
-      // Each placed again, among twice as many places.
-      this.#places = new Int32Array(this.#places.length * 2)
-      mask = this.#places.length - 1
-      this.#found.forEach((each, place) => {
-        let at = placeOf(each.key, 0, each.key.length, each.group) & mask
-        while (this.#places[at] !== 0) at = (at + 1) & mask
-        this.#places[at] = place + 1
+    this.#foundIndex[slot] = this.#found.push(found)
+    if (this.#found.length * 2 > this.#foundIndex.length) {
+      this.#foundIndex = new Int32Array(this.#foundIndex.length * 2)
+      mask = this.#foundIndex.length - 1
+      this.#found.forEach((each, index) => {
+        let at = keyHash(each.key, 0, each.key.length, each.group) & mask
+        while (this.#foundIndex[at] !== 0) at = (at + 1) & mask
+        this.#foundIndex[at] = index + 1
       })
     }
     return found
+  }
+
+  forget(group: number, row: number): void {
+    for (const found of this.#found) if (found.group === group) found.drop(row)
   }
 
   finish(): ParsedTable {
@@ -810,7 +728,8 @@ class Rows {
       shape: this.shape,
       ...this.#chunks,
       records: this.#records.slice(0, this.count),
-      found: this.#found.map((found) => found.finish()),
+      // A member whose only value was dropped by a repeated group is left out.
+      found: this.#found.filter((found) => found.written).map((found) => found.finish()),
       lacking: this.#lacking.map((rows) => Uint32Array.from(rows)),
     }
   }
@@ -827,10 +746,9 @@ class Rows {
         lazyColumn(this.bytes, this.#slot(fields.length + i), 'unsigned', true),
       ),
     )
-    this.#fresh()
+    this.#startChunk()
   }
 
-  /** Each row's value of slot `slot`, as its start and end, of the rows staged. */
   #slot(slot: number): Int32Array {
     const spans = new Int32Array(2 * this.#staged)
     const width = 2 * this.width
@@ -841,49 +759,54 @@ class Rows {
     return spans
   }
 
-  #fresh(): void {
+  #startChunk(): void {
     this.ids = builder(this.shape.identity.type)
     this.#spans = new Int32Array(256 * 2 * this.width)
     this.#staged = 0
   }
 }
 
-/** Reads a case's records into its tables, one record after another in file order. */
+/** Reads a case's records into tables, one record at a time in file order. */
 export class Parser {
   readonly #bytes: Uint8Array
   readonly #layout: Layout
   readonly #own: Shape
   readonly #classes: Keys
-  /** Every table's shape by code: the catalog's, then each class it does not know, as found. */
+  /** Table shapes by code: the catalog's, then unknown classes in the order found. */
   readonly #shapes: Shape[]
   readonly #unknown = new Map<string, number>()
-  readonly #tables: (Rows | undefined)[] = []
+  readonly #tables: (TableBuilder | undefined)[] = []
   readonly #members = new Members()
   readonly #nested = new Members()
-  /** The record being read: each field's and port's value as a start and end, -1 where absent. */
   #slots = new Int32Array(2 * 64)
   #id = -1
   #idEnd = -1
+  /** Objects read so far. Each object's number marks the keys it contains. */
+  #objects = 0
   readonly #mons: Partial<Record<ArrayName, Uint32Array>> = {}
   readonly #problems: SourceProblem[] = []
+  readonly #repeats: Repeat[]
 
-  /** A parser of the case `bytes` hold, which `layout` lays out, read with `catalog`. */
   constructor(catalog: Catalog, bytes: Uint8Array, layout: Layout) {
     this.#bytes = bytes
     this.#layout = layout
     this.#own = catalog.shapes.get(CASE)!
     this.#classes = new Keys(catalog.codes.map((shape) => shape.type))
     this.#shapes = [...catalog.codes]
+    this.#repeats = [...layout.repeats]
     for (const array of ARRAYS) {
       const records = layout.arrays[array]
       if (records) this.#mons[array] = new Uint32Array(2 * records.starts.length)
     }
   }
 
-  /** Reads record `record` of `array`. */
   record(array: ArrayName, record: number): void {
     const bytes = this.#bytes
-    const count = this.#members.read(bytes, this.#layout.arrays[array]!.starts[record]!)
+    const open = this.#layout.arrays[array]!.starts[record]!
+    // GridKit rejects a record that is not an object.
+    if (bytes[open] !== OPEN_OBJECT)
+      return this.#problem(record, `Each of the case's ${array} is written as an object.`, array)
+    const count = this.#members.read(bytes, open)
     const spans = this.#members.spans
     const code =
       array === 'buses'
@@ -892,81 +815,99 @@ export class Parser {
           ? SIGNAL_CODE
           : this.#classOf(count, record)
     if (code === NONE) return
-    const rows = (this.#tables[code] ??= new Rows(this.#shapes[code]!, bytes))
-    const slots = this.#stage(rows)
-    const row = rows.count
-    let seen = 0
+    const table = (this.#tables[code] ??= new TableBuilder(this.#shapes[code]!, bytes))
+    const slots = this.#stage(table)
+    const row = table.count
+    const object = ++this.#objects
     for (let m = 0; m < count; m++) {
       const keyStart = spans[4 * m]!
       const keyEnd = spans[4 * m + 1]!
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
-      const key = rows.keys.find(bytes, keyStart, keyEnd)
-      const what = key < 0 ? OTHER : rows.what[key]!
-      if (key >= 0 && rows.bits[key]! >= 0) seen |= 1 << rows.bits[key]!
-      if (what >= 0) stage(slots, what, value, end)
-      else if (what === ID) {
+      const key = table.keys.find(bytes, keyStart, keyEnd)
+      if (key < 0) {
+        if (!table.find(-1, bytes, keyStart, keyEnd).push(row, bytes, value, end))
+          this.#repeat(table, row, keyStart, keyEnd)
+        continue
+      }
+      const role = table.roles[key]!
+      const required = table.required[key]!
+      if (table.marks[key] === object) {
+        this.#repeat(table, row, keyStart, keyEnd)
+        // A repeated key replaces the earlier value.
+        if (required >= 0) table.present[required] = 0
+        if (role <= GROUP) this.#clear(table, GROUP - role, row)
+      }
+      table.marks[key] = object
+      // A group that is not an object is ignored.
+      if (role <= GROUP && bytes[value] !== OPEN_OBJECT) continue
+      if (required >= 0) table.present[required] = object
+      if (role >= 0) stage(slots, role, value, end)
+      else if (role === ID) {
         this.#id = value
         this.#idEnd = end
-      } else if (what === LIST) {
+      } else if (role === LIST) {
         const mons = this.#mons[array]!
         mons[2 * record] = value
         mons[2 * record + 1] = end
-      } else if (what <= GROUP && bytes[value] === OPEN_OBJECT)
-        this.#group(rows, GROUP - what, value, row)
-      else if (what !== TABLE) rows.find(-1, bytes, keyStart, keyEnd).push(row, bytes, value, end)
+      } else if (role <= GROUP) this.#group(table, GROUP - role, value, row)
+      else if (role === OTHER) table.find(-1, bytes, keyStart, keyEnd).push(row, bytes, value, end)
     }
-    if (seen !== rows.all) rows.lack(row, rows.all & ~seen)
-    rows.next(record)
-    this.#identity(rows, array, record)
-    rows.stage(slots)
+    table.lack(row, object)
+    table.next(record)
+    this.#identity(table, array, record)
+    table.stage(slots)
   }
 
-  /** What it read: every table, each of the catalog's whether or not the case has a record of it,
-   *  and the case's own row, read from the file's own members. */
+  /** Every table, including empty catalog tables, and the case's own row. */
   finish(): Parsed {
     const bytes = this.#bytes
     const tables = this.#shapes.map((shape, code) =>
-      (this.#tables[code] ?? new Rows(shape, bytes)).finish(),
+      (this.#tables[code] ?? new TableBuilder(shape, bytes)).finish(),
     )
     const shape = this.#own
-    const rows = new Rows(shape, bytes)
-    const slots = this.#stage(rows)
-    const written = new Set<string>()
+    const table = new TableBuilder(shape, bytes)
+    const slots = this.#stage(table)
+    const object = ++this.#objects
     for (const { name, value } of this.#layout.members) {
-      written.add(name)
       const group = shape.groups.indexOf(name)
-      // What else a header or the system's parameters hold is the file's own, and no field.
-      if (group >= 0 && bytes[value] === OPEN_OBJECT) this.#group(rows, group, value)
+      // A group that is not an object, or an array member that is not an array, is ignored.
+      if (group >= 0 && bytes[value] !== OPEN_OBJECT) continue
+      if (ARRAYS.some((array) => array === name) && !this.#layout.arrays[name as ArrayName])
+        continue
+      const required = shape.required.indexOf(name)
+      if (required >= 0) table.present[required] = object
+      if (group >= 0) this.#group(table, group, value)
     }
-    shape.required.forEach((name, bit) => {
-      if (!written.has(name)) rows.lack(0, 1 << bit)
-    })
-    rows.next(0)
-    rows.ids.push(CASE_ROW)
-    rows.stage(slots)
-    tables.push(rows.finish())
-    return { tables, mons: this.#mons, problems: this.#problems }
+    table.lack(0, object)
+    table.next(0)
+    table.ids.push(CASE_ROW)
+    table.stage(slots)
+    tables.push(table.finish())
+    return { tables, mons: this.#mons, problems: this.#problems, repeats: this.#repeats }
   }
 
-  /** A device record's table code, from its class. */
+  /** A device record's table code from its class. The last `class` key wins, as in GridKit. */
   #classOf(count: number, record: number): number {
     const bytes = this.#bytes
     const spans = this.#members.spans
-    for (let m = 0; m < count; m++) {
+    for (let m = count - 1; m >= 0; m--) {
       if (CLASS_KEY.find(bytes, spans[4 * m]!, spans[4 * m + 1]!) !== 0) continue
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
-      if (bytes[value] !== QUOTE) break
+      if (bytes[value] !== QUOTE) {
+        this.#problem(record, "A device's class is not text.")
+        return NONE
+      }
       const code = this.#classes.find(bytes, value + 1, end - 1)
       if (code >= DEVICE_CODES) return code
       const name = jsonText(bytes, value + 1, end - 1)
-      // A bus, a signal and the case are types of their own, never a device's class.
+      // Bus, signal and case are types of their own, never device classes.
       if (code >= 0 || name === CASE) {
         this.#problem(record, `${name} is not a device class.`)
         return NONE
       }
-      // A class the catalog does not know is a table of its own, its members found as they are.
+      // An unknown class gets its own table, with its members discovered as they are read.
       let found = this.#unknown.get(name)
       if (found === undefined) {
         found = this.#shapes.push(unknownShape(name)) - 1
@@ -978,63 +919,81 @@ export class Parser {
     return NONE
   }
 
-  /** The members of the object at `open`, the group `group` of a record of `rows`: each staged to
-   *  its field or port, or, for the record of `row`, found. */
-  #group(rows: Rows, group: number, open: number, row?: number): void {
+  /** Stages a group's members into their slots, and with `row`, collects unknown members. */
+  #group(table: TableBuilder, group: number, open: number, row?: number): void {
     const bytes = this.#bytes
-    const { keys, slots } = rows.groups[group]!
+    const { keys, slots, marks } = table.groups[group]!
     const count = this.#nested.read(bytes, open)
     const spans = this.#nested.spans
+    const object = ++this.#objects
     for (let m = 0; m < count; m++) {
       const keyStart = spans[4 * m]!
       const keyEnd = spans[4 * m + 1]!
       const value = spans[4 * m + 2]!
       const end = spans[4 * m + 3]!
       const known = keys.find(bytes, keyStart, keyEnd)
-      if (known >= 0) stage(this.#slots, slots[known]!, value, end)
-      else if (row !== undefined)
-        rows.find(group, bytes, keyStart, keyEnd).push(row, bytes, value, end)
+      if (known >= 0) {
+        if (marks[known] === object) this.#repeat(table, row ?? 0, keyStart, keyEnd)
+        marks[known] = object
+        stage(this.#slots, slots[known]!, value, end)
+      } else if (
+        row !== undefined &&
+        !table.find(group, bytes, keyStart, keyEnd).push(row, bytes, value, end)
+      )
+        this.#repeat(table, row, keyStart, keyEnd)
     }
   }
 
-  /** Room for a row of `rows`, none of its values written yet. */
-  #stage(rows: Rows): Int32Array {
-    const length = 2 * rows.width
+  /** Clears what `group` staged for `row` before a repeated group replaces it. */
+  #clear(table: TableBuilder, group: number, row: number): void {
+    for (const slot of table.groups[group]!.slots) stage(this.#slots, slot, -1, -1)
+    table.forget(group, row)
+  }
+
+  #repeat(table: TableBuilder, row: number, start: number, end: number): void {
+    this.#repeats.push({ type: table.shape.type, row, start: start - 1, end: end + 1 })
+  }
+
+  #stage(table: TableBuilder): Int32Array {
+    const length = 2 * table.width
     if (this.#slots.length < length) this.#slots = new Int32Array(length)
     this.#slots.fill(-1, 0, length)
     this.#id = -1
     return this.#slots
   }
 
-  #identity(rows: Rows, array: ArrayName, record: number): void {
-    const { type, name } = rows.shape.identity
+  #identity(table: TableBuilder, array: ArrayName, record: number): void {
+    const { type, name } = table.shape.identity
     if (this.#id < 0) {
-      this.#problem(record, `A ${rows.shape.type} record has no ${name}.`, array)
-      return rows.ids.push(null)
+      this.#problem(record, `A ${table.shape.type} record has no ${name}.`, array)
+      return table.ids.push(null)
     }
     if (type === 'text') {
-      if (textInto(this.#bytes, rows.ids as TextBuilder, this.#id, this.#idEnd)) return
-      this.#problem(record, `A ${rows.shape.type} record's id is not text.`, array)
-      return rows.ids.push(null)
+      if (textInto(this.#bytes, table.ids as TextBuilder, this.#id, this.#idEnd)) return
+      this.#problem(record, `A ${table.shape.type} record's id is not text.`, array)
+      return table.ids.push(null)
     }
     const number = parseNumber(this.#bytes, this.#id, this.#idEnd)
-    if (isUint32(number)) return (rows.ids as NumericBuilder).pushNumber(number)
-    this.#problem(record, `A ${rows.shape.type} record's ${name} is not a whole number.`, array)
-    rows.ids.push(null)
+    if (isId(number)) return (table.ids as NumericBuilder).pushNumber(number)
+    this.#problem(
+      record,
+      `A ${table.shape.type} record's ${name} is not a whole number of 0 or more.`,
+      array,
+    )
+    table.ids.push(null)
   }
 
   #problem(record: number, message: string, array: ArrayName = 'devices'): void {
-    if (this.#problems.length < PROBLEMS)
-      this.#problems.push({
-        code: 'invalid-input',
-        message,
-        target: { kind: 'path', path: [array, record] },
-      })
+    this.#problems.push({
+      code: 'invalid-input',
+      message,
+      target: { kind: 'path', path: [array, record] },
+    })
   }
 }
 
-/** The value at [value, end) into `target`, if it has the field's type. */
-function into(
+/** Appends the value to `target` if it decodes as `type`, and returns whether it did. */
+function decodeInto(
   bytes: Uint8Array,
   target: Builder,
   type: DecodeKind,
@@ -1043,9 +1002,8 @@ function into(
 ): boolean {
   if (type === 'number' || type === 'integer') {
     const number = parseNumber(bytes, value, end)
-    if (!Number.isFinite(number)) return false
-    // A whole number written as one: GridKit reads `1.0` as a real, which is no integer to it.
-    if (type === 'integer' && !(isInt32(number) && whole(bytes, value, end))) return false
+    // Any whole number is an integer, including `1.0` and `1e3`, as in GridKit.
+    if (type === 'integer' ? !Number.isSafeInteger(number) : !Number.isFinite(number)) return false
     ;(target as NumericBuilder).pushNumber(number)
     return true
   }
@@ -1057,7 +1015,7 @@ function into(
   }
   if (type === 'text') return textInto(bytes, target as TextBuilder, value, end)
   if (type !== 'path') return false
-  const path: unknown = JSON.parse(utf8(bytes, value, end))
+  const path: unknown = JSON.parse(text(bytes, value, end))
   if (
     !Array.isArray(path) ||
     !path.every(
@@ -1072,16 +1030,6 @@ function into(
   return true
 }
 
-/** Whether the number at [start, end) is written without a fraction or an exponent. */
-function whole(bytes: Uint8Array, start: number, end: number): boolean {
-  for (let i = start; i < end; i++) {
-    const c = bytes[i]!
-    if (c === 0x2e || c === 0x65 || c === 0x45) return false
-  }
-  return true
-}
-
-/** A JSON string's text into `target`. */
 function textInto(bytes: Uint8Array, target: TextBuilder, value: number, end: number): boolean {
   if (bytes[value] !== QUOTE) return false
   target.push(jsonText(bytes, value + 1, end - 1))
@@ -1093,20 +1041,18 @@ function stage(spans: Int32Array, at: number, value: number, end: number): void 
   spans[2 * at + 1] = end
 }
 
-/** The most a number's digits make of it that a double still holds exactly, and the most they may
- *  be before the next digit could take them past it. */
+/** Mantissa limits for exact parsing: the largest exact integer, and a tenth of it. */
 const EXACT = Number.MAX_SAFE_INTEGER
 const EXACT_TENTH = Math.floor(EXACT / 10)
 
-/** A JSON number: exact by Clinger's fast path while its digits are a whole number a double holds
- *  and its exponent is small, else by the platform's parser; NaN when it is not a JSON number. */
+/** Parses a JSON number with Clinger's fast path when the mantissa is exact and the exponent is
+ *  within ±22, else with `Number()`. NaN when the bytes are not a JSON number. */
 export function parseNumber(bytes: Uint8Array, start: number, end: number): number {
   let i = start
   const negative = bytes[i] === 0x2d
   if (negative) i++
   let mantissa = 0
   let exponent = 0
-  /** Whether every digit so far is in `mantissa`. */
   let exact = true
   const first = i
   for (let c = bytes[i]!; i < end && c >= 0x30 && c <= 0x39; c = bytes[++i]!) {
@@ -1115,7 +1061,7 @@ export function parseNumber(bytes: Uint8Array, start: number, end: number): numb
     if (mantissa <= EXACT_TENTH && next <= EXACT) mantissa = next
     else exact = false
   }
-  // A whole part of digits, and no zero before another digit.
+  // Integer digits are required, without a leading zero.
   if (i === first || (bytes[first] === 0x30 && i > first + 1)) return NaN
   if (i < end && bytes[i] === 0x2e) {
     const fraction = ++i

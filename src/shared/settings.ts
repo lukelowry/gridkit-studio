@@ -1,16 +1,12 @@
-/** Every setting Studio contributes, each defined once: how GridKit runs, how much of its results
- *  stay read, and how the Network and the Monitor look. VS Code names each in its Settings by its
- *  id, and owns the theme, its contrast and its motion. `pnpm settings` writes them into
- *  package.json. */
+/** The single definition of every Studio setting. `pnpm settings` writes them into package.json.
+ *  Theme, contrast and motion preferences stay VS Code's. */
 
 import { type ColormapName, colormaps } from 'latkit'
 
-/** What a setting is set for, as VS Code scopes it: a file's views, the machine GridKit runs on,
- *  or the window. */
 type Scope = 'resource' | 'machine-overridable' | 'window'
 
-/** One setting: the default a reset restores, the values it takes, and, in Markdown, what its id
- *  does not say. Null leaves a color to the theme. */
+/** One setting definition. A null color follows the theme. Numbers are bounded only where latkit
+ *  or the meaning of the value requires it. */
 type Setting = { readonly scope: Scope; readonly description?: string } & (
   | { readonly kind: 'boolean'; readonly default: boolean }
   | {
@@ -21,7 +17,7 @@ type Setting = { readonly scope: Scope; readonly description?: string } & (
   | {
       readonly kind: 'number'
       readonly default: number
-      readonly min: number
+      readonly min?: number
       readonly max?: number
       readonly integer: boolean
     }
@@ -29,16 +25,15 @@ type Setting = { readonly scope: Scope; readonly description?: string } & (
   | { readonly kind: 'text'; readonly default: string }
 )
 
-/** A choice's options as value and label, in the order VS Code lists them. */
 type Options<V> = readonly (readonly [value: V, label: string])[]
 
-// A row reads: id, default, then the range or options of its kind, then the description.
+// Each helper takes the default, then the range or options, then the description.
 const bool = (value: boolean, description?: string) =>
   ({ kind: 'boolean', scope: 'resource', default: value, description }) as const
 
 const num = (
   value: number,
-  [min, max]: readonly [min: number, max?: number],
+  [min, max]: readonly [min?: number, max?: number],
   description?: string,
 ) =>
   ({
@@ -53,7 +48,7 @@ const num = (
 
 const int = (
   value: number,
-  [min, max]: readonly [min: number, max: number],
+  [min, max]: readonly [min?: number, max?: number],
   description?: string,
 ) =>
   ({
@@ -86,7 +81,7 @@ const color = (value: string | null, description?: string) =>
 const text = (value: string, description?: string) =>
   ({ kind: 'text', scope: 'resource', default: value, description }) as const
 
-/** A setting of where GridKit runs, which a workspace may override on its machine. */
+/** Scopes a setting to the machine GridKit runs on, overridable per workspace. */
 const machine = <S extends Setting>(
   setting: S,
 ): Omit<S, 'scope'> & { scope: 'machine-overridable' } => ({
@@ -94,40 +89,41 @@ const machine = <S extends Setting>(
   scope: 'machine-overridable',
 })
 
-/** A setting of the window, whatever it shows. */
 const windowed = <S extends Setting>(setting: S): Omit<S, 'scope'> & { scope: 'window' } => ({
   ...setting,
   scope: 'window',
 })
 
-/** latkit's colormaps that map a number, as it names and labels them: all but the categorical. */
 const COLORMAPS: Options<ColormapName> = colormaps()
   .filter((map) => map.kind !== 'categorical')
   .map((map) => [map.name, map.label] as const)
-/** latkit's categorical colormaps, which give each trace of a plot its own color. */
+/** latkit's categorical colormaps, which give each plot trace its own color. */
 const TRACE_COLORMAPS: Options<ColormapName> = colormaps()
   .filter((map) => map.kind === 'categorical')
   .map((map) => [map.name, map.label] as const)
 const WHEEL = [
-  ['wheel', 'Wheel'],
-  ['modifier', 'Modifier + wheel'],
+  ['wheel', 'Wheel zooms'],
+  ['modifier', 'Modifier + wheel zooms'],
   ['off', 'Off'],
 ] as const
-/** The Network's wheel can also pan, as a trackpad scrolls. The Monitor's wheel scrolls its plots. */
-const NETWORK_WHEEL = [['wheel', 'Wheel'], ['trackpad', 'Trackpad'], ...WHEEL.slice(1)] as const
+/** The Network's wheel can also pan, like a trackpad. */
+const NETWORK_WHEEL = [
+  ['wheel', 'Wheel zooms'],
+  ['trackpad', 'Scroll pans, pinch zooms'],
+  ...WHEEL.slice(1),
+] as const
 const MOTION = [
   ['system', 'System'],
   ['full', 'Full'],
   ['reduced', 'Reduced'],
 ] as const
-/** The tilt the Network's Tilt button sets, and a height mapped on a flat Network takes. */
+/** The tilt set by the Network's Tilt button, and when a height is mapped on a flat Network. */
 export const TILTED = 45
-/** The narrowest an edge draws, in CSS pixels. latkit writes depth only where a line covers whole
- *  pixels, so a thinner line is a faint sliver that hides nothing behind it, and where many cross,
- *  the most numerous color shows whichever is nearest. */
+/** The minimum edge width in CSS pixels. latkit writes depth only where a line covers whole pixels,
+ *  so a thinner line hides nothing behind it, and where many cross the most common color wins
+ *  regardless of depth. */
 export const EDGE_WIDTH = 2
-/** The settings by id, in the order VS Code lists them: first those of GridKit itself, then each
- *  view's, which its id starts with. */
+/** The settings by id in display order: GridKit's first, then each view's, prefixed by its name. */
 export const SETTINGS = {
   gridkitPath: machine(
     text(
@@ -144,14 +140,14 @@ export const SETTINGS = {
   catalog: machine(
     text(
       '',
-      "A catalog of GridKit's classes to use in place of GridKit Studio's own, in the same form, for a GridKit build whose classes differ. A relative path starts at the first workspace folder. It is read when the window opens.",
+      'Path to a GridKit class catalog, for a GridKit build whose classes differ from the included one. Relative paths start at the first workspace folder. Read when the window opens.',
     ),
   ),
   resultCacheMiB: windowed(
     num(
       256,
       [0],
-      'Memory per window for results no view shows, in MiB, so they open again at once. Past it, those unused longest are closed.',
+      'Memory, in MiB, for results no view shows, so they reopen at once. The least recently used are released first.',
     ),
   ),
 
@@ -159,63 +155,61 @@ export const SETTINGS = {
     ['mercator', 'Mercator'],
     ['globe', 'Globe'],
   ]),
+  // latkit's camera tilts at most 75° from straight down.
   'network.tilt': int(0, [0, 75], 'Degrees from straight down.'),
-  'network.orbit': int(0, [-90, 90], 'Degrees per second.'),
-  'network.labels': bool(false),
+  'network.orbit': int(0, [], 'Degrees per second.'),
+  'network.labels': bool(false, 'Show bus names.'),
   'network.vertexRadius': num(
     2.5,
-    [EDGE_WIDTH, 12],
-    'Radius in CSS pixels, never under the edge width, so a vertex shows past the edges that meet it. Size mappings start from this radius.',
+    [EDGE_WIDTH],
+    'Radius in CSS pixels, at least the edge width. Size mappings start from this radius.',
   ),
   'network.edgeWidth': num(
     EDGE_WIDTH,
-    [EDGE_WIDTH, 8],
-    `Width in CSS pixels, at least ${EDGE_WIDTH}, as a thinner line can't hide what is behind it. Width mappings start from this width.`,
+    [EDGE_WIDTH],
+    `Width in CSS pixels, at least ${EDGE_WIDTH}. Width mappings start from this width.`,
   ),
   'network.colormap': choice('viridis', COLORMAPS),
-  'network.transitionDuration': num(0.3, [0, 2], 'Seconds.'),
+  'network.transitionDuration': num(0.3, [0], 'Seconds.'),
   'network.height': num(
     0.2,
-    [0.01, 1],
-    'How high the highest mapped value raises a vertex: a share of the distance across the case.',
+    [0.01],
+    "Height of the largest mapped value, as a fraction of the case's width.",
   ),
-  'network.wheelBehavior': choice(
-    'wheel',
-    NETWORK_WHEEL,
-    'Trackpad scrolls to pan and pinches to zoom.',
-  ),
+  'network.wheelBehavior': choice('wheel', NETWORK_WHEEL),
   'network.motion': choice('system', MOTION),
-  'network.pickingDistance': int(
-    8,
-    [0, 32],
-    'How near the pointer finds an element, in CSS pixels.',
-  ),
+  'network.pickingDistance': int(8, [0], 'How near the pointer finds an element, in CSS pixels.'),
   'network.map.source': choice('borders', [
-    ['borders', 'Bundled borders'],
+    ['borders', 'Included borders'],
     ['streets', 'Street map'],
     ['none', 'None'],
   ]),
-  'network.map.tilesUrl': text('https://tiles.openfreemap.org/planet'),
-  'network.map.attribution': text('© OpenStreetMap contributors · OpenFreeMap'),
-  'network.map.daylight': bool(false),
-  'network.map.groundColor': color(null, 'Null follows the current VS Code theme.'),
-  'network.map.nightBrightness': num(0.3, [0, 1]),
+  'network.map.tilesUrl': text(
+    'https://tiles.openfreemap.org/planet',
+    "The Street map's vector tiles: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
+  ),
+  'network.map.attribution': text(
+    '© OpenStreetMap contributors · OpenFreeMap',
+    'The credit shown on the Street map.',
+  ),
+  'network.map.daylight': bool(false, "Shade the map by the sun's position now."),
+  'network.map.groundColor': color(null, 'Leave empty to follow the color theme.'),
+  'network.map.nightBrightness': num(0.3, [0, 1], 'Brightness of the night side, from 0 to 1.'),
 
   'monitor.interpolation': choice('linear', [
     ['linear', 'Linear'],
     ['step', 'Step'],
   ]),
-  'monitor.lineWidth': num(1, [0.25, 8], 'CSS pixels.'),
+  'monitor.lineWidth': num(1, [0.25], 'CSS pixels.'),
   'monitor.colormap': choice('tab10', TRACE_COLORMAPS),
   'monitor.wheelBehavior': choice('wheel', WHEEL),
   'monitor.motion': choice('system', MOTION),
-  'monitor.pickingDistance': int(8, [0, 32], 'How near the pointer finds a trace, in CSS pixels.'),
+  'monitor.pickingDistance': int(8, [0], 'How near the pointer finds a trace, in CSS pixels.'),
 } as const satisfies Record<string, Setting>
 
 type Definitions = typeof SETTINGS
-/** Every setting's value, which takes its default's type. */
 export type Settings = { [K in keyof Definitions]: Definitions[K]['default'] }
-/** The settings of how the views look, which the pages draw with: each view's start with its name. */
+/** The display settings the pages read, prefixed by their view's name. */
 type ViewKey = Extract<keyof Settings, `${'network' | 'monitor'}.${string}`>
 export type ViewSettings = Pick<Settings, ViewKey>
 export interface SettingsReader {
@@ -229,8 +223,8 @@ export const defaults = Object.freeze(
   Object.fromEntries(VIEW_KEYS.map((id) => [id, SETTINGS[id].default])),
 ) as Readonly<ViewSettings>
 
-/** `input` as view settings, each of its kind and range: a whole change is checked before any of it
- *  is taken. */
+/** Validates `input` as view settings by kind and range. Throws on the first invalid entry, so a
+ *  change is applied whole or not at all. */
 export function validateSettings(input: unknown): Partial<ViewSettings> {
   if (input === null || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Settings must be a JSON object.')
@@ -252,7 +246,7 @@ export function validateSettings(input: unknown): Partial<ViewSettings> {
         valid =
           typeof value === 'number' &&
           Number.isFinite(value) &&
-          value >= setting.min &&
+          (setting.min === undefined || value >= setting.min) &&
           (setting.max === undefined || value <= setting.max) &&
           (!setting.integer || Number.isInteger(value))
         break
@@ -270,11 +264,21 @@ export function validateSettings(input: unknown): Partial<ViewSettings> {
   return Object.fromEntries(entries) as Partial<ViewSettings>
 }
 
+/** Coerces a number for setting `key` to the nearest valid value: rounded for integer settings and
+ *  clamped to the range. Other values pass through. */
+export function nearest(key: string, value: unknown): unknown {
+  const setting: Setting | undefined = SETTINGS[key as keyof typeof SETTINGS]
+  if (setting?.kind !== 'number' || typeof value !== 'number' || !Number.isFinite(value))
+    return value
+  const whole = setting.integer ? Math.round(value) : value
+  return Math.min(setting.max ?? Infinity, Math.max(setting.min ?? -Infinity, whole))
+}
+
 const readers = new WeakMap<Partial<ViewSettings>, SettingsReader>()
 const unset: SettingsReader = { get: (key) => defaults[key] }
 
-/** The settings in `values`, else their defaults. Each object has one reader, so what is derived
- *  from a reader stays equal while its settings do. */
+/** A reader of `values` that falls back to defaults. Readers are cached per object, so anything
+ *  derived from a reader stays equal while its settings do. */
 export function reader(values?: Partial<ViewSettings>): SettingsReader {
   if (!values) return unset
   let found = readers.get(values)

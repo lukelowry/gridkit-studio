@@ -18,8 +18,8 @@ export const workerData = initial.data
 export const port = {
   postMessage: (message: unknown, transfer: readonly ArrayBuffer[] = []) =>
     scope.postMessage(message, [...transfer]),
-  on: (_name: 'message', hear: (value: any) => void) =>
-    scope.addEventListener('message', ({ data }) => hear(data)),
+  on: (_name: 'message', listener: (value: any) => void) =>
+    scope.addEventListener('message', ({ data }) => listener(data)),
 }
 export const ready = () => scope.postMessage({ __ready: true })
 export const finish = () => {

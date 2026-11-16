@@ -1,19 +1,16 @@
-/** Solver files, read where they are: the case each names, the state file it starts that case
- *  from, and the file its runs write. */
+/** Reads solver files: the case each names, its optional state file, and the output its runs
+ *  write. */
 
 import * as vscode from 'vscode'
 
 import { stat } from '../platform/files.js'
 import { outputPath } from '../platform/host.js'
-import { isAbsolute } from '../platform/path.js'
+import { isAbsolute, nameOf } from '../platform/path.js'
 import type { Summary } from '../shared/messages.js'
 import { outputOf, readSolver, type Solver } from '../shared/study.js'
 import { reference, uriOf } from './uris.js'
 
-/** A file's name, as its path ends. */
-export const nameOf = (uri: vscode.Uri) => uri.path.split('/').at(-1)!
-
-/** `path` as GridKit reads it in the solver file `solver`: relative to its folder unless absolute. */
+/** Resolves `path` as GridKit does in `solver`: relative to its folder unless absolute. */
 const near = (solver: vscode.Uri, path: string) =>
   isAbsolute(path)
     ? path.startsWith('/') && solver.scheme !== 'file'
@@ -21,11 +18,9 @@ const near = (solver: vscode.Uri, path: string) =>
       : uriOf(path)
     : vscode.Uri.joinPath(solver, '..', path)
 
-/** The solver file at `solver` as saved, what it says, the case it names, and the state file it
- *  names, if any. */
 export async function solverAt(solver: vscode.Uri) {
   const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(solver))
-  const study = readSolver(nameOf(solver), text)
+  const study = readSolver(nameOf(solver.toString()), text)
   return {
     study,
     model: near(solver, study.model),
@@ -33,32 +28,32 @@ export async function solverAt(solver: vscode.Uri) {
   }
 }
 
-/** The file a run of `solver`, which `study` says, writes its samples to for the case `summary`
- *  reads, by GridKit's rule. */
+/** The output file a run of `solver` writes for the case `summary`, by GridKit's rule. */
 export const writtenBy = (solver: vscode.Uri, study: Solver, summary: Summary): vscode.Uri =>
   uriOf(
     outputPath(
-      reference(near(solver, outputOf(nameOf(solver), study, summary.recording.monitor).file)),
+      reference(
+        near(solver, outputOf(nameOf(solver.toString()), study, summary.recording.monitor).file),
+      ),
     ),
   )
 
-/** Whether `uri` names a file that is there. */
 export const exists = (uri: vscode.Uri) =>
   Promise.resolve(stat(reference(uri))).then(
     () => true,
     () => false,
   )
 
-/** Whether `uri` names a file that is gone: one that cannot be reached now, on a remote or network
- *  drive, is not. */
+/** Whether the file at `uri` does not exist. An unreachable file (remote or network drive) does
+ *  not count as gone. */
 export const gone = (uri: vscode.Uri) =>
   Promise.resolve(stat(reference(uri))).then(
     () => false,
     (error: unknown) => (error as { code?: string })?.code === 'ENOENT',
   )
 
-/** The file the solver file at `path` writes now for the case `summary` reads, when it names that
- *  case and the file is there. */
+/** The output the solver file at `path` currently writes for `summary`'s case, if it names that
+ *  case and the output exists. */
 export async function writtenNow(path: string, summary: Summary): Promise<string | undefined> {
   try {
     const solver = uriOf(path)

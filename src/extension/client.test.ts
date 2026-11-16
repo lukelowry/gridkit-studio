@@ -9,10 +9,9 @@ import { bundle, OPTIONS } from '../../tests/rig.js'
 import type { RunRequest } from '../shared/messages.js'
 import { Client } from './client.js'
 
-/** The worker as the extension ships it. */
+/** The worker bundle as shipped. */
 let shipped: string
-/** A worker that reports a GridKit process when asked to run, answers anything else with `ok`,
- *  and crashes when asked to open. */
+/** A stub worker: reports a GridKit process on run, crashes on open, replies `ok` otherwise. */
 let crashing: string
 beforeAll(async () => {
   shipped = dirname(await bundle('client'))
@@ -39,13 +38,11 @@ parentPort.on('message', (message) => {
 })
 
 const ONE = '{"buses":[{"class":"Bus","number":1,"name":"one"}]}'
-/** The worker as the tests start it, keeping what it reads under the tests' output. */
 const options = () => ({ ...OPTIONS, store: resolve('output/tests/client-store') })
-/** What a listener's failure is said by. */
 const failed = vi.fn()
 
-describe('the worker the extension asks', () => {
-  it('starts the worker once asked, and asks what it holds only while it runs', async () => {
+describe('the worker client', () => {
+  it('starts the worker on first use, and reports stats only while it runs', async () => {
     const client = new Client(shipped, options, failed)
     try {
       expect(await client.stats()).toBeUndefined()
@@ -66,7 +63,7 @@ describe('the worker the extension asks', () => {
     await expect(client.worker.call('stats', {})).rejects.toThrow(/closed/)
   })
 
-  it('ends what a stopped worker started, fails what was asked of it, and starts again', async () => {
+  it('stops what a crashed worker started, fails its pending calls, and starts again', async () => {
     const gridkit = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
@@ -80,7 +77,7 @@ describe('the worker the extension asks', () => {
         run: 'first',
         pid: gridkit.pid,
       } as unknown as RunRequest)
-      // Answered after the worker reported the process, which the client now owns.
+      // Replies after the worker reported the process, so the client now tracks it.
       expect(await client.worker.call('stats', {})).toBe('ok')
       const open = client.worker.call('open', {
         uri: 'file:///one',
@@ -91,11 +88,11 @@ describe('the worker the extension asks', () => {
       await expect(open).rejects.toThrow(/worker stopped/)
       await expect(run).rejects.toThrow(/worker stopped/)
       expect(stopped).toHaveBeenCalledOnce()
-      // The process it started is ended with it.
+      // The GridKit process is ended with the worker.
       await vi.waitFor(() => expect(() => process.kill(gridkit.pid!, 0)).toThrow(), {
         timeout: 5000,
       })
-      // Asked again, another worker answers.
+      // The next call starts a new worker.
       expect(await client.worker.call('stats', {})).toBe('ok')
     } finally {
       gridkit.kill()

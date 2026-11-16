@@ -1,20 +1,19 @@
-<!-- The Network: the case on a latkit canvas, its projections and rotation over its top right. The
-  rows a revision of the case draws and the GPU's view of them have lifetimes of their own: the
-  view goes while the page is out of sight, and is made again where it looked. -->
+<!-- The Network: the case on a latkit canvas, with projection and orbit controls. The canvas
+  view is destroyed while the page is hidden and reopens at its last camera. -->
 <script lang="ts">
   import type { Camera, Data, Scene, Source } from 'latkit'
-  import { onMount, tick } from 'svelte'
+  import { onMount, untrack } from 'svelte'
 
-  import { type Entity, isEntity } from '../../shared/document.js'
+  import type { Entity } from '../../shared/document.js'
   import type { Mappings } from '../../shared/mappings.js'
   import { revisionOf, type Summary, type ViewState } from '../../shared/messages.js'
   import { reader, TILTED } from '../../shared/settings.js'
   import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { saveImage, viewShot } from '../export/image.js'
-  import { type CanvasView, followPlayback } from '../latkit/canvas.js'
-  import { CaseProjection } from '../latkit/data.js'
-  import { FrameReads, PlayheadFeed, SHOWN_PER_SECOND } from '../latkit/frames.js'
+  import type { CanvasView } from '../latkit/canvas.js'
+  import { CaseRows } from '../latkit/data.js'
+  import { MAX_FRAME_RATE, PlayheadFeed } from '../latkit/frames.js'
   import { bindInteractions } from '../latkit/interactions.js'
   import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
   import { type Background, mapKey, mapOf, NO_MAP } from '../latkit/maps.js'
@@ -24,24 +23,20 @@
   import { nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
 
-  /** The ways the Network looks at a case, as its toolbar names them. */
-  const LOOKS = [
+  const PROJECTIONS = [
     ['Flat', 'projection-flat'],
     ['Tilt', 'projection-tilt'],
     ['Globe', 'projection-globe'],
   ] as const
-  type Look = (typeof LOOKS)[number][0]
+  type Projection = (typeof PROJECTIONS)[number][0]
 
-  /** The rows of one revision of the case, as the view draws them. */
-  interface Drawn {
+  interface LoadedCase {
     readonly data: Data
     readonly summary: Summary
-    /** The fields of each type the rows hold. */
     readonly fields: ReadonlyMap<string, ReadonlySet<string>>
   }
 
-  /** Where a view of the case at `uri` looked: what the page keeps to open on again. */
-  interface Looked {
+  interface CaseCamera {
     readonly uri?: string
     readonly camera?: Camera
   }
@@ -51,140 +46,121 @@
   }
   mark('canvas:boot')
 
-  /** Elements as one key, by their type and id alone. */
   const keyOf = (entities: readonly Entity[]) =>
     JSON.stringify(entities.map(({ table, id }) => [table, id]))
 
-  /** latkit replaces a lost device itself; only once it stops does the page start over. A wait the
-   *  view let go of, as it went, is no failure. */
   const page = new LatkitPage((error) => {
     busy = false
     bridge.report(error, { view: 'network', phase: 'draw' })
   })
   const fail = page.fail
-  const cases = new CaseProjection()
-  const reads = new FrameReads()
-  /** The frames each mapped field of the results holds about the playhead. */
-  const feed = new PlayheadFeed(reads)
-  /** Lets go of an image being drawn once the page goes. */
+  const cases = new CaseRows()
+  const feed = new PlayheadFeed({
+    changed() {
+      if (!closed) framesVersion++
+    },
+    failed: fail,
+  })
   const lifetime = new AbortController()
 
-  let app = $state.raw<ViewState>({})
-  let drawn = $state.raw<Drawn>()
-  /** The view on show, while the page is in sight. */
-  let shown = $state.raw<CanvasView>()
+  let viewState = $state.raw<ViewState>({})
+  let loadedCase = $state.raw<LoadedCase>()
+  let canvasView = $state.raw<CanvasView>()
   let background = $state.raw<Background>(NO_MAP)
-  /** Until the case first draws, or cannot. */
   let busy = $state(true)
-  /** Counts the changes to the frames the mapped fields hold. */
   let framesVersion = $state(0)
-  /** Where the view that went last looked, until the next is made. */
-  let left = $state.raw<Looked>()
+  let previousCamera = $state.raw<CaseCamera>()
 
   let closed = false
-  let playback: (() => void) | undefined
-  let saving: ReturnType<typeof setTimeout> | undefined
-  /** The selection the view shows, and the one last made here, as keys. */
-  let selected = ''
-  let own = ''
-  let madeMap = ''
+  let framingTimer: ReturnType<typeof setTimeout> | undefined
+  /** Selection keys: the one shown, and the last one made in this view. */
+  let shownSelection = ''
+  let selectedHere = ''
+  let backgroundKey = ''
   let mapController: AbortController | undefined
-  let received = 0
-  /** The mappings last drawn, which stay until the rows hold the fields of those sent since. */
-  let held: Mappings = {}
+  /** The mappings drawn; newer ones apply once the rows have their fields. */
+  let drawnMappings: Mappings = {}
 
   const active = $derived(page.active)
-  const settings = $derived(reader(app.settings))
-  const geographic = $derived(!!drawn?.summary.definition.drawing.geographic)
+  const settings = $derived(reader(viewState.settings))
+  const geographic = $derived(!!loadedCase?.summary.definition.drawing.geographic)
   const tilt = $derived(settings.get('network.tilt'))
-  const look = $derived<Look>(
+  const projection = $derived<Projection>(
     geographic && settings.get('network.projection') === 'globe'
       ? 'Globe'
       : tilt > 0
         ? 'Tilt'
         : 'Flat',
   )
-  /** The sun's time, read once each time the Daylight setting turns on: a scene that differed on
-   *  every rebuild would be drawn anew on every rebuild. */
-  const lit = $derived(settings.get('network.map.daylight'))
-  const daylight = $derived(daylightOf(lit))
-  /** What the view draws now: the mappings whose fields its rows hold. */
+  // Read once per toggle: a time that changed on every rebuild would redraw the scene every time.
+  const daylightOn = $derived(settings.get('network.map.daylight'))
+  const daylight = $derived(daylightOf(daylightOn))
   const mappings = $derived.by(() => {
-    if (!drawn) return held
-    const { fields } = drawn
-    const asked = sceneFields(drawn.summary.definition, app.mappings)
+    if (!loadedCase) return drawnMappings
+    const { fields } = loadedCase
+    const asked = sceneFields(loadedCase.summary.definition, viewState.mappings)
     if (asked.every((type) => type.fields.every((name) => fields.get(type.table)?.has(name))))
-      held = app.mappings ?? {}
-    return held
+      drawnMappings = viewState.mappings ?? {}
+    return drawnMappings
   })
   const scene = $derived.by((): Scene | undefined => {
     void page.themeVersion
     void framesVersion
-    return (
-      drawn &&
-      sceneOf(drawn.data, drawn.summary.definition, settings, nativeTheme(settings, 'network'), {
-        mappings,
-        results: app.results,
-        sampled: feed.source,
-        background,
-        daylight,
-      })
-    )
+    if (!loadedCase) return undefined
+    const { data, summary } = loadedCase
+    return sceneOf(data, summary.definition, settings, nativeTheme(settings, 'network'), {
+      mappings,
+      results: viewState.results,
+      sampled: feed.source,
+      background,
+      daylight,
+    })
   })
   const sources = $derived.by((): Source[] => {
     void framesVersion
-    return drawn ? [drawn.data, ...background.sources, ...feed.sources] : []
+    return loadedCase ? [loadedCase.data, ...background.sources, ...feed.sources] : []
   })
-  /** Where a view made now looks first: where the last one looked, else where the page last kept
-   *  one of this case looking; with neither, it frames the whole case. */
+  /** The camera a new view opens at: the last view's, else the one saved for this case. Without
+   *  either, the view fits the whole case. */
   const camera = $derived.by(() => {
-    const looked = left ?? bridge.state<Looked>({})
-    return looked.uri === app.uri ? looked.camera : undefined
+    const saved = previousCamera ?? bridge.state<CaseCamera>({})
+    return saved.uri === viewState.uri ? saved.camera : undefined
   })
 
-  /** Whether every sampled field mapped holds the frames at `at`. */
+  const sampled = $derived(
+    loadedCase && viewState.results?.frames
+      ? sampledFields(loadedCase.summary.definition, viewState.mappings, viewState.results)
+      : [],
+  )
+
   function covered(at: number): boolean {
-    if (!drawn || !app.results?.frames) return true
-    return feed.holds(sampledFields(drawn.summary.definition, app.mappings, app.results), at)
+    return !sampled.length || feed.covers(sampled, at)
   }
 
-  /** Keeps the frames each mapped field shows about `at`, as the clock moves, and lets go of those
-   *  of fields no longer mapped. */
   function prefetch(at: number) {
-    if (!active || !drawn) return
-    const results = app.results
-    const fields = results?.frames
-      ? sampledFields(drawn.summary.definition, app.mappings, results)
-      : []
-    if (results?.frames)
-      void feed
-        .ahead(fields, at, {
+    if (!active || !loadedCase) return
+    const results = viewState.results
+    if (results?.frames && sampled.length)
+      feed
+        .ahead(sampled, at, {
           results,
           playing: clock.state.status === 'playing',
           rate: clock.state.rate,
-          shown: SHOWN_PER_SECOND,
-          bytes: 8 * 1024 * 1024,
+          frameRate: MAX_FRAME_RATE,
         })
-        .then((changed) => {
-          if (changed && !closed) framesVersion++
-        }, fail)
-    if (feed.keep(fields)) framesVersion++
+        .catch(() => {})
   }
 
   const clock = createClock((at) => {
     prefetch(at)
-    if (shown && active && covered(at)) shown.view.at = at
+    if (canvasView && active && covered(at)) canvasView.view.at = at
   }, follow)
 
-  /** Shows the playhead on every frame while it plays. */
   function follow() {
-    playback?.()
-    playback = undefined
-    const view = shown?.view
-    if (!page.gpu || !view || !active || clock.state.status !== 'playing') return
-    playback = followPlayback(
-      page.gpu,
-      () => (covered(clock.now()) ? [view] : []),
+    const view = canvasView?.view
+    page.follow(
+      !!view && clock.state.status === 'playing',
+      () => (view && covered(clock.now()) ? [view] : []),
       () => {
         const at = clock.now()
         prefetch(at)
@@ -193,82 +169,73 @@
     )
   }
 
-  /** Says what the canvas frames once its camera and size rest: the page keeps the camera to open
-   *  on again, and the extension the framing, for an export to frame what the user saw. A canvas
-   *  out of sight frames nothing. */
-  function framing() {
-    clearTimeout(saving)
-    saving = setTimeout(() => {
-      if (!shown) return
-      const { view, canvas } = shown
+  /** At most every 200 ms: saves the camera to reopen at, and sends the framing so exports match
+   *  what the user saw. A hidden canvas reports nothing. */
+  function scheduleFraming() {
+    if (framingTimer) return
+    framingTimer = setTimeout(() => {
+      framingTimer = undefined
+      if (!canvasView) return
+      const { view, canvas } = canvasView
       const size = [canvas.clientWidth, canvas.clientHeight]
       if (!size[0] || !size[1]) return
       const { camera } = view
-      bridge.save({ uri: app.uri, camera } satisfies Looked)
+      bridge.save({ uri: viewState.uri, camera } satisfies CaseCamera)
       bridge.send({ kind: 'framing', framing: { camera, size } })
     }, 200)
   }
 
-  /** Takes up the view made: frames the whole case unless it opened where one looked before, and
-   *  hears what the user does in it. As it goes, where it looked is kept for the next. */
-  function ready(made: CanvasView) {
-    const { view, canvas } = made
-    const uri = app.uri
-    if (!camera && drawn) made.fit(caseFit(drawn.data, drawn.summary.definition.drawing))
-    left = undefined
-    selected = ''
-    shown = made
+  /** Fits a new view to the whole case unless it opened at a saved camera. */
+  function ready(opened: CanvasView) {
+    const { view, canvas } = opened
+    const uri = viewState.uri
+    if (!camera && loadedCase)
+      opened.fit(caseFit(loadedCase.data, loadedCase.summary.definition.drawing))
+    previousCamera = undefined
+    shownSelection = ''
+    canvasView = opened
     const stop = bindInteractions(view, canvas, {
       select(element) {
-        own = keyOf(element ? [element] : [])
+        selectedHere = keyOf(element ? [element] : [])
         bridge.send({ kind: 'select', element })
       },
       open: (element) => bridge.send({ kind: 'open', element }),
-      menu: (point, elements) => nativeMenu(canvas, point, elements, app, 'network'),
-      camera: framing,
+      menu: (point, element) => nativeMenu(canvas, point, element, viewState, 'network'),
+      camera: scheduleFraming,
       error: fail,
     })
-    // What it frames is said once its first fit applies: till then it shows only its background.
-    const resizing = new ResizeObserver(framing)
-    void made.framed().then(() => {
-      if (shown === made) resizing.observe(canvas)
+    // Report framing only after the first fit; until then the view shows only its background.
+    const resizing = new ResizeObserver(scheduleFraming)
+    void opened.framed().then(() => {
+      if (canvasView === opened) resizing.observe(canvas)
     })
     return () => {
-      left = { uri, camera: view.camera }
+      previousCamera = { uri, camera: view.camera }
       stop()
       resizing.disconnect()
-      clearTimeout(saving)
-      if (shown === made) shown = undefined
+      clearTimeout(framingTimer)
+      framingTimer = undefined
+      if (canvasView === opened) canvasView = undefined
     }
   }
 
-  function drew() {
+  function markRendered() {
     mark('canvas:frame')
     busy = false
   }
 
-  /** The map the settings choose under a case on the earth, made anew once they or the theme
-   *  change what it draws. */
-  async function backgrounds() {
+  async function loadBackground() {
     const key = mapKey(settings, geographic)
-    if (madeMap === key) return
-    madeMap = key
+    if (backgroundKey === key) return
+    backgroundKey = key
     mapController?.abort()
     const controller = (mapController = new AbortController())
     try {
       const next = await mapOf(settings, geographic, controller.signal)
-      if (controller.signal.aborted || closed) {
-        next.destroy?.()
-        return
-      }
-      const old = background
-      background = next
-      // The view draws the new map before the old one's rows go.
-      await tick()
-      old.destroy?.()
+      if (!controller.signal.aborted && !closed) background = next
     } catch (error) {
       if (!controller.signal.aborted) {
-        madeMap = ''
+        backgroundKey = ''
         fail(error)
       }
     }
@@ -276,37 +243,41 @@
 
   $effect(() => {
     void page.themeVersion
-    void backgrounds()
+    void loadBackground()
   })
   $effect(() => {
-    if (shown) shown.view.orbit = settings.get('network.orbit')
+    const mapped = sampled
+    untrack(() => feed.keep(mapped))
   })
-  // A pitch alone turns the camera and keeps a fit that is due.
   $effect(() => {
-    if (shown) shown.view.camera = { pitch: tilt }
+    if (canvasView) canvasView.view.orbit = settings.get('network.orbit')
+  })
+  // Setting only the pitch keeps any pending fit.
+  $effect(() => {
+    if (canvasView) canvasView.view.camera = { pitch: tilt }
   })
   $effect(() => {
     void framesVersion
-    void drawn
-    if (shown && covered(clock.now())) shown.view.at = clock.now()
+    void loadedCase
+    if (canvasView && covered(clock.now())) canvasView.view.at = clock.now()
   })
-  /** The selection as the Network shows it, framed unless the user picked it here. */
+  // Show the selection, and frame it unless it was picked in this view.
   $effect(() => {
-    if (!shown || !drawn) return
-    const data = drawn.data.name
-    const entities = app.networkSelection ?? []
+    if (!canvasView || !loadedCase) return
+    const data = loadedCase.data.name
+    const entities = viewState.networkSelection ?? []
     const key = keyOf(entities)
-    if (key === selected) return
-    selected = key
-    shown.view.selection = entities.map((entity) => ({
+    if (key === shownSelection) return
+    shownSelection = key
+    canvasView.view.selection = entities.map((entity) => ({
       data,
       table: entity.table,
       ids: [entity.id],
     }))
-    if (entities[0] && key !== own) shown.fit({ reveal: { data, ...entities[0] } })
+    if (entities[0] && key !== selectedHere) canvasView.fit({ reveal: { data, ...entities[0] } })
   })
   $effect(() => {
-    void shown
+    void canvasView
     void page.gpu
     void active
     follow()
@@ -315,58 +286,44 @@
   onMount(() => {
     const off = bridge.on((message) => {
       if (message.kind === 'state') {
-        const previous = app
-        app = message.state
-        if (previous.uri !== app.uri) {
-          drawn = undefined
+        const previous = viewState
+        viewState = message.state
+        if (previous.uri !== viewState.uri) {
+          loadedCase = undefined
           cases.clear()
         }
-        if (previous.uri !== app.uri || previous.results?.id !== app.results?.id) {
+        if (previous.uri !== viewState.uri || previous.results?.id !== viewState.results?.id) {
           feed.clear()
-          reads.clear()
           framesVersion++
         }
-        const next = app.summary
-        if (next && !app.stale) {
-          const fields = sceneFields(next.definition, app.mappings)
+        const next = viewState.summary
+        if (next && !viewState.stale) {
+          const fields = sceneFields(next.definition, viewState.mappings)
           void cases
             .receive({ revision: revisionOf(next), fields }, fields)
             .then((changed) => {
               if (!changed || closed) return
-              drawn = {
+              loadedCase = {
                 data: cases.slot.current!.data,
                 summary: next,
                 fields: new Map(fields.map((type) => [type.table, new Set(type.fields)])),
               }
-              received++
               mark('canvas:data')
             })
             .catch(fail)
         }
         prefetch(clock.now())
-        if (!app.summary && app.error) busy = false
+        if (!viewState.summary && viewState.error) busy = false
       } else if (message.kind === 'action') {
         if (message.command === 'reloadView') void page.open()
-        else if (message.command === 'fit' && shown && drawn)
-          shown.fit(caseFit(drawn.data, drawn.summary.definition.drawing))
-        else if (message.command === 'neighborhood' && shown && drawn) {
-          // What the Network draws for the element in context, and what each of those links to.
-          const { view } = shown
-          const data = drawn.data.name
-          const entities = Array.isArray(message.value) ? message.value.filter(isEntity) : []
-          if (entities.length)
-            shown.fit({
-              rows: entities.flatMap((entity) => [
-                { data, table: entity.table, ids: [entity.id] },
-                ...view.neighbors({ data, ...entity }),
-              ]),
-            })
-        } else if (message.command === 'exportImage' && shown && drawn && app.uri) {
-          const [made, uri, name] = [shown, app.uri, drawn.summary.name]
-          // The picture shows the view as framed, never its background before its first fit.
-          void made
+        else if (message.command === 'fitAll' && canvasView && loadedCase)
+          canvasView.fit(caseFit(loadedCase.data, loadedCase.summary.definition.drawing))
+        else if (message.command === 'exportImage' && canvasView && loadedCase && viewState.uri) {
+          const [exported, uri, name] = [canvasView, viewState.uri, loadedCase.summary.name]
+          // Wait for the first fit, so the image is never just the background.
+          void exported
             .framed()
-            .then(() => saveImage(viewShot(made.view), uri, name, 'network', lifetime.signal))
+            .then(() => saveImage(viewShot(exported.view), uri, name, 'network', lifetime.signal))
             .catch(fail)
         }
       }
@@ -381,15 +338,15 @@
     hooks.gridkitLifecycle = () => ({
       visible: page.visible,
       hidden: document.hidden,
-      summary: drawn?.summary.version,
-      projection: cases.slot.current?.key,
-      view: !!shown,
+      summary: loadedCase?.summary.version,
+      rows: cases.slot.current?.key,
+      view: !!canvasView,
       gpu: !!page.gpu,
     })
     hooks.gridkitStats = () => {
       const gpu = page.gpu
-      if (!shown || !gpu) return undefined
-      const { view } = shown
+      if (!canvasView || !gpu) return undefined
+      const { view } = canvasView
       return {
         ...view.stats,
         complete: view.complete,
@@ -403,37 +360,34 @@
         requestedAt: clock.now(),
         covered: covered(clock.now()),
         windows: feed.spans,
-        received,
-        mappings: held,
-        cacheBytes: reads.bytes,
-        reads: reads.active,
+        mappings: drawnMappings,
       }
     }
     hooks.gridkitSelection = () =>
-      shown && {
-        entities: shown.view.selection.flatMap((group) =>
+      canvasView && {
+        entities: canvasView.view.selection.flatMap((group) =>
           group.ids.map((id) => ({ table: group.table, id })),
         ),
-        camera: shown.view.camera,
+        camera: canvasView.view.camera,
       }
     hooks.gridkitLocate = (entity) =>
-      shown && drawn
-        ? shown.view.screenOf({ data: drawn.data.name, ...entity }, { signal: shown.lifetime })
+      canvasView && loadedCase
+        ? canvasView.view.screenOf(
+            { data: loadedCase.data.name, ...entity },
+            { signal: canvasView.lifetime },
+          )
         : null
-    // What a GPU reset does, so a test can check that the Network draws on.
+    // Simulates a GPU reset, so tests can check that the Network keeps drawing.
     hooks.gridkitLose = () => page.gpu?.lose()
     bridge.ready()
     return () => {
       closed = true
       lifetime.abort()
-      playback?.()
       off()
       clock.stop()
       mapController?.abort()
-      background.destroy?.()
       feed.clear()
       cases.clear()
-      reads.clear()
       page.destroy()
     }
   })
@@ -448,7 +402,7 @@
       {active}
       {camera}
       onready={ready}
-      ondrawn={drew}
+      ondrawn={markRendered}
       onerror={fail}
       label="Network view. Right-click an element for actions."
     />
@@ -459,12 +413,12 @@
     </div>
   {/if}
   <div class="toolbar" data-testid="view-toolbar" role="toolbar" aria-label="Network display">
-    {#each LOOKS as [label, glyph] (label)}
+    {#each PROJECTIONS as [label, glyph] (label)}
       <button
         class="c-icon-btn"
         aria-label={label}
         title={label}
-        aria-pressed={label === look}
+        aria-pressed={label === projection}
         disabled={label === 'Globe' && !geographic}
         onclick={() =>
           bridge.send({
@@ -480,8 +434,8 @@
     {/each}
     <button
       class="c-icon-btn"
-      aria-label="Auto-rotate"
-      title="Auto-rotate"
+      aria-label="Orbit"
+      title="Orbit"
       aria-pressed={settings.get('network.orbit') !== 0}
       onclick={() =>
         bridge.send({

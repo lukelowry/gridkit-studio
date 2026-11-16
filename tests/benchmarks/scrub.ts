@@ -1,7 +1,5 @@
-/** Scrubbing a large run with the Network mapping two of its fields: how soon a seek shows, how
- *  closely the Network follows a drag, and how long it waits on samples. Real GridKit, ACTIVSg10k,
- *  ten seconds of voltage magnitude and angle, one mapped to color and the other to height. No time
- *  fails a run; it fails only when a view stops answering or Studio reports an error. */
+/** Scrub benchmark on 10 s of ACTIVSg10k (Vm as color, Va as height): seek latency, drag lag and
+ *  buffering. Timings never fail the run; a stuck view or a Studio error does. */
 
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -12,10 +10,9 @@ import * as vscode from 'vscode'
 
 import { pause, testHost, until, visible } from '../e2e/harness.js'
 
-/** A playhead drag at the display's pace. */
 const STEP_MS = 16
 
-/** What the Network showed on each of its animation frames while a scenario ran. */
+/** The Network's state on one animation frame. */
 interface Watched {
   /** Milliseconds since the scenario began. */
   ms: number
@@ -27,7 +24,6 @@ interface Watched {
   requestedAt?: number
 }
 
-/** Record what the Network shows each animation frame, until `stop`. */
 const watch = (network: Frame) =>
   network.evaluate(`(() => {
     const start = performance.now()
@@ -46,11 +42,11 @@ const watch = (network: Frame) =>
     }
     look()
   })()`)
-const stop = (network: Frame) =>
+const stopWatching = (network: Frame) =>
   network.evaluate<Watched[]>('(cancelAnimationFrame(window.watching), window.watched)')
 
-/** Data availability and actual native draw counts are separate from View.complete, which may
- *  stay false while a changing playhead keeps new GPU work queued. */
+/** Reports data availability and native draw counts separately from View.complete, which can stay
+ *  false while a moving playhead keeps GPU work queued. */
 function summarize(watched: readonly Watched[], ended: number) {
   const during = watched.filter((sample) => sample.ms <= ended)
   const lag = during
@@ -115,39 +111,38 @@ export async function run() {
     await vscode.commands.executeCommand('gridkitStudio.openMonitor', uri)
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
-    const shows = (t: number, after = -1) =>
+    const drawnAt = (t: number, after = -1) =>
       network.waitForFunction(
         `([t, after]) => gridkitStats()?.frames > after && gridkitStats()?.covered && gridkitStats()?.complete && Math.abs(gridkitStats().at - t) < 1e-6`,
         [t, after],
         { polling: 'raf', timeout: 120_000 },
       )
-    const firstShown = performance.now()
-    await shows(0)
-    report.first = performance.now() - firstShown
+    const firstStart = performance.now()
+    await drawnAt(0)
+    report.first = performance.now() - firstStart
     report.frames = session.results!.frames
     report.domain = session.results!.domain
 
-    /** Seconds of the run, as it recorded them. */
     const [start, end] = session.results!.domain
     const at = (part: number) => start + part * (end - start)
 
-    // Seeks far from anything shown.
+    // Seeks far from anything drawn before.
     const seeks: number[] = []
     for (const part of [0.95, 0.05, 0.7, 0.35, 0.85]) {
       const t = transport.currentT()
       const frames = await network.evaluate<number>('gridkitStats().frames')
       const begun = performance.now()
       transport.seek(at(part))
-      await shows(transport.currentT(), frames)
+      await drawnAt(transport.currentT(), frames)
       seeks.push(performance.now() - begun)
       assert.notEqual(t, transport.currentT())
     }
     report.seekMs = seeks
 
-    /** Drag the playhead from `from` to `to`, parts of the run, over `ms`, then let it rest. */
+    /** Drags the playhead between fractions `from` and `to` of the run over `ms`, then waits. */
     async function drag(name: string, from: number, to: number, ms: number) {
       transport.seek(at(from))
-      await shows(transport.currentT())
+      await drawnAt(transport.currentT())
       await watch(network)
       const begun = performance.now()
       const steps = Math.round(ms / STEP_MS)
@@ -156,24 +151,24 @@ export async function run() {
         await pause(STEP_MS)
       }
       const ended = performance.now() - begun
-      await shows(transport.currentT())
+      await drawnAt(transport.currentT())
       await pause(100)
-      report[name] = summarize(await stop(network), ended)
+      report[name] = summarize(await stopWatching(network), ended)
     }
-    // A drag over times not yet shown, the same one back, and one across the whole run.
+    // A drag over undrawn times, the same drag back, and one across the whole run.
     await drag('scrub cold', 0.2, 0.5, 2000)
     await drag('scrub back', 0.5, 0.2, 2000)
     await drag('scrub whole', 0, 1, 3000)
 
-    // Playing from a moment far from the last one shown.
+    // Play from a time far from the last one drawn.
     transport.seek(at(0.6))
-    await shows(transport.currentT())
+    await drawnAt(transport.currentT())
     await watch(network)
     transport.setRate(1)
     transport.play()
     await pause(3000)
     transport.pause()
-    report['play'] = summarize(await stop(network), 3000)
+    report['play'] = summarize(await stopWatching(network), 3000)
 
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')

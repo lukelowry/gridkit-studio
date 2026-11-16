@@ -1,22 +1,21 @@
 import { URI } from 'vscode-uri'
 
-/** The names GridKit Studio contributes in its manifest, and the files it reads, in one place: the
- *  manifest's own test holds them to package.json. */
+/** Every name Studio contributes in its manifest, checked against package.json by the manifest
+ *  test, plus the case file pattern. */
 
-/** What every contributed name starts with. */
+export const EXTENSION = 'lukelowery.gridkit-studio'
+
 export const PREFIX = 'gridkitStudio'
 
-/** Every command Studio contributes, by its name after the prefix. */
+/** Every contributed command, without the prefix. */
 export const COMMANDS = [
   'openCase',
   'openNetwork',
   'revealInNetwork',
   'openCasePanel',
-  'revealInCase',
+  'revealInCasePanel',
   'openMonitor',
-  'openSource',
-  'revealInSource',
-  'goToReference',
+  'showJson',
   'copyId',
   'copyValue',
   'copyFieldPath',
@@ -38,12 +37,10 @@ export const COMMANDS = [
   'nextSample',
   'goToEnd',
   'playbackSpeed',
-  'fit',
-  'zoomToNeighborhood',
+  'fitAll',
   'reloadView',
   'timeWindow',
   'valueRange',
-  'selectOverlapping',
   'chooseType',
   'filterRows',
   'chooseColumns',
@@ -64,12 +61,11 @@ export const COMMANDS = [
 ] as const
 export type Command = (typeof COMMANDS)[number]
 
-/** The views Studio contributes: the Network editor, its three webview panels, and Monitored
- *  Signals. */
+/** The Network editor, the three webview panels, and Monitored Signals. */
 export const VIEWS = ['network', 'case', 'monitor', 'export', 'signals'] as const
 export type View = (typeof VIEWS)[number]
 
-/** The context keys Studio sets, which its manifest's `when` clauses read. */
+/** The context keys Studio sets for the manifest's `when` clauses. */
 export const CONTEXT_KEYS = [
   'hasCase',
   'running',
@@ -85,20 +81,17 @@ export type ContextKey = (typeof CONTEXT_KEYS)[number]
 export const commandId = (name: Command) => `${PREFIX}.${name}` as const
 export const viewId = (view: View) => `${PREFIX}.${view}` as const
 export const contextKey = (key: ContextKey) => `${PREFIX}.${key}` as const
-/** The settings of `category`, as the Settings editor searches for them. */
 export const settingsOf = (category: string) => `${PREFIX}.${category}` as const
 
-/** A GridKit case, by its file's name. */
 export const CASE_FILE = /\.case\.json$/i
-/** Saved case files, including virtual workspaces; Git previews and untitled copies stay separate. */
-export const followed = (uri: string) => {
+/** Saved case files, virtual workspaces included. Git previews and untitled copies are not cases. */
+export const isCaseFile = (uri: string) => {
   const file = URI.parse(uri)
   return !!file.scheme && !['git', 'untitled'].includes(file.scheme) && CASE_FILE.test(file.path)
 }
 
-/** The key a case's saved state is kept under in the workspace's state. */
+/** The workspace state key prefix for a case's saved state. */
 const SAVED = 'case:'
 export const savedKey = (uri: string) => SAVED + uri
-/** The case a saved state's key names, if it names one. */
 export const savedUri = (key: string) =>
   key.startsWith(SAVED) ? key.slice(SAVED.length) : undefined

@@ -116,7 +116,7 @@ export function nativeTheme(
     ...(contrasted ? { contrast: 7 } : kind === 'monitor' && { contrast: 3 }),
     background: kind === 'monitor' ? palette.background : palette.editor,
     // High contrast borders are too loud for a grid behind the case.
-    grid: contrasted ? palette.guide : palette.border,
+    grid: { color: contrasted ? palette.guide : palette.border },
     text: { color: palette.text1, ...(font && { font }) },
     focus: { selected: palette.focus, hover: palette.primaryText },
     vertex: { color: palette.network },

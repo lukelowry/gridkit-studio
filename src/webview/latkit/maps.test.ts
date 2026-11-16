@@ -1,17 +1,20 @@
-import { createRequire } from 'node:module'
-
-import type { Mark } from 'latkit'
-import { beforeAll, expect, it } from 'vitest'
+import { type Mark, Tiles, type TilesDescription } from 'latkit'
+import { expect, it } from 'vitest'
 
 import { reader } from '../../shared/settings.js'
-import { loadNative } from '../../workers/native.js'
-import { mapKey, mapOf, NO_MAP } from './maps.js'
-
-beforeAll(() => loadNative(createRequire(import.meta.url).resolve('latkit/wasm')))
+import { mapKey, mapOf, NO_MAP, tileMap } from './maps.js'
 
 const COLORS = { land: '#1f1f1f', water: '#14354f', line: '#666666', faint: '#303030' }
 
 const tableOf = (mark: Mark) => ('areas' in mark ? mark.areas : 'lines' in mark ? mark.lines : null)
+
+/** What a source says of itself: the `layers` it lists, and no credit. */
+const said = (...layers: string[]): TilesDescription => ({
+  attribution: null,
+  zooms: [0, 14],
+  bounds: [-180, -85, 180, 85],
+  layers: layers.map((name) => ({ name, fields: [] })),
+})
 
 it('reads a map again only for a new source, never for its colors', async () => {
   // A case that is not geographic, None, and Custom without tiles have no map.
@@ -29,29 +32,35 @@ it('reads a map again only for a new source, never for its colors', async () => 
   )
 })
 
-it('draws tiles as OpenMapTiles layers, water first, in the colors given', async () => {
-  const map = await mapOf(
-    reader({
-      'map.basemap': 'custom',
-      'map.tilesUrl': 'https://tiles.test/planet',
-      'map.attribution': '© test',
-    }),
-    true,
-  )
-  expect(map.attribution).toBe('© test')
-  const marks = map.marks(COLORS)
-  expect(marks.map(tableOf)).toEqual(
-    ['water', 'building', 'transportation', 'boundary'].map((layer) => [
-      map.sources[0]!.name,
-      layer,
-    ]),
-  )
-  expect(marks[0]).toMatchObject({ color: COLORS.water, pick: false, select: false })
+it('draws tiles as the OpenMapTiles layers their source lists, water first, in the colors given', () => {
+  const tiles = new Tiles('map:tiles', 'https://tiles.test/planet')
+  const tablesOf = (description: TilesDescription) =>
+    tileMap(tiles, description)
+      .marks(COLORS)
+      .map(tableOf)
+      .map((table) => (table as [string, string])[1])
+  // A URL template lists no layers, so every layer is drawn.
+  expect(tablesOf(said())).toEqual(['water', 'building', 'transportation', 'boundary'])
+  // A source that lists its layers is drawn only where it has them.
+  expect(tablesOf(said('boundary', 'place', 'water'))).toEqual(['water', 'boundary'])
+  expect(tablesOf(said('contours'))).toEqual([])
+  const map = tileMap(tiles, said())
+  expect(map.sources).toEqual([tiles])
+  expect(map.marks(COLORS)[0]).toMatchObject({
+    areas: [tiles.name, 'water'],
+    color: COLORS.water,
+    pick: false,
+    select: false,
+  })
   expect(map.marks({ ...COLORS, water: '#0000ff' })[0]).toMatchObject({ color: '#0000ff' })
-  // One dataset per URL for the page's life, whatever chose it.
-  const again = await mapOf(
-    reader({ 'map.basemap': 'custom', 'map.tilesUrl': 'https://tiles.test/planet' }),
-    true,
+})
+
+it('credits tiles as the Attribution setting says, and without one only as their source asks', () => {
+  const tiles = new Tiles('map:tiles', 'https://tiles.test/planet')
+  expect(tileMap(tiles, said(), '© test').attribution).toBe('© test')
+  expect(tileMap(tiles, { ...said(), attribution: '© source' }, '© test').attribution).toBe(
+    '© test',
   )
-  expect(again.sources[0]).toBe(map.sources[0])
+  // A source that asks for no credit gets none.
+  expect(tileMap(tiles, said())).not.toHaveProperty('attribution')
 })

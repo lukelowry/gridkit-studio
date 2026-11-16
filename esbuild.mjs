@@ -98,6 +98,7 @@ await Promise.all([
     resolve(output, 'licenses/vscode-uri.md'),
   ),
   cp(require.resolve('latkit/wasm'), resolve(output, 'webview/latkit.wasm')),
+  cp(require.resolve('latkit/jobs'), resolve(output, 'webview/latkit-jobs.wasm')),
   cp(require.resolve('latkit/worker'), resolve(output, 'webview/latkit-worker.js')),
   cp(resolve(root, 'assets/maps'), resolve(output, 'webview/maps'), { recursive: true }),
   cp(resolve(packageRoot, 'NOTICES.md'), resolve(output, 'licenses/latkit-NOTICES.md')),

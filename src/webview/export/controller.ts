@@ -78,7 +78,7 @@ async function compose(
     await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
     const data = caseRows.slot.current!.data
     const background: Background = network
-      ? await mapOf(settings, definition.drawing.geographic)
+      ? await mapOf(settings, definition.drawing.geographic, signal)
       : NO_MAP
     signal.throwIfAborted()
     const fields = network ? sampledFields(definition, state.mappings, results) : []

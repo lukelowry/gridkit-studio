@@ -33,14 +33,22 @@ export function tileRequest(url: string): TileRequest {
   }
 }
 
-/** One fetch for every tile set on the page, so tiles of one manifest share what they fetched. */
 const fetch = (url: string) => bridge.request('tile', tileRequest(url))
+
+/** The tiles of the results last asked for, by URL. latkit shares what it fetched only among the
+ *  views of one `Tiles`, and keeps it while that `Tiles` lives. So every plot of a field draws the
+ *  same one, a plot that closes and opens again fetches nothing, and other results' tiles are let
+ *  go. */
+let held: { readonly results: string; readonly tiles: Map<string, Tiles> } | undefined
 
 /** Time tiles of `table`'s `field`: every recorded row, or only `id`. Named by their URL. */
 export function resultTiles(results: string, table: string, field: string, id?: Id): Tiles {
   const rows = id === undefined ? '*' : JSON.stringify(id)
   const url = `${SCHEME}${[results, table, field, rows].map(encodeURIComponent).join('/')}/frames.json`
-  return new Tiles(url, url, { fetch })
+  if (held?.results !== results) held = { results, tiles: new Map() }
+  let tiles = held.tiles.get(url)
+  if (!tiles) held.tiles.set(url, (tiles = new Tiles(url, url, { fetch })))
+  return tiles
 }
 
 /** Refreshes `tiles` as a run records more: at once, then again after `drawn` resolves if more

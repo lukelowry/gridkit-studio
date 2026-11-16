@@ -231,7 +231,7 @@
     if (backgroundKey === key) return
     backgroundKey = key
     try {
-      const next = await mapOf(settings, geographic)
+      const next = await mapOf(settings, geographic, lifetime.signal)
       if (backgroundKey === key && !closed) background = next
     } catch (error) {
       if (backgroundKey === key && !closed) {

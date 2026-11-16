@@ -31,9 +31,10 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   const settings = reader()
   const network = networkScene(data, definition.drawing, settings, LOOK, [])
   expect(network.layout).toEqual({ stress: { gap: GAP } })
-  // The wheel's default leaves every input to latkit.
+  // The wheel's default leaves every input to latkit. Only the space limits the camera, so a
+  // view moves alike whether it fitted the case or opened at a saved camera.
   expect(network.controls).toEqual(
-    expect.objectContaining({ keyboard: true, motion: 'system', gestures: {} }),
+    expect.objectContaining({ keyboard: true, motion: 'system', gestures: {}, reach: 'space' }),
   )
   // A trackpad scrolls a canvas to pan and pinches to zoom.
   const trackpad = reader({ 'network.wheelBehavior': 'trackpad' })
@@ -178,10 +179,10 @@ it('draws the map in its colors, then branches, then buses, and credits the map'
   expect(kinds).toEqual(['areas', 'edges', 'vertices'])
   expect(scene.marks![0]).toMatchObject({ color: LOOK.map.water })
   expect(scene.title).toEqual({ text: '', subtitle: '© the map', place: 'bottom-right' })
-  expect(scene.space).toMatchObject({ earth: { graticule: false } })
+  expect(scene.space).toMatchObject({ earth: { grid: 'off' } })
   // Without a map, lines of longitude and latitude give the bearings, and nothing is credited.
   const bare = networkScene(data, drawing, reader(), LOOK, [])
-  expect(bare.space).toMatchObject({ earth: { graticule: true } })
+  expect(bare.space).toMatchObject({ earth: { grid: 'lines' } })
   expect(bare.title).toBeNull()
   // The sun is placed at the time given, so every scene of one view is lit the same.
   expect(networkScene(data, drawing, reader(), LOOK, [], undefined, 1000).space).toMatchObject({

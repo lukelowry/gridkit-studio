@@ -32,6 +32,18 @@ it("names each file of a field's tiles as latkit resolves it, and reads the name
   expect(() => tileRequest('https://tiles/frames.json')).toThrow('Not a file of results')
 })
 
+it("draws every plot of a field from the same tiles, and lets go of other results' tiles", () => {
+  const first = resultTiles('run 1', 'Bus', 'Vm')
+  // latkit shares what it fetched only among the views of one Tiles.
+  expect(resultTiles('run 1', 'Bus', 'Vm')).toBe(first)
+  expect(resultTiles('run 1', 'Bus', 'Vm', 7)).not.toBe(first)
+  expect(resultTiles('run 1', 'Bus', 'Vm')).toBe(first)
+  // New results replace what is held, so the old tiles go once no plot draws them.
+  const next = resultTiles('run 2', 'Bus', 'Vm')
+  expect(next).not.toBe(first)
+  expect(resultTiles('run 1', 'Bus', 'Vm')).not.toBe(first)
+})
+
 it('refreshes as a run grows, and once more after a draw for what arrived during it', async () => {
   const refresh = vi.fn()
   let draw!: () => void

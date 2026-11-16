@@ -98,6 +98,7 @@ try {
     'solver/DynamicSimulation.wasm',
     'solver/build.json',
     'webview/latkit.wasm',
+    'webview/latkit-jobs.wasm',
     'webview/download.js',
     'webview/latkit-worker.js',
     'licenses/latkit-NOTICES.md',

@@ -1,8 +1,17 @@
-import { Data, field, type Mark, type TableInput, Tiles, when, zoom } from 'latkit'
+import {
+  Data,
+  field,
+  type Mark,
+  type TableInput,
+  Tiles,
+  type TilesDescription,
+  when,
+  zoom,
+} from 'latkit'
 
 import { type Basemap, BASEMAPS } from '../../shared/basemaps.js'
 import type { SettingsReader } from '../../shared/settings.js'
-import { asset } from './load.js'
+import { asset, loadLatkit } from './load.js'
 import type { MapColors } from './theme.js'
 
 /** A map under the Network: its datasets, read once per page, and its marks in any colors, so a
@@ -17,11 +26,11 @@ export interface Background {
 export const NO_MAP: Background = { sources: [], marks: () => [] }
 
 /** The map the settings choose for a case: tiles at a URL, the included map without one, or null
- *  for none. Custom without a URL is none. */
+ *  for none. Custom without a URL is none, and only Custom takes the Attribution setting. */
 function chosen(
   settings: SettingsReader,
   geographic: boolean,
-): Pick<Basemap, 'url' | 'attribution'> | null {
+): (Pick<Basemap, 'url'> & { readonly attribution?: string }) | null {
   const id = geographic ? settings.get('map.basemap') : 'none'
   if (id === 'none') return null
   if (id === 'custom') {
@@ -29,17 +38,25 @@ function chosen(
     const attribution = settings.get('map.attribution').trim()
     return url ? { url, ...(attribution && { attribution }) } : null
   }
-  const { url, attribution }: Basemap = BASEMAPS[id]
-  return { url, attribution }
+  const { url }: Basemap = BASEMAPS[id]
+  return { url }
 }
 
 /** What `mapOf` reads; the map is read again only when this changes. */
 export const mapKey = (settings: SettingsReader, geographic: boolean): string =>
   JSON.stringify(chosen(settings, geographic))
 
-export async function mapOf(settings: SettingsReader, geographic: boolean): Promise<Background> {
+/** The map the settings choose. Tiles are asked what they hold first, so a map that cannot be
+ *  reached fails here; `signal` ends that wait. */
+export async function mapOf(
+  settings: SettingsReader,
+  geographic: boolean,
+  signal?: AbortSignal,
+): Promise<Background> {
   const map = chosen(settings, geographic)
   if (!map) return NO_MAP
+  // latkit loads from the page's assets before a read below asks it to load from its own.
+  await loadLatkit()
   if (!map.url) {
     const data = await naturalEarth()
     // GeoJSON tables are named by geometry: the polygons are water and the lines boundaries.
@@ -49,11 +66,29 @@ export async function mapOf(settings: SettingsReader, geographic: boolean): Prom
     }
   }
   const tiles = tilesAt(map.url)
+  return tileMap(tiles, await tiles.describe(signal ? { signal } : {}), map.attribution)
+}
+
+/** `tiles` as a map, given what their source `said` of itself. It draws the OpenMapTiles layers
+ *  the source lists, or all of them when it lists none, as a URL template does. It is credited
+ *  with `attribution`, or without one as the source asks. */
+export function tileMap(tiles: Tiles, said: TilesDescription, attribution?: string): Background {
+  const listed = new Set(said.layers.map((layer) => layer.name))
+  const layers = LAYERS.filter((layer) => !listed.size || listed.has(layer))
+  const credit = attribution ?? textOf(said.attribution)
   return {
     sources: [tiles],
-    marks: style(Object.fromEntries(LAYERS.map((layer) => [layer, [tiles.name, layer]]))),
-    attribution: map.attribution,
+    marks: style(Object.fromEntries(layers.map((layer) => [layer, [tiles.name, layer]]))),
+    ...(credit && { attribution: credit }),
   }
+}
+
+/** A source's credit as text. A source may write it as HTML, which the scene's title cannot
+ *  show. */
+function textOf(credit: string | null): string {
+  if (!credit) return ''
+  const text = new DOMParser().parseFromString(credit, 'text/html').body.textContent
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 let included: Promise<Data> | undefined
@@ -71,7 +106,8 @@ function naturalEarth(): Promise<Data> {
 
 const tiles = new Map<string, Tiles>()
 
-/** One `Tiles` per URL for the page's life. */
+/** One `Tiles` per URL for the page's life. latkit keeps what it fetched while a `Tiles` lives, so
+ *  a Network that was hidden draws its map again without fetching it. */
 function tilesAt(url: string): Tiles {
   let found = tiles.get(url)
   if (!found) tiles.set(url, (found = new Tiles('map:tiles', url)))

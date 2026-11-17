@@ -259,14 +259,16 @@ export function networkScene(
           earth: {
             projection: settings.get('network.projection'),
             daylight,
-            graticule: !background.sources.length,
+            grid: background.sources.length ? 'off' : 'lines',
           },
         }
       : 'plane',
     layout: { stress: { gap: GAP } },
     theme: look.theme,
     ease: settings.get('network.transitionDuration'),
-    controls: { ...controls(settings, 'network'), cycle: true },
+    // Only the space limits the camera. A fit would keep it near the case, but a view that opens
+    // at a saved camera never fits, so the two would move differently.
+    controls: { ...controls(settings, 'network'), cycle: true, reach: 'space' },
     // Map, then branches, then buses. latkit draws elevated rows lowest first, so overlaps
     // resolve correctly from any camera.
     marks: [...background.marks(look.map), ...edges, ...vertices],

@@ -1,7 +1,7 @@
 {
   "name": "gridkit-studio",
   "displayName": "GridKit Studio",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "View and simulate GridKit power-system cases in VS Code.",
   "publisher": "lukelowery",
   "author": "Luke Lowery",
@@ -73,7 +73,7 @@
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "jsonc-parser": "3.3.1",
-    "latkit": "0.8.0",
+    "latkit": "0.10.0",
     "vscode-uri": "^3.2.0"
   },
   "devDependencies": {
@@ -1289,7 +1289,7 @@
             "default": "",
             "scope": "resource",
             "order": 4,
-            "markdownDescription": "The credit shown under the Custom map.",
+            "markdownDescription": "The credit shown under the Custom map. Leave empty for the credit its tiles ask for.",
             "type": "string"
           },
           "gridkitStudio.map.daylight": {

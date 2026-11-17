@@ -14,10 +14,18 @@ export function asset(name: string): string {
   return value
 }
 
-/** Loads latkit once per page, retrying after a failure. The worker is on the webview's resource
- *  origin, so latkit fetches it through the page and starts it from a blob. */
-export const loadLatkit = (): Promise<void> =>
-  load({ wasm: asset('latkit-wasm'), worker: asset('latkit-worker') })
+/** Loads latkit once per page, retrying after a failure. Its assets come as a set, beside the
+ *  page's bundles: the module that draws, the jobs module, and the worker that runs the jobs. The
+ *  worker is on the webview's resource origin, so latkit fetches it through the page and starts it
+ *  from a blob. */
+export function loadLatkit(): Promise<void> {
+  const at = (file: string) => new URL(file, asset('latkit-assets')).href
+  return load({
+    wasm: at('latkit.wasm'),
+    jobs: at('latkit-jobs.wasm'),
+    worker: at('latkit-worker.js'),
+  })
+}
 
 export async function openGpu(): Promise<Gpu> {
   await loadLatkit()

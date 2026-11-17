@@ -3,7 +3,15 @@
   import type { Id } from 'latkit'
   import { onMount, tick } from 'svelte'
 
-  import { changedTable, display, rowsOf, shownColumns, shownType } from '../../shared/cells.js'
+  import {
+    cellText,
+    changedTable,
+    emptyText,
+    grown,
+    rowsOf,
+    shownColumns,
+    shownType,
+  } from '../../shared/cells.js'
   import type { TableRequest } from '../../shared/data.js'
   import {
     type Entity,
@@ -20,7 +28,7 @@
 
   type Row = ReturnType<typeof rowsOf>[number]
 
-  /** Row height in CSS pixels; matches the --spacing-row-h token. */
+  /** Row height in CSS pixels: the --spacing-row-h token, which each row is, border included. */
   const ROW_HEIGHT = 28
   const MOVE_KEYS = [
     'ArrowUp',
@@ -53,6 +61,16 @@
   /** Rows per page: those visible plus a scroll margin, at least 100. */
   const limit = $derived(Math.max(100, Math.ceil(viewport / ROW_HEIGHT) + 40))
   let loading = $state(false)
+  /** Whether the last page asked for arrived. A page that failed says nothing about the rows. */
+  let answered = $state(false)
+  /** The widest each column has measured, by type and field. A column takes the width of the rows
+   *  rendered, so without a floor it would resize as other rows scroll into view. */
+  let widths = $state.raw<Readonly<Record<string, number>>>({})
+  const widthKey = (field = '') => JSON.stringify([type, field])
+  const widthOf = (field?: string) => {
+    const width = widths[widthKey(field)]
+    return width ? width + 'px' : null
+  }
   let page = $state.raw<{ offset: number; rows: Row[] }>({ offset: 0, rows: [] })
   let scroll: HTMLDivElement
   let generation = 0
@@ -86,11 +104,17 @@
     const count = (summary.counts[type] ?? 0).toLocaleString()
     return `${typeLabel} · ${filter || equal ? `${total.toLocaleString()} of ${count}` : count}`
   })
-  /** Numbers to six significant digits; the tooltip shows the full value. */
-  const text = (value: unknown) =>
-    typeof value === 'number'
-      ? String(Number(value.toPrecision(6)))
-      : display(value, { native: true })
+  const empty = $derived(
+    emptyText({
+      open: !!viewState.uri,
+      read: !!summary,
+      unreadable: !!viewState.error,
+      rows: total,
+      loading,
+      answered,
+      filtered: !!(filter || equal),
+    }),
+  )
   const mapped = $derived(
     new Map(
       fields.flatMap((field) => {
@@ -192,19 +216,31 @@
       if (generation !== current) return
       page = { offset: result.offset, rows: rowsOf(result) }
       total = result.total
+      answered = true
       // The view's title shows the filtered row count.
       if (total !== reportedTotal) bridge.send({ kind: 'rows', total: (reportedTotal = total) })
       await tick()
+      measure()
       if (pendingFocus && pendingFocus.row >= at && pendingFocus.row < at + page.rows.length) {
         focusCell(pendingFocus.row, pendingFocus.column)
         pendingFocus = undefined
       }
       scrollToSelected()
     } catch (reason) {
-      if (generation === current && !request.signal.aborted) bridge.report(reason)
+      if (generation === current && !request.signal.aborted) {
+        answered = false
+        bridge.report(reason)
+      }
     } finally {
       if (generation === current) loading = false
     }
+  }
+  /** Keeps each column at least as wide as it has been. */
+  function measure() {
+    const measured: Record<string, number> = {}
+    for (const header of scroll?.querySelectorAll<HTMLElement>('thead th:not(.case__fill)') ?? [])
+      measured[widthKey(header.dataset.field)] = Math.ceil(header.getBoundingClientRect().width)
+    widths = grown(widths, measured)
   }
   $effect(() => {
     generation++
@@ -312,6 +348,8 @@
           controller?.abort()
           page = { offset: 0, rows: [] }
           total = 0
+          answered = false
+          widths = {}
         }
         // Adopt the session's table when it changes there, by a command or a change made here.
         if (otherCase || viewState.table !== sessionTable) {
@@ -355,7 +393,12 @@
     <table aria-label={type + ' fields'} aria-rowcount={total + 1}>
       <thead>
         <tr>
-          <th scope="col" class="case__corner" title={identity && `${typeLabel} ${identity}`}>
+          <th
+            scope="col"
+            class="case__corner"
+            style:min-width={widthOf()}
+            title={identity && `${typeLabel} ${identity}`}
+          >
             {corner}
           </th>
           {#each fields as field (field)}
@@ -364,6 +407,7 @@
               scope="col"
               aria-sort={order?.field === field ? order.direction : 'none'}
               data-field={field}
+              style:min-width={widthOf(field)}
             >
               <button onclick={() => sort(field)} title={field}>
                 {headers.get(
@@ -421,7 +465,7 @@
                     ? String(row.values[field])
                     : undefined}
                 >
-                  {text(row.values[field])}
+                  {cellText(row.values[field])}
                 </button>
               </td>
             {/each}
@@ -437,18 +481,8 @@
           </tr>{/if}
       </tbody>
     </table>
-    {#if !viewState.uri || (!summary && !viewState.error) || (summary && !total && !loading)}
-      <div class="c-empty">
-        <p class="c-empty__text">
-          {!viewState.uri
-            ? 'Open a GridKit case.'
-            : !summary
-              ? 'Loading case…'
-              : filter || equal
-                ? 'No elements match the filter.'
-                : 'This case has no elements.'}
-        </p>
-      </div>
+    {#if empty}
+      <div class="c-empty"><p class="c-empty__text">{empty}</p></div>
     {/if}
   </div>
 </main>
@@ -510,11 +544,12 @@
     margin-inline-start: var(--spacing-2xs);
     color: var(--color-text-1);
   }
+  /* A cell's height includes its border, so its button leaves the border's pixel free. */
   th button,
   .cell {
     display: block;
     width: 100%;
-    min-height: var(--spacing-row-h);
+    min-height: calc(var(--spacing-row-h) - 1px);
     max-width: 28rem;
     padding: var(--spacing-xs);
     overflow: hidden;

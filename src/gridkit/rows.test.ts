@@ -95,6 +95,68 @@ it('projects reference identities before fields and queries lazily', async () =>
   ).rejects.toThrow('Unknown field')
 })
 
+it('orders a text column itself, since a query sorts only numbers', async () => {
+  const names = ['bus 10', 'Bus 9', '', 'alpha', 'bus 10']
+  const ids = [5, 4, 3, 2, 1]
+  const texts: CaseColumns = {
+    key: 'texts',
+    definition: {
+      tables: [
+        {
+          name: 'Bus',
+          label: 'Bus',
+          labelField: 'name',
+          fields: [
+            { name: '@studio.label', kind: 'text', label: 'Label' },
+            { name: 'name', kind: 'text', label: 'Name' },
+            { name: 'v', kind: 'number', label: 'Voltage' },
+          ],
+        },
+      ],
+      drawing: { geographic: false, vertices: [], edges: [] },
+    },
+    tables: new Map([
+      [
+        'Bus',
+        {
+          ids,
+          read: (name: string, offset: number, count: number) =>
+            (name === 'v'
+              ? Float64Array.of(1, 2, 3, 4, 5)
+              : name === 'name'
+                ? names
+                : ids.map(String)
+            ).slice(offset, offset + count),
+        },
+      ],
+    ]),
+  }
+  const queries = new CaseQueries(texts)
+  try {
+    const page = (request: Partial<Parameters<CaseQueries['page']>[0]>) =>
+      queries.page({ table: 'Bus', fields: ['name'], offset: 0, limit: 10, ...request }, signal)
+    const ascending = { field: 'name', direction: 'ascending' } as const
+    const descending = { field: 'name', direction: 'descending' } as const
+    // Letters without regard to case and digits by value. Equal names keep their order, and a row
+    // without a name comes last either way.
+    expect((await page({ order: ascending })).ids).toEqual([2, 4, 5, 1, 3])
+    expect((await page({ order: descending })).ids).toEqual([5, 1, 4, 2, 3])
+    const second = await page({ order: ascending, offset: 1, limit: 2 })
+    expect(second.ids).toEqual([4, 5])
+    expect(second.total).toBe(5)
+    // The filter, the rows asked for and an anchor all follow that order.
+    expect((await page({ order: descending, search: 'us 1' })).ids).toEqual([5, 1])
+    expect((await page({ order: ascending, ids: [1, 2] })).ids).toEqual([2, 1])
+    expect(await page({ order: ascending, anchor: 1 })).toMatchObject({ anchored: true, offset: 0 })
+    // A number column is still sorted by the query.
+    expect((await page({ order: { field: 'v', direction: 'descending' } })).ids).toEqual([
+      1, 2, 3, 4, 5,
+    ])
+  } finally {
+    queries.destroy()
+  }
+})
+
 it('queries typed fields in empty tables', async () => {
   const empty: CaseColumns = {
     ...document,

@@ -4,11 +4,9 @@ export interface Basemap {
   readonly label: string
   /** Shown with the choice in Settings. */
   readonly description: string
-  /** Vector tiles in OpenMapTiles' layers. Natural Earth is included, and Custom reads the Tiles
-   *  URL setting. */
+  /** Vector tiles in OpenMapTiles' layers, credited as they ask. Natural Earth is included, and
+   *  Custom reads the Tiles URL setting. */
   readonly url?: string
-  /** The credit shown under the map. */
-  readonly attribution?: string
 }
 
 export const BASEMAPS = {
@@ -20,7 +18,6 @@ export const BASEMAPS = {
     label: 'OpenFreeMap',
     description: 'OpenStreetMap streets from openfreemap.org, fetched as you move. No key.',
     url: 'https://tiles.openfreemap.org/planet',
-    attribution: '© OpenStreetMap contributors · OpenFreeMap',
   },
   custom: {
     label: 'Custom',

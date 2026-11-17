@@ -204,7 +204,10 @@ export const SETTINGS = {
     '',
     "The Custom map's vector tiles, in OpenMapTiles' layers: a PMTiles archive, a TileJSON document, or a {z}/{x}/{y} URL.",
   ),
-  'map.attribution': text('', 'The credit shown under the Custom map.'),
+  'map.attribution': text(
+    '',
+    'The credit shown under the Custom map. Leave empty for the credit its tiles ask for.',
+  ),
   'map.daylight': bool(false, "Shade the map by the sun's position now."),
   'map.nightBrightness': num(0.3, [0, 1], 'Brightness of the night side, from 0 to 1.'),
 

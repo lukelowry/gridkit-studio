@@ -15,7 +15,8 @@ export class FrameWindow {
   #key = ''
   #pending?: Promise<boolean>
   #range?: TimeRange
-  #requested?: TimeRange
+  #requested?: FrameRequest
+  #published?: FrameRequest
   #version?: number
 
   get loading(): Promise<boolean> | undefined {
@@ -28,8 +29,17 @@ export class FrameWindow {
   get range(): TimeRange | undefined {
     return this.#range
   }
-  get requested(): TimeRange | undefined {
+  get requested(): FrameRequest | undefined {
     return this.#requested
+  }
+  covers(at: number, exact: boolean): boolean {
+    const range = this.#range
+    const request = this.#published
+    if (!range || !request || at < range[0] || at > range[1]) return false
+    if (!exact) return true
+    // A lookahead frame may be the first of two values at a fault timestamp.
+    // An exact seek there must read the last one. Playback windows also skip samples.
+    return request.step === 0 && (at < range[1] || at === request.range[0])
   }
   /** The results' frame count when the loaded frames were read. */
   get version(): number | undefined {
@@ -48,7 +58,7 @@ export class FrameWindow {
     const abort = () => controller.abort(signal?.reason)
     signal?.addEventListener('abort', abort, { once: true })
     this.#key = key
-    this.#requested = request.range
+    this.#requested = request
     const task = (async () => {
       try {
         await loadLatkit()
@@ -62,6 +72,7 @@ export class FrameWindow {
           controller.signal,
         )
         if (published) {
+          this.#published = request
           this.#range = this.data?.describe().span ?? undefined
           this.#version = version
         }
@@ -85,6 +96,7 @@ export class FrameWindow {
     this.#pending = undefined
     this.#range = undefined
     this.#requested = undefined
+    this.#published = undefined
     this.#version = undefined
     this.slot.clear()
   }
@@ -113,9 +125,6 @@ interface Lane {
   next: FrameWindow
   failed?: string
 }
-
-const windowCovers = (window: FrameWindow, at: number) =>
-  !!window.range && at >= window.range[0] && at <= window.range[1]
 
 interface Listener {
   changed(): void
@@ -167,7 +176,7 @@ export class PlayheadFeed {
     for (const sampled of fields) {
       const lane = this.#lane(sampled)
       if (!playing) lane.next.clear()
-      else if (!windowCovers(lane.now, at) && windowCovers(lane.next, at)) {
+      else if (!lane.now.covers(at, false) && lane.next.covers(at, false)) {
         // Played into the window read ahead.
         ;[lane.now, lane.next] = [lane.next, lane.now]
         lane.next.clear()
@@ -176,10 +185,16 @@ export class PlayheadFeed {
       if (lane.failed === moment) continue
       lane.failed = undefined
       const requested = lane.now.requested
-      if (lane.now.loading && requested && at >= requested[0] && at <= requested[1])
+      if (
+        lane.now.loading &&
+        requested &&
+        (playing || requested.step === 0) &&
+        at >= requested.range[0] &&
+        at <= requested.range[1]
+      )
         waits.push(lane.now.loading)
       else if (
-        !windowCovers(lane.now, at) ||
+        !lane.now.covers(at, !playing) ||
         // Paused past the last frame of a growing run: read again to show the frames since.
         (!playing && lane.now.version !== results.frames && at >= lane.now.range![1])
       ) {
@@ -234,11 +249,10 @@ export class PlayheadFeed {
     return [...this.#lanes.values()].flatMap(({ now }) => (now.data ? [now.data] : []))
   }
 
-  covers(fields: readonly Sampled[], at: number): boolean {
-    return fields.every(([table, field]) => {
-      const lane = this.#lanes.get(keyOf(table, field))
-      return !!lane && windowCovers(lane.now, at)
-    })
+  covers(fields: readonly Sampled[], at: number, exact = false): boolean {
+    return fields.every(([table, field]) =>
+      this.#lanes.get(keyOf(table, field))?.now.covers(at, exact),
+    )
   }
 
   get spans(): { span?: TimeRange; pending: boolean }[] {

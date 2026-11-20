@@ -2,21 +2,16 @@ import { type Fit, type Scene, View } from 'latkit'
 
 import { clearStopped } from './load.js'
 
-/** A latkit view on a canvas, used by the Network and each Monitor plot. Marks the canvas once a
- *  frame draws it completely, and skips scene updates that would draw the same. */
+/** A latkit view on a canvas, marked ready once its first complete frame draws. */
 export class CanvasView {
   readonly #lifetime = new AbortController()
   #fitting = Promise.resolve()
-  #sceneKey: string
 
   private constructor(
     readonly view: View,
     readonly canvas: HTMLCanvasElement,
-    scene: Scene,
     readonly fail: (error: unknown) => void,
-  ) {
-    this.#sceneKey = JSON.stringify(scene)
-  }
+  ) {}
 
   /** `drawn` is called once a frame first draws the view completely. */
   static async open(
@@ -26,7 +21,7 @@ export class CanvasView {
     fail: (error: unknown) => void,
     drawn?: () => void,
   ): Promise<CanvasView> {
-    const opened = new CanvasView(await View.create(canvas, scene, options), canvas, scene, fail)
+    const opened = new CanvasView(await View.create(canvas, scene, options), canvas, fail)
     void opened.view.done({ signal: opened.lifetime }).then(() => {
       canvas.dataset.rendered = 'true'
       clearStopped()
@@ -38,13 +33,6 @@ export class CanvasView {
   /** Aborts when the view is destroyed, ending every wait on latkit. */
   get lifetime(): AbortSignal {
     return this.#lifetime.signal
-  }
-
-  set scene(scene: Scene) {
-    const key = JSON.stringify(scene)
-    if (key === this.#sceneKey) return
-    this.#sceneKey = key
-    this.view.scene = scene
   }
 
   /** Applies `fit` once the rows are placed, however long they take to arrive. */

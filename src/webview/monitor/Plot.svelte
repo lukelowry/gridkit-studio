@@ -1,6 +1,5 @@
 <script lang="ts">
-  import type { Gpu, Id, View } from 'latkit'
-  import { untrack } from 'svelte'
+  import type { Gpu, Id, Tiles, View } from 'latkit'
 
   import type { ExactSample, TimeRange } from '../../shared/data.js'
   import { fieldDefinition } from '../../shared/document.js'
@@ -14,7 +13,7 @@
   import type { CanvasView } from '../latkit/canvas.js'
   import { bindInteractions } from '../latkit/interactions.js'
   import LatkitCanvas from '../latkit/LatkitCanvas.svelte'
-  import { refresher, resultTiles } from '../latkit/results.js'
+  import { refreshResults } from '../latkit/results.js'
   import { plotScene } from '../latkit/scenes.js'
   import { nativeTheme } from '../latkit/theme.js'
   import { contextOf, nativeMenu } from '../menu.js'
@@ -22,6 +21,7 @@
 
   let {
     monitor,
+    tiles,
     viewState,
     gpu,
     active,
@@ -34,6 +34,7 @@
     onerror,
   }: {
     monitor: Monitor
+    tiles: Tiles
     viewState: ViewState
     gpu: Gpu
     active: boolean
@@ -46,12 +47,7 @@
     onwindow: (range: TimeRange) => void
     onerror: (error: unknown) => void
   } = $props()
-  // The Monitor recreates a plot for new results, so its tiles stay fixed for its lifetime.
-  const tiles = untrack(() =>
-    resultTiles(viewState.results!.id, monitor.table, monitor.field, monitor.id),
-  )
   let plotView = $state.raw<View>()
-  let lifetime = new AbortController()
   let hoveredId = $state<Id>()
   let traceIndex = $state(0)
   let sample = $state.raw<ExactSample>()
@@ -84,26 +80,9 @@
     return `${String(sampleId)}: ${value}${unit ? ` ${unit}` : ''} · ${formatNumber(sample.at)} s`
   })
 
-  /** Refetches the tiles as the run records more, each time after the last refresh has drawn. */
-  const grow = refresher(tiles, () => plotView?.done({ signal: lifetime.signal }))
-  let refreshed = untrack(() => frames)
-  $effect(() => {
-    if (frames === refreshed) return
-    refreshed = frames
-    untrack(grow)
-  })
+  $effect(() => refreshResults(tiles, frames))
   $effect(() => {
     if (plotView) plotView.camera = camera
-  })
-  let unregister: (() => void) | undefined
-  $effect(() => {
-    const view = plotView
-    if (!view) return
-    const off = (unregister = untrack(() => register(view)))
-    return () => {
-      off()
-      if (unregister === off) unregister = undefined
-    }
   })
   $effect(() => {
     if (!plotView) return
@@ -151,7 +130,6 @@
 
   function ready({ view, canvas }: CanvasView) {
     plotView = view
-    lifetime = new AbortController()
     const disconnect = bindInteractions(view, canvas, {
       select(element) {
         bridge.send({
@@ -171,6 +149,7 @@
     const hover = view.on('hovered', ({ hit }) => {
       hoveredId = hit?.row.id
     })
+    const unregister = register(view)
     const seek = (event: PointerEvent) => {
       if (
         event.buttons ||
@@ -205,8 +184,7 @@
     hooks.gridkitPoint = (at, value) => view.screen([at, value, 0])
     hooks.gridkitRead = (point) => view.pick(point)
     return () => {
-      lifetime.abort()
-      unregister?.()
+      unregister()
       disconnect()
       hover()
       canvas.removeEventListener('pointermove', seek)
@@ -252,7 +230,6 @@
       {gpu}
       {scene}
       sources={[tiles]}
-      at={t}
       {active}
       {camera}
       onready={ready}

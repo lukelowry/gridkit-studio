@@ -1,6 +1,6 @@
 <!-- @component A latkit view on its own canvas. `onready` may return a cleanup. -->
 <script lang="ts">
-  import type { Camera, Gpu, Scene, Source } from 'latkit'
+  import type { Camera, Gpu, Scene, Source, View } from 'latkit'
   import { untrack } from 'svelte'
 
   import { CanvasView } from './canvas.js'
@@ -9,7 +9,6 @@
     gpu,
     scene,
     sources,
-    at,
     active = true,
     camera,
     onready,
@@ -20,8 +19,6 @@
     gpu: Gpu
     scene: Scene
     sources: readonly Source[]
-    /** The time to show, unless the owner sets it on the view itself. */
-    at?: number
     active?: boolean
     /** The initial camera; without one, the view fits everything. */
     camera?: Partial<Camera>
@@ -33,14 +30,21 @@
   } = $props()
 
   let canvasView = $state.raw<CanvasView>()
+  let failures = $state.raw<View['failures']>([])
 
   function attach(canvas: HTMLCanvasElement) {
     const device = gpu
     if (!active) return
-    let ended = false
+    const controller = new AbortController()
     let owned: CanvasView | undefined
     let disconnect: (() => void) | void
-    const options = untrack(() => ({ gpu: device, sources, ...(camera ? { camera } : {}) }))
+    let stopFailures: (() => void) | undefined
+    const options = untrack(() => ({
+      gpu: device,
+      sources,
+      signal: controller.signal,
+      ...(camera ? { camera } : {}),
+    }))
     void CanvasView.open(
       canvas,
       untrack(() => scene),
@@ -49,13 +53,15 @@
       () => untrack(() => ondrawn)?.(),
     ).then(
       (opened) => {
-        if (ended) {
+        if (controller.signal.aborted) {
           opened.destroy()
           return
         }
         owned = opened
         try {
           disconnect = untrack(() => onready(opened))
+          failures = opened.view.failures
+          stopFailures = opened.view.on('failures', (current) => (failures = current))
           canvasView = opened
         } catch (error) {
           opened.destroy()
@@ -64,12 +70,14 @@
         }
       },
       (error: unknown) => {
-        if (!ended) onerror(error)
+        if (!controller.signal.aborted) onerror(error)
       },
     )
     return () => {
-      ended = true
+      controller.abort()
       try {
+        stopFailures?.()
+        failures = []
         disconnect?.()
       } finally {
         owned?.destroy()
@@ -79,17 +87,24 @@
   }
 
   $effect(() => {
-    if (canvasView) canvasView.view.sources = sources
+    if (!canvasView) return
+    const current = canvasView.view.sources
+    if (sources.length !== current.length || sources.some((source, i) => source !== current[i]))
+      canvasView.view.sources = sources
   })
   $effect(() => {
-    if (canvasView) canvasView.scene = scene
-  })
-  $effect(() => {
-    if (canvasView && at !== undefined) canvasView.view.at = at
+    if (canvasView && canvasView.view.scene !== scene) canvasView.view.scene = scene
   })
 </script>
 
 <canvas {@attach attach} aria-label={label} tabindex="0"></canvas>
+{#if failures.length}
+  <div class="failures" role="status">
+    {#each failures as failure (failure)}
+      <div>{failure.message}</div>
+    {/each}
+  </div>
+{/if}
 
 <style>
   canvas {
@@ -97,5 +112,17 @@
     width: 100%;
     height: 100%;
     min-height: 0;
+  }
+
+  .failures {
+    position: absolute;
+    inset-inline-start: var(--spacing-xs);
+    inset-block-end: var(--spacing-xs);
+    max-inline-size: calc(100% - 2 * var(--spacing-xs));
+    padding: var(--spacing-xs);
+    background: var(--color-surface-1);
+    color: var(--color-text-1);
+    overflow-wrap: anywhere;
+    pointer-events: none;
   }
 </style>

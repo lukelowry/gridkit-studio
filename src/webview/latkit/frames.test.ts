@@ -146,6 +146,35 @@ test('a window read ahead is not a source until shown, since it shares the shown
   feed.clear()
 })
 
+test('a paused seek reads through duplicate fault timestamps and replaces a thinned playback window', async () => {
+  const feed = new PlayheadFeed()
+  const fields: Sampled[] = [['Bus', 'Vm']]
+  const pace = {
+    results: { id: 'run', frames: 8, domain: [0, 4] as const },
+    playing: false,
+    rate: 1,
+    frameRate: 60,
+  }
+  request.mockResolvedValueOnce(page([0, 1]))
+  await feed.ahead(fields, 0, pace)
+  expect(feed.covers(fields, 0.5, true)).toBe(true)
+  expect(feed.covers(fields, 1, true)).toBe(false)
+  request.mockResolvedValueOnce(page([1, 1.1]))
+  await feed.ahead(fields, 1, pace)
+  expect(feed.covers(fields, 1, true)).toBe(true)
+  request.mockResolvedValueOnce(page([2, 3, 4]))
+  await feed.ahead(fields, 2, { ...pace, playing: true })
+  expect(feed.covers(fields, 2.5, true)).toBe(false)
+  request.mockResolvedValueOnce(page([2.5, 2.6]))
+  await feed.ahead(fields, 2.5, pace)
+  expect(request).toHaveBeenLastCalledWith(
+    'frames',
+    expect.objectContaining({ range: [2.5, 2.5], step: 0 }),
+    expect.anything(),
+  )
+  feed.clear()
+})
+
 test('a read that failed is read again once the results or the playhead move, not every frame', async () => {
   const failed = vi.fn()
   const feed = new PlayheadFeed({ changed: vi.fn(), failed })

@@ -279,6 +279,12 @@ export function networkScene(
   }
 }
 
+/** Minimum automatic voltage ranges, in per unit and radians. */
+const voltageSpans = new Map([
+  ['Vm', 0.01],
+  ['Va', 0.05],
+])
+
 /** A plot of `monitor`'s traces, colored by `series`. The axes show only ticks, since the Monitor
  *  lists each monitor's name. Exports pass `name` to label the value axis. */
 export function plotScene(
@@ -289,7 +295,15 @@ export function plotScene(
   name?: string,
 ): Scene {
   return {
-    space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
+    space: {
+      plot: {
+        x: { unit: ' s' },
+        y: {
+          label: name ?? null,
+          minSpan: (monitor.table === 'Bus' && voltageSpans.get(monitor.field)) || null,
+        },
+      },
+    },
     theme,
     ease: 0,
     // Shift and drag zooms to a span of time, which becomes the Monitor's window.

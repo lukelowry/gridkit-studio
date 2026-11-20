@@ -8,6 +8,7 @@ import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
+import type { TileRequest } from '../../src/shared/data.js'
 import {
   idle,
   simpleDialog,
@@ -85,7 +86,8 @@ suite('Journeys', function () {
 
   test('a run of the solver file is followed live, then played', async function () {
     if (!(await bench.gridkit())) this.skip()
-    await bench.record(VM.table, [VM.field])
+    await bench.record(VM.table, [VM.field, 'Va'])
+    bench.session.showMonitor(VM)
     await bench.writeSolver({ tmax: 2, dt_monitor: 0.001, events: [] })
     bench.explorer('Run Dynamic Simulation')
     const monitor = await bench.view('monitor')
@@ -104,6 +106,40 @@ suite('Journeys', function () {
     await bench.playback('Previous Sample').click()
     await until(() => bench.session.transport.currentT() < end, 'the status bar steps back')
     await bench.capture('journey-run')
+
+    const angle = { table: 'Bus', field: 'Va' }
+    const worker = bench.studio.client.worker
+    const call = worker.call.bind(worker)
+    let offline = true
+    worker.call = (method, input, signal) => {
+      if (method === 'tile' && (input as TileRequest).field === angle.field && offline)
+        return Promise.reject(new Error('Tile temporarily unavailable'))
+      return call(method, input, signal)
+    }
+    try {
+      bench.session.split(angle)
+      const notice = monitor
+        .locator('.plot [role="status"]')
+        .filter({ hasText: 'Tile temporarily unavailable' })
+      await notice.waitFor({ state: 'visible' })
+      offline = false
+      await notice.waitFor({ state: 'detached' })
+    } finally {
+      worker.call = call
+    }
+    const together = `([from, to]) => {
+      const plots = gridkitMonitor().plots
+      return plots.length === 2 && plots[0].at === plots[1].at &&
+        plots[0].at >= from && plots[0].at <= to
+    }`
+    bench.session.transport.seek(0)
+    bench.session.transport.play()
+    await monitor.waitForFunction(together, [0.001, end - 0.001])
+    await bench.show('case')
+    bench.session.transport.pause()
+    bench.session.transport.seek(0.75)
+    const reopened = await bench.show('monitor')
+    await reopened.waitForFunction(together, [0.75, 0.75])
   })
 
   test('the Network is saved as a picture, and the Monitor as a video', async () => {

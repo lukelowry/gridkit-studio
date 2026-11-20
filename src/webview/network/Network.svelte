@@ -134,7 +134,7 @@
   )
 
   function covered(at: number): boolean {
-    return !sampled.length || feed.covers(sampled, at)
+    return !sampled.length || feed.covers(sampled, at, clock.state.status !== 'playing')
   }
 
   function prefetch(at: number) {

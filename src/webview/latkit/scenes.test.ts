@@ -60,9 +60,17 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   })
   // The Monitor's list names its monitors, so their axes show only ticks, and an exported plot
   // labels its value axis. Neither titles the time axis, whose last tick shows the unit.
-  expect(monitored.space).toEqual({ plot: { x: { unit: ' s' }, y: { label: null } } })
+  expect(monitored.space).toEqual({
+    plot: { x: { unit: ' s' }, y: { label: null, minSpan: 0.01 } },
+  })
   expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
-    plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm' } },
+    plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm', minSpan: 0.01 } },
+  })
+  expect(plotScene(data, { table: 'Bus', field: 'Va' }, settings, {}).space).toMatchObject({
+    plot: { y: { minSpan: 0.05 } },
+  })
+  expect(plotScene(data, { table: 'Branch', field: 'p1' }, settings, {}).space).toMatchObject({
+    plot: { y: { minSpan: null } },
   })
 })
 it('joins sparse sampled mappings by ID with a stable whole-run domain', () => {

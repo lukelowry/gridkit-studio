@@ -4,7 +4,7 @@ import type { TimeRange } from '../../shared/data.js'
 import type { Monitor, Results, ViewState } from '../../shared/messages.js'
 import { isRecorded, monitorName } from '../../shared/monitors.js'
 import { reader } from '../../shared/settings.js'
-import { resultTiles } from '../latkit/results.js'
+import type { ResultTiles } from '../latkit/results.js'
 import { plotScene } from '../latkit/scenes.js'
 import { plotCamera } from '../monitor/plot.js'
 
@@ -22,7 +22,11 @@ export async function plotViews(
   timeWindow: TimeRange,
   region: Rect,
   signal: AbortSignal,
-  { theme, direction }: { readonly theme: Theme; readonly direction: 'row' | 'column' },
+  {
+    sources,
+    theme,
+    direction,
+  }: { readonly sources: ResultTiles; readonly theme: Theme; readonly direction: 'row' | 'column' },
 ): Promise<PlotViews> {
   const settings = reader(state.settings)
   const monitors: Monitor[] = (state.shown ?? []).filter((monitor) => isRecorded(results, monitor))
@@ -32,7 +36,7 @@ export async function plotViews(
   }
   try {
     for (const [index, monitor] of monitors.entries()) {
-      const tiles = resultTiles(results.id, monitor.table, monitor.field, monitor.id)
+      const tiles = sources.field(monitor.table, monitor.field, monitor.id)
       const name = monitorName(state.summary?.definition, monitor)
       const scene = plotScene(tiles, monitor, settings, theme, name)
       const view = await View.create(null, scene, {

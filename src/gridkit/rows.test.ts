@@ -361,8 +361,12 @@ it('sends a view each table whole, in few pages however many its rows', async ()
   }))
   const document = await caseColumns(JSON.stringify({ buses }))
   using data = new Data('case')
+  const selection = [{ table: 'Bus', fields: ['name'] }]
+  const first = await caseRowsPage(document, selection, undefined, signal)
+  expect(first.next?.offset).toBe(4096)
+  expect(first.next?.count).toBeGreaterThan(first.next!.offset)
   // Ids, then names, in far fewer pages than rows.
-  expect(await loadPages(data, document, [{ table: 'Bus', fields: ['name'] }])).toBeLessThan(10)
+  expect(await loadPages(data, document, selection)).toBeLessThan(10)
   expect(data.query({ of: 'Bus' }).ids).toHaveLength(buses.length)
   expect(data.get('Bus', buses.length, 'name')).toBe('Bus ' + buses.length)
 })

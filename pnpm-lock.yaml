@@ -15,8 +15,8 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
       latkit:
-        specifier: 0.10.0
-        version: 0.10.0
+        specifier: 0.12.1
+        version: 0.12.1
       vscode-uri:
         specifier: ^3.2.0
         version: 3.2.0
@@ -1545,8 +1545,8 @@ packages:
     resolution: {integrity: sha512-NdsWJYxVzUuYt718DtEQRhUXqqsAPA4VlaUGrlidjh/T2TP/4OQXqQg4ouUHfHD9f+tgmwLZWPm+JQLgqM9YbA==}
     engines: {node: '>= 18'}
 
-  latkit@0.10.0:
-    resolution: {integrity: sha512-+m3k6TOZUjNCKP3/8ydbfyq8wIimgvHtHorFM6UZxlexaZWv6NXBmuNgGD+1/aABlZ424UPpoPwaebxGFYrBkQ==}
+  latkit@0.12.1:
+    resolution: {integrity: sha512-fP7OhqEA93lVDA/TeiJeZmR0GrBgtdvWKlSt0iVec4Vn/MV6DH6ObFu0uWEQH+cWinSXJ39dxN2sb7zCPU+++Q==}
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -3653,7 +3653,7 @@ snapshots:
       type-is: 2.1.0
       vary: 1.1.2
 
-  latkit@0.10.0: {}
+  latkit@0.12.1: {}
 
   levn@0.4.1:
     dependencies:

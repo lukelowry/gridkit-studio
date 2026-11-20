@@ -7,7 +7,8 @@ import { bridge } from '../bridge.js'
 import { CaseRows } from '../latkit/data.js'
 import { PlayheadFeed } from '../latkit/frames.js'
 import { openGpu } from '../latkit/load.js'
-import { type Background, mapOf, NO_MAP } from '../latkit/maps.js'
+import { mapOf } from '../latkit/maps.js'
+import { ResultTiles } from '../latkit/results.js'
 import {
   captionScene,
   caseFit,
@@ -73,27 +74,7 @@ async function compose(
       views.push(caption)
       placed.push({ view: caption, region: [0, 0, 1, band] })
     }
-    const network = job.views.includes('network')
-    const selection = network ? sceneFields(definition, state.mappings) : []
-    await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
-    const data = caseRows.slot.current!.data
-    const background: Background = network
-      ? await mapOf(settings, definition.drawing.geographic, signal)
-      : NO_MAP
-    signal.throwIfAborted()
-    const fields = network ? sampledFields(definition, state.mappings, results) : []
-    const sources = () => [data, ...background.sources, ...feed.sources]
-    const framing = network ? await bridge.request('framing', { uri: summary.uri }, signal) : null
-    let networkView: View | undefined
-    const pace = {
-      results: { ...results, domain: job.timeRange },
-      playing: job.format === 'video',
-      rate: job.rate,
-      frameRate: style['export.frameRate'],
-    }
-    // The Network's scene maps a sampled field only once its frames are loaded.
-    await feed.ahead(fields, job.timeRange[0], pace, signal)
-    changed = false
+    let prepareNetwork: Composition['prepare'] | undefined
     // A video's plots span the video, and an image's the Monitor's window.
     const window = job.format === 'video' ? job.timeRange : (videoTimes(state) ?? results.domain)
     const fill: Rect = [0, band, 1, 1 - band]
@@ -105,6 +86,7 @@ async function compose(
           : [0, fill[1] + index * share * fill[3], 1, share * fill[3]]
       if (kind === 'monitor') {
         const lanes = await plotViews(state, results, gpu, window, region, signal, {
+          sources: new ResultTiles(results.id),
           theme: themeOf('monitor'),
           direction:
             region[2] * style['export.width'] >= 2 * region[3] * style['export.height']
@@ -115,6 +97,21 @@ async function compose(
         views.push(...lanes.placed.map(({ view }) => view))
         continue
       }
+      const selection = sceneFields(definition, state.mappings)
+      await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
+      const data = caseRows.slot.current!.data
+      const background = await mapOf(settings, definition.drawing.geographic, signal)
+      const framing = await bridge.request('framing', { uri: summary.uri }, signal)
+      const fields = sampledFields(definition, state.mappings, results)
+      const pace = {
+        results: { ...results, domain: job.timeRange },
+        playing: job.format === 'video',
+        rate: job.rate,
+        frameRate: style['export.frameRate'],
+      }
+      // The first scene needs the sampled fields that will drive it.
+      await feed.ahead(fields, job.timeRange[0], pace, signal)
+      const sources = () => [data, ...background.sources, ...feed.sources]
       const scene = sceneOf(
         data,
         definition,
@@ -136,11 +133,17 @@ async function compose(
       // The user's framing in the Network if there is one, else the whole case.
       const view = await View.create(null, scene, {
         gpu,
+        signal,
         sources: sources(),
         ...(framing && { camera: framed(framing, size) }),
       })
       views.push(view)
-      networkView = view
+      changed = false
+      prepareNetwork = async (at, abort) => {
+        await feed.ahead(fields, at, pace, abort)
+        if (changed) view.sources = sources()
+        changed = false
+      }
       view.orbit = settings.get('network.orbit')
       if (!framing) {
         view.camera = { pitch: settings.get('network.tilt') }
@@ -154,9 +157,7 @@ async function compose(
       placed,
       release,
       async prepare(at, abort) {
-        await feed.ahead(fields, at, pace, abort)
-        if (changed && networkView) networkView.sources = sources()
-        changed = false
+        await prepareNetwork?.(at, abort)
         for (const view of views) view.at = at
         // The subtitle follows the time each frame shows.
         if (captionView) captionView.scene = captionScene(captionTheme, title, time(at))

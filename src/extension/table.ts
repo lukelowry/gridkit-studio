@@ -70,17 +70,16 @@ export function registerTable({ command, valuesOf }: Commands) {
     const type = shownTypeOf(context, summary)
     const visible = shownColumns(summary, table, type)
     const selected = await vscode.window.showQuickPick(
-      tableFields(summary, type).map((field) => ({
-        label: leaf(field),
-        description: [
-          field.includes('.') ? field.slice(0, field.indexOf('.')) : '',
-          fieldDefinition(definition, type, field)?.unit,
-        ]
-          .filter(Boolean)
-          .join(' · '),
-        field,
-        picked: visible.includes(field),
-      })),
+      tableFields(summary, type).map((field) => {
+        const group = field.includes('.') ? field.slice(0, field.indexOf('.')) : ''
+        const unit = fieldDefinition(definition, type, field)?.unit
+        return {
+          label: leaf(field),
+          description: [group, unit && `[${unit}]`].filter(Boolean).join(' '),
+          field,
+          picked: visible.includes(field),
+        }
+      }),
       { title: tableLabel(definition, type) + ' columns', canPickMany: true },
     )
     if (selected)

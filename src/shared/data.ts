@@ -19,7 +19,7 @@ export interface CaseRowsCursor {
   readonly phase: 'identities' | 'fields'
   readonly table: number
   readonly offset: number
-  /** The previous page's row count, used to size the next page. */
+  /** Suggested row count for the next page, based on the previous page's encoded size. */
   readonly count?: number
 }
 

@@ -12,7 +12,7 @@ import { LABEL } from '../shared/document.js'
 import type { CaseColumns } from './document.js'
 import { Turns } from './turns.js'
 
-/** Rows the Case panel's query columns load per step, between turns. */
+/** Initial rows per case page and rows loaded per turn for a Case panel query. */
 const ROWS_PER_STEP = 4096
 
 /** The fraction of a page rows are sized to fill, leaving room for slightly larger rows. */
@@ -48,7 +48,7 @@ function included(document: CaseColumns, selection: readonly FieldSelection[]) {
     if (tables.has(table)) throw new Error(`Repeated table: ${table}`)
     for (const name of fields) {
       const definitionField = definition.fields.find((item) => item.name === name)
-      if (!definitionField) throw new Error(`Unknown field: ${table}.${name}`)
+      if (!definitionField) throw new Error(`Unknown field “${name}” on ${table}.`)
       if (definitionField.kind === 'sampled') throw new Error('Sampled fields belong to results.')
     }
     tables.set(table, [...new Set(fields)])
@@ -66,7 +66,7 @@ function included(document: CaseColumns, selection: readonly FieldSelection[]) {
   return [...tables]
 }
 
-/** Stateless, bounded pages. A cursor carries the previous page's row count to size the next. */
+/** Stateless pages. Start each table and phase small, then size the next read from bytes per row. */
 export async function caseRowsPage(
   document: CaseColumns,
   selection: readonly FieldSelection[],
@@ -75,7 +75,7 @@ export async function caseRowsPage(
 ): Promise<CaseRowsPage> {
   const tables = included(document, selection)
   let { phase, table: index, offset } = cursor ?? { phase: 'identities', table: 0, offset: 0 }
-  const previousCount = cursor?.count
+  const suggested = cursor?.count
   if (
     (phase !== 'identities' && phase !== 'fields') ||
     !Number.isSafeInteger(index) ||
@@ -83,7 +83,7 @@ export async function caseRowsPage(
     index > tables.length ||
     !Number.isSafeInteger(offset) ||
     offset < 0 ||
-    (previousCount !== undefined && !(Number.isSafeInteger(previousCount) && previousCount >= 1))
+    (suggested !== undefined && !(Number.isSafeInteger(suggested) && suggested >= 1))
   )
     throw new Error('Invalid rows cursor.')
   const turns = new Turns(signal)
@@ -110,7 +110,7 @@ export async function caseRowsPage(
     const rows = table.ids.length - offset
     const { bytes, count } = await paged(
       rows,
-      offset > 0 && previousCount !== undefined ? previousCount : rows,
+      offset > 0 && suggested !== undefined ? suggested : ROWS_PER_STEP,
       (count) => {
         const values: Record<string, Fields[string]> = {}
         if (phase === 'fields') {
@@ -136,11 +136,15 @@ export async function caseRowsPage(
     if (phase === 'fields') {
       while (index < tables.length && tables[index]![1].length === 0) index++
     }
+    const nextCount = Math.max(
+      1,
+      Math.min(count * 2, Math.floor((count * FILL * PAGE_BYTES) / bytes.byteLength)),
+    )
     return {
       key: caseRowsKey(document, selection),
       bytes,
       ...(index < tables.length
-        ? { next: { phase, table: index, offset, ...(offset > 0 && { count }) } }
+        ? { next: { phase, table: index, offset, ...(offset > 0 && { count: nextCount }) } }
         : {}),
     }
   }
@@ -180,7 +184,7 @@ export class CaseQueries {
     for (const name of missing) {
       const field = definition.fields.find((item) => item.name === name)
       if (!field || field.kind === 'sampled')
-        throw new Error(`Not a static field: ${tableName}.${name}`)
+        throw new Error(`Field “${name}” on ${tableName} is not static.`)
     }
     if (!missing.length) return
     const turns = new Turns(signal)

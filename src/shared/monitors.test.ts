@@ -1,6 +1,30 @@
 import { expect, it } from 'vitest'
 
-import { shownOf, signalsOf } from './monitors.js'
+import { type CaseDefinition, fieldKey } from './document.js'
+import { monitorName, shownOf, signalsOf } from './monitors.js'
+
+it('keeps monitor names readable with and without a case definition', () => {
+  const document: CaseDefinition = {
+    tables: [
+      {
+        name: 'bus',
+        label: 'Bus',
+        labelField: 'name',
+        fields: [{ name: 'mon.Vm', label: 'Vm', kind: 'sampled', unit: 'p.u.' }],
+      },
+    ],
+    drawing: { geographic: false, vertices: [], edges: [] },
+  }
+  const monitor = { table: 'bus', field: 'mon.Vm' }
+  expect(monitorName(document, monitor)).toBe('Bus Vm [p.u.]')
+  expect(monitorName(document, { ...monitor, id: 0 })).toBe('Bus 0 Vm [p.u.]')
+  expect(monitorName(document, monitor, 'field')).toBe('Vm')
+  expect(monitorName(undefined, { table: 'Bus', field: 'Va', id: 'north' })).toBe('Bus north Va')
+})
+
+it('distinguishes fields whose names contain periods', () => {
+  expect(fieldKey({ table: 'A.B', field: 'C' })).not.toBe(fieldKey({ table: 'A', field: 'B.C' }))
+})
 
 it('lists the outputs of results once read, and before that what the case records', () => {
   const listed = { Bus: { Vm: 39, Va: 0 }, GENROU: { omega: 10 } }

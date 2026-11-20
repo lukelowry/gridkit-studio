@@ -8,7 +8,7 @@ import { nameOf } from '../platform/path.js'
 import { fileKey } from '../results/index.js'
 import { changedTable } from '../shared/cells.js'
 import type { ValueRange } from '../shared/data.js'
-import { type Entity, type Field, networkRole } from '../shared/document.js'
+import { type Entity, type Field, networkRole, sameField } from '../shared/document.js'
 import { defect, failedWith, message, quiet } from '../shared/errors.js'
 import { formatNumber } from '../shared/format.js'
 import { isCaseFile, savedKey, savedUri } from '../shared/ids.js'
@@ -33,7 +33,7 @@ import {
   type Summary,
   type TableState,
 } from '../shared/messages.js'
-import { sameField, shownOf, signalsOf } from '../shared/monitors.js'
+import { shownOf, signalsOf } from '../shared/monitors.js'
 import type { ExportSettings, ViewSettings } from '../shared/settings.js'
 import { Transport } from '../shared/transport.js'
 import { isDiagnosed, noCase, notice, SHOW_OUTPUT } from './report.js'
@@ -416,8 +416,8 @@ export class Session {
       const samples = `${(written?.frames ?? 0).toLocaleString()} samples`
       output.info(
         next.state === 'complete'
-          ? `■ ${next.command} finished · ${samples}`
-          : `■ ${next.command} stopped at t = ${formatNumber(written?.domain[1] ?? 0)} s · ${samples}`,
+          ? `■ ${next.command} finished (${samples})`
+          : `■ ${next.command} stopped at t = ${formatNumber(written?.domain[1] ?? 0)} s (${samples})`,
       )
     }
     this.#end(running, next)

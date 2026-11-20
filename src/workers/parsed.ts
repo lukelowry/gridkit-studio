@@ -22,7 +22,7 @@ export async function parseCase(
   file: Uint8Array,
   uri: string,
   catalog: Catalog,
-  version: string,
+  version: string | undefined,
   signal?: AbortSignal,
 ): Promise<Case> {
   try {

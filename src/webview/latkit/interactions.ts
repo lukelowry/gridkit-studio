@@ -37,10 +37,6 @@ export function bindInteractions(
     ),
     view.on('camera', actions.camera),
     view.on('error', actions.error),
-    // An option drawn as unset, or a mark not drawn at all, is a defect in Studio's scene.
-    view.on('failures', ([failure]) => {
-      if (failure) actions.error(failure)
-    }),
   ]
   return () => {
     canvas.removeEventListener('contextmenu', stopNativeMenu)

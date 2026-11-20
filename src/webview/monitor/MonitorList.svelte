@@ -7,13 +7,14 @@ focuses its plot, and a row's menu holds the rest. -->
 </script>
 
 <script lang="ts">
+  import { fieldKey, sameField } from '../../shared/document.js'
   import { CHANNELS, channelsOf } from '../../shared/mappings.js'
   import type { Monitor, ViewState } from '../../shared/messages.js'
-  import { monitorName, sameField } from '../../shared/monitors.js'
+  import { monitorName } from '../../shared/monitors.js'
   import { contextOf, nativeMenu } from '../menu.js'
   import Icon from '../ui/Icon.svelte'
 
-  /** Below this width, rows show only their icons. */
+  /** Below this width, show the field symbol. */
   const NARROW = 96
 
   let {
@@ -44,7 +45,8 @@ focuses its plot, and a row's menu holds the rest. -->
   let dragging = $state(false)
 
   const isShown = (monitor: Monitor) => shown.some((each) => sameField(each, monitor))
-  const nameOf = (monitor: Monitor) => monitorName(viewState.summary?.definition, monitor)
+  const nameOf = (monitor: Monitor, form: 'full' | 'field' = 'full') =>
+    monitorName(viewState.summary?.definition, monitor, form)
   const channels = (monitor: Monitor) =>
     channelsOf(viewState.mappings ?? {}, monitor).map((channel) => CHANNELS[channel].label)
   const menuOf = (monitor: Monitor) => contextOf(viewState, 'monitor', undefined, monitor)
@@ -126,9 +128,10 @@ focuses its plot, and a row's menu holds the rest. -->
     bind:this={list}
     onkeydown={keydown}
   >
-    {#each monitors as monitor, index (`${monitor.table}.${monitor.field}`)}
+    {#each monitors as monitor, index (fieldKey(monitor))}
       {@const selected = isShown(monitor)}
       {@const mapped = channels(monitor)}
+      {@const name = nameOf(monitor)}
       <!-- svelte-ignore a11y_click_events_have_key_events (The listbox handles the keys for its rows.) -->
       <div
         id={rowId(index)}
@@ -136,8 +139,9 @@ focuses its plot, and a row's menu holds the rest. -->
         class:monitor-row--focused={index === focus}
         role="option"
         tabindex="-1"
+        aria-label={name}
         aria-selected={selected}
-        title={nameOf(monitor)}
+        title={name}
         data-vscode-context={JSON.stringify(menuOf(monitor))}
         onclick={() => {
           focus = index
@@ -145,9 +149,8 @@ focuses its plot, and a row's menu holds the rest. -->
         }}
         ondblclick={() => onopen(monitor)}
       >
-        <span class="monitor-row__icon"><Icon name="graph" /></span>
+        <span class="monitor-row__name">{narrow ? nameOf(monitor, 'field') : name}</span>
         {#if !narrow}
-          <span class="monitor-row__name">{nameOf(monitor)}</span>
           {#if mapped.length}
             <span class="monitor-row__status" title={'On the Network as ' + mapped.join(', ')}>
               <Icon name="mapped" />
@@ -159,7 +162,7 @@ focuses its plot, and a row's menu holds the rest. -->
               type="button"
               tabindex="-1"
               title={selected ? 'Unsplit Monitor' : 'Split Monitor'}
-              aria-label={`${selected ? 'Unsplit' : 'Split'} ${nameOf(monitor)}`}
+              aria-label={`${selected ? 'Unsplit' : 'Split'} ${name}`}
               onclick={(event) => {
                 event.stopPropagation()
                 if (selected) onunsplit(monitor)
@@ -246,17 +249,12 @@ focuses its plot, and a row's menu holds the rest. -->
     outline-offset: -1px;
   }
 
-  .monitor-row__icon,
   .monitor-row__status {
     display: inline-flex;
     flex: none;
-  }
-
-  .monitor-row__status {
     color: var(--color-text-2);
   }
 
-  .monitor-row__icon :global(svg),
   .monitor-row__status :global(svg) {
     inline-size: 16px;
     block-size: 16px;
@@ -289,7 +287,6 @@ focuses its plot, and a row's menu holds the rest. -->
   }
 
   .monitors--narrow .monitor-row {
-    justify-content: center;
-    padding-inline: 0;
+    padding-inline: var(--spacing-2xs);
   }
 </style>

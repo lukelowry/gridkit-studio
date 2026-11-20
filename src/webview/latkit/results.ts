@@ -8,7 +8,7 @@ import { bridge } from '../bridge.js'
 
 const SCHEME = 'results:'
 
-/** Parses a URL that `resultTiles` made, or that latkit resolved against one. */
+/** Parses the manifest URL for a recorded field, or a tile URL resolved against it. */
 export function tileRequest(url: string): TileRequest {
   if (!url.startsWith(SCHEME)) throw new Error(`Not a file of results: ${url}`)
   const [results, table, field, rows, ...rest] = url
@@ -34,63 +34,36 @@ export function tileRequest(url: string): TileRequest {
   }
 }
 
-/** The tiles of the results last asked for, by URL. latkit shares what it fetched only among the
- *  views of one `Tiles`, and keeps it while that `Tiles` lives. So every plot of a field draws the
- *  same one, a plot that closes and opens again fetches nothing, and other results' tiles are let
- *  go. */
-let held: { readonly results: string; readonly tiles: Map<string, Tiles> } | undefined
-
-/** One file of results' tiles, for latkit. A request that something replaced has no answer: the
- *  page was shown another case, or the results closed or were read again. latkit reports any
- *  rejection as a failure of the tiles, and keeps it for as long as they live, yet the plot that
- *  asked is about to go. So such a request stays unanswered, and the tiles held are let go: a plot
- *  of what replaced them draws tiles of its own. */
+/** Latkit treats AbortError as a canceled read and retries real I/O failures. */
 export async function tile(url: string): Promise<Uint8Array> {
   try {
     return await bridge.request('tile', tileRequest(url))
   } catch (error) {
     if (!quiet(error)) throw error
-    held = undefined
-    return new Promise<never>(() => {})
+    throw new DOMException('The requested results are no longer current.', 'AbortError')
   }
 }
 
-/** Time tiles of `table`'s `field`: every recorded row, or only `id`. Named by their URL. */
-export function resultTiles(results: string, table: string, field: string, id?: Id): Tiles {
-  const rows = id === undefined ? '*' : JSON.stringify(id)
-  const url = `${SCHEME}${[results, table, field, rows].map(encodeURIComponent).join('/')}/frames.json`
-  if (held?.results !== results) held = { results, tiles: new Map() }
-  let tiles = held.tiles.get(url)
-  if (!tiles) held.tiles.set(url, (tiles = new Tiles(url, url, { fetch: tile })))
-  return tiles
+/** Shares fetched tiles among the plots of one result, for as long as the result is open. */
+export class ResultTiles {
+  readonly #sources = new Map<string, Tiles>()
+  constructor(readonly results: string) {}
+
+  field(table: string, field: string, id?: Id): Tiles {
+    const rows = id === undefined ? '*' : JSON.stringify(id)
+    const url = `${SCHEME}${[this.results, table, field, rows].map(encodeURIComponent).join('/')}/frames.json`
+    let source = this.#sources.get(url)
+    if (!source) this.#sources.set(url, (source = new Tiles(url, url, { fetch: tile })))
+    return source
+  }
 }
 
-/** Refreshes `tiles` as a run records more: at once, then again after `drawn` resolves if more
- *  arrived meanwhile. A fast run plots as often as the page can draw, and no fetch restarts. */
-export function refresher(
-  tiles: Pick<Tiles, 'refresh'>,
-  drawn: () => Promise<void> | undefined,
-): () => void {
-  let busy = false
-  let again = false
-  return () => {
-    if (busy) {
-      again = true
-      return
-    }
-    busy = true
-    void (async () => {
-      try {
-        do {
-          again = false
-          tiles.refresh()
-          // A view closed meanwhile has nothing left to draw.
-          await drawn()?.catch(() => {})
-        } while (again)
-      } finally {
-        // In the same task as the last check of `again`, so no refresh request is lost.
-        busy = false
-      }
-    })()
-  }
+const recorded = new WeakMap<Tiles, number>()
+
+/** A shared source needs one refresh per advance, including growth while its plots were closed. */
+export function refreshResults(tiles: Tiles, frames: number): void {
+  const previous = recorded.get(tiles)
+  if (previous !== undefined && frames <= previous) return
+  recorded.set(tiles, frames)
+  if (previous !== undefined) tiles.refresh()
 }

@@ -2,7 +2,7 @@
 
 import { Data } from 'latkit'
 
-import type { CaseRowsCursor, CaseRowsPage, FieldSelection } from '../../shared/data.js'
+import type { CaseRowsCursor, CaseRowsPage } from '../../shared/data.js'
 import type { ViewApi } from '../../shared/messages.js'
 import { bridge } from '../bridge.js'
 import { loadLatkit } from './load.js'
@@ -68,12 +68,8 @@ export class CaseRows {
   #request = ''
   #controller?: AbortController
 
-  async receive(
-    source: ViewApi['caseRows']['input'],
-    fields: readonly FieldSelection[],
-    abort?: AbortSignal,
-  ): Promise<boolean> {
-    const key = JSON.stringify([source, fields])
+  async receive(source: ViewApi['caseRows']['input'], abort?: AbortSignal): Promise<boolean> {
+    const key = JSON.stringify(source)
     if (key === this.#request) return false
     this.#controller?.abort()
     const controller = (this.#controller = new AbortController())
@@ -85,7 +81,7 @@ export class CaseRows {
     try {
       await loadLatkit()
       signal.throwIfAborted()
-      const first = await bridge.request('caseRows', { ...source, fields }, signal)
+      const first = await bridge.request('caseRows', source, signal)
       async function* pages() {
         let page: CaseRowsPage = first
         for (;;) {
@@ -93,7 +89,7 @@ export class CaseRows {
           yield page.bytes
           const cursor: CaseRowsCursor | undefined = page.next
           if (!cursor) return
-          page = await bridge.request('caseRows', { ...source, fields, cursor }, signal)
+          page = await bridge.request('caseRows', { ...source, cursor }, signal)
           if (page.key !== first.key) throw new Error('The case changed while its rows loaded.')
         }
       }

@@ -100,7 +100,10 @@ export class Case {
     const bytes = file
     let layout: Layout
     try {
-      layout = await scan(bytes, signal)
+      ;[version, layout] = await Promise.all([
+        version ?? versionOf(catalog, bytes),
+        scan(bytes, signal),
+      ])
     } catch (error) {
       // Report invalid JSON at the character where it fails.
       const byte = (error as { byte?: number }).byte
@@ -117,7 +120,6 @@ export class Case {
       }
     }
     const parsed = parser.finish()
-    version ??= await versionOf(catalog, bytes)
     const { kase, repeated } = built(bytes, layout, parsed, catalog, name, version)
     const problems = [...parsed.problems, ...repeated]
     if (!problems.length) return kase
@@ -208,7 +210,7 @@ export class Case {
           // No field positions vertices, so the layout does.
           if (NETWORK_POSITION.includes(field)) return new Float64Array(count).fill(NaN)
           const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
-          if (!column) throw problem('invalid-input', 'Unknown source field: ' + name + '.' + field)
+          if (!column) throw problem('invalid-input', `Unknown source field “${field}” on ${name}.`)
           const values = readColumn(column, offset, count)
           return column.target
             ? reference(

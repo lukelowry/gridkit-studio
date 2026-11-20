@@ -7,7 +7,7 @@ export interface WorkspaceApi {
   write: { input: { path: string; bytes: Uint8Array }; output: null }
   mkdir: { input: { path: string }; output: null }
   rename: { input: { from: string; to: string }; output: null }
-  remove: { input: { path: string }; output: null }
+  remove: { input: { path: string; recursive?: boolean; force?: boolean }; output: null }
   list: { input: { path: string }; output: [string, number][] }
 }
 import { answerer, Caller, type Cancel, type Reply, type Request } from '../shared/rpc.js'

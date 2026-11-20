@@ -1,9 +1,8 @@
 /** Context menu targets and the context keys that place menu items. */
 
-import { type Entity, type Field, fieldDefinition, tableDefinition } from './document.js'
+import { type Entity, type Field, fieldDefinition, sameField, tableDefinition } from './document.js'
 import { channelsOf, mappable, type Mappings, NUMERIC } from './mappings.js'
 import type { Monitor, Revision, Summary } from './messages.js'
-import { sameField } from './monitors.js'
 
 /** What a menu acts on: an element, one of its values, a Case panel column, a monitor, or the
  *  Monitor's list of them. */

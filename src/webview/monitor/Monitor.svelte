@@ -1,14 +1,16 @@
 <script lang="ts">
-  import type { View } from 'latkit'
+  import { Playhead, type View } from 'latkit'
   import { onMount, tick } from 'svelte'
 
   import type { TimeRange } from '../../shared/data.js'
+  import { fieldKey } from '../../shared/document.js'
   import type { Monitor, ViewState } from '../../shared/messages.js'
   import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
   import { imageOptions, picture, saveImage } from '../export/image.js'
   import { plotViews } from '../export/plots.js'
   import { LatkitPage } from '../latkit/page.svelte.js'
+  import { ResultTiles } from '../latkit/results.js'
   import { nativeTheme } from '../latkit/theme.js'
   import MonitorList, { LIST_WIDTH } from './MonitorList.svelte'
   import { monitorWindow, sameWindow, SETTLE_MS } from './plot.js'
@@ -23,10 +25,15 @@
   let area = $state<HTMLElement>()
   let areaSize = $state<readonly [number, number]>([0, 0])
   const views = new Set<View>()
+  let head: Playhead | undefined
+  let stopReading: (() => void) | undefined
+  let epoch: number | undefined
   const lifetime = new AbortController()
   let windowTimer: ReturnType<typeof setTimeout> | undefined
   const active = $derived(page.active)
   const results = $derived(viewState.results)
+  const resultId = $derived(results?.id)
+  const sources = $derived(resultId && new ResultTiles(resultId))
   const monitors = $derived(viewState.monitors ?? [])
   const shown = $derived(viewState.shown ?? [])
   /** Split plots sit side by side in a wide panel, as the Terminal splits in the bottom panel, and
@@ -39,10 +46,7 @@
     const next = monitorWindow(results, chosenWindow ?? viewState.window)
     return (previousWindow = sameWindow(previousWindow, next) ? previousWindow! : next)
   })
-  const clock = createClock((at) => {
-    t = at
-    if (active) for (const view of views) view.at = at
-  }, follow)
+  const clock = createClock(syncPlayback)
 
   $effect(() => bridge.save({ listWidth }))
   $effect(() => {
@@ -54,30 +58,49 @@
     return () => observer.disconnect()
   })
 
-  /** While playing, moves the playhead every frame; the readouts update four times a second. */
-  function follow() {
-    let reported = 0
-    page.follow(
-      !!views.size && clock.state.status === 'playing',
-      () => views,
-      () => {
-        const at = clock.now()
+  /** The host coordinates webviews. Within this Monitor, every plot draws the same native clock. */
+  function syncPlayback(at: number) {
+    if (!head) {
+      t = at
+      return
+    }
+    const state = clock.state
+    if (epoch !== state.epoch) head.pause()
+    epoch = state.epoch
+    head.span = state.span
+    if (state.follow) {
+      // Seeking a live head would restart its smoothing on every arriving batch.
+      if (!head.live) head.live = true
+    } else {
+      head.at = at
+      if (state.status === 'playing') head.play(state.rate)
+      else head.pause()
+    }
+    t = head.at
+  }
+  function register(view: View): () => void {
+    if (!head) {
+      head = new Playhead()
+      syncPlayback(clock.now())
+      let reported = 0
+      stopReading = head.on('at', (at) => {
         const now = performance.now()
         if (now - reported >= 250) {
           t = at
           reported = now
         }
-        return at
-      },
-    )
-  }
-  function register(view: View): () => void {
+      })
+    }
     views.add(view)
-    view.at = clock.now()
-    follow()
+    view.playhead = head
     return () => {
+      view.playhead = null
       views.delete(view)
-      follow()
+      if (!views.size) {
+        stopReading?.()
+        head?.destroy()
+        head = undefined
+      }
     }
   }
   /** Shows `monitor` and moves the keyboard to its plot. */
@@ -87,16 +110,14 @@
     // The plot appears once the extension shows it; wait a frame for its canvas.
     requestAnimationFrame(() =>
       area
-        ?.querySelector<HTMLElement>(
-          `[data-monitor="${CSS.escape(`${monitor.table}.${monitor.field}`)}"] canvas`,
-        )
+        ?.querySelector<HTMLElement>(`[data-monitor="${CSS.escape(fieldKey(monitor))}"] canvas`)
         ?.focus(),
     )
   }
   /** Exports the plots as the Monitor shows them. */
   async function exportImage() {
     const gpu = page.gpu
-    if (!gpu || !results || !viewState.uri || !viewState.summary || !area) return
+    if (!gpu || !results || !sources || !viewState.uri || !viewState.summary || !area) return
     const options = imageOptions(viewState.exportSettings)
     const plots = await plotViews(
       viewState,
@@ -106,12 +127,14 @@
       [0, 0, 1, 1],
       lifetime.signal,
       {
+        sources,
         theme: nativeTheme('monitor'),
         direction,
       },
     )
     try {
-      for (const { view } of plots.placed) view.at = t
+      const at = head?.at ?? clock.now()
+      for (const { view } of plots.placed) view.at = at
       await saveImage(
         picture([area.clientWidth, area.clientHeight], plots.placed, options),
         viewState.uri,
@@ -159,11 +182,6 @@
     clearTimeout(windowTimer)
     windowTimer = setTimeout(() => bridge.send({ kind: 'window', bounds: range }), SETTLE_MS)
   }
-  $effect(() => {
-    void active
-    void page.gpu
-    follow()
-  })
   onMount(() => {
     const off = bridge.on((message) => {
       if (message.kind === 'state') {
@@ -238,10 +256,11 @@
             to see its results here.
           </p>
         </div>
-      {:else if page.gpu}
+      {:else if page.gpu && sources}
         {#each shown as monitor (JSON.stringify( [results.id, monitor.table, monitor.field, monitor.id] ))}
           <Plot
             {monitor}
+            tiles={sources.field(monitor.table, monitor.field, monitor.id)}
             {viewState}
             gpu={page.gpu}
             {active}

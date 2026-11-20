@@ -5,7 +5,7 @@ import { basename } from '../platform/path.js'
 import { nameOf } from '../platform/path.js'
 import { shownType } from '../shared/cells.js'
 import { isRange } from '../shared/data.js'
-import { isEntity, tableLabel } from '../shared/document.js'
+import { isEntity, sameField, tableLabel } from '../shared/document.js'
 import { errorOf, problemOf, superseded } from '../shared/errors.js'
 import { commandId, isCaseFile, viewId } from '../shared/ids.js'
 import {
@@ -20,7 +20,7 @@ import {
   type ViewMessage,
   type ViewState,
 } from '../shared/messages.js'
-import { isField, monitorWith, sameField } from '../shared/monitors.js'
+import { isField, monitorWith } from '../shared/monitors.js'
 import { type Answerer, answerer, type Handlers } from '../shared/rpc.js'
 import { type DisplaySettings, isExportKey, validateSettings } from '../shared/settings.js'
 import { changes } from '../shared/state.js'
@@ -55,7 +55,7 @@ function describe(studio: Studio, kind: ViewKind, uri: string): string {
     if (results.solver) parts.push(basename(results.solver))
     if (results.frames) parts.push(`${results.frames.toLocaleString()} samples`)
   }
-  return parts.join(' · ')
+  return parts.join(', ')
 }
 
 /** Validates a Case panel table change; a part set to an invalid value is cleared. */

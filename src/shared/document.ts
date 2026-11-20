@@ -64,6 +64,14 @@ export function entityKey(entity: Entity): string {
   return JSON.stringify([entity.table, entity.id])
 }
 
+export function fieldKey({ table, field }: Field): string {
+  return JSON.stringify([table, field])
+}
+
+export function sameField(a: Field | undefined, b: Field): boolean {
+  return a !== undefined && a.table === b.table && a.field === b.field
+}
+
 export function entityLabel(entity: Entity): string {
   return `${entity.table} ${String(entity.id)}`
 }

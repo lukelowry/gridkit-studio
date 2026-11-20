@@ -98,7 +98,11 @@
   const mappings = $derived.by(() => {
     if (!loadedCase) return drawnMappings
     const { fields } = loadedCase
-    const asked = sceneFields(loadedCase.summary.definition, viewState.mappings)
+    const asked = sceneFields(
+      loadedCase.summary.definition,
+      viewState.mappings,
+      settings.get('network.labels'),
+    )
     if (asked.every((type) => type.fields.every((name) => fields.get(type.table)?.has(name))))
       drawnMappings = viewState.mappings ?? {}
     return drawnMappings
@@ -107,8 +111,14 @@
     void page.themeVersion
     void framesVersion
     if (!loadedCase) return undefined
-    const { data, summary } = loadedCase
-    return sceneOf(data, summary.definition, settings, networkLook(settings), {
+    const { data, summary, fields } = loadedCase
+    const waitingForLabels =
+      settings.get('network.labels') &&
+      summary.definition.drawing.vertices.some((v) => v.label && !fields.get(v.table)?.has(v.label))
+    const display = waitingForLabels
+      ? reader({ ...viewState.settings, 'network.labels': false })
+      : settings
+    return sceneOf(data, summary.definition, display, networkLook(settings), {
       mappings,
       results: viewState.results,
       sampled: feed.source,
@@ -134,7 +144,7 @@
   )
 
   function covered(at: number): boolean {
-    return !sampled.length || feed.covers(sampled, at)
+    return !sampled.length || feed.covers(sampled, at, clock.state.status !== 'playing')
   }
 
   function prefetch(at: number) {
@@ -242,7 +252,8 @@
   }
 
   $effect(() => {
-    void loadBackground()
+    // Let the fitted case draw before adding the geographic backdrop.
+    if (!busy) void loadBackground()
   })
   $effect(() => {
     const mapped = sampled
@@ -297,9 +308,13 @@
         }
         const next = viewState.summary
         if (next && !viewState.stale) {
-          const fields = sceneFields(next.definition, viewState.mappings)
+          const fields = sceneFields(
+            next.definition,
+            viewState.mappings,
+            reader(viewState.settings).get('network.labels'),
+          )
           void cases
-            .receive({ revision: revisionOf(next), fields }, fields)
+            .receive({ revision: revisionOf(next), fields })
             .then((changed) => {
               if (!changed || closed) return
               loadedCase = {
@@ -340,6 +355,7 @@
     const hooks = window as Window & {
       gridkitLifecycle?: () => unknown
       gridkitStats?: () => unknown
+      gridkitSample?: (field: string, bus: number) => Promise<unknown>
       gridkitSelection?: () => unknown
       gridkitLocate?: (entity: Entity) => unknown
       gridkitLose?: () => void
@@ -379,6 +395,21 @@
         ),
         camera: canvasView.view.camera,
       }
+    hooks.gridkitSample = async (field, bus) => {
+      const opened = canvasView
+      if (!opened) return null
+      const { view } = opened
+      // complete describes the last frame. A replacement source may still need its first draw.
+      await view.done({ signal: opened.lifetime })
+      const source = feed.source('Bus', field)
+      if (!source) return null
+      const snapshot = view.snapshot(source.name)
+      try {
+        return snapshot?.get('Bus', bus, field, { at: view.at }) ?? null
+      } finally {
+        snapshot?.destroy()
+      }
+    }
     hooks.gridkitLocate = (entity) =>
       canvasView && loadedCase
         ? canvasView.view.screenOf(

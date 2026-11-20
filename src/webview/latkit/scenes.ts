@@ -21,6 +21,8 @@ import {
   type Drawing,
   type Field,
   fieldDefinition,
+  fieldKey,
+  sameField,
   tableLabel,
 } from '../../shared/document.js'
 import { type Channel, CHANNELS, type Mappings } from '../../shared/mappings.js'
@@ -53,12 +55,14 @@ export function sampledFields(
 ): Array<readonly [table: string, field: string]> {
   const fields = new Map<string, readonly [string, string]>()
   if (results)
-    for (const { table, field } of Object.values(mappings))
+    for (const mapping of Object.values(mappings)) {
+      const { table, field } = mapping
       if (
         fieldDefinition(definition, table, field)?.kind === 'sampled' &&
-        results.outputs.some((output) => output.table === table && output.field === field)
+        results.outputs.some((output) => sameField(output, mapping))
       )
-        fields.set(JSON.stringify([table, field]), [table, field])
+        fields.set(fieldKey(mapping), [table, field])
+    }
   return [...fields.values()]
 }
 
@@ -124,9 +128,7 @@ export function stylesOf(
 ): Style[] {
   return Object.entries(mappings).flatMap(([channel, mapping]) => {
     const { option, placement } = CHANNELS[channel as Channel]
-    const recorded = outputs.find(
-      (output) => output.table === mapping.table && output.field === mapping.field,
-    )
+    const recorded = outputs.find((output) => sameField(output, mapping))
     const source = sampled(mapping.table, mapping.field)
     if (fieldDefinition(definition, mapping.table, mapping.field)?.kind === 'sampled' && !source)
       return []
@@ -279,6 +281,12 @@ export function networkScene(
   }
 }
 
+/** Minimum automatic voltage ranges, in per unit and radians. */
+const voltageSpans = new Map([
+  ['Vm', 0.01],
+  ['Va', 0.05],
+])
+
 /** A plot of `monitor`'s traces, colored by `series`. The axes show only ticks, since the Monitor
  *  lists each monitor's name. Exports pass `name` to label the value axis. */
 export function plotScene(
@@ -289,7 +297,15 @@ export function plotScene(
   name?: string,
 ): Scene {
   return {
-    space: { plot: { x: { unit: ' s' }, y: { label: name ?? null } } },
+    space: {
+      plot: {
+        x: { unit: ' s' },
+        y: {
+          label: name ?? null,
+          minSpan: (monitor.table === 'Bus' && voltageSpans.get(monitor.field)) || null,
+        },
+      },
+    },
     theme,
     ease: 0,
     // Shift and drag zooms to a span of time, which becomes the Monitor's window.
@@ -319,7 +335,11 @@ export function captionScene(theme: Theme, text: string, subtitle: string): Scen
 }
 
 /** The case fields the Network's marks read; sampled fields come from their own sources. */
-export function sceneFields(definition: CaseDefinition, mappings: Mappings = {}): FieldSelection[] {
+export function sceneFields(
+  definition: CaseDefinition,
+  mappings: Mappings = {},
+  labels = false,
+): FieldSelection[] {
   const selected = new Map<string, Set<string>>()
   const add = (table: string, fields: readonly string[]) => {
     const names = selected.get(table) ?? new Set<string>()
@@ -328,7 +348,7 @@ export function sceneFields(definition: CaseDefinition, mappings: Mappings = {})
   }
   const drawing = definition.drawing
   for (const vertex of drawing.vertices)
-    add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
+    add(vertex.table, [...vertex.position, ...(labels && vertex.label ? [vertex.label] : [])])
   for (const edge of drawing.edges)
     add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
   for (const mapping of Object.values(mappings))

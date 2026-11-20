@@ -1,7 +1,13 @@
 /** Network mappings: display channels and the numeric field each one shows. */
 
 import type { ValueRange } from './data.js'
-import { type CaseDefinition, type Field, fieldDefinition, networkRole } from './document.js'
+import {
+  type CaseDefinition,
+  type Field,
+  fieldDefinition,
+  networkRole,
+  sameField,
+} from './document.js'
 
 /** Every channel, vertex channels first; `option` is the latkit mark option it sets. */
 export const CHANNELS = {
@@ -44,9 +50,6 @@ export function keptMappings(definition: CaseDefinition, mappings: Mappings): Ma
     ? mappings
     : (Object.fromEntries(kept) as Mappings)
 }
-
-const sameField = (a: Field | undefined, b: Field): boolean =>
-  a !== undefined && a.table === b.table && a.field === b.field
 
 /** The channels available to a type drawn as `placement`. */
 export function channelsFor(placement: 'vertex' | 'edge' | null): readonly Channel[] {

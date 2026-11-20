@@ -3,6 +3,7 @@
 import type { Data } from 'latkit'
 
 import type { FrameRequest, TimeRange } from '../../shared/data.js'
+import { fieldKey } from '../../shared/document.js'
 import type { Results } from '../../shared/messages.js'
 import { bridge } from '../bridge.js'
 import { DatasetSlot } from './data.js'
@@ -103,8 +104,6 @@ export class FrameWindow {
 }
 
 export type Sampled = readonly [table: string, field: string]
-
-const keyOf = (table: string, field: string) => JSON.stringify([table, field])
 
 /** The highest frame rate a playing view shows, which caps the frames it requests. */
 export const MAX_FRAME_RATE = 60
@@ -220,7 +219,7 @@ export class PlayheadFeed {
   }
 
   #lane([table, field]: Sampled): Lane {
-    const key = keyOf(table, field)
+    const key = fieldKey({ table, field })
     let lane = this.#lanes.get(key)
     if (!lane) this.#lanes.set(key, (lane = { now: new FrameWindow(), next: new FrameWindow() }))
     return lane
@@ -228,7 +227,7 @@ export class PlayheadFeed {
 
   /** Drops the windows of every field not in `fields`. */
   keep(fields: readonly Sampled[]): void {
-    const kept = new Set(fields.map(([table, field]) => keyOf(table, field)))
+    const kept = new Set(fields.map(([table, field]) => fieldKey({ table, field })))
     let dropped = false
     for (const [key, lane] of this.#lanes)
       if (!kept.has(key)) {
@@ -241,7 +240,7 @@ export class PlayheadFeed {
   }
 
   readonly source = (table: string, field: string): Data | undefined =>
-    this.#lanes.get(keyOf(table, field))?.now.data
+    this.#lanes.get(fieldKey({ table, field }))?.now.data
 
   /** The shown windows' datasets. A window read ahead becomes a source only once shown, since it
    *  has the same name as the shown one. */
@@ -251,7 +250,7 @@ export class PlayheadFeed {
 
   covers(fields: readonly Sampled[], at: number, exact = false): boolean {
     return fields.every(([table, field]) =>
-      this.#lanes.get(keyOf(table, field))?.now.covers(at, exact),
+      this.#lanes.get(fieldKey({ table, field }))?.now.covers(at, exact),
     )
   }
 

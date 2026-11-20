@@ -57,8 +57,4 @@ export const writeFile = (
 export const rename = (from: string, to: string) =>
   remote(from) ? workspaceCall('rename', { from, to }) : fs.rename(from, to)
 export const rm = (path: string, options?: { recursive?: boolean; force?: boolean }) =>
-  remote(path)
-    ? workspaceCall('remove', { path }).catch((error: unknown) => {
-        if (!options?.force || (error as { code?: string }).code !== 'ENOENT') throw error
-      })
-    : fs.rm(path, options)
+  remote(path) ? workspaceCall('remove', { path, ...options }) : fs.rm(path, options)

@@ -48,7 +48,7 @@ function included(document: CaseColumns, selection: readonly FieldSelection[]) {
     if (tables.has(table)) throw new Error(`Repeated table: ${table}`)
     for (const name of fields) {
       const definitionField = definition.fields.find((item) => item.name === name)
-      if (!definitionField) throw new Error(`Unknown field: ${table}.${name}`)
+      if (!definitionField) throw new Error(`Unknown field “${name}” on ${table}.`)
       if (definitionField.kind === 'sampled') throw new Error('Sampled fields belong to results.')
     }
     tables.set(table, [...new Set(fields)])
@@ -184,7 +184,7 @@ export class CaseQueries {
     for (const name of missing) {
       const field = definition.fields.find((item) => item.name === name)
       if (!field || field.kind === 'sampled')
-        throw new Error(`Not a static field: ${tableName}.${name}`)
+        throw new Error(`Field “${name}” on ${tableName} is not static.`)
     }
     if (!missing.length) return
     const turns = new Turns(signal)

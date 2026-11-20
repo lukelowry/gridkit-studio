@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { readFile, rm } from 'node:fs/promises'
 
 import { suite, suiteSetup, suiteTeardown, test } from 'mocha'
+import type { Frame } from 'playwright-core'
 import { PNG } from 'pngjs'
 import * as vscode from 'vscode'
 
@@ -93,6 +94,23 @@ suite('Journeys', function () {
     const monitor = await bench.view('monitor')
     await until(() => bench.session.run?.state === 'complete', 'the run ends', 120_000)
     await visible(monitor, 'canvas[data-rendered=true]')
+    const voltage = monitor.getByRole('option', { name: 'Bus Vm [p.u.]', exact: true })
+    const label = voltage.locator('.monitor-row__name')
+    assert.equal(await label.textContent(), 'Bus Vm [p.u.]')
+    const sash = monitor.locator('.monitors__sash')
+    const box = (await sash.boundingBox())!
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await bench.page.mouse.move(x, y)
+    await bench.page.mouse.down()
+    await bench.page.mouse.move(x + 128, y)
+    await bench.page.mouse.up()
+    await until(async () => (await label.textContent()) === 'Vm', 'the compact monitor label')
+    await sash.dblclick()
+    await until(
+      async () => (await label.textContent()) === 'Bus Vm [p.u.]',
+      'the full monitor label',
+    )
     const end = bench.session.results!.domain[1]
     await until(
       async () =>
@@ -127,19 +145,24 @@ suite('Journeys', function () {
     } finally {
       worker.call = call
     }
-    const together = `([from, to]) => {
-      const plots = gridkitMonitor().plots
-      return plots.length === 2 && plots[0].at === plots[1].at &&
-        plots[0].at >= from && plots[0].at <= to
-    }`
+    const together = (frame: Frame, from: number, to: number) =>
+      until(async () => {
+        const plots = await frame.evaluate<{ at?: number }[]>(
+          'globalThis.gridkitMonitor?.().plots ?? []',
+        )
+        const at = plots[0]?.at
+        return (
+          plots.length === 2 && at !== undefined && at === plots[1]?.at && at >= from && at <= to
+        )
+      }, `both Monitor plots between ${from} and ${to} s`)
     bench.session.transport.seek(0)
     bench.session.transport.play()
-    await monitor.waitForFunction(together, [0.001, end - 0.001])
+    await together(monitor, 0.001, end - 0.001)
     await bench.show('case')
     bench.session.transport.pause()
     bench.session.transport.seek(0.75)
     const reopened = await bench.show('monitor')
-    await reopened.waitForFunction(together, [0.75, 0.75])
+    await together(reopened, 0.75, 0.75)
   })
 
   test('the Network is saved as a picture, and the Monitor as a video', async () => {

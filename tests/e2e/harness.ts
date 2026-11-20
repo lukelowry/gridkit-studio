@@ -31,12 +31,13 @@ export async function until<T>(
   get: () => Promise<T> | T,
   label: string | (() => Promise<string> | string),
   timeout = TIMEOUT,
+  pollMs = 100,
 ): Promise<NonNullable<T>> {
   const start = Date.now()
   while (Date.now() - start < timeout) {
     const value = await get()
     if (value) return value as NonNullable<T>
-    await pause(100)
+    await pause(pollMs)
   }
   throw new Error('Timed out: ' + (typeof label === 'string' ? label : await label()))
 }

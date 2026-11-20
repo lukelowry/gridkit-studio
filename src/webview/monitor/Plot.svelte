@@ -2,10 +2,10 @@
   import type { Gpu, Id, Tiles, View } from 'latkit'
 
   import type { ExactSample, TimeRange } from '../../shared/data.js'
-  import { fieldDefinition } from '../../shared/document.js'
+  import { fieldDefinition, fieldKey, sameField } from '../../shared/document.js'
   import { formatNumber } from '../../shared/format.js'
   import type { Monitor, ViewState } from '../../shared/messages.js'
-  import { isRecorded, monitorName } from '../../shared/monitors.js'
+  import { monitorName } from '../../shared/monitors.js'
   import { reader } from '../../shared/settings.js'
   import { clamp } from '../../shared/transport.js'
   import { bridge } from '../bridge.js'
@@ -55,13 +55,10 @@
   const name = $derived(monitorName(viewState.summary?.definition, monitor))
   const settings = $derived(reader(viewState.settings))
   const results = $derived(viewState.results)
-  const recorded = $derived(isRecorded(results, monitor))
+  const output = $derived(results?.outputs.find((each) => sameField(each, monitor)))
+  const recorded = $derived(!!output)
   const frames = $derived(results?.frames ?? 0)
-  const ids = $derived(
-    results?.outputs.find(
-      (output) => output.table === monitor.table && output.field === monitor.field,
-    )?.ids ?? [],
-  )
+  const ids = $derived(output?.ids ?? [])
   const scene = $derived.by(() => {
     void themeVersion
     return plotScene(tiles, monitor, settings, nativeTheme('monitor'))
@@ -76,8 +73,11 @@
   /** The hovered or focused trace's value at the playhead. */
   const reading = $derived.by(() => {
     if (!sample || (!focused && hoveredId === undefined)) return ''
-    const value = sample.value === null ? 'No value' : formatNumber(sample.value)
-    return `${String(sampleId)}: ${value}${unit ? ` ${unit}` : ''} · ${formatNumber(sample.at)} s`
+    const value =
+      sample.value === null
+        ? 'No value'
+        : [formatNumber(sample.value), unit].filter(Boolean).join(' ')
+    return `${String(sampleId)}: ${value} at ${formatNumber(sample.at)} s`
   })
 
   $effect(() => refreshResults(tiles, frames))
@@ -220,7 +220,7 @@
 <section
   class="plot"
   aria-label={name}
-  data-monitor={`${monitor.table}.${monitor.field}`}
+  data-monitor={fieldKey(monitor)}
   onkeydowncapture={keydown}
   onfocusin={() => (focused = true)}
   onfocusout={() => (focused = false)}

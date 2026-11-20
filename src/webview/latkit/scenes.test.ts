@@ -70,8 +70,8 @@ it('builds native scenes and projects only mark fields with separate sampled sou
   expect(monitored.space).toEqual({
     plot: { x: { unit: ' s' }, y: { label: null, minSpan: 0.01 } },
   })
-  expect(plotScene(data, plot, settings, {}, 'Bus · Vm').space).toEqual({
-    plot: { x: { unit: ' s' }, y: { label: 'Bus · Vm', minSpan: 0.01 } },
+  expect(plotScene(data, plot, settings, {}, 'Bus Vm').space).toEqual({
+    plot: { x: { unit: ' s' }, y: { label: 'Bus Vm', minSpan: 0.01 } },
   })
   expect(plotScene(data, { table: 'Bus', field: 'Va' }, settings, {}).space).toMatchObject({
     plot: { y: { minSpan: 0.05 } },

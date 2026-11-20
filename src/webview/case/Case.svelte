@@ -102,7 +102,7 @@
   const corner = $derived.by(() => {
     if (!summary || !type) return ''
     const count = (summary.counts[type] ?? 0).toLocaleString()
-    return `${typeLabel} · ${filter || equal ? `${total.toLocaleString()} of ${count}` : count}`
+    return `${typeLabel} (${filter || equal ? `${total.toLocaleString()} of ${count}` : count})`
   })
   const empty = $derived(
     emptyText({

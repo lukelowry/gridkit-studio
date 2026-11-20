@@ -8,6 +8,9 @@ import { setup, suite, teardown, test } from 'mocha'
 import * as vscode from 'vscode'
 
 import { ExportFile } from '../../src/extension/exports.js'
+import { workspaceAccess } from '../../src/extension/workspace.js'
+import { rm as browserRemove } from '../../src/platform/browser/files.js'
+import { rm as desktopRemove } from '../../src/platform/files.js'
 import { folder } from './studio.js'
 
 suite('Export files', () => {
@@ -35,6 +38,24 @@ suite('Export files', () => {
     assert.equal(await readFile(destination.fsPath, 'utf8'), 'original')
     assert.deepEqual(await readdir(directory), ['results.mp4'])
   })
+
+  for (const [platform, remove] of [
+    ['desktop', desktopRemove],
+    ['browser', browserRemove],
+  ] as const) {
+    test(`${platform} workspace cleanup honors force and recursion independently`, async () => {
+      workspaceAccess()
+      const uri = destination.toString()
+      await mkdir(destination.fsPath)
+      const child = join(destination.fsPath, 'keep.txt')
+      await writeFile(child, 'original')
+      await assert.rejects(remove(uri, { force: true }))
+      assert.equal(await readFile(child, 'utf8'), 'original')
+      await remove(uri, { recursive: true })
+      await assert.rejects(remove(uri), { code: 'ENOENT' })
+      await remove(uri, { force: true })
+    })
+  }
 
   test('publishes sequential writes only after successful completion', async () => {
     await writeFile(destination.fsPath, 'original')

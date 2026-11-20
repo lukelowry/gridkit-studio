@@ -51,7 +51,7 @@ _IEEE39 during a fault, with voltage magnitude on the network and in the Monitor
 
 ## Author
 
-[Luke Lowery](https://lukelowry.github.io/), PhD student in the [Birchfield Research Group](https://birchfield.engr.tamu.edu/) at Texas A&M University · [Google Scholar](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en) · [ORCID](https://orcid.org/0009-0000-0029-3403)
+[Luke Lowery](https://lukelowry.github.io/), PhD student in the [Birchfield Research Group](https://birchfield.engr.tamu.edu/) at Texas A&M University. [Google Scholar](https://scholar.google.com/citations?user=CTynuRMAAAAJ&hl=en), [ORCID](https://orcid.org/0009-0000-0029-3403)
 
 ## License
 

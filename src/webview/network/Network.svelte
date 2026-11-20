@@ -314,7 +314,7 @@
             reader(viewState.settings).get('network.labels'),
           )
           void cases
-            .receive({ revision: revisionOf(next), fields }, fields)
+            .receive({ revision: revisionOf(next), fields })
             .then((changed) => {
               if (!changed || closed) return
               loadedCase = {

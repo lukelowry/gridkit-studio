@@ -16,6 +16,7 @@ import {
   renderer,
   replaying,
   simpleDialog,
+  stats,
   testHost,
   until,
   VM,
@@ -49,6 +50,10 @@ const WORK = [
 const SIZE = ['draws', 'instances', 'rows', 'drawn', 'resident', 'uploading'] as const
 type Stats = Record<(typeof SIZE)[number] | 'frames', number> & {
   work: Record<(typeof WORK)[number], number>
+  complete: boolean
+  covered: boolean
+  at: number
+  windows: { span?: readonly [number, number] }[]
 }
 type Plot = { frames: number; at?: number; instances: number; complete: boolean; visible: boolean }
 /** Keeps work independent of timing: no easing or motion (VS Code's reduceMotion is set too). */
@@ -75,11 +80,7 @@ function canary(): number {
 
 /** Polls `check` every few milliseconds so the polling adds little to the measured time. */
 async function settle(check: () => unknown, label: string, timeout = 60_000): Promise<void> {
-  const start = performance.now()
-  while (!check()) {
-    if (performance.now() - start > timeout) throw new Error('Timed out: ' + label)
-    await pause(4)
-  }
+  await until(check, label, timeout, 4)
 }
 
 /** Times `act` through `done`, `runs` times; `ready` runs untimed and its result goes to both. */
@@ -105,18 +106,16 @@ async function time<T = void>(
 
 /** Resolves once `frame`'s canvas has drawn more than `frames` frames. */
 const painted = (frame: Frame, frames: number) =>
-  frame.waitForFunction('(frames) => gridkitStats().frames > frames', frames, {
-    polling: 'raf',
-    timeout: 60_000,
-  })
+  settle(async () => (await stats(frame))?.frames > frames, 'the next Network frame')
 
 const plots = (monitor: Frame) =>
   monitor.evaluate<Plot[]>(`Array.from(document.querySelectorAll('canvas')).map((canvas) => {
     const plot = canvas.gridkitPlot?.()
     const r = canvas.getBoundingClientRect()
-    return plot && { frames: plot.frames, at: plot.at, instances: plot.instances,
-      complete: plot.complete, visible: r.bottom > 0 && r.top < innerHeight }
-  }).filter(Boolean)`)
+    return { frames: plot?.frames ?? 0, at: plot?.at, instances: plot?.instances ?? 0,
+      complete: plot?.complete === true, visible: r.width > 0 && r.height > 0 &&
+        r.right > 0 && r.left < innerWidth && r.bottom > 0 && r.top < innerHeight }
+  })`)
 
 /** Waits until every plot is complete and their instance counts stop changing. */
 async function steady(monitor: Frame): Promise<Plot[]> {
@@ -126,6 +125,7 @@ async function steady(monitor: Frame): Promise<Plot[]> {
     await pause(500)
     const now = await plots(monitor)
     if (
+      now.some((plot) => plot.visible) &&
       now.every((plot) => plot.complete) &&
       now.map((plot) => plot.instances).join() === before.map((plot) => plot.instances).join()
     )
@@ -138,14 +138,13 @@ async function steady(monitor: Frame): Promise<Plot[]> {
 
 /** Resolves once every visible plot has drawn past its count in `before`. */
 const plotted = (monitor: Frame, before: readonly Plot[]) =>
-  monitor.waitForFunction(
-    `(before) => Array.from(document.querySelectorAll('canvas')).every((canvas, i) => {
-      const r = canvas.getBoundingClientRect()
-      return r.bottom <= 0 || r.top >= innerHeight || (canvas.gridkitPlot?.().frames ?? 0) > (before[i]?.frames ?? 0)
-    })`,
-    before,
-    { polling: 'raf', timeout: 60_000 },
-  )
+  settle(async () => {
+    const now = await plots(monitor)
+    return (
+      now.some((plot) => plot.visible) &&
+      now.every((plot, i) => !plot.visible || plot.frames > (before[i]?.frames ?? 0))
+    )
+  }, 'the visible plots to draw another frame')
 
 const countMessages = (frame: Frame) =>
   frame.evaluate(`(() => {
@@ -251,9 +250,10 @@ export async function run() {
           settings.update('map.basemap', i % 2 === 1 ? 'naturalEarth' : 'none', global),
         )
         await settings.update('map.basemap', undefined, global)
-        await network.waitForFunction('() => gridkitStats().complete', undefined, {
-          timeout: 60_000,
-        })
+        await settle(
+          async () => (await stats<Stats>(network))?.complete,
+          'the map to finish drawing',
+        )
       }
       const bus = JSON.parse(await readFile(uri.fsPath, 'utf8')).buses[0].number
       await measure('select', (i) =>
@@ -282,11 +282,13 @@ export async function run() {
             () => !bench.studio.state(key).stale && summary().version !== read,
             'the change read',
           )
-          await network.waitForFunction(
-            `([version, before]) => gridkitLifecycle().summary === version && gridkitStats().complete && gridkitStats().frames > before`,
-            [summary().version, before],
-            { timeout: 60_000 },
-          )
+          const version = summary().version
+          await settle(async () => {
+            const drawn = await network.evaluate<{ version?: number; stats?: Stats }>(
+              '({ version: gridkitLifecycle().summary, stats: gridkitStats() })',
+            )
+            return drawn.version === version && drawn.stats?.complete && drawn.stats.frames > before
+          }, 'the Network to draw the reread case')
         },
       })
       await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(file))
@@ -322,9 +324,13 @@ export async function run() {
           bench.studio.get(key)!.setTable({ filter: i % 2 ? undefined : 'no name holds this' }),
         done: (i) => table.locator(rows(i % 2 ? counts.Bus! : 0)).waitFor({ timeout: 60_000 }),
       })
-      await table.locator('.cell').first().focus()
       await time(`case ${size} > page`, 2 * RUNS, {
-        act: (i) => table.locator('.cell:focus').press(i % 2 ? 'Control+Home' : 'Control+End'),
+        ready: async (i) => {
+          const from = table.locator(`.cell[data-row="${i % 2 ? counts.Bus! - 1 : 0}"]`).first()
+          await from.focus()
+          return from
+        },
+        act: (i, from) => from.press(i % 2 ? 'Control+Home' : 'Control+End'),
         done: (i) =>
           table.locator(`.cell[data-row="${i % 2 ? 0 : counts.Bus! - 1}"]:focus`).waitFor(),
       })
@@ -350,16 +356,14 @@ export async function run() {
       bench.explorer('Run Dynamic Simulation', solver)
       const [sampled, mapped, plottedLive] = await Promise.all([
         settle(() => (runResults()?.frames ?? 0) > 0, 'the first sample', 300_000).then(since),
-        network
-          .waitForFunction(
-            '() => gridkitStats()?.complete && gridkitStats()?.covered && gridkitStats()?.windows.some(window => window.span?.length)',
-            undefined,
-            {
-              polling: 'raf',
-              timeout: 300_000,
-            },
-          )
-          .then(since),
+        settle(
+          async () => {
+            const drawn = await stats<Stats>(network)
+            return drawn?.complete && drawn.covered && drawn.windows.some((window) => window.span)
+          },
+          'the Network to draw the first mapped sample',
+          300_000,
+        ).then(since),
         monitor
           .locator('canvas[data-rendered=true]')
           .first()
@@ -422,17 +426,24 @@ export async function run() {
         }),
         act: (i) => transport.seek(at(i)),
         done: async (i, before) => {
-          await network.waitForFunction(
-            `([t, frames]) => gridkitStats().frames > frames && gridkitStats().covered && gridkitStats().complete && Math.abs(gridkitStats().at - t) < 1e-6`,
-            [at(i), before.network],
-            { polling: 'raf', timeout: 60_000 },
-          )
+          const target = at(i)
+          await settle(async () => {
+            const drawn = await stats<Stats>(network)
+            return (
+              drawn?.complete &&
+              drawn.covered &&
+              drawn.frames > before.network &&
+              Math.abs(drawn.at - target) < 1e-6
+            )
+          }, `the Network to draw ${target} s`)
           await plotted(monitor, before.plots)
-          await monitor.waitForFunction(
-            `(t) => Array.from(document.querySelectorAll('canvas')).every((c) => Math.abs((c.gridkitPlot?.().at ?? -1) - t) < 1e-6)`,
-            at(i),
-            { polling: 'raf', timeout: 60_000 },
-          )
+          await settle(async () => {
+            const visible = (await plots(monitor)).filter((plot) => plot.visible)
+            return (
+              visible.length > 0 &&
+              visible.every((plot) => plot.at !== undefined && Math.abs(plot.at - target) < 1e-6)
+            )
+          }, `the visible plots to draw ${target} s`)
         },
       })
       await time(`playback ${size} > step`, RUNS, {
@@ -447,10 +458,12 @@ export async function run() {
       // A new element replaces the plot; the old canvas is marked so the new one is recognized.
       const mark = () => monitor.evaluate(`document.querySelector('canvas').dataset.replaced = ''`)
       const replaced = () =>
-        monitor.waitForFunction(
-          `() => { const canvas = document.querySelector('canvas'); return !!canvas && !('replaced' in canvas.dataset) && !!canvas.gridkitPlot?.().complete }`,
-          undefined,
-          { polling: 'raf', timeout: 60_000 },
+        settle(
+          () =>
+            monitor.evaluate<boolean>(
+              `document.querySelector('canvas:not([data-replaced])')?.gridkitPlot?.().complete === true`,
+            ),
+          'the replacement plot to finish drawing',
         )
       // Each sample narrows the monitor to one bus, after widening it to every bus untimed.
       await time(`monitor ${size} > choose element`, RUNS, {

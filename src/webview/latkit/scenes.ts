@@ -21,6 +21,8 @@ import {
   type Drawing,
   type Field,
   fieldDefinition,
+  fieldKey,
+  sameField,
   tableLabel,
 } from '../../shared/document.js'
 import { type Channel, CHANNELS, type Mappings } from '../../shared/mappings.js'
@@ -53,12 +55,14 @@ export function sampledFields(
 ): Array<readonly [table: string, field: string]> {
   const fields = new Map<string, readonly [string, string]>()
   if (results)
-    for (const { table, field } of Object.values(mappings))
+    for (const mapping of Object.values(mappings)) {
+      const { table, field } = mapping
       if (
         fieldDefinition(definition, table, field)?.kind === 'sampled' &&
-        results.outputs.some((output) => output.table === table && output.field === field)
+        results.outputs.some((output) => sameField(output, mapping))
       )
-        fields.set(JSON.stringify([table, field]), [table, field])
+        fields.set(fieldKey(mapping), [table, field])
+    }
   return [...fields.values()]
 }
 
@@ -124,9 +128,7 @@ export function stylesOf(
 ): Style[] {
   return Object.entries(mappings).flatMap(([channel, mapping]) => {
     const { option, placement } = CHANNELS[channel as Channel]
-    const recorded = outputs.find(
-      (output) => output.table === mapping.table && output.field === mapping.field,
-    )
+    const recorded = outputs.find((output) => sameField(output, mapping))
     const source = sampled(mapping.table, mapping.field)
     if (fieldDefinition(definition, mapping.table, mapping.field)?.kind === 'sampled' && !source)
       return []

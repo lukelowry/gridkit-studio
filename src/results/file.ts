@@ -15,6 +15,7 @@ import {
   type TileRequest,
   type TimeRange,
 } from '../shared/data.js'
+import { sameField } from '../shared/document.js'
 import { message, problem } from '../shared/errors.js'
 import {
   type ResultsLayout,
@@ -479,9 +480,7 @@ export class ResultsFile {
   }
   async sample(request: ExactSampleRequest, signal: AbortSignal): Promise<ExactSample> {
     if (!Number.isFinite(request.at)) throw new Error('Invalid sample time.')
-    const field = this.fields.findIndex(
-      (item) => item.table === request.table && item.field === request.field,
-    )
+    const field = this.fields.findIndex((item) => sameField(item, request))
     const place = this.#places[field]?.get(request.id)
     if (place === undefined || !this.#progress.frames) return { at: request.at, value: null }
     const frame = (await this.#bound(request.at, true)) - 1

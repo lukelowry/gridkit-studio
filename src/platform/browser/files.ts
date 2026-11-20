@@ -145,7 +145,7 @@ export async function readdir(path: string): Promise<string[]> {
   return names
 }
 export async function rm(path: string, options?: { recursive?: boolean; force?: boolean }) {
-  if (!local(path)) return workspaceCall('remove', { path })
+  if (!local(path)) return workspaceCall('remove', { path, ...options })
   try {
     const parent = await directory(dirname(path))
     await unlocked(() => parent.removeEntry(basename(path), { recursive: options?.recursive }))

@@ -3,6 +3,7 @@
   import { onMount, tick } from 'svelte'
 
   import type { TimeRange } from '../../shared/data.js'
+  import { fieldKey } from '../../shared/document.js'
   import type { Monitor, ViewState } from '../../shared/messages.js'
   import { bridge } from '../bridge.js'
   import { createClock } from '../clock.js'
@@ -109,9 +110,7 @@
     // The plot appears once the extension shows it; wait a frame for its canvas.
     requestAnimationFrame(() =>
       area
-        ?.querySelector<HTMLElement>(
-          `[data-monitor="${CSS.escape(`${monitor.table}.${monitor.field}`)}"] canvas`,
-        )
+        ?.querySelector<HTMLElement>(`[data-monitor="${CSS.escape(fieldKey(monitor))}"] canvas`)
         ?.focus(),
     )
   }

@@ -194,7 +194,7 @@ function valuesOf(type: string, group: string, specs: readonly ValueSpec[] = [])
     if (!Object.hasOwn(DECODES, spec.type))
       throw problem(
         'invalid-input',
-        `${type}.${spec.id} is of type ${spec.type}, which is not real, integer, flag or text.`,
+        `Field “${spec.id}” on ${type} has unsupported type ${spec.type}. Expected real, integer, flag or text.`,
       )
     return {
       ...value([group, spec.id], DECODES[spec.type], spec.unit),
@@ -214,7 +214,10 @@ function shapeOf(
   const parameters = new Set(params.map((param) => param.id))
   for (const port of ports)
     if (parameters.has(port.name))
-      throw problem('invalid-input', `${spec.name}.${port.name} is both a parameter and a port.`)
+      throw problem(
+        'invalid-input',
+        `Field “${port.name}” on ${spec.name} is both a parameter and a port.`,
+      )
   const array = kind === 'bus' ? 'buses' : 'devices'
   const { entries, members } = requiring(
     [
@@ -365,7 +368,7 @@ function compile(
     if (entry.name.startsWith('@studio.'))
       throw problem('invalid-input', 'The @studio namespace is reserved.')
     if (plan.has(entry.name))
-      throw problem('invalid-input', `${table.type}.${entry.name} is declared twice.`)
+      throw problem('invalid-input', `Field “${entry.name}” on ${table.type} is declared twice.`)
     plan.set(entry.name, entry)
     if (entry.role === 'output') outputs.push(entry.name)
     else if (entry.role === 'port') ports.push(entry as PortPlan)

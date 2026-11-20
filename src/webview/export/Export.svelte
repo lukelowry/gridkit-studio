@@ -35,10 +35,10 @@
     [1080, 1920, 'Portrait'],
   ] as const
   const FORMATS = [
-    { value: 'video', label: 'Video · MP4' },
-    { value: 'png', label: 'Image · PNG' },
-    { value: 'jpeg', label: 'Image · JPEG' },
-    { value: 'webp', label: 'Image · WebP' },
+    { value: 'video', label: 'MP4 video' },
+    { value: 'png', label: 'PNG image' },
+    { value: 'jpeg', label: 'JPEG image' },
+    { value: 'webp', label: 'WebP image' },
   ] as const
 
   let viewState = $state.raw<ViewState>({})

@@ -210,7 +210,7 @@ export class Case {
           // No field positions vertices, so the layout does.
           if (NETWORK_POSITION.includes(field)) return new Float64Array(count).fill(NaN)
           const column = field === table.shape.identity.name ? table.ids : table.fields.get(field)
-          if (!column) throw problem('invalid-input', 'Unknown source field: ' + name + '.' + field)
+          if (!column) throw problem('invalid-input', `Unknown source field “${field}” on ${name}.`)
           const values = readColumn(column, offset, count)
           return column.target
             ? reference(

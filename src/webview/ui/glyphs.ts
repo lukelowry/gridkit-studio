@@ -4,8 +4,6 @@ type Shape = string | readonly [cx: number, cy: number, r: number]
 
 const GLYPHS = {
   close: ['M4 4l8 8M12 4l-8 8'],
-  /** A monitor: a trace over time. */
-  graph: ['M2.5 2.5v11h11', 'M4.5 10.5l2.5-3.5 2.5 2 3.5-5'],
   split: ['M2.5 3.5h11v9h-11z', 'M8 3.5v9'],
   /** Mapped onto the Network. */
   mapped: ['M8 2.75c2.4 2.9 3.75 4.95 3.75 6.75a3.75 3.75 0 0 1-7.5 0c0-1.8 1.35-3.85 3.75-6.75z'],

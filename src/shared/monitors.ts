@@ -8,6 +8,7 @@ import {
   type Field,
   fieldDefinition,
   fieldLabel,
+  sameField,
   tableLabel,
 } from './document.js'
 import type { Monitor, Results, Summary } from './messages.js'
@@ -18,8 +19,6 @@ export const isField = (value: unknown): value is Field =>
   typeof value === 'object' &&
   typeof (value as Field).table === 'string' &&
   typeof (value as Field).field === 'string'
-
-export const sameField = (a: Field, b: Field): boolean => a.table === b.table && a.field === b.field
 
 /** The signals the Monitor lists: the outputs of `results` once its header is read, else what the
  *  case's `mon` lists record. */
@@ -55,15 +54,15 @@ export const monitorWith = (
 export const isRecorded = (results: Pick<Results, 'outputs'> | undefined, monitor: Field) =>
   !!results?.outputs.some((output) => sameField(output, monitor))
 
-/** A monitor's name: type, element if any, and field, as in "Bus 16 · Va [rad]". */
-export function monitorName(document: CaseDefinition | undefined, monitor: Monitor): string {
-  if (!document) return monitor.field
-  const element = monitor.id === undefined ? '' : ' ' + String(monitor.id)
-  const field = fieldDefinition(document, monitor.table, monitor.field)
-  return (
-    tableLabel(document, monitor.table) +
-    element +
-    ' · ' +
-    (field ? fieldLabel(field) : monitor.field)
-  )
+/** A monitor's full name (e.g. "Bus 16 Va [rad]") or just its field symbol. */
+export function monitorName(
+  document: CaseDefinition | undefined,
+  { table, field, id }: Monitor,
+  form: 'full' | 'field' = 'full',
+): string {
+  const spec = document && fieldDefinition(document, table, field)
+  if (form === 'field') return spec?.label ?? field
+  const type = document ? tableLabel(document, table) : table
+  const owner = id === undefined ? type : `${type} ${id}`
+  return `${owner} ${spec ? fieldLabel(spec) : field}`
 }

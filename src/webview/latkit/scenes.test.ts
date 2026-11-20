@@ -45,6 +45,13 @@ it('builds native scenes and projects only mark fields with separate sampled sou
     vertexColor: { table: 'Bus', field: 'Vm' },
   })
   expect(columns.flatMap((table) => table.fields)).not.toContain('Vm')
+  const busFields = (selection: typeof columns) =>
+    selection.find((table) => table.table === 'Bus')?.fields
+  expect(busFields(columns)).not.toContain('name')
+  expect(busFields(sceneFields(definition, {}, true))).toContain('name')
+  expect(
+    busFields(sceneFields(definition, { vertexColor: { table: 'Bus', field: 'name' } })),
+  ).toContain('name')
   expect(columns.find((table) => table.table === 'Branch')?.fields).toContain('ports.bus1')
   const plot = { table: 'Bus', field: 'Vm' }
   const monitored = plotScene(data, plot, settings, {})

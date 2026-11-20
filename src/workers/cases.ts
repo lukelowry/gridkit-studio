@@ -54,10 +54,10 @@ export function caseFiles(catalog: Catalog) {
       const kept = settled(stamp, at) ? stamp : undefined
       const bytes = await caseBytes(uri, signal)
       current()
-      // A file rewritten unchanged keeps its case, found by fingerprint before parsing.
-      const fingerprint = await versionOf(catalog, bytes)
+      // A reread can reuse the previous case. A first read hashes alongside the JSON scan.
+      const fingerprint = before ? await versionOf(catalog, bytes) : undefined
       current()
-      if (before?.kase.version === fingerprint) {
+      if (before && before.kase.version === fingerprint) {
         before.stamp = kept
         return before.summary
       }

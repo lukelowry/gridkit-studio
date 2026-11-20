@@ -97,7 +97,7 @@ async function compose(
         views.push(...lanes.placed.map(({ view }) => view))
         continue
       }
-      const selection = sceneFields(definition, state.mappings)
+      const selection = sceneFields(definition, state.mappings, settings.get('network.labels'))
       await caseRows.receive({ results: results.id, fields: selection }, selection, signal)
       const data = caseRows.slot.current!.data
       const background = await mapOf(settings, definition.drawing.geographic, signal)

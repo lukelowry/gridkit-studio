@@ -333,7 +333,11 @@ export function captionScene(theme: Theme, text: string, subtitle: string): Scen
 }
 
 /** The case fields the Network's marks read; sampled fields come from their own sources. */
-export function sceneFields(definition: CaseDefinition, mappings: Mappings = {}): FieldSelection[] {
+export function sceneFields(
+  definition: CaseDefinition,
+  mappings: Mappings = {},
+  labels = false,
+): FieldSelection[] {
   const selected = new Map<string, Set<string>>()
   const add = (table: string, fields: readonly string[]) => {
     const names = selected.get(table) ?? new Set<string>()
@@ -342,7 +346,7 @@ export function sceneFields(definition: CaseDefinition, mappings: Mappings = {})
   }
   const drawing = definition.drawing
   for (const vertex of drawing.vertices)
-    add(vertex.table, [...vertex.position, ...(vertex.label ? [vertex.label] : [])])
+    add(vertex.table, [...vertex.position, ...(labels && vertex.label ? [vertex.label] : [])])
   for (const edge of drawing.edges)
     add(edge.table, [...(edge.ends ?? []), ...(edge.bends ? [edge.bends] : [])])
   for (const mapping of Object.values(mappings))

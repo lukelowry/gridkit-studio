@@ -1,5 +1,5 @@
 /** Scrub benchmark on 10 s of ACTIVSg10k (Vm as color, Va as height): seek latency, drag lag and
- *  buffering. Timings never fail the run; a stuck view or a Studio error does. */
+ *  buffering. Also checks the Network's voltage and angle against the solver around the fault. */
 
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -23,6 +23,8 @@ interface Watched {
   at?: number
   requestedAt?: number
 }
+
+declare function gridkitStats(): Omit<Watched, 'ms'> | undefined
 
 const watch = (network: Frame) =>
   network.evaluate(`(() => {
@@ -112,10 +114,24 @@ export async function run() {
     const monitor = await bench.view('monitor')
     await visible(monitor, 'canvas[data-rendered=true]')
     const drawnAt = (t: number, after = -1) =>
-      network.waitForFunction(
-        `([t, after]) => gridkitStats()?.frames > after && gridkitStats()?.covered && gridkitStats()?.complete && Math.abs(gridkitStats().at - t) < 1e-6`,
-        [t, after],
-        { polling: 'raf', timeout: 120_000 },
+      network.evaluate(
+        async ({ t, after }) => {
+          const deadline = performance.now() + 120_000
+          do {
+            const stats = gridkitStats()
+            if (
+              stats?.covered &&
+              stats.complete &&
+              stats.frames > after &&
+              stats.requestedAt === t &&
+              stats.at === t
+            )
+              return
+            await new Promise(requestAnimationFrame)
+          } while (performance.now() < deadline)
+          throw new Error(`Network did not draw a complete frame at ${t}s after frame ${after}`)
+        },
+        { t, after },
       )
     const firstStart = performance.now()
     await drawnAt(0)
@@ -169,6 +185,28 @@ export async function run() {
     await pause(3000)
     transport.pause()
     report['play'] = summarize(await stopWatching(network), 3000)
+
+    // At either fault transition the solver may store two samples at the same timestamp.
+    const fault = []
+    for (const at of [0.99, 1, 1.01, 1.14, 1.15, 1.16]) {
+      const before = await network.evaluate<number>('gridkitStats().frames')
+      transport.seek(at)
+      await drawnAt(at, before)
+      for (const field of ['Vm', 'Va'] as const) {
+        const { value } = await bench.studio.client.worker.call('sample', {
+          results: session.results!.id,
+          table: 'Bus',
+          id: 30399,
+          field,
+          at,
+        })
+        const drawn = await network.evaluate<number | null>(`gridkitSample("${field}", 30399)`)
+        assert.ok(value !== null, `Missing solver sample for Bus 30399 ${field} at ${at}s`)
+        assert.equal(drawn, Math.fround(value), `Bus 30399 ${field} at ${at}s`)
+        fault.push({ at, field, drawn, exact: value })
+      }
+    }
+    report.fault = fault
 
     assert.deepEqual(bench.studio.reporter.errors, [], 'Studio reported no error')
     const output = join(process.env.GRIDKIT_TEST_OUTPUT!, 'bench')

@@ -100,7 +100,10 @@ export class Case {
     const bytes = file
     let layout: Layout
     try {
-      layout = await scan(bytes, signal)
+      ;[version, layout] = await Promise.all([
+        version ?? versionOf(catalog, bytes),
+        scan(bytes, signal),
+      ])
     } catch (error) {
       // Report invalid JSON at the character where it fails.
       const byte = (error as { byte?: number }).byte
@@ -117,7 +120,6 @@ export class Case {
       }
     }
     const parsed = parser.finish()
-    version ??= await versionOf(catalog, bytes)
     const { kase, repeated } = built(bytes, layout, parsed, catalog, name, version)
     const problems = [...parsed.problems, ...repeated]
     if (!problems.length) return kase
